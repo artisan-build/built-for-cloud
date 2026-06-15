@@ -46,6 +46,7 @@ return [
 
     'cloud' => [
         'binary' => env('BUILT_FOR_CLOUD_BINARY', 'cloud'),
+        'application' => env('BUILT_FOR_CLOUD_APPLICATION'),
     ],
 
 ];
