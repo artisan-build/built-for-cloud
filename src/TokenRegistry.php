@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud;
 
 use Carbon\CarbonInterface;
+use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
 final class TokenRegistry
@@ -33,10 +34,10 @@ final class TokenRegistry
             return null;
         }
 
-        $row->forceFill([
-            'request_count' => $row->request_count + 1,
+        ApiToken::query()->whereKey($row->getKey())->update([
+            'request_count' => DB::raw('request_count + 1'),
             'last_used_at' => now(),
-        ])->save();
+        ]);
 
         return $row->name;
     }
@@ -45,6 +46,10 @@ final class TokenRegistry
     {
         if ($name === self::FALLBACK) {
             throw new InvalidArgumentException('The fallback token name is reserved.');
+        }
+
+        if (! preg_match('/^[0-9a-f]{64}$/', $hash)) {
+            throw new InvalidArgumentException('A token hash must be a sha256 hex digest.');
         }
 
         return ApiToken::query()->create([

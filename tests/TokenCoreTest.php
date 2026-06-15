@@ -61,9 +61,35 @@ it('does not resolve fallback when the fallback token is null', function (): voi
     expect((new TokenRegistry)->resolve('fallback-secret'))->not->toBe(TokenRegistry::FALLBACK);
 });
 
+it('does not resolve fallback when the fallback token is an empty string', function (): void {
+    config(['built-for-cloud.fallback_token' => '']);
+
+    expect((new TokenRegistry)->resolve('anything'))->toBeNull()
+        ->not->toBe(TokenRegistry::FALLBACK);
+});
+
 it('rejects the reserved fallback name on store', function (): void {
     (new TokenRegistry)->store(TokenRegistry::FALLBACK, hash('sha256', 'secret'));
 })->throws(InvalidArgumentException::class);
+
+it('rejects non-sha256 hashes on store', function (string $hash): void {
+    (new TokenRegistry)->store('app', $hash);
+})->with([
+    'plaintext' => 'not-a-valid-hash',
+    'too short' => str_repeat('a', 63),
+    'uppercase' => strtoupper(hash('sha256', 'secret')),
+])->throws(InvalidArgumentException::class, 'A token hash must be a sha256 hex digest.');
+
+it('resolves tokens when revoked_at alone is set', function (): void {
+    $registry = new TokenRegistry;
+    $plaintext = 'informational-revocation-secret';
+
+    $token = $registry->store('informational', hash('sha256', $plaintext));
+
+    ApiToken::query()->whereKey($token->getKey())->update(['revoked_at' => now()]);
+
+    expect($registry->resolve($plaintext))->toBe('informational');
+});
 
 it('rotates by leaving the old row resolvable for an hour by default', function (): void {
     $registry = new TokenRegistry;
@@ -81,6 +107,19 @@ it('rotates by leaving the old row resolvable for an hour by default', function 
         ->and($oldToken->expires_at?->greaterThan(now()->addMinutes(59)))->toBeTrue()
         ->and($oldToken->revoked_at)->toBeNull()
         ->and($newToken->exists)->toBeTrue();
+});
+
+it('does not mutate the new row expiry during default rotation', function (): void {
+    $registry = new TokenRegistry;
+    $oldPlaintext = 'old-expiry-secret';
+    $newPlaintext = 'new-expiry-secret';
+
+    $registry->store('expiry', hash('sha256', $oldPlaintext));
+    $newToken = $registry->rotate('expiry', hash('sha256', $newPlaintext));
+
+    $newToken->refresh();
+
+    expect($newToken->expires_at)->toBeNull();
 });
 
 it('rotates in emergency mode by expiring the old row immediately', function (): void {
