@@ -38,14 +38,14 @@ final class CloudCommandRunner
         }
 
         if (count($environments) === 1) {
-            return (string) $environments[0]['id'];
+            return $this->environmentId($environments[0]);
         }
 
         /** @var array<string, string> $choices */
         $choices = [];
 
         foreach ($environments as $environment) {
-            $id = (string) $environment['id'];
+            $id = $this->environmentId($environment);
             $name = (string) ($environment['name'] ?? $id);
             $choices[$id] = $name;
         }
@@ -79,10 +79,34 @@ final class CloudCommandRunner
         /** @var array{output?: mixed, exitCode?: mixed} $payload */
         $payload = $this->decodeJsonObject($result->output());
 
+        if (! isset($payload['exitCode']) || ! is_numeric($payload['exitCode'])) {
+            throw new RuntimeException('Laravel Cloud returned a response without a valid exit code.');
+        }
+
         return [
             'output' => (string) ($payload['output'] ?? ''),
-            'exitCode' => (int) ($payload['exitCode'] ?? 0),
+            'exitCode' => (int) $payload['exitCode'],
         ];
+    }
+
+    /**
+     * @param  array{id?: mixed, name?: mixed}  $environment
+     */
+    private function environmentId(array $environment): string
+    {
+        $id = $environment['id'] ?? null;
+
+        if (! is_string($id) && ! is_int($id)) {
+            throw new RuntimeException('Laravel Cloud returned an environment without a valid id.');
+        }
+
+        $id = (string) $id;
+
+        if ($id === '') {
+            throw new RuntimeException('Laravel Cloud returned an environment without a valid id.');
+        }
+
+        return $id;
     }
 
     private function binary(): string

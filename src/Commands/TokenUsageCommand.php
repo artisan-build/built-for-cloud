@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\CloudCommandRunner;
 use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
 use DateTimeInterface;
 use Illuminate\Console\Command;
+use RuntimeException;
 
 final class TokenUsageCommand extends Command
 {
@@ -132,7 +133,7 @@ final class TokenUsageCommand extends Command
         $decoded = json_decode($json, true);
 
         if (! is_array($decoded) || ! array_is_list($decoded)) {
-            return [];
+            throw new RuntimeException('Laravel Cloud returned invalid JSON.');
         }
 
         /** @var list<array{name: string, request_count: int, last_used_at: string|null, stats: array<string, mixed>}> $decoded */

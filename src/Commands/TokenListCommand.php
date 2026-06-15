@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\CloudCommandRunner;
 use DateTimeInterface;
 use Illuminate\Console\Command;
+use RuntimeException;
 
 final class TokenListCommand extends Command
 {
@@ -103,7 +104,7 @@ final class TokenListCommand extends Command
         $decoded = json_decode($json, true);
 
         if (! is_array($decoded) || ! array_is_list($decoded)) {
-            return [];
+            throw new RuntimeException('Laravel Cloud returned invalid JSON.');
         }
 
         /** @var list<array{name: string, status: string, last_used_at: string|null, request_count: int, expires_at: string|null}> $decoded */

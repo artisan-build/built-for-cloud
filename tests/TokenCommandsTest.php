@@ -52,6 +52,57 @@ it('creates a token row in execute mode', function (): void {
     expect(ApiToken::query()->where('name', 'app')->where('token_hash', $hash)->exists())->toBeTrue();
 });
 
+it('runs token rotate in driver mode without sending plaintext to cloud', function (): void {
+    Process::fake([
+        '*' => Process::result('{"output":"Token app rotated with one hour grace.\\n","exitCode":0}'),
+    ]);
+
+    Artisan::call('token:rotate', [
+        'name' => 'app',
+        '--environment' => 'env-1',
+    ]);
+
+    $output = Artisan::output();
+
+    preg_match('/Save this token - shown once: (tok_[0-9a-f]{64})/', $output, $matches);
+    $plaintext = $matches[1] ?? '';
+    $hash = hash('sha256', $plaintext);
+
+    expect($plaintext)->not->toBe('')
+        ->and(substr_count($output, $plaintext))->toBe(1);
+
+    Process::assertRan(function ($process) use ($plaintext, $hash): bool {
+        $command = $process->command[4] ?? '';
+
+        return is_string($command)
+            && str_contains($command, 'token:rotate')
+            && str_contains($command, '--execute')
+            && str_contains($command, '--hash='.$hash)
+            && ! str_contains($command, $plaintext);
+    });
+});
+
+it('forwards emergency mode when rotating tokens in driver mode', function (): void {
+    Process::fake([
+        '*' => Process::result('{"output":"Token app rotated with emergency expiry.\\n","exitCode":0}'),
+    ]);
+
+    Artisan::call('token:rotate', [
+        'name' => 'app',
+        '--environment' => 'env-1',
+        '--emergency' => true,
+    ]);
+
+    Process::assertRan(function ($process): bool {
+        $command = $process->command[4] ?? '';
+
+        return is_string($command)
+            && str_contains($command, 'token:rotate')
+            && str_contains($command, '--execute')
+            && str_contains($command, '--emergency');
+    });
+});
+
 it('rotates tokens in execute mode with emergency expiry', function (): void {
     $old = ApiToken::query()->create([
         'name' => 'app',
