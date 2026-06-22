@@ -18,4 +18,17 @@ abstract class TestCase extends Orchestra
     {
         return [BuiltForCloudServiceProvider::class];
     }
+
+    protected function defineDatabaseMigrations(): void
+    {
+        $this->loadMigrationsFrom(__DIR__.'/database/migrations');
+    }
+
+    /**
+     * @param  Application  $app
+     */
+    protected function getEnvironmentSetUp($app): void
+    {
+        $app['config']->set('auth.providers.users.model', Fixtures\User::class);
+    }
 }
