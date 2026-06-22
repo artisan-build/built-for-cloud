@@ -12,7 +12,9 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 /**
@@ -80,25 +82,33 @@ final class Invitation extends Model
      */
     public static function accept(string $token, array $attributes): Model
     {
-        $invitation = self::query()->pending()->where('token', $token)->first();
+        return DB::transaction(function () use ($token, $attributes): Model {
+            $invitation = self::query()->pending()->where('token', $token)->lockForUpdate()->first();
 
-        if (! $invitation instanceof self) {
-            throw InvalidInvitation::forToken($token);
-        }
+            if (! $invitation instanceof self) {
+                throw InvalidInvitation::forToken($token);
+            }
 
-        if (isset($attributes['password']) && is_string($attributes['password'])) {
-            $attributes['password'] = Hash::make($attributes['password']);
-        }
+            unset($attributes['is_admin']);
 
-        $userClass = self::userModelClass();
-        $user = $userClass::query()->create([
-            ...$attributes,
-            'email' => $invitation->email,
-        ]);
+            if (isset($attributes['password']) && is_string($attributes['password'])) {
+                $attributes['password'] = Hash::make($attributes['password']);
+            }
 
-        $invitation->forceFill(['accepted_at' => now()])->save();
+            $userClass = self::userModelClass();
+            $user = $userClass::query()->create([
+                ...$attributes,
+                'email' => $invitation->email,
+            ]);
 
-        return $user;
+            if (Schema::hasColumn($user->getTable(), 'is_admin')) {
+                $user->forceFill(['is_admin' => false])->save();
+            }
+
+            $invitation->forceFill(['accepted_at' => now()])->save();
+
+            return $user;
+        });
     }
 
     /**

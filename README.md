@@ -73,13 +73,15 @@ Built for Cloud augments your Laravel app's existing user model. It does **not**
 ### User admin flag
 
 The package ships a guarded migration that runs late and adds `is_admin boolean default false` to an
-existing `users` table. If the table or column is missing, the migration is a no-op; it never creates
-or replaces your app's user table.
+existing `users` table. It never creates or replaces your app's user table, so run your app's users
+table migration first and let the package migration run after that. If the users table does not exist
+yet, the package migration is a no-op.
 
-Make sure your app's user model allows/casts the column as appropriate, for example:
+Make sure your app's user model casts the column as a boolean. Keep `is_admin` out of `$fillable` as
+defense-in-depth so user-submitted form data cannot mass-assign privileges:
 
 ```php
-protected $fillable = ['name', 'email', 'password', 'is_admin'];
+protected $fillable = ['name', 'email', 'password'];
 
 protected function casts(): array
 {
@@ -104,6 +106,9 @@ php artisan create-admin --email=ops@example.com --password=secret --name="Ops" 
 
 When an option is omitted, the command prompts for it using Laravel Prompts.
 
+The command requires the `is_admin` column to exist and fails with a migration reminder when it is
+missing. It sets the admin flag with `forceFill()`, so your app should not make `is_admin` fillable.
+
 ### Invitations
 
 The package provides an `ArtisanBuild\BuiltForCloud\Invitation` model and migration. Consuming apps
@@ -122,8 +127,10 @@ $user = Invitation::accept($invitation->token, [
 
 `invite()` generates a unique token and defaults `expires_at` to seven days from now. `accept()` only
 accepts pending, unexpired invitations; it creates the configured user with the invitation email,
-hashes a provided `password`, marks `accepted_at`, and returns the new user. Invalid, expired, or
-already accepted tokens throw `ArtisanBuild\BuiltForCloud\Exceptions\InvalidInvitation`.
+hashes a provided `password`, marks `accepted_at`, and returns the new user. `accept()` never grants
+admin access: privileged incoming attributes such as `is_admin` are ignored and the created user is
+forced non-admin when the column exists. Invalid, expired, or already accepted tokens throw
+`ArtisanBuild\BuiltForCloud\Exceptions\InvalidInvitation`.
 
 Useful scopes are available for app UI and housekeeping:
 

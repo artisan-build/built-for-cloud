@@ -6,6 +6,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\InvalidInvitation;
 use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
 use Illuminate\Console\Command;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Hash;
@@ -64,6 +65,22 @@ it('creates the first admin and refuses another unless forced', function (): voi
         ->and(User::query()->where('is_admin', true)->count())->toBe(2);
 });
 
+it('fails create-admin clearly when the is_admin column is missing', function (): void {
+    Schema::table('users', function (Blueprint $table): void {
+        $table->dropColumn('is_admin');
+    });
+
+    $exitCode = Artisan::call('create-admin', [
+        '--email' => 'missing@b.c',
+        '--password' => 'secret-pass',
+        '--name' => 'Missing Column',
+    ]);
+
+    expect($exitCode)->toBe(Command::FAILURE)
+        ->and(Artisan::output())->toContain('The is_admin column is missing — run your migrations first.')
+        ->and(User::query()->where('email', 'missing@b.c')->exists())->toBeFalse();
+});
+
 it('creates and accepts invitations exactly once', function (): void {
     $invitation = Invitation::invite('new@user.test');
 
@@ -103,6 +120,20 @@ it('creates and accepts invitations exactly once', function (): void {
         ->and(User::query()->whereIn('email', ['expired@user.test', 'unknown@user.test'])->exists())->toBeFalse();
 });
 
+it('ignores admin escalation attempts while accepting invitations', function (): void {
+    $invitation = Invitation::invite('mallory@user.test');
+
+    $user = Invitation::accept($invitation->token, [
+        'name' => 'Mallory',
+        'password' => 'pw',
+        'is_admin' => true,
+    ]);
+
+    expect($user)->toBeInstanceOf(User::class)
+        ->and($user->refresh()->is_admin)->toBeFalse()
+        ->and($user->email)->toBe('mallory@user.test');
+});
+
 it('protects routes through auth and admin middleware aliases', function (): void {
     Route::middleware('bfc.auth')->get('/auth-only', fn (): string => 'auth ok');
     Route::middleware('bfc.admin')->get('/admin-only', fn (): string => 'admin ok');
@@ -117,8 +148,9 @@ it('protects routes through auth and admin middleware aliases', function (): voi
         'name' => 'Admin',
         'email' => 'admin@example.com',
         'password' => Hash::make('secret'),
-        'is_admin' => true,
     ]);
+
+    $admin->forceFill(['is_admin' => true])->save();
 
     $this->get('/auth-only')->assertUnauthorized();
     $this->get('/admin-only')->assertForbidden();
