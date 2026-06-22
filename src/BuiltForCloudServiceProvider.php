@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Commands\CreateAdminCommand;
 use ArtisanBuild\BuiltForCloud\Commands\FallbackTokenGenerateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenCreateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenListCommand;
@@ -11,6 +12,8 @@ use ArtisanBuild\BuiltForCloud\Commands\TokenRevokeCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenRotateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenUsageCommand;
 use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use Illuminate\Support\ServiceProvider;
 
 final class BuiltForCloudServiceProvider extends ServiceProvider
@@ -26,8 +29,14 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     {
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
 
+        if ($this->app->bound('router')) {
+            $this->app['router']->aliasMiddleware('bfc.auth', EnsureUserIsAuthenticated::class);
+            $this->app['router']->aliasMiddleware('bfc.admin', EnsureUserIsAdmin::class);
+        }
+
         if ($this->app->runningInConsole()) {
             $this->commands([
+                CreateAdminCommand::class,
                 FallbackTokenGenerateCommand::class,
                 TokenCreateCommand::class,
                 TokenListCommand::class,
