@@ -161,6 +161,55 @@ Route::middleware('bfc.admin')->group(function () {
 });
 ```
 
+## Installer scaffold
+
+Client packages can share the same `*:install` command plumbing with
+`ArtisanBuild\BuiltForCloud\Commands\Concerns\WritesInstallEnv`. The trait keeps installer commands
+focused on prompts and option parsing while it handles the repeatable side effects:
+
+| Helper | Behaviour |
+| --- | --- |
+| `setEnvironmentValue()` | Purely returns `.env` contents with a key appended or replaced idempotently. Values with spaces or special characters are quoted. |
+| `writeEnvFile()` | Reads an env file, applies key/value updates, writes only when the contents changed, and creates the file when missing. |
+| `pinComposerConstraint()` | Sets `require[vendor/package]` to a clean caret major such as `^2` in `composer.json`, creating `require` when needed. |
+| `summarize()` | Prints a tidy install summary from the consuming Artisan command. |
+
+Prompts stay in the consuming command, so each app can ask the right questions while sharing the file
+and composer mutation logic:
+
+```php
+use ArtisanBuild\BuiltForCloud\Commands\Concerns\WritesInstallEnv;
+use Illuminate\Console\Command;
+
+final class SinkInstallCommand extends Command
+{
+    use WritesInstallEnv;
+
+    protected $signature = 'sink:install {--api-url=}';
+
+    public function handle(): int
+    {
+        $apiUrl = $this->option('api-url') ?: text('Sink API URL');
+
+        $envChanged = $this->writeEnvFile($this->laravel->environmentFilePath(), [
+            'SINK_API_URL' => $apiUrl,
+        ]);
+
+        $this->pinComposerConstraint(base_path('composer.json'), 'artisan-build/sink', 1);
+
+        $this->summarize([
+            'env changed' => $envChanged,
+            'composer package' => 'artisan-build/sink:^1',
+        ]);
+
+        return self::SUCCESS;
+    }
+}
+```
+
+A cloud-provisioning installer command is planned for a future v2 release; this scaffold only covers
+local install command helpers.
+
 ## Contributing
 
 This package is developed by [Artisan Build](https://artisan.build). Issues and pull requests are
