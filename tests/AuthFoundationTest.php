@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\CloudCommandRunner;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidInvitation;
 use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
@@ -34,6 +35,7 @@ it('augments an existing users table with an idempotent is_admin column', functi
 
 it('creates the first admin and refuses another unless forced', function (): void {
     $firstExitCode = Artisan::call('create-admin', [
+        '--execute' => true,
         '--email' => 'a@b.c',
         '--password' => 'secret-pass',
         '--name' => 'Admin',
@@ -46,6 +48,7 @@ it('creates the first admin and refuses another unless forced', function (): voi
         ->and(Hash::check('secret-pass', $admin->password))->toBeTrue();
 
     $secondExitCode = Artisan::call('create-admin', [
+        '--execute' => true,
         '--email' => 'second@b.c',
         '--password' => 'secret-pass',
         '--name' => 'Second Admin',
@@ -55,6 +58,7 @@ it('creates the first admin and refuses another unless forced', function (): voi
         ->and(User::query()->where('is_admin', true)->count())->toBe(1);
 
     $forcedExitCode = Artisan::call('create-admin', [
+        '--execute' => true,
         '--email' => 'forced@b.c',
         '--password' => 'secret-pass',
         '--name' => 'Forced Admin',
@@ -65,12 +69,112 @@ it('creates the first admin and refuses another unless forced', function (): voi
         ->and(User::query()->where('is_admin', true)->count())->toBe(2);
 });
 
+it('stores the provided admin password hash verbatim in execute mode', function (): void {
+    $hash = Hash::make('already-hashed');
+
+    $exitCode = Artisan::call('create-admin', [
+        '--execute' => true,
+        '--email' => 'hashed@b.c',
+        '--password-hash' => $hash,
+        '--name' => 'Hashed Admin',
+    ]);
+
+    $admin = User::query()->where('email', 'hashed@b.c')->firstOrFail();
+
+    expect($exitCode)->toBe(Command::SUCCESS)
+        ->and($admin->password)->toBe($hash);
+});
+
+it('creates an admin locally in driver mode', function (): void {
+    $exitCode = Artisan::call('create-admin', [
+        '--local' => true,
+        '--email' => 'local@b.c',
+        '--password' => 'secret-pass',
+        '--name' => 'Local Admin',
+    ]);
+
+    $admin = User::query()->where('email', 'local@b.c')->firstOrFail();
+
+    expect($exitCode)->toBe(Command::SUCCESS)
+        ->and($admin->is_admin)->toBeTrue()
+        ->and(Hash::check('secret-pass', $admin->password))->toBeTrue();
+});
+
+it('sends an escaped password hash instead of plaintext when creating an admin in cloud', function (): void {
+    $runner = new class extends CloudCommandRunner
+    {
+        public string $environment = '';
+
+        public string $command = '';
+
+        /**
+         * @return array{output: string, exitCode: int}
+         */
+        public function run(string $environment, string $artisanCommand): array
+        {
+            $this->environment = $environment;
+            $this->command = $artisanCommand;
+
+            return ['output' => 'Admin user cloud@example.com created.', 'exitCode' => 0];
+        }
+    };
+
+    app()->instance(CloudCommandRunner::class, $runner);
+
+    $exitCode = Artisan::call('create-admin', [
+        '--environment' => 'env-1',
+        '--email' => 'cloud@example.com',
+        '--password' => 'secret-pass',
+        '--name' => "Cloud Admin'Name",
+        '--force' => true,
+    ]);
+
+    preg_match("/--password-hash='([^']+)'/", $runner->command, $matches);
+
+    expect($exitCode)->toBe(Command::SUCCESS)
+        ->and($runner->environment)->toBe('env-1')
+        ->and($runner->command)->toContain('create-admin --execute')
+        ->and($runner->command)->toContain('--email='.escapeshellarg('cloud@example.com'))
+        ->and($runner->command)->toContain('--name='.escapeshellarg("Cloud Admin'Name"))
+        ->and($matches[1] ?? null)->toBeString()
+        ->and(Hash::check('secret-pass', $matches[1] ?? ''))->toBeTrue()
+        ->and($runner->command)->toContain(' --force')
+        ->and($runner->command)->not->toContain('--password=')
+        ->and($runner->command)->not->toContain('secret-pass');
+});
+
+it('falls back to local target selection when cloud environments cannot be listed', function (): void {
+    $runner = new class extends CloudCommandRunner
+    {
+        /**
+         * @return array<string, string>
+         */
+        public function listEnvironments(): array
+        {
+            return [];
+        }
+    };
+
+    app()->instance(CloudCommandRunner::class, $runner);
+
+    $exitCode = Artisan::call('create-admin', [
+        '--email' => 'fallback@b.c',
+        '--password' => 'secret-pass',
+        '--name' => 'Fallback Admin',
+    ]);
+
+    expect($exitCode)->toBe(Command::SUCCESS)
+        ->and(Artisan::output())->toContain('only local creation is available')
+        ->and(User::query()->where('email', 'fallback@b.c')->where('is_admin', true)->exists())->toBeTrue();
+});
+
 it('fails create-admin clearly when the is_admin column is missing', function (): void {
     Schema::table('users', function (Blueprint $table): void {
         $table->dropColumn('is_admin');
     });
 
     $exitCode = Artisan::call('create-admin', [
+        '--execute' => true,
         '--email' => 'missing@b.c',
         '--password' => 'secret-pass',
         '--name' => 'Missing Column',

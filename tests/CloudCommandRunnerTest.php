@@ -15,6 +15,35 @@ it('resolves a single cloud environment without prompting', function (): void {
     expect((new CloudCommandRunner)->resolveEnvironment())->toBe('env-1');
 });
 
+it('lists cloud environments without prompting', function (): void {
+    config(['built-for-cloud.cloud.application' => 'app-1']);
+
+    Process::fake([
+        '*' => Process::result('[{"id":"env-1","name":"Production"},{"id":"env-2","name":"Staging"}]'),
+    ]);
+
+    expect((new CloudCommandRunner)->listEnvironments())->toBe([
+        'env-1' => 'Production',
+        'env-2' => 'Staging',
+    ]);
+});
+
+it('returns an empty cloud environment list when the cloud cli is unavailable', function (): void {
+    config(['built-for-cloud.cloud.application' => 'app-1']);
+
+    Process::fake([
+        '*' => Process::result('', 'cloud unavailable', 1),
+    ]);
+
+    expect((new CloudCommandRunner)->listEnvironments())->toBe([]);
+});
+
+it('returns an empty cloud environment list when no application is configured', function (): void {
+    config(['built-for-cloud.cloud.application' => null]);
+
+    expect((new CloudCommandRunner)->listEnvironments())->toBe([]);
+});
+
 it('resolves the cloud application id from dot cloud config when config is null', function (): void {
     config(['built-for-cloud.cloud.application' => null]);
 

@@ -9,8 +9,30 @@ use RuntimeException;
 
 use function Laravel\Prompts\select;
 
-final class CloudCommandRunner
+class CloudCommandRunner
 {
+    /**
+     * @return array<string, string>
+     */
+    public function listEnvironments(): array
+    {
+        try {
+            $environments = $this->fetchEnvironments();
+        } catch (RuntimeException) {
+            return [];
+        }
+
+        /** @var array<string, string> $choices */
+        $choices = [];
+
+        foreach ($environments as $environment) {
+            $id = $this->environmentId($environment);
+            $choices[$id] = (string) ($environment['name'] ?? $id);
+        }
+
+        return $choices;
+    }
+
     public function resolveEnvironment(?string $explicit = null): string
     {
         if ($explicit !== null && $explicit !== '') {
@@ -18,20 +40,7 @@ final class CloudCommandRunner
         }
 
         $application = $this->applicationId();
-
-        $result = Process::run([
-            $this->binary(),
-            'environment:list',
-            $application,
-            '--json',
-            '--fields=id,name',
-        ]);
-
-        if (! $result->successful()) {
-            throw new RuntimeException('Unable to list Laravel Cloud environments: '.$result->errorOutput());
-        }
-
-        $environments = $this->decodeJsonArray($result->output());
+        $environments = $this->fetchEnvironments($application);
 
         if ($environments === []) {
             throw new RuntimeException('No environments found for Laravel Cloud application '.$application.'.');
@@ -54,6 +63,28 @@ final class CloudCommandRunner
             label: 'Select the Laravel Cloud environment',
             options: $choices,
         );
+    }
+
+    /**
+     * @return list<array{id: mixed, name?: mixed}>
+     */
+    private function fetchEnvironments(?string $application = null): array
+    {
+        $application ??= $this->applicationId();
+
+        $result = Process::run([
+            $this->binary(),
+            'environment:list',
+            $application,
+            '--json',
+            '--fields=id,name',
+        ]);
+
+        if (! $result->successful()) {
+            throw new RuntimeException('Unable to list Laravel Cloud environments: '.$result->errorOutput());
+        }
+
+        return $this->decodeJsonArray($result->output());
     }
 
     /**
