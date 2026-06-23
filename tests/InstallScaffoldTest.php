@@ -35,6 +35,38 @@ it('sets new and existing environment values without disturbing unrelated lines'
         ->and(substr_count($updated, 'EXISTING='))->toBe(1);
 });
 
+it('does not replace env keys with matching prefixes', function (): void {
+    $harness = new InstallScaffoldHarness;
+
+    $updated = $harness->setEnvironmentValue("TOKEN_SUFFIX=keepme\n", 'TOKEN', 'new');
+
+    expect($updated)->toContain("TOKEN_SUFFIX=keepme\n")
+        ->and($updated)->toContain("TOKEN=new\n")
+        ->and(substr_count($updated, 'TOKEN_SUFFIX='))->toBe(1)
+        ->and(substr_count($updated, 'TOKEN='))->toBe(1);
+});
+
+it('escapes newlines and quotes in env values to prevent injected variables', function (): void {
+    $harness = new InstallScaffoldHarness;
+
+    $updated = $harness->setEnvironmentValue('', 'SECRET', "a\nINJECTED=yes \"quoted\"");
+
+    expect($updated)->toBe("SECRET=\"a\\nINJECTED\\=yes \\\"quoted\\\"\"\n")
+        ->and(substr_count($updated, 'SECRET='))->toBe(1)
+        ->and(substr_count($updated, 'INJECTED='))->toBe(0);
+});
+
+it('quotes empty env values idempotently', function (): void {
+    $harness = new InstallScaffoldHarness;
+
+    $updated = $harness->setEnvironmentValue('', 'EMPTY_KEY', '');
+    $secondWrite = $harness->setEnvironmentValue($updated, 'EMPTY_KEY', '');
+
+    expect($updated)->toBe("EMPTY_KEY=\"\"\n")
+        ->and($secondWrite)->toBe($updated)
+        ->and($updated)->not->toContain("EMPTY_KEY=\n");
+});
+
 it('writes env files idempotently and creates missing files', function (): void {
     $harness = new InstallScaffoldHarness;
     $path = install_scaffold_temp_dir().'/.env';
@@ -55,6 +87,14 @@ it('writes env files idempotently and creates missing files', function (): void 
     ]))->toBeFalse()
         ->and(substr_count((string) file_get_contents($path), 'FIRST_KEY='))->toBe(1)
         ->and(substr_count((string) file_get_contents($path), 'SECOND_KEY='))->toBe(1);
+});
+
+it('throws when env files cannot be written', function (): void {
+    $harness = new InstallScaffoldHarness;
+    $path = install_scaffold_temp_dir().'/missing-parent/.env';
+
+    expect(fn () => $harness->writeEnvFile($path, ['KEY' => 'value']))
+        ->toThrow(RuntimeException::class, "Unable to write env file at {$path}.");
 });
 
 it('pins composer constraints while preserving other require entries', function (): void {
@@ -82,6 +122,14 @@ it('pins composer constraints while preserving other require entries', function 
     $harness->pinComposerConstraint($path, 'vendor/pkg', 3);
 
     expect((string) file_get_contents($path))->toBe($firstWrite);
+});
+
+it('throws when composer constraints cannot be written', function (): void {
+    $harness = new InstallScaffoldHarness;
+    $path = install_scaffold_temp_dir().'/missing-parent/composer.json';
+
+    expect(fn () => $harness->pinComposerConstraint($path, 'vendor/pkg', 3))
+        ->toThrow(RuntimeException::class, "Unable to write composer.json at {$path}.");
 });
 
 it('runs end to end from a consuming artisan command', function (): void {

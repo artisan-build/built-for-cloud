@@ -40,7 +40,9 @@ trait WritesInstallEnv
             return false;
         }
 
-        file_put_contents($path, $contents);
+        if (@file_put_contents($path, $contents) === false) {
+            throw new RuntimeException("Unable to write env file at {$path}.");
+        }
 
         return true;
     }
@@ -68,10 +70,14 @@ trait WritesInstallEnv
         $require[$package] = $constraint;
         $composer['require'] = $require;
 
-        file_put_contents(
+        $written = @file_put_contents(
             $composerJsonPath,
             json_encode($composer, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR).PHP_EOL,
         );
+
+        if ($written === false) {
+            throw new RuntimeException("Unable to write composer.json at {$composerJsonPath}.");
+        }
     }
 
     /**
@@ -96,7 +102,8 @@ trait WritesInstallEnv
             return $value;
         }
 
-        return '"'.str_replace(['\\', '"', "\n", "\r"], ['\\\\', '\\"', '\\n', ''], $value).'"';
+        // A lone carriage return is dropped so generated .env files cannot break CRLF boundaries.
+        return '"'.str_replace(['\\', '"', "\n", "\r", '='], ['\\\\', '\\"', '\\n', '', '\\='], $value).'"';
     }
 
     /**
