@@ -19,6 +19,7 @@ use Illuminate\Database\Eloquent\Model;
  * @property int $request_count
  * @property CarbonInterface|null $expires_at
  * @property CarbonInterface|null $revoked_at
+ * @property array<int, string>|null $abilities
  * @property CarbonInterface|null $created_at
  * @property CarbonInterface|null $updated_at
  *
@@ -46,6 +47,7 @@ final class ApiToken extends Model
         'request_count',
         'expires_at',
         'revoked_at',
+        'abilities',
     ];
 
     /**
@@ -58,7 +60,17 @@ final class ApiToken extends Model
             'expires_at' => 'datetime',
             'revoked_at' => 'datetime',
             'request_count' => 'integer',
+            'abilities' => 'array',
         ];
+    }
+
+    public function hasAbility(string $ability): bool
+    {
+        if ($this->abilities === null || $this->abilities === []) {
+            return false;
+        }
+
+        return in_array($ability, $this->abilities, true);
     }
 
     /**

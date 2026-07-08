@@ -42,7 +42,40 @@ final class TokenRegistry
         return $row->name;
     }
 
-    public function store(string $name, string $hash, ?CarbonInterface $expiresAt = null): ApiToken
+    public function resolveModel(string $bearer): ?ApiToken
+    {
+        if ($bearer === '') {
+            return null;
+        }
+
+        $fallback = config('built-for-cloud.fallback_token');
+
+        if ($fallback !== null && $fallback !== '' && hash_equals(hash('sha256', (string) $fallback), hash('sha256', $bearer))) {
+            return null;
+        }
+
+        /** @var ApiToken|null $row */
+        $row = ApiToken::query()
+            ->where('token_hash', hash('sha256', $bearer))
+            ->resolvable()
+            ->first();
+
+        if ($row === null) {
+            return null;
+        }
+
+        ApiToken::query()->whereKey($row->getKey())->update([
+            'request_count' => DB::raw('request_count + 1'),
+            'last_used_at' => now(),
+        ]);
+
+        return $row->refresh();
+    }
+
+    /**
+     * @param  list<string>  $abilities
+     */
+    public function store(string $name, string $hash, ?CarbonInterface $expiresAt = null, array $abilities = []): ApiToken
     {
         if ($name === self::FALLBACK) {
             throw new InvalidArgumentException('The fallback token name is reserved.');
@@ -57,6 +90,7 @@ final class TokenRegistry
             'token_hash' => $hash,
             'expires_at' => $expiresAt,
             'revoked_at' => null,
+            'abilities' => $abilities === [] ? null : $abilities,
         ]);
     }
 

@@ -49,7 +49,52 @@ it('creates a token row in execute mode', function (): void {
         '--hash' => $hash,
     ]);
 
-    expect(ApiToken::query()->where('name', 'app')->where('token_hash', $hash)->exists())->toBeTrue();
+    $token = ApiToken::query()->where('name', 'app')->where('token_hash', $hash)->firstOrFail();
+
+    expect($token->exists)->toBeTrue()
+        ->and($token->abilities)->toBeNull();
+});
+
+it('creates a token row with abilities in execute mode', function (): void {
+    $hash = hash('sha256', 'create-admin-secret');
+
+    Artisan::call('token:create', [
+        'name' => 'app',
+        '--execute' => true,
+        '--hash' => $hash,
+        '--abilities' => ' admin, ,ci ',
+    ]);
+
+    $token = ApiToken::query()->where('name', 'app')->where('token_hash', $hash)->firstOrFail();
+
+    expect($token->abilities)->toBe(['admin', 'ci']);
+});
+
+it('forwards token create abilities in driver mode without sending plaintext to cloud', function (): void {
+    Process::fake([
+        '*' => Process::result('{"output":"Token app stored.\\n","exitCode":0}'),
+    ]);
+
+    Artisan::call('token:create', [
+        'name' => 'app',
+        '--environment' => 'env-1',
+        '--abilities' => 'admin',
+    ]);
+
+    $output = Artisan::output();
+
+    preg_match('/Save this token - shown once: (tok_[0-9a-f]{64})/', $output, $matches);
+    $plaintext = $matches[1] ?? '';
+
+    Process::assertRan(function ($process) use ($plaintext): bool {
+        $command = $process->command[4] ?? '';
+
+        return is_string($command)
+            && str_contains($command, 'token:create')
+            && str_contains($command, '--execute')
+            && str_contains($command, '--abilities='.escapeshellarg('admin'))
+            && ! str_contains($command, $plaintext);
+    });
 });
 
 it('runs token rotate in driver mode without sending plaintext to cloud', function (): void {

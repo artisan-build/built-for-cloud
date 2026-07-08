@@ -11,16 +11,17 @@ use Illuminate\Console\Command;
 
 final class TokenCreateCommand extends Command
 {
-    protected $signature = 'token:create {name} {--execute} {--hash=} {--environment=}';
+    protected $signature = 'token:create {name} {--execute} {--hash=} {--environment=} {--abilities=}';
 
     protected $description = 'Create a Built for Cloud API token';
 
     public function handle(CloudCommandRunner $runner, TokenGenerator $generator, TokenRegistry $registry): int
     {
         $name = (string) $this->argument('name');
+        $abilities = $this->abilitiesOption();
 
         if ((bool) $this->option('execute')) {
-            $registry->store($name, (string) $this->option('hash'));
+            $registry->store($name, (string) $this->option('hash'), abilities: $abilities);
             $this->line("Token {$name} stored.");
 
             return self::SUCCESS;
@@ -28,7 +29,7 @@ final class TokenCreateCommand extends Command
 
         $generated = $generator->generate();
         $environment = $runner->resolveEnvironment($this->stringOption('environment'));
-        $result = $runner->run($environment, 'token:create '.$this->quote($name).' --execute --hash='.$generated->hash);
+        $result = $runner->run($environment, 'token:create '.$this->quote($name).' --execute --hash='.$generated->hash.$this->remoteAbilitiesOption($abilities));
 
         $this->line($result['output']);
 
@@ -51,5 +52,34 @@ final class TokenCreateCommand extends Command
     private function quote(string $value): string
     {
         return escapeshellarg($value);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function abilitiesOption(): array
+    {
+        $value = $this->stringOption('abilities');
+
+        if ($value === null) {
+            return [];
+        }
+
+        return array_values(array_filter(array_map(
+            static fn (string $ability): string => trim($ability),
+            explode(',', $value),
+        ), static fn (string $ability): bool => $ability !== ''));
+    }
+
+    /**
+     * @param  list<string>  $abilities
+     */
+    private function remoteAbilitiesOption(array $abilities): string
+    {
+        if ($abilities === []) {
+            return '';
+        }
+
+        return ' --abilities='.$this->quote(implode(',', $abilities));
     }
 }
