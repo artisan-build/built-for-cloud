@@ -35,6 +35,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Credential API
+    |--------------------------------------------------------------------------
+    |
+    | Disabled by default. When enabled, a token-admin guarded JSON API can
+    | issue, list, and revoke plain access tokens without sessions or CSRF.
+    |
+    */
+
+    'credential_api' => [
+        'enabled' => env('BUILT_FOR_CLOUD_CREDENTIAL_API_ENABLED', false),
+        'prefix' => env('BUILT_FOR_CLOUD_CREDENTIAL_API_PREFIX', 'api/credentials'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Cloud CLI
     |--------------------------------------------------------------------------
     |

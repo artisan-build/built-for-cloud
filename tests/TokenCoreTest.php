@@ -168,3 +168,10 @@ it('provides an api token factory with a default active token', function (): voi
     expect($token->exists)->toBeTrue()
         ->and($token->expires_at)->toBeNull();
 });
+
+it('checks token abilities strictly', function (): void {
+    expect(ApiToken::factory()->make(['abilities' => null])->hasAbility('admin'))->toBeFalse()
+        ->and(ApiToken::factory()->make(['abilities' => []])->hasAbility('admin'))->toBeFalse()
+        ->and(ApiToken::factory()->make(['abilities' => ['admin']])->hasAbility('admin'))->toBeTrue()
+        ->and(ApiToken::factory()->make(['abilities' => ['admin']])->hasAbility('ci'))->toBeFalse();
+});

@@ -12,8 +12,11 @@ use ArtisanBuild\BuiltForCloud\Commands\TokenRevokeCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenRotateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenUsageCommand;
 use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
+use Illuminate\Routing\Router;
 use Illuminate\Support\ServiceProvider;
 
 final class BuiltForCloudServiceProvider extends ServiceProvider
@@ -30,8 +33,22 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
 
         if ($this->app->bound('router')) {
-            $this->app['router']->aliasMiddleware('bfc.auth', EnsureUserIsAuthenticated::class);
-            $this->app['router']->aliasMiddleware('bfc.admin', EnsureUserIsAdmin::class);
+            /** @var Router $router */
+            $router = $this->app['router'];
+
+            $router->aliasMiddleware('bfc.auth', EnsureUserIsAuthenticated::class);
+            $router->aliasMiddleware('bfc.admin', EnsureUserIsAdmin::class);
+            $router->aliasMiddleware('bfc.token.admin', EnsureAdminToken::class);
+
+            if ((bool) config('built-for-cloud.credential_api.enabled', false)) {
+                $router->prefix(trim((string) config('built-for-cloud.credential_api.prefix', 'api/credentials'), '/'))
+                    ->middleware('bfc.token.admin')
+                    ->group(function (Router $router): void {
+                        $router->get('/', [ManageTokens::class, 'index']);
+                        $router->post('/', [ManageTokens::class, 'store']);
+                        $router->delete('/{name}', [ManageTokens::class, 'destroy']);
+                    });
+            }
         }
 
         if ($this->app->runningInConsole()) {
