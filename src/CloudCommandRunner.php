@@ -184,6 +184,10 @@ class CloudCommandRunner
     }
 
     /**
+     * The cloud CLI streams newline-delimited JSON in monitor mode: zero or
+     * more {status,...} progress lines followed by the result object, so the
+     * result is the last line that parses to an object with an exitCode key.
+     *
      * @return array<string, mixed>
      */
     private function decodeJsonObject(string $json): array
@@ -191,11 +195,39 @@ class CloudCommandRunner
         /** @var mixed $decoded */
         $decoded = json_decode($json, true);
 
-        if (! is_array($decoded) || array_is_list($decoded)) {
-            throw new RuntimeException('Laravel Cloud returned invalid JSON.');
+        if (is_array($decoded) && ! array_is_list($decoded)) {
+            /** @var array<string, mixed> $decoded */
+            return $decoded;
         }
 
-        /** @var array<string, mixed> $decoded */
-        return $decoded;
+        $lines = array_filter(
+            array_map('trim', explode("\n", $json)),
+            static fn (string $line): bool => $line !== '',
+        );
+
+        /** @var array<string, mixed>|null $fallback */
+        $fallback = null;
+
+        foreach (array_reverse($lines) as $line) {
+            /** @var mixed $decoded */
+            $decoded = json_decode($line, true);
+
+            if (! is_array($decoded) || array_is_list($decoded)) {
+                continue;
+            }
+
+            /** @var array<string, mixed> $decoded */
+            if (array_key_exists('exitCode', $decoded)) {
+                return $decoded;
+            }
+
+            $fallback ??= $decoded;
+        }
+
+        if ($fallback !== null) {
+            return $fallback;
+        }
+
+        throw new RuntimeException('Laravel Cloud returned invalid JSON.');
     }
 }
