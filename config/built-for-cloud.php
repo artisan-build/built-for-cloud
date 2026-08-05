@@ -6,6 +6,18 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Product Name
+    |--------------------------------------------------------------------------
+    |
+    | Human-readable product name exposed through the unauthenticated metadata
+    | endpoint so consoles can identify the target environment.
+    |
+    */
+
+    'product' => env('BUILT_FOR_CLOUD_PRODUCT', env('APP_NAME', 'Laravel')),
+
+    /*
+    |--------------------------------------------------------------------------
     | Fallback Token
     |--------------------------------------------------------------------------
     |
