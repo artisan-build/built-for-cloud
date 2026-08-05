@@ -13,7 +13,7 @@ return new class extends Migration
         Schema::create('invitations', function (Blueprint $table): void {
             $table->uuid('id')->primary();
             $table->string('email')->index();
-            $table->string('token')->unique();
+            $table->string('token', 64)->unique();
             $table->uuid('invited_by')->nullable();
             $table->timestamp('accepted_at')->nullable();
             $table->timestamp('expires_at')->nullable();

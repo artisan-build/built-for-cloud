@@ -23,7 +23,7 @@ final class InvitationFactory extends Factory
     {
         return [
             'email' => fake()->unique()->safeEmail(),
-            'token' => Str::random(40),
+            'token' => hash('sha256', Str::random(40)),
             'expires_at' => now()->addDays(7),
         ];
     }
