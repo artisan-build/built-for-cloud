@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\TokenGenerator;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -44,7 +46,7 @@ final class ManageTokens
             'name' => ['required', 'string'],
             'expires_at' => ['nullable', 'date'],
             'abilities' => ['nullable', 'array'],
-            'abilities.*' => ['string'],
+            'abilities.*' => ['string', Rule::in(Scope::values())],
         ]);
 
         $name = trim($validated['name']);
