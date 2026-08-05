@@ -6,7 +6,7 @@ namespace ArtisanBuild\BuiltForCloud;
 
 final class BuiltForCloud
 {
-    public const VERSION = '0.1.x';
+    public const VERSION = '0.3.0';
 
     public const API_VERSION = 1;
 }
