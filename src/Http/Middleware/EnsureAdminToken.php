@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
 
+use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Closure;
@@ -36,6 +37,13 @@ final class EnsureAdminToken
         }
 
         if ($this->tokens->resolve($bearer) !== null) {
+            abort(403);
+        }
+
+        if (ApiToken::query()
+            ->where('token_hash', hash('sha256', $bearer))
+            ->whereNotNull('revoked_at')
+            ->exists()) {
             abort(403);
         }
 
