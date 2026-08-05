@@ -36,6 +36,8 @@ final class Invitation extends Model
 
     use HasUuids;
 
+    private ?string $plainTextToken = null;
+
     public $incrementing = false;
 
     protected $keyType = 'string';
@@ -66,15 +68,20 @@ final class Invitation extends Model
     public static function invite(string $email, ?string $invitedBy = null, ?DateTimeInterface $expiresAt = null): self
     {
         do {
-            $token = Str::random(40);
-        } while (self::query()->where('token', $token)->exists());
+            $plainTextToken = Str::random(40);
+            $tokenHash = self::hashToken($plainTextToken);
+        } while (self::query()->where('token', $tokenHash)->exists());
 
-        return self::query()->create([
+        $invitation = self::query()->create([
             'email' => $email,
-            'token' => $token,
+            'token' => $tokenHash,
             'invited_by' => $invitedBy,
             'expires_at' => $expiresAt ?? now()->addDays(7),
         ]);
+
+        $invitation->plainTextToken = $plainTextToken;
+
+        return $invitation;
     }
 
     /**
@@ -83,7 +90,7 @@ final class Invitation extends Model
     public static function accept(string $token, array $attributes): Model
     {
         return DB::transaction(function () use ($token, $attributes): Model {
-            $invitation = self::query()->pending()->where('token', $token)->lockForUpdate()->first();
+            $invitation = self::query()->pending()->where('token', self::hashToken($token))->lockForUpdate()->first();
 
             if (! $invitation instanceof self) {
                 throw InvalidInvitation::forToken($token);
@@ -143,6 +150,11 @@ final class Invitation extends Model
             ->whereNull('accepted_at');
     }
 
+    public function getTokenAttribute(string $value): string
+    {
+        return $this->plainTextToken ?? $value;
+    }
+
     protected static function newFactory(): InvitationFactory
     {
         return InvitationFactory::new();
@@ -158,5 +170,10 @@ final class Invitation extends Model
         return is_string($configured) && is_a($configured, Model::class, true)
             ? $configured
             : 'App\\Models\\User';
+    }
+
+    private static function hashToken(string $token): string
+    {
+        return hash('sha256', $token);
     }
 }

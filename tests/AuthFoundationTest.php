@@ -187,16 +187,20 @@ it('fails create-admin clearly when the is_admin column is missing', function ()
 
 it('creates and accepts invitations exactly once', function (): void {
     $invitation = Invitation::invite('new@user.test');
+    $plainTextToken = $invitation->token;
+    $tokenHash = hash('sha256', $plainTextToken);
 
-    expect($invitation->token)->not->toBe('')
+    expect($plainTextToken)->not->toBe('')
         ->and($invitation->expires_at?->isFuture())->toBeTrue()
-        ->and(Invitation::query()->pending()->whereKey($invitation->getKey())->exists())->toBeTrue();
+        ->and(Invitation::query()->pending()->whereKey($invitation->getKey())->exists())->toBeTrue()
+        ->and(Invitation::query()->whereKey($invitation->getKey())->value('token'))->toBe($tokenHash)
+        ->and(Invitation::query()->whereKey($invitation->getKey())->value('token'))->not->toBe($plainTextToken);
 
     $secondInvitation = Invitation::invite('another@user.test');
 
-    expect($secondInvitation->token)->not->toBe($invitation->token);
+    expect($secondInvitation->token)->not->toBe($plainTextToken);
 
-    $user = Invitation::accept($invitation->token, [
+    $user = Invitation::accept($plainTextToken, [
         'name' => 'New',
         'password' => 'pw',
     ]);
@@ -208,7 +212,7 @@ it('creates and accepts invitations exactly once', function (): void {
         ->and($invitation->accepted_at)->not->toBeNull()
         ->and(User::query()->where('email', 'new@user.test')->exists())->toBeTrue();
 
-    expect(fn () => Invitation::accept($invitation->token, ['name' => 'Again', 'password' => 'pw']))
+    expect(fn () => Invitation::accept($plainTextToken, ['name' => 'Again', 'password' => 'pw']))
         ->toThrow(InvalidInvitation::class);
 
     $expired = Invitation::factory()->create([
