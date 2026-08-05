@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Orchestra\Testbench\Attributes\WithConfig;
@@ -38,12 +39,12 @@ final class CredentialApiTest extends TestCase
     {
         $response = $this->postJson('/api/credentials', [
             'name' => 'ci-admin',
-            'abilities' => ['admin'],
+            'abilities' => [Scope::Admin->value],
         ], $this->credentialAdminHeaders());
 
         $response->assertCreated()
             ->assertJsonPath('name', 'ci-admin')
-            ->assertJsonPath('abilities', ['admin']);
+            ->assertJsonPath('abilities', [Scope::Admin->value]);
 
         $plaintext = (string) $response->json('plaintext');
         $hash = hash('sha256', $plaintext);
@@ -53,11 +54,46 @@ final class CredentialApiTest extends TestCase
             ->where('token_hash', $hash)
             ->firstOrFail();
 
-        $this->assertSame(['admin'], $token->abilities);
+        $this->assertSame([Scope::Admin->value], $token->abilities);
 
         $this->postJson('/api/credentials', [
             'name' => 'admin-gated',
         ], ['Authorization' => 'Bearer '.$plaintext])->assertCreated();
+    }
+
+    public function test_it_issues_a_consume_token_through_the_credential_api(): void
+    {
+        $response = $this->postJson('/api/credentials', [
+            'name' => 'ci-consume',
+            'abilities' => [Scope::Consume->value],
+        ], $this->credentialAdminHeaders());
+
+        $response->assertCreated()
+            ->assertJsonPath('name', 'ci-consume')
+            ->assertJsonPath('abilities', [Scope::Consume->value]);
+
+        $plaintext = (string) $response->json('plaintext');
+        $hash = hash('sha256', $plaintext);
+
+        $token = ApiToken::query()
+            ->where('name', 'ci-consume')
+            ->where('token_hash', $hash)
+            ->firstOrFail();
+
+        $this->assertSame([Scope::Consume->value], $token->abilities);
+    }
+
+    public function test_admin_gate_rejects_a_consume_only_token(): void
+    {
+        ApiToken::factory()->create([
+            'name' => 'consume',
+            'token_hash' => hash('sha256', 'consume-secret'),
+            'abilities' => [Scope::Consume->value],
+        ]);
+
+        $this->postJson('/api/credentials', [
+            'name' => 'consume-gated',
+        ], ['Authorization' => 'Bearer consume-secret'])->assertForbidden();
     }
 
     public function test_it_revokes_a_credential_api_token(): void
@@ -85,7 +121,7 @@ final class CredentialApiTest extends TestCase
             'last_used_at' => now(),
             'expires_at' => now()->addDay(),
             'revoked_at' => null,
-            'abilities' => ['admin'],
+            'abilities' => [Scope::Admin->value],
         ]);
 
         $response = $this->getJson('/api/credentials', $this->credentialAdminHeaders());
@@ -96,7 +132,7 @@ final class CredentialApiTest extends TestCase
             ]);
 
         $this->assertSame('ci', $response->json('0.name'));
-        $this->assertSame(['admin'], $response->json('0.abilities'));
+        $this->assertSame([Scope::Admin->value], $response->json('0.abilities'));
         $this->assertStringNotContainsString($plaintext, (string) $response->getContent());
         $this->assertStringNotContainsString('token_hash', (string) $response->getContent());
         $this->assertStringNotContainsString($hash, (string) $response->getContent());
@@ -116,7 +152,7 @@ final class CredentialApiTest extends TestCase
         ApiToken::factory()->create([
             'name' => 'expired-admin',
             'token_hash' => hash('sha256', 'expired-admin-secret'),
-            'abilities' => ['admin'],
+            'abilities' => [Scope::Admin->value],
             'expires_at' => now()->subMinute(),
         ]);
 
@@ -169,8 +205,9 @@ final class CredentialApiTest extends TestCase
     public static function invalidAbilities(): array
     {
         return [
-            'string' => ['admin'],
+            'string' => [Scope::Admin->value],
             'non-string item' => [[123]],
+            'unknown scope' => [['superuser']],
         ];
     }
 
@@ -182,7 +219,7 @@ final class CredentialApiTest extends TestCase
         ApiToken::factory()->create([
             'name' => 'admin',
             'token_hash' => hash('sha256', $plaintext),
-            'abilities' => ['admin'],
+            'abilities' => [Scope::Admin->value],
         ]);
 
         return ['Authorization' => 'Bearer '.$plaintext];

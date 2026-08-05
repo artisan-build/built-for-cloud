@@ -73,6 +73,11 @@ final class ApiToken extends Model
         return in_array($ability, $this->abilities, true);
     }
 
+    public function hasScope(Scope $scope): bool
+    {
+        return $this->hasAbility($scope->value);
+    }
+
     /**
      * @param  Builder<ApiToken>  $query
      * @return Builder<ApiToken>

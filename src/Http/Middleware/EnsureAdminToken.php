@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
 
+use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Closure;
 use Illuminate\Http\Request;
@@ -27,7 +28,7 @@ final class EnsureAdminToken
         $token = $this->tokens->resolveModel($bearer);
 
         if ($token !== null) {
-            if ($token->hasAbility('admin')) {
+            if ($token->hasScope(Scope::Admin)) {
                 return $next($request);
             }
 
