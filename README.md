@@ -210,6 +210,30 @@ final class SinkInstallCommand extends Command
 A cloud-provisioning installer command is planned for a future v2 release; this scaffold only covers
 local install command helpers.
 
+## Contract conformance
+
+Consuming apps can run the package contract kit in CI to prove their installed app still exposes the
+Built for Cloud routes, auth gates, token model shape, and scope vocabulary expected by the shared
+contract. Add a test in the consuming app's own suite after the package migrations are available:
+
+```php
+<?php
+
+use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+
+uses(RefreshDatabase::class);
+uses(ContractAssertions::class);
+
+it('satisfies the Built for Cloud contract', function (): void {
+    $this->assertBuiltForCloudContract();
+});
+```
+
+The trait is shipped under the package's normal PSR-4 autoload (`src/Testing`), so downstream tests can
+import it directly from `ArtisanBuild\BuiltForCloud\Testing\ContractAssertions`. It includes helpers
+for minting admin and consume-scoped API tokens when an app wants to assert individual contract areas.
+
 ## Contributing
 
 This package is developed by [Artisan Build](https://artisan.build). Issues and pull requests are
