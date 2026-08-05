@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
+use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
 use ArtisanBuild\BuiltForCloud\Scope;
@@ -48,6 +50,8 @@ final class ManageOwnership
             $ownerToken = $this->tokens->store('owner', $generated->hash, abilities: [Scope::Admin->value]);
             $webhookSecret = bin2hex(random_bytes(32));
             $now = now();
+            $oldCallbackUrl = $ownership?->notify_callback;
+            $oldWebhookSecret = $ownership?->webhook_secret;
 
             if ($ownership === null) {
                 $ownership = Ownership::query()->create([
@@ -72,6 +76,15 @@ final class ManageOwnership
                     'webhook_secret' => $webhookSecret,
                     'pending_claim_id' => null,
                 ])->save();
+
+                if ($isPendingTransfer && $oldWebhookSecret !== null) {
+                    event(new OwnershipTransferred(
+                        callbackUrl: $oldCallbackUrl,
+                        secret: $oldWebhookSecret,
+                        event: 'ownership.transferred',
+                        payload: ['product' => config('built-for-cloud.product')],
+                    ));
+                }
             }
 
             $claim->forceFill(['consumed_at' => $now])->save();
@@ -86,12 +99,9 @@ final class ManageOwnership
 
     public function release(Request $request): JsonResponse
     {
-        /** @var array{notify_callback?: string|null} $validated */
-        $validated = $request->validate([
-            'notify_callback' => ['nullable', 'url'],
-        ]);
+        $request->validate([]);
 
-        return DB::transaction(function () use ($validated): JsonResponse {
+        return DB::transaction(function (): JsonResponse {
             $ownership = Ownership::query()->lockForUpdate()->first();
 
             if ($ownership === null || $ownership->owner_token_id === null) {
@@ -105,11 +115,17 @@ final class ManageOwnership
             [$swapToken, $claim] = $this->mintClaim();
 
             $ownership->forceFill([
-                'notify_callback' => array_key_exists('notify_callback', $validated)
-                    ? $validated['notify_callback']
-                    : $ownership->notify_callback,
                 'pending_claim_id' => $claim->getKey(),
             ])->save();
+
+            if ($ownership->webhook_secret !== null) {
+                event(new OwnershipReleasePending(
+                    callbackUrl: $ownership->notify_callback,
+                    secret: $ownership->webhook_secret,
+                    event: 'ownership.release_pending',
+                    payload: ['product' => config('built-for-cloud.product')],
+                ));
+            }
 
             return response()->json(['swap_token' => $swapToken], 201);
         });

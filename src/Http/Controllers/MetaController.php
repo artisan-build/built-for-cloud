@@ -18,7 +18,7 @@ final class MetaController
             'product' => config('built-for-cloud.product'),
             'bfc_version' => BuiltForCloud::VERSION,
             'api_version' => BuiltForCloud::API_VERSION,
-            'capabilities' => ['tokens', 'ownership', 'onboarding'],
+            'capabilities' => ['tokens', 'ownership', 'onboarding', 'webhooks'],
             'claimed' => $ownership !== null && $ownership->owner_token_id !== null,
         ]);
     }

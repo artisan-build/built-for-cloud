@@ -12,6 +12,8 @@ use ArtisanBuild\BuiltForCloud\Commands\TokenRevokeCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenRotateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenUsageCommand;
 use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
+use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
+use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
@@ -19,7 +21,9 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
+use ArtisanBuild\BuiltForCloud\Listeners\QueueOwnershipWebhook;
 use Illuminate\Routing\Router;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 
 final class BuiltForCloudServiceProvider extends ServiceProvider
@@ -34,6 +38,9 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+
+        Event::listen(OwnershipReleasePending::class, QueueOwnershipWebhook::class);
+        Event::listen(OwnershipTransferred::class, QueueOwnershipWebhook::class);
 
         if ($this->app->bound('router')) {
             /** @var Router $router */
