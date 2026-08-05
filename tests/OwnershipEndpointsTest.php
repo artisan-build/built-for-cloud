@@ -9,12 +9,14 @@ use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
 use ArtisanBuild\BuiltForCloud\Scope;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Route;
 
 uses(RefreshDatabase::class);
 
 beforeEach(function (): void {
     config(['built-for-cloud.product' => 'Sink']);
+    Queue::fake();
 
     Route::middleware('bfc.token.admin')->post('/owner-gate', fn (): array => ['ok' => true]);
 });
