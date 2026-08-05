@@ -24,12 +24,13 @@ final class ManageTokens
     {
         $tokens = ApiToken::query()
             ->orderBy('created_at')
-            ->get(['name', 'last_used_at', 'expires_at', 'revoked_at'])
+            ->get(['name', 'last_used_at', 'expires_at', 'revoked_at', 'abilities'])
             ->map(static fn (ApiToken $token): array => [
                 'name' => $token->name,
                 'last_used_at' => $token->last_used_at,
                 'expires_at' => $token->expires_at,
                 'revoked_at' => $token->revoked_at,
+                'abilities' => $token->abilities ?? [],
             ])
             ->values();
 
@@ -38,10 +39,12 @@ final class ManageTokens
 
     public function store(Request $request): JsonResponse
     {
-        /** @var array{name: string, expires_at?: string|null} $validated */
+        /** @var array{name: string, expires_at?: string|null, abilities?: list<string>|null} $validated */
         $validated = $request->validate([
             'name' => ['required', 'string'],
             'expires_at' => ['nullable', 'date'],
+            'abilities' => ['nullable', 'array'],
+            'abilities.*' => ['string'],
         ]);
 
         $name = trim($validated['name']);
@@ -56,13 +59,15 @@ final class ManageTokens
         $expiresAt = isset($validated['expires_at'])
             ? Carbon::parse($validated['expires_at'])
             : null;
+        $abilities = array_values($validated['abilities'] ?? []);
 
-        $this->tokens->store($name, $generated->hash, $expiresAt);
+        $this->tokens->store($name, $generated->hash, $expiresAt, $abilities);
 
         return response()->json([
             'name' => $name,
             'plaintext' => $generated->plaintext,
             'expires_at' => $expiresAt,
+            'abilities' => $abilities,
         ], 201);
     }
 
