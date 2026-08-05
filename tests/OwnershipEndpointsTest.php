@@ -96,7 +96,7 @@ it('cuts over ownership with the pending claim and revokes the old owner token',
     expect($oldOwnerToken->expires_at)->not->toBeNull()
         ->and($oldOwnerToken->revoked_at)->not->toBeNull();
 
-    $this->postJson('/owner-gate', [], ownerHeaders($ownerPlaintext))->assertForbidden();
+    $this->postJson('/owner-gate', [], ownerHeaders($ownerPlaintext))->assertUnauthorized();
     $this->postJson('/owner-gate', [], ownerHeaders($newOwnerPlaintext))->assertOk();
 });
 
