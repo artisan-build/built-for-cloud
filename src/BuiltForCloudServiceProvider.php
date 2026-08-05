@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\Commands\TokenRevokeCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenRotateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenUsageCommand;
 use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
@@ -43,6 +44,15 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
 
             $router->get('/bfc/meta', MetaController::class)
                 ->middleware('throttle:60,1');
+
+            $router->post('/bfc/ownership/claim', [ManageOwnership::class, 'claim'])
+                ->middleware('throttle:10,1');
+
+            $router->post('/bfc/ownership/release', [ManageOwnership::class, 'release'])
+                ->middleware('bfc.token.admin');
+
+            $router->post('/bfc/ownership/cancel-transfer', [ManageOwnership::class, 'cancelTransfer'])
+                ->middleware('bfc.token.admin');
 
             if ((bool) config('built-for-cloud.credential_api.enabled', false)) {
                 $router->prefix(trim((string) config('built-for-cloud.credential_api.prefix', 'api/credentials'), '/'))
