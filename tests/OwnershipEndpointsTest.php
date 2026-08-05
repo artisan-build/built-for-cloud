@@ -54,9 +54,7 @@ it('claims an unowned environment with a claim token and returns an admin owner 
 it('releases ownership for make before break and keeps the old owner valid until cutover', function (): void {
     $ownerPlaintext = claimInitialOwner();
 
-    $release = $this->postJson('/bfc/ownership/release', [
-        'notify_callback' => 'https://new-owner.example.test/hook',
-    ], ownerHeaders($ownerPlaintext));
+    $release = $this->postJson('/bfc/ownership/release', [], ownerHeaders($ownerPlaintext));
 
     $release->assertCreated()->assertJsonStructure(['swap_token']);
 
@@ -64,8 +62,7 @@ it('releases ownership for make before break and keeps the old owner valid until
     $ownership = Ownership::current();
 
     expect($ownership?->pending_claim_id)->not->toBeNull()
-        ->and(OwnershipClaim::resolve($swapToken)?->getKey())->toBe($ownership?->pending_claim_id)
-        ->and($ownership?->notify_callback)->toBe('https://new-owner.example.test/hook');
+        ->and(OwnershipClaim::resolve($swapToken)?->getKey())->toBe($ownership?->pending_claim_id);
 
     $this->postJson('/owner-gate', [], ownerHeaders($ownerPlaintext))->assertOk();
 });

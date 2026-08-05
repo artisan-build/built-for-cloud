@@ -99,12 +99,9 @@ final class ManageOwnership
 
     public function release(Request $request): JsonResponse
     {
-        /** @var array{notify_callback?: string|null} $validated */
-        $validated = $request->validate([
-            'notify_callback' => ['nullable', 'url'],
-        ]);
+        $request->validate([]);
 
-        return DB::transaction(function () use ($validated): JsonResponse {
+        return DB::transaction(function (): JsonResponse {
             $ownership = Ownership::query()->lockForUpdate()->first();
 
             if ($ownership === null || $ownership->owner_token_id === null) {
@@ -118,9 +115,6 @@ final class ManageOwnership
             [$swapToken, $claim] = $this->mintClaim();
 
             $ownership->forceFill([
-                'notify_callback' => array_key_exists('notify_callback', $validated)
-                    ? $validated['notify_callback']
-                    : $ownership->notify_callback,
                 'pending_claim_id' => $claim->getKey(),
             ])->save();
 
