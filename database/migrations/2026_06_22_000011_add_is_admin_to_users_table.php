@@ -10,6 +10,10 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (config('built-for-cloud.auth_foundation.user_admin_column') === false) {
+            return;
+        }
+
         if (! Schema::hasTable('users') || Schema::hasColumn('users', 'is_admin')) {
             return;
         }
@@ -21,6 +25,10 @@ return new class extends Migration
 
     public function down(): void
     {
+        if (config('built-for-cloud.auth_foundation.user_admin_column') === false) {
+            return;
+        }
+
         if (! Schema::hasTable('users') || ! Schema::hasColumn('users', 'is_admin')) {
             return;
         }

@@ -10,6 +10,10 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (config('built-for-cloud.auth_foundation.invitations') === false || Schema::hasTable('invitations')) {
+            return;
+        }
+
         Schema::create('invitations', function (Blueprint $table): void {
             $table->uuid('id')->primary();
             $table->string('email')->index();
@@ -23,6 +27,10 @@ return new class extends Migration
 
     public function down(): void
     {
+        if (config('built-for-cloud.auth_foundation.invitations') === false) {
+            return;
+        }
+
         Schema::dropIfExists('invitations');
     }
 };

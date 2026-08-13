@@ -16,6 +16,38 @@ use Illuminate\Support\Facades\Schema;
 
 uses(RefreshDatabase::class);
 
+it('creates the invitations table when auth foundation invitations are enabled', function (): void {
+    Schema::dropIfExists('invitations');
+
+    $migration = require __DIR__.'/../database/migrations/2026_06_22_000010_create_invitations_table.php';
+    $migration->up();
+
+    expect(Schema::hasTable('invitations'))->toBeTrue();
+});
+
+it('skips the invitations table when auth foundation invitations are disabled', function (): void {
+    config(['built-for-cloud.auth_foundation.invitations' => false]);
+    Schema::dropIfExists('invitations');
+
+    $migration = require __DIR__.'/../database/migrations/2026_06_22_000010_create_invitations_table.php';
+    $migration->up();
+
+    expect(Schema::hasTable('invitations'))->toBeFalse();
+});
+
+it('skips an existing invitations table without throwing', function (): void {
+    Schema::dropIfExists('invitations');
+    Schema::create('invitations', function (Blueprint $table): void {
+        $table->id();
+    });
+
+    $migration = require __DIR__.'/../database/migrations/2026_06_22_000010_create_invitations_table.php';
+    $migration->up();
+
+    expect(Schema::hasTable('invitations'))->toBeTrue()
+        ->and(Schema::hasColumn('invitations', 'email'))->toBeFalse();
+});
+
 it('augments an existing users table with an idempotent is_admin column', function (): void {
     expect(Schema::hasColumn('users', 'is_admin'))->toBeTrue();
 
@@ -31,6 +63,43 @@ it('augments an existing users table with an idempotent is_admin column', functi
     $migration->up();
 
     expect(Schema::hasColumn('users', 'is_admin'))->toBeTrue();
+});
+
+it('skips the is_admin column when auth foundation admin column is disabled', function (): void {
+    config(['built-for-cloud.auth_foundation.user_admin_column' => false]);
+    Schema::table('users', function (Blueprint $table): void {
+        $table->dropColumn('is_admin');
+    });
+
+    $migration = require __DIR__.'/../database/migrations/2026_06_22_000011_add_is_admin_to_users_table.php';
+    $migration->up();
+
+    expect(Schema::hasColumn('users', 'is_admin'))->toBeFalse();
+});
+
+it('skips an existing is_admin column without throwing', function (): void {
+    expect(Schema::hasColumn('users', 'is_admin'))->toBeTrue();
+
+    $migration = require __DIR__.'/../database/migrations/2026_06_22_000011_add_is_admin_to_users_table.php';
+    $migration->up();
+
+    expect(Schema::hasColumn('users', 'is_admin'))->toBeTrue();
+});
+
+it('does not drop auth foundation objects while their flags are disabled', function (): void {
+    config([
+        'built-for-cloud.auth_foundation.invitations' => false,
+        'built-for-cloud.auth_foundation.user_admin_column' => false,
+    ]);
+
+    $invitationsMigration = require __DIR__.'/../database/migrations/2026_06_22_000010_create_invitations_table.php';
+    $adminColumnMigration = require __DIR__.'/../database/migrations/2026_06_22_000011_add_is_admin_to_users_table.php';
+
+    $invitationsMigration->down();
+    $adminColumnMigration->down();
+
+    expect(Schema::hasTable('invitations'))->toBeTrue()
+        ->and(Schema::hasColumn('users', 'is_admin'))->toBeTrue();
 });
 
 it('creates the first admin and refuses another unless forced', function (): void {
