@@ -9,19 +9,20 @@ use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
+use ArtisanBuild\BuiltForCloud\OwnershipClaimMinter;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\TokenGenerator;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 
 final class ManageOwnership
 {
     public function __construct(
         private readonly TokenGenerator $generator,
         private readonly TokenRegistry $tokens,
+        private readonly OwnershipClaimMinter $claims,
     ) {}
 
     public function claim(Request $request): JsonResponse
@@ -112,7 +113,7 @@ final class ManageOwnership
                 $this->consumeClaimById($ownership->pending_claim_id);
             }
 
-            [$swapToken, $claim] = $this->mintClaim();
+            [$swapToken, $claim] = $this->claims->mint();
 
             $ownership->forceFill([
                 'pending_claim_id' => $claim->getKey(),
@@ -156,24 +157,6 @@ final class ManageOwnership
             ->first();
 
         return $claim;
-    }
-
-    /**
-     * @return array{string, OwnershipClaim}
-     */
-    private function mintClaim(): array
-    {
-        do {
-            $plainTextToken = bin2hex(random_bytes(32));
-            $tokenHash = OwnershipClaim::hashToken($plainTextToken);
-        } while (OwnershipClaim::query()->where('token_hash', $tokenHash)->exists());
-
-        $claim = OwnershipClaim::query()->create([
-            'id' => (string) Str::uuid(),
-            'token_hash' => $tokenHash,
-        ]);
-
-        return [$plainTextToken, $claim];
     }
 
     private function consumeClaimById(string $claimId): void
