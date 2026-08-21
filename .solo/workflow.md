@@ -62,7 +62,10 @@ not strictly related to the work at hand.**
 ## Ship details
 - branch naming: `feat/<slug>`.
 - PR target repo: `artisan-build/built-for-cloud` (branch `main`).
-- release: **manual** — after merge, `git tag vX.Y.Z && git push --tags`; Packagist auto-updates.
+- release: **manual** — after merge, bump `BuiltForCloud::VERSION` (`src/BuiltForCloud.php`) to the
+  version being tagged, then `git tag vX.Y.Z && git push --tags`; Packagist auto-updates.
+  **Every tag gets a VERSION bump** — `/bfc/meta` reports the constant, so a stale VERSION lies to
+  every control plane that reads it (it sat at 0.3.0 through the v0.3.1 tag).
   Bump additively within 0.1.x (new optional features → patch). Consumers then `composer update
   artisan-build/built-for-cloud`.
 

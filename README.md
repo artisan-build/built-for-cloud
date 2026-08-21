@@ -64,6 +64,32 @@ php artisan token:list                # list tokens and their status
 php artisan token:usage [<name>]      # show usage for a token (or all)
 ```
 
+### Ownership bootstrap and recovery
+
+An unclaimed environment mints a one-time ownership claim token during migration and writes the
+plaintext to the log exactly once. When that log line is gone — or a still-owning control plane has
+lost its admin owner token — these two commands are the way back in. Both follow the same
+driver/execute split as the token commands: the plaintext is generated and shown on your machine,
+and only its hash travels to production.
+
+```
+php artisan bfc:ownership:mint-claim            # re-mint a pending claim (UNCLAIMED environments only)
+php artisan bfc:ownership:remint-owner-token    # re-issue the current owner's admin token
+```
+
+`mint-claim` refuses with a non-zero exit when ownership is already claimed, so it can never be used
+to take an environment away from its owner; exchange the token it prints at `POST /bfc/ownership/claim`
+as usual. `remint-owner-token` requires ownership to already be claimed, keeps the same owner, and
+revokes the previous owner token as it issues the replacement. It is console-only by design — there is
+no HTTP route that re-issues an owner token.
+
+Run either half directly against a deployed environment if you prefer to drive the Cloud CLI yourself,
+passing the hash of a token you generated locally:
+
+```
+cloud command:run <env> --cmd "php artisan bfc:ownership:mint-claim --execute --hash=<sha256>"
+```
+
 ## Auth foundation
 
 Built for Cloud augments your Laravel app's existing user model. It does **not** create or own a
@@ -238,6 +264,12 @@ for minting admin and consume-scoped API tokens when an app wants to assert indi
 
 This package is developed by [Artisan Build](https://artisan.build). Issues and pull requests are
 welcome.
+
+### Releasing
+
+Every tag gets a version bump: update `BuiltForCloud::VERSION` to the version you are about to tag
+**before** tagging, because `/bfc/meta` reports that constant and control planes use it to decide
+which capabilities an instance has. Then `git tag vX.Y.Z && git push --tags`.
 
 ## License
 

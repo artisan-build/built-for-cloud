@@ -6,6 +6,8 @@ namespace ArtisanBuild\BuiltForCloud;
 
 use ArtisanBuild\BuiltForCloud\Commands\CreateAdminCommand;
 use ArtisanBuild\BuiltForCloud\Commands\FallbackTokenGenerateCommand;
+use ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand;
+use ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenCreateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenListCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenRevokeCommand;
@@ -86,6 +88,8 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $this->commands([
                 CreateAdminCommand::class,
                 FallbackTokenGenerateCommand::class,
+                OwnershipMintClaimCommand::class,
+                OwnershipRemintOwnerTokenCommand::class,
                 TokenCreateCommand::class,
                 TokenListCommand::class,
                 TokenRevokeCommand::class,
