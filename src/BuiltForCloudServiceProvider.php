@@ -24,8 +24,11 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\Listeners\QueueOwnershipWebhook;
+use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Http\Request;
 use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 
 final class BuiltForCloudServiceProvider extends ServiceProvider
@@ -44,6 +47,8 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         Event::listen(OwnershipReleasePending::class, QueueOwnershipWebhook::class);
         Event::listen(OwnershipTransferred::class, QueueOwnershipWebhook::class);
 
+        $this->registerRateLimiters();
+
         if ($this->app->bound('router')) {
             /** @var Router $router */
             $router = $this->app['router'];
@@ -53,10 +58,10 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router->aliasMiddleware('bfc.token.admin', EnsureAdminToken::class);
 
             $router->get('/bfc/meta', MetaController::class)
-                ->middleware('throttle:60,1');
+                ->middleware('throttle:bfc-public');
 
             $router->post('/bfc/ownership/claim', [ManageOwnership::class, 'claim'])
-                ->middleware('throttle:10,1');
+                ->middleware('throttle:bfc-claim');
 
             $router->post('/bfc/ownership/release', [ManageOwnership::class, 'release'])
                 ->middleware('bfc.token.admin');
@@ -68,10 +73,10 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 ->middleware('bfc.token.admin');
 
             $router->post('/bfc/onboarding/exchange', [ManageOnboarding::class, 'exchange'])
-                ->middleware('throttle:10,1');
+                ->middleware('throttle:bfc-claim');
 
             $router->post('/bfc/onboarding/verify', [ManageOnboarding::class, 'verify'])
-                ->middleware('throttle:60,1');
+                ->middleware('throttle:bfc-public');
 
             if ((bool) config('built-for-cloud.credential_api.enabled', false)) {
                 $router->prefix(trim((string) config('built-for-cloud.credential_api.prefix', 'api/credentials'), '/'))
@@ -101,5 +106,20 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 __DIR__.'/../config/built-for-cloud.php' => $this->app->configPath('built-for-cloud.php'),
             ], 'built-for-cloud-config');
         }
+    }
+
+    /**
+     * BfC's management routes are public/pre-auth, and a headless app may have
+     * no auth guard at all (`auth.defaults.guard` null, `auth.guards` empty).
+     * Laravel's inline `throttle:N,1` builds its signature via
+     * `$request->user()`, so on such an app the AuthManager throws and every
+     * throttled route 500s. Keying these limiters on the IP is both correct for
+     * pre-auth traffic and free of any guard resolution.
+     */
+    private function registerRateLimiters(): void
+    {
+        RateLimiter::for('bfc-public', fn (Request $request): Limit => Limit::perMinute(60)->by($request->ip() ?? 'unknown'));
+
+        RateLimiter::for('bfc-claim', fn (Request $request): Limit => Limit::perMinute(10)->by($request->ip() ?? 'unknown'));
     }
 }

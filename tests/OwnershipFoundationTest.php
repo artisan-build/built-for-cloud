@@ -61,5 +61,5 @@ it('returns unauthenticated bfc meta for unclaimed and claimed environments', fu
 it('rate limits the bfc meta route', function (): void {
     $route = Route::getRoutes()->match(request()->create('/bfc/meta', 'GET'));
 
-    expect($route->gatherMiddleware())->toContain('throttle:60,1');
+    expect($route->gatherMiddleware())->toContain('throttle:bfc-public');
 });
