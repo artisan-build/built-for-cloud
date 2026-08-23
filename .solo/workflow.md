@@ -26,9 +26,15 @@ via Packagist (`^0.1`). This is a **library** (no app shell).
 - post-install: none required (library; no .env, no app DB).
 
 ## Harness map (role → runtime; decorrelate by ROLE/FRAMING, not lineage)
-- implementer: OpenCode (Solo `agent_tool_id 2`).
-- adversarial reviewer: Claude (Solo `agent_tool_id 3`) — security framing (command-injection, secret
-  handling, auth/privilege). Only Claude + OpenCode run reliably in this Solo env.
+- implementer: **Claude — Solo `agent_tool_id 3`.**
+  ⚠️ **Do NOT use OpenCode (id 2) on this machine** — it hangs on a Kitty graphics probe under the Solo
+  PTY and never becomes ready (same failure the scalpels_app profile documents). Corrected 2026-08-23.
+- adversarial reviewer: **Codex, one-shot via `codex exec` in a Bash call — NOT a Solo agent** (its
+  interactive TUI dies under the Solo PTY here). Security framing (command-injection, secret handling,
+  auth/privilege), which keeps the reviewer off the implementer's model lineage. Invoke as:
+  `codex exec --sandbox danger-full-access --cd <worktree> "$(cat brief.md)" </dev/null > <outfile> 2>&1`
+  (background it and poll the outfile). ⚠️ **`</dev/null` is MANDATORY** — without it `codex exec` reads
+  stdin forever and hangs, looking exactly like a slow review.
 
 ## Toolchain conformance — the ride-along rule (STANDING, all projects)
 
