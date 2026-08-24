@@ -166,8 +166,12 @@ final class ClientIdentityObservationTest extends TestCase
         $this->assertSame(0, ClientIdentityObservation::query()->count());
     }
 
-    // AC6 — the same for a header sent more than once, which needs a real duplicate header value.
-    public function test_a_duplicated_identity_header_is_never_observed(): void
+    // AC6 — a header that arrives as TWO values is dropped. Read the name: this covers only
+    // runtimes that PRESERVE header multiplicity (Octane, Swoole, RoadRunner). It builds the
+    // request in-process because real HTTP ingestion under PHP-FPM or Apache cannot produce it —
+    // those fold the lines before PHP runs. See the folded-value test below for what an FPM
+    // deployment actually does; this test does NOT describe that.
+    public function test_a_duplicated_identity_header_is_dropped_on_a_multiplicity_preserving_runtime(): void
     {
         $this->enableObservations();
 
@@ -351,6 +355,46 @@ final class ClientIdentityObservationTest extends TestCase
         Schema::drop('bfc_client_identity_observations');
 
         $this->getJson('/api/credentials', [ClientIdentity::HEADER => 'ghost-client'])
+            ->assertUnauthorized();
+
+        $this->assertSame([], $records);
+    }
+
+    // FIX A — what production ACTUALLY does with two header lines. PHP-FPM and Apache fold them
+    // into one comma-joined value before PHP runs, and that value is byte-indistinguishable from
+    // a legitimate opaque identity that really is "first-identity, second-identity". It is
+    // therefore contract-valid and IS observed, as the one opaque identity it arrives as.
+    // Rejecting it would break legitimate clients; there is no correct fix at the PHP layer.
+    public function test_a_folded_duplicate_header_is_observed_as_one_opaque_identity(): void
+    {
+        $this->enableObservations();
+
+        $folded = 'first-identity, second-identity';
+
+        $this->getJson('/api/credentials', [ClientIdentity::HEADER => $folded])
+            ->assertUnauthorized();
+
+        $this->assertSame(1, ClientIdentityObservation::query()->count());
+        $this->assertSame($folded, $this->observationFor($folded)->client_identity);
+        $this->assertSame(1, $this->observationFor($folded)->observation_count);
+    }
+
+    // FIX B — the other half of the amplification guard. The thrown-write branch is held by
+    // test_a_failing_observation_write_logs_nothing; this holds the malformed-header branch,
+    // which an unauthenticated caller can drive on every request of an unthrottled route.
+    public function test_a_malformed_identity_logs_nothing_on_the_unauthenticated_path(): void
+    {
+        $this->enableObservations();
+
+        $records = [];
+
+        Log::shouldReceive('warning')->andReturnUsing(
+            function (string $message, array $context = []) use (&$records): void {
+                $records[] = [$message, $context];
+            }
+        );
+
+        $this->getJson('/api/credentials', [ClientIdentity::HEADER => str_repeat('a', 256)])
             ->assertUnauthorized();
 
         $this->assertSame([], $records);

@@ -101,12 +101,19 @@ enabling this in production.
 | --- | --- |
 | **What counts** | Only the genuine no-credential paths: no bearer token, or a bearer that resolves to nothing (unknown, expired, revoked). |
 | **What does not** | A `403` — that caller *has* a working credential and merely lacks the admin scope. Nor the fallback token, which authenticates. Neither is observed. |
-| **Malformed headers** | Dropped and never observed, exactly as elsewhere — and deliberately not logged on this path, since it is unauthenticated and unthrottled. |
+| **Malformed headers** | A contract-violating value — too long, CR/LF/NUL, invalid UTF-8, empty — is dropped and never observed, and deliberately **not logged** on this path, since it is unauthenticated and unthrottled. |
 | **Repeat claims** | Increment `observation_count` and bump `last_seen_at`. `first_seen_at` never moves — it is the earliest signal. |
 | **The cap** | `BUILT_FOR_CLOUD_MAX_OBSERVATIONS` (default `100`) caps the number of **distinct** identities stored. It is enforced **per request, not atomically** — concurrent requests can each pass the check and briefly overshoot it. An approximate ceiling, not an exact one. |
 | **At the cap** | A **new** identity is dropped; existing rows still update. **Nothing is evicted** — otherwise anyone spraying unbounded distinct identities could push the genuine client out. |
 | **Never fatal** | The write is best-effort. If it throws, the caller still gets exactly the `401` it was already going to get — silently, with no log line, since this path is unauthenticated and unthrottled. |
 | **Byte-exact** | Rows are keyed on a sha256 digest of the identity's exact bytes, so `client-a` and `CLIENT-A` stay distinct even on a case-insensitive database collation. |
+
+Repeated header lines are **not** among the malformed cases in a typical deployment. As in the
+section above, the single-value rule is enforced only where the server preserves header multiplicity
+(Octane, Swoole, RoadRunner); under PHP-FPM or Apache the lines are folded into one comma-joined
+value before PHP sees it. That folded value is contract-valid and byte-indistinguishable from a
+legitimate identity that really is `a, b`, so it **is observed**, as the single opaque identity it
+arrives as. There is no correct behaviour available at the PHP layer.
 
 #### `GET {prefix}/client-observations`
 
