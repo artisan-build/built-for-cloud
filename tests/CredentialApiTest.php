@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\ClientIdentity;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -136,6 +137,113 @@ final class CredentialApiTest extends TestCase
         $this->assertStringNotContainsString($plaintext, (string) $response->getContent());
         $this->assertStringNotContainsString('token_hash', (string) $response->getContent());
         $this->assertStringNotContainsString($hash, (string) $response->getContent());
+    }
+
+    // AC1 — the recorded identity comes back byte-identical. Recorded through the REAL PR1 path
+    // (a request carrying the header), not a factory write, so the recording half and the
+    // listing half drifting apart would fail this.
+    public function test_it_lists_the_client_identity_recorded_against_a_token(): void
+    {
+        $headers = $this->credentialAdminHeaders();
+        $identity = 'клиент-ідентичність';
+
+        $this->getJson('/api/credentials', $headers + [ClientIdentity::HEADER => $identity])->assertOk();
+
+        $response = $this->getJson('/api/credentials', $headers)->assertOk();
+
+        $response->assertJsonPath('0.name', 'admin')
+            ->assertJsonPath('0.client_identity', $identity);
+
+        $this->assertSame($identity, $response->json('0.client_identity'));
+        $this->assertNotNull($response->json('0.client_identity_last_seen_at'));
+    }
+
+    // AC2 — present AND null, not absent. Pinned separately so omitting the keys cannot pass.
+    public function test_a_token_that_never_carried_a_client_identity_lists_both_keys_as_null(): void
+    {
+        $headers = $this->credentialAdminHeaders();
+
+        ApiToken::factory()->create(['name' => 'never-seen']);
+
+        $response = $this->getJson('/api/credentials', $headers)->assertOk();
+
+        $rows = $response->json();
+        $index = array_search('never-seen', array_column($rows, 'name'), true);
+
+        $this->assertNotFalse($index);
+        $this->assertArrayHasKey('client_identity', $rows[$index]);
+        $this->assertArrayHasKey('client_identity_last_seen_at', $rows[$index]);
+
+        $response->assertJsonPath($index.'.client_identity', null)
+            ->assertJsonPath($index.'.client_identity_last_seen_at', null);
+    }
+
+    // AC3 + AC5 — the exact key set of a row. An accidental extra field (token_hash, id) fails
+    // here, and so does a dropped pre-existing one.
+    public function test_a_listing_row_exposes_exactly_the_expected_keys(): void
+    {
+        $plaintext = 'list-secret';
+
+        ApiToken::factory()->create([
+            'name' => 'ci',
+            'token_hash' => hash('sha256', $plaintext),
+            'abilities' => [Scope::Admin->value],
+        ]);
+
+        $response = $this->getJson('/api/credentials', $this->credentialAdminHeaders())->assertOk();
+
+        $rows = $response->json();
+
+        $this->assertNotSame([], $rows);
+
+        foreach ($rows as $row) {
+            $this->assertSame([
+                'name',
+                'last_used_at',
+                'expires_at',
+                'revoked_at',
+                'abilities',
+                'client_identity',
+                'client_identity_last_seen_at',
+            ], array_keys($row));
+        }
+
+        $content = (string) $response->getContent();
+
+        $this->assertStringNotContainsString('token_hash', $content);
+        $this->assertStringNotContainsString(hash('sha256', $plaintext), $content);
+        $this->assertStringNotContainsString($plaintext, $content);
+    }
+
+    // AC3 — still ordered by created_at.
+    public function test_the_listing_is_still_ordered_by_created_at(): void
+    {
+        $headers = $this->credentialAdminHeaders();
+
+        $this->travel(1)->minutes();
+        ApiToken::factory()->create(['name' => 'second']);
+
+        $this->travel(1)->minutes();
+        ApiToken::factory()->create(['name' => 'third']);
+
+        $response = $this->getJson('/api/credentials', $headers)->assertOk();
+
+        $this->assertSame(['admin', 'second', 'third'], array_column($response->json(), 'name'));
+    }
+
+    // AC4 — regression: PR1 touched this middleware. The listing stays admin-token-guarded.
+    public function test_the_listing_remains_admin_token_guarded(): void
+    {
+        ApiToken::factory()->create([
+            'name' => 'consume',
+            'token_hash' => hash('sha256', 'consume-secret'),
+            'abilities' => [Scope::Consume->value],
+        ]);
+
+        $this->getJson('/api/credentials')->assertUnauthorized();
+
+        $this->getJson('/api/credentials', ['Authorization' => 'Bearer consume-secret'])
+            ->assertForbidden();
     }
 
     #[DataProvider('rejectedBearerTokens')]

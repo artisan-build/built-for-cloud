@@ -26,13 +26,17 @@ final class ManageTokens
     {
         $tokens = ApiToken::query()
             ->orderBy('created_at')
-            ->get(['name', 'last_used_at', 'expires_at', 'revoked_at', 'abilities'])
+            ->get(['name', 'last_used_at', 'expires_at', 'revoked_at', 'abilities', 'client_identity', 'client_identity_last_seen_at'])
             ->map(static fn (ApiToken $token): array => [
                 'name' => $token->name,
                 'last_used_at' => $token->last_used_at,
                 'expires_at' => $token->expires_at,
                 'revoked_at' => $token->revoked_at,
                 'abilities' => $token->abilities ?? [],
+                // null is meaningful here: no client has ever presented this token. Unlike
+                // abilities above, it is deliberately NOT coerced to an empty value.
+                'client_identity' => $token->client_identity,
+                'client_identity_last_seen_at' => $token->client_identity_last_seen_at,
             ])
             ->values();
 
