@@ -100,6 +100,9 @@ final class ManageOnboarding
             abort(401);
         }
 
+        // Best-effort attribution, deliberately outside the transaction below.
+        $this->tokens->recordClientIdentityFromRequest($request, $durableToken);
+
         return DB::transaction(function () use ($durableToken): JsonResponse {
             /** @var ApiToken $lockedToken */
             $lockedToken = ApiToken::query()

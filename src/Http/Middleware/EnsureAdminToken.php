@@ -28,6 +28,10 @@ final class EnsureAdminToken
         $token = $this->tokens->resolveModel($bearer);
 
         if ($token !== null) {
+            // Attribution is about WHICH token authenticated, not what it is allowed to do:
+            // a valid token that then 403s on scope still authenticated.
+            $this->tokens->recordClientIdentityFromRequest($request, $token);
+
             if ($token->hasScope(Scope::Admin)) {
                 return $next($request);
             }

@@ -46,6 +46,34 @@ It is deliberately low-ceremony and **not meant for production workloads**: dele
 environment to disable it, and provision per-app database tokens instead. When `FALLBACK_TOKEN` is
 absent, fallback authentication is off entirely.
 
+### Client identity
+
+A BfC client app (`artisan-build/bfc-client`) sends a stable `X-BfC-Client-Id` header alongside the
+bearer token it already authenticates with. This package records that value on the token row that
+authenticated, so a control plane holding the owner token can attribute a token to a client install.
+
+| Rule | Behaviour |
+| --- | --- |
+| **Shape** | Valid UTF-8, **1–255 bytes** (bytes, not characters), no CR, LF or NUL, exactly one header value. |
+| **Opaque** | Compared byte-wise and stored **verbatim** — no trimming, normalising, case-folding or truncation. |
+| **Not a credential** | It grants nothing. A token without the admin scope still gets `403`; a request with no bearer token still gets `401`. |
+| **Non-fatal** | A header that violates the contract is logged (never its value — it is attacker-controlled) and dropped. The request proceeds exactly as it would have. |
+| **Storage** | `api_tokens.client_identity`, plus `client_identity_last_seen_at`, bumped on **every** valid presentation, not only on change. A changed identity overwrites — last writer wins. |
+
+Rejecting NUL is a deliberate **server-side narrowing** of the shipped client contract, which
+permits it: PostgreSQL truncates a bound value at the first NUL silently rather than erroring, so
+accepting one would mean the stored identity differing from the presented one on some drivers —
+and would let two distinct identities collide on a single row.
+
+The single-value rule is enforced only where the server preserves header multiplicity (Octane,
+Swoole, RoadRunner); under PHP-FPM or Apache, repeated header lines are folded into one
+comma-joined value before PHP sees it, and that folded value is stored as the opaque string it
+arrives as.
+
+It is **forward-only**: the migration adds nullable columns and backfills nothing. Existing tokens
+stay `null` until a client actually presents a header, and a request without the header leaves a
+stored identity untouched.
+
 ## Administering from the Cloud CLI
 
 Token administration is designed to be driven from your machine against your deployed environment.
