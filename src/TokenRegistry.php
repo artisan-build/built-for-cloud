@@ -111,6 +111,81 @@ final class TokenRegistry
     }
 
     /**
+     * Observe a client identity claimed on a request that authenticated NOTHING.
+     *
+     * ADVISORY ONLY, and off unless the provider opts in. The identity is unauthenticated and
+     * trivially spoofable, so this never grants anything and never influences the response — the
+     * caller gets exactly the 401 it was already going to get.
+     *
+     * Call this ONLY on a genuine no-credential path. A 403 means the caller HAS a working
+     * credential and merely lacks the scope, which is not a NoCredential event; the fallback token
+     * authenticates, so it is not one either.
+     */
+    public function observeUnauthenticatedClientIdentity(Request $request): void
+    {
+        if (! (bool) config('built-for-cloud.client_identity.observe_unauthenticated', false)) {
+            return;
+        }
+
+        if ($request->headers->all(ClientIdentity::HEADER) === []) {
+            return;
+        }
+
+        try {
+            $identity = ClientIdentity::fromRequest($request);
+
+            // A malformed header is dropped and never observed. Deliberately NOT logged here:
+            // this path is unauthenticated and unthrottled, so a log line per malformed request
+            // would be an amplification an attacker controls. The authenticated path still logs.
+            if ($identity === null) {
+                return;
+            }
+
+            $this->storeObservation($identity);
+        } catch (Throwable $e) {
+            $this->reportClientIdentityFailure($e);
+        }
+    }
+
+    /**
+     * Increment an existing identity, or insert a new one while there is room under the cap.
+     *
+     * At the cap a NEW identity is dropped and NOTHING is evicted: preserving the earliest-seen
+     * real signal is the point, since an attacker able to spray unbounded distinct identities
+     * could otherwise push the genuine client out of the table.
+     */
+    private function storeObservation(string $identity): void
+    {
+        $existing = ClientIdentityObservation::query()
+            ->where('client_identity', $identity)
+            ->first();
+
+        if ($existing !== null) {
+            ClientIdentityObservation::query()->whereKey($existing->getKey())->update([
+                'observation_count' => DB::raw('observation_count + 1'),
+                'last_seen_at' => now(),
+            ]);
+
+            return;
+        }
+
+        $max = (int) config('built-for-cloud.client_identity.max_observations', 100);
+
+        if (ClientIdentityObservation::query()->count() >= $max) {
+            return;
+        }
+
+        $now = now();
+
+        ClientIdentityObservation::query()->create([
+            'client_identity' => $identity,
+            'first_seen_at' => $now,
+            'last_seen_at' => $now,
+            'observation_count' => 1,
+        ]);
+    }
+
+    /**
      * Record the opaque client identity that presented this token.
      *
      * The value is stored verbatim; `client_identity_last_seen_at` is bumped on every valid

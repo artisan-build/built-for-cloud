@@ -22,6 +22,8 @@ final class EnsureAdminToken
         $bearer = $request->bearerToken();
 
         if ($bearer === null || $bearer === '') {
+            $this->tokens->observeUnauthenticatedClientIdentity($request);
+
             abort(401);
         }
 
@@ -39,9 +41,13 @@ final class EnsureAdminToken
             abort(403);
         }
 
+        // The fallback token authenticates without a row: it is not a NoCredential event, and
+        // neither is the 403 above -- that caller HAS a working credential.
         if ($this->tokens->resolve($bearer) !== null) {
             abort(403);
         }
+
+        $this->tokens->observeUnauthenticatedClientIdentity($request);
 
         abort(401);
     }

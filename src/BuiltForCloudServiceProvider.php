@@ -16,6 +16,7 @@ use ArtisanBuild\BuiltForCloud\Commands\TokenUsageCommand;
 use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
@@ -83,6 +84,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                     ->middleware('bfc.token.admin')
                     ->group(function (Router $router): void {
                         $router->get('/', [ManageTokens::class, 'index']);
+                        $router->get('/client-observations', ClientObservations::class);
                         $router->post('/', [ManageTokens::class, 'store']);
                         $router->delete('/{name}', [ManageTokens::class, 'destroy']);
                     });
