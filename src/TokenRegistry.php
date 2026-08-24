@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud;
 
 use Carbon\CarbonInterface;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -142,8 +143,13 @@ final class TokenRegistry
             }
 
             $this->storeObservation($identity);
-        } catch (Throwable $e) {
-            $this->reportClientIdentityFailure($e);
+        } catch (Throwable) {
+            // Deliberately SILENT, and deliberately asymmetric with the authenticated path
+            // above, which does log its failures. That path requires a valid token; this one
+            // does not, and it is unthrottled, so one log line per request is an amplification
+            // the caller controls. It is not hypothetical: a contract-VALID four-byte identity
+            // fails on every insert against a utf8mb3 table, and a missing table mid-rollout
+            // behaves the same way. Do not "fix" this back into a log.
         }
     }
 
@@ -156,16 +162,13 @@ final class TokenRegistry
      */
     private function storeObservation(string $identity): void
     {
-        $existing = ClientIdentityObservation::query()
-            ->where('client_identity', $identity)
-            ->first();
+        // Key on a digest of the EXACT bytes. `client_identity` inherits the consuming app's
+        // collation, and a case-insensitive one -- MySQL's utf8mb4_0900_ai_ci default among
+        // them -- compares `client-a` and `CLIENT-A` as equal, silently collapsing two distinct
+        // clients into one row and corrupting the signal this feature exists to provide.
+        $hash = hash('sha256', $identity);
 
-        if ($existing !== null) {
-            ClientIdentityObservation::query()->whereKey($existing->getKey())->update([
-                'observation_count' => DB::raw('observation_count + 1'),
-                'last_seen_at' => now(),
-            ]);
-
+        if ($this->incrementObservation($hash)) {
             return;
         }
 
@@ -177,12 +180,32 @@ final class TokenRegistry
 
         $now = now();
 
-        ClientIdentityObservation::query()->create([
-            'client_identity' => $identity,
-            'first_seen_at' => $now,
-            'last_seen_at' => $now,
-            'observation_count' => 1,
-        ]);
+        try {
+            ClientIdentityObservation::query()->create([
+                'client_identity' => $identity,
+                'client_identity_hash' => $hash,
+                'first_seen_at' => $now,
+                'last_seen_at' => $now,
+                'observation_count' => 1,
+            ]);
+        } catch (UniqueConstraintViolationException) {
+            // A concurrent request claiming the SAME new identity inserted between our lookup
+            // and our insert. Increment the winner rather than losing the observation.
+            $this->incrementObservation($hash);
+        }
+    }
+
+    /**
+     * Bump an existing observation. Returns false when there is no row for this identity yet.
+     */
+    private function incrementObservation(string $hash): bool
+    {
+        return ClientIdentityObservation::query()
+            ->where('client_identity_hash', $hash)
+            ->update([
+                'observation_count' => DB::raw('observation_count + 1'),
+                'last_seen_at' => now(),
+            ]) > 0;
     }
 
     /**

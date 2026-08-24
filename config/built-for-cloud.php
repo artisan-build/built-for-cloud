@@ -77,9 +77,14 @@ return [
     | UNAUTHENTICATED request, and the token-guarded routes carry no throttle
     | middleware. A provider opts in; no consuming app inherits it by upgrading.
     |
-    | `max_observations` hard-caps the number of DISTINCT identities stored. At
-    | the cap a new identity is dropped and nothing is evicted, so a flood of
+    | `max_observations` caps the number of DISTINCT identities stored. At the
+    | cap a new identity is dropped and nothing is evicted, so a flood of
     | sprayed identities cannot push the genuine client out of the table.
+    |
+    | The cap is enforced PER REQUEST, not atomically: concurrent requests can
+    | each pass the check and briefly overshoot it. Storage stays bounded --
+    | the overshoot is limited by in-flight concurrency -- but the number is an
+    | approximate ceiling, not an exact one.
     |
     */
 

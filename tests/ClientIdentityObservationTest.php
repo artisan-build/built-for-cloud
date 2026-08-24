@@ -10,7 +10,10 @@ use ArtisanBuild\BuiltForCloud\ClientIdentityObservation;
 use ArtisanBuild\BuiltForCloud\Scope;
 use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Orchestra\Testbench\Attributes\WithConfig;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -86,6 +89,7 @@ final class ClientIdentityObservationTest extends TestCase
         $this->assertTrue($after->last_seen_at?->greaterThan($lastSeenAt));
     }
 
+    // Exclusion guard: names a path that must NOT be observed.
     // AC4 — a 403 caller HAS a working credential. Not a NoCredential event.
     public function test_a_403_is_not_a_no_credential_event(): void
     {
@@ -329,6 +333,115 @@ final class ClientIdentityObservationTest extends TestCase
         $this->assertContains($status, [401, 403]);
     }
 
+    // FIX 1 — the failure path must not log. It is reachable and repeatable by an unauthenticated
+    // caller on an unthrottled route (a four-byte identity against a utf8mb3 table fails on EVERY
+    // insert), so one line per request is an amplification the attacker controls.
+    public function test_a_failing_observation_write_logs_nothing(): void
+    {
+        $this->enableObservations();
+
+        $records = [];
+
+        Log::shouldReceive('warning')->andReturnUsing(
+            function (string $message, array $context = []) use (&$records): void {
+                $records[] = [$message, $context];
+            }
+        );
+
+        Schema::drop('bfc_client_identity_observations');
+
+        $this->getJson('/api/credentials', [ClientIdentity::HEADER => 'ghost-client'])
+            ->assertUnauthorized();
+
+        $this->assertSame([], $records);
+    }
+
+    // FIX 2 — byte-distinct identities stay distinct. Verified live against MySQL 8.4.9: with the
+    // unique key on the VALUE under utf8mb4_unicode_ci only 2 of these 4 identities store at all,
+    // and a lookup for CLIENT-A matches the client-a row. Keying on the sha256 of the exact bytes
+    // is exact on every driver. On SQLite (this suite) both shapes pass — the mutations below are
+    // what prove the digest is doing the work.
+    #[DataProvider('byteDistinctIdentityPairs')]
+    public function test_byte_distinct_identities_are_never_collapsed_into_one_row(string $first, string $second): void
+    {
+        $this->enableObservations();
+
+        $this->claim($first);
+        $this->claim($second);
+        $this->claim($second);
+
+        $this->assertSame(2, ClientIdentityObservation::query()->count());
+        $this->assertSame(1, $this->observationFor($first)->observation_count);
+        $this->assertSame(2, $this->observationFor($second)->observation_count);
+    }
+
+    // FIX 2 — the digest is a lookup key, never part of the public shape.
+    public function test_the_endpoint_never_exposes_the_identity_hash(): void
+    {
+        $this->enableObservations();
+
+        $this->claim('ghost-client');
+
+        $content = (string) $this->getJson('/api/credentials/client-observations', $this->adminHeaders())
+            ->assertOk()
+            ->getContent();
+
+        $this->assertStringNotContainsString('client_identity_hash', $content);
+        $this->assertStringNotContainsString(hash('sha256', 'ghost-client'), $content);
+    }
+
+    // FIX 3 — two concurrent requests claiming the same NEW identity: both pass the existence
+    // check, one insert wins, the loser hits the unique constraint. The losing observation must be
+    // folded into the winner, not dropped. The listener plays the winner, inserting the row after
+    // our lookup has already missed.
+    public function test_a_concurrent_claim_of_the_same_new_identity_is_not_lost(): void
+    {
+        $this->enableObservations();
+
+        $identity = 'racing-client';
+        $injected = false;
+
+        DB::listen(function (QueryExecuted $query) use (&$injected, $identity): void {
+            if ($injected || ! str_contains($query->sql, 'bfc_client_identity_observations')) {
+                return;
+            }
+
+            if (! str_starts_with(strtolower(ltrim($query->sql)), 'update')) {
+                return;
+            }
+
+            // Set BEFORE the write below, so the insert it triggers cannot re-enter.
+            $injected = true;
+
+            ClientIdentityObservation::query()->create([
+                'client_identity' => $identity,
+                'client_identity_hash' => hash('sha256', $identity),
+                'first_seen_at' => now(),
+                'last_seen_at' => now(),
+                'observation_count' => 1,
+            ]);
+        });
+
+        $this->claim($identity);
+
+        $this->assertTrue($injected, 'The concurrent winner was never injected; the race was not exercised.');
+        $this->assertSame(1, ClientIdentityObservation::query()->count());
+        $this->assertSame(2, $this->observationFor($identity)->observation_count);
+    }
+
+    /**
+     * Pairs that a case-insensitive or trailing-space-insensitive collation would treat as equal.
+     *
+     * @return array<string, array{string, string}>
+     */
+    public static function byteDistinctIdentityPairs(): array
+    {
+        return [
+            'case' => ['client-a', 'CLIENT-A'],
+            'trailing space' => ['spaced', 'spaced '],
+        ];
+    }
+
     /**
      * @return array<string, array{string, bool, bool}>
      */
@@ -388,6 +501,7 @@ final class ClientIdentityObservationTest extends TestCase
     {
         ClientIdentityObservation::query()->create([
             'client_identity' => $identity,
+            'client_identity_hash' => hash('sha256', $identity),
             'first_seen_at' => $lastSeenAt,
             'last_seen_at' => $lastSeenAt,
             'observation_count' => 1,
@@ -396,7 +510,11 @@ final class ClientIdentityObservationTest extends TestCase
 
     private function observationFor(string $identity): ClientIdentityObservation
     {
-        return ClientIdentityObservation::query()->where('client_identity', $identity)->firstOrFail();
+        // Look up by digest: querying `client_identity` would itself be collation-dependent and
+        // could mask exactly the collapse these tests exist to catch.
+        return ClientIdentityObservation::query()
+            ->where('client_identity_hash', hash('sha256', $identity))
+            ->firstOrFail();
     }
 
     /**

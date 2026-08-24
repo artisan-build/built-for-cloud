@@ -16,6 +16,7 @@ use Illuminate\Database\Eloquent\Model;
  *
  * @property string $id
  * @property string $client_identity
+ * @property string $client_identity_hash
  * @property CarbonInterface|null $first_seen_at
  * @property CarbonInterface|null $last_seen_at
  * @property int $observation_count
@@ -38,6 +39,7 @@ final class ClientIdentityObservation extends Model
     protected $fillable = [
         'id',
         'client_identity',
+        'client_identity_hash',
         'first_seen_at',
         'last_seen_at',
         'observation_count',
