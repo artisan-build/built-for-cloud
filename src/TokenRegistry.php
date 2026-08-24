@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud;
 
 use Carbon\CarbonInterface;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -108,6 +109,103 @@ final class TokenRegistry
         } catch (Throwable $e) {
             $this->reportClientIdentityFailure($e);
         }
+    }
+
+    /**
+     * Observe a client identity claimed on a request that authenticated NOTHING.
+     *
+     * ADVISORY ONLY, and off unless the provider opts in. The identity is unauthenticated and
+     * trivially spoofable, so this never grants anything and never influences the response — the
+     * caller gets exactly the 401 it was already going to get.
+     *
+     * Call this ONLY on a genuine no-credential path. A 403 means the caller HAS a working
+     * credential and merely lacks the scope, which is not a NoCredential event; the fallback token
+     * authenticates, so it is not one either.
+     */
+    public function observeUnauthenticatedClientIdentity(Request $request): void
+    {
+        if (! (bool) config('built-for-cloud.client_identity.observe_unauthenticated', false)) {
+            return;
+        }
+
+        if ($request->headers->all(ClientIdentity::HEADER) === []) {
+            return;
+        }
+
+        try {
+            $identity = ClientIdentity::fromRequest($request);
+
+            // A malformed header is dropped and never observed. Deliberately NOT logged here:
+            // this path is unauthenticated and unthrottled, so a log line per malformed request
+            // would be an amplification an attacker controls. The authenticated path still logs.
+            if ($identity === null) {
+                return;
+            }
+
+            $this->storeObservation($identity);
+        } catch (Throwable) {
+            // Deliberately SILENT, and deliberately asymmetric with the authenticated path
+            // above, which does log its failures. That path requires a valid token; this one
+            // does not, and it is unthrottled, so one log line per request is an amplification
+            // the caller controls. It is not hypothetical: a contract-VALID four-byte identity
+            // fails on every insert against a utf8mb3 table, and a missing table mid-rollout
+            // behaves the same way. Do not "fix" this back into a log.
+        }
+    }
+
+    /**
+     * Increment an existing identity, or insert a new one while there is room under the cap.
+     *
+     * At the cap a NEW identity is dropped and NOTHING is evicted: preserving the earliest-seen
+     * real signal is the point, since an attacker able to spray unbounded distinct identities
+     * could otherwise push the genuine client out of the table.
+     */
+    private function storeObservation(string $identity): void
+    {
+        // Key on a digest of the EXACT bytes. `client_identity` inherits the consuming app's
+        // collation, and a case-insensitive one -- MySQL's utf8mb4_0900_ai_ci default among
+        // them -- compares `client-a` and `CLIENT-A` as equal, silently collapsing two distinct
+        // clients into one row and corrupting the signal this feature exists to provide.
+        $hash = hash('sha256', $identity);
+
+        if ($this->incrementObservation($hash)) {
+            return;
+        }
+
+        $max = (int) config('built-for-cloud.client_identity.max_observations', 100);
+
+        if (ClientIdentityObservation::query()->count() >= $max) {
+            return;
+        }
+
+        $now = now();
+
+        try {
+            ClientIdentityObservation::query()->create([
+                'client_identity' => $identity,
+                'client_identity_hash' => $hash,
+                'first_seen_at' => $now,
+                'last_seen_at' => $now,
+                'observation_count' => 1,
+            ]);
+        } catch (UniqueConstraintViolationException) {
+            // A concurrent request claiming the SAME new identity inserted between our lookup
+            // and our insert. Increment the winner rather than losing the observation.
+            $this->incrementObservation($hash);
+        }
+    }
+
+    /**
+     * Bump an existing observation. Returns false when there is no row for this identity yet.
+     */
+    private function incrementObservation(string $hash): bool
+    {
+        return ClientIdentityObservation::query()
+            ->where('client_identity_hash', $hash)
+            ->update([
+                'observation_count' => DB::raw('observation_count + 1'),
+                'last_seen_at' => now(),
+            ]) > 0;
     }
 
     /**

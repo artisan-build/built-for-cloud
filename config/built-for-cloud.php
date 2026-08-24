@@ -62,6 +62,39 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Client Identity Observation
+    |--------------------------------------------------------------------------
+    |
+    | Records the client identity claimed on requests that presented NO working
+    | credential, so a provider can see "something calling itself client X is
+    | reaching us and its token does not work" (expired, revoked, wrong, absent).
+    |
+    | ADVISORY ONLY. A claimed identity on an unauthenticated request is
+    | trivially spoofable — anyone can send any header — so it never grants
+    | anything and never influences authentication.
+    |
+    | DISABLED BY DEFAULT, deliberately. This is a database write driven by an
+    | UNAUTHENTICATED request, and the token-guarded routes carry no throttle
+    | middleware. A provider opts in; no consuming app inherits it by upgrading.
+    |
+    | `max_observations` caps the number of DISTINCT identities stored. At the
+    | cap a new identity is dropped and nothing is evicted, so a flood of
+    | sprayed identities cannot push the genuine client out of the table.
+    |
+    | The cap is enforced PER REQUEST, not atomically: concurrent requests can
+    | each pass the check and briefly overshoot it. Storage stays bounded --
+    | the overshoot is limited by in-flight concurrency -- but the number is an
+    | approximate ceiling, not an exact one.
+    |
+    */
+
+    'client_identity' => [
+        'observe_unauthenticated' => env('BUILT_FOR_CLOUD_OBSERVE_UNAUTHENTICATED', false),
+        'max_observations' => env('BUILT_FOR_CLOUD_MAX_OBSERVATIONS', 100),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Auth Foundation
     |--------------------------------------------------------------------------
     |
