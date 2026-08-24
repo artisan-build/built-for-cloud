@@ -57,6 +57,7 @@ authenticated, so a control plane holding the owner token can attribute a token 
 | **Shape** | Valid UTF-8, **1–255 bytes** (bytes, not characters), no CR, LF or NUL, exactly one header value. |
 | **Opaque** | Compared byte-wise and stored **verbatim** — no trimming, normalising, case-folding or truncation. |
 | **Not a credential** | It grants nothing. A token without the admin scope still gets `403`; a request with no bearer token still gets `401`. |
+| **Untrusted text** | It is opaque, attacker-controlled text of up to 255 bytes, and it is readable through the token listing — anything rendering it into HTML, a terminal or a log must escape it itself. |
 | **Non-fatal** | A header that violates the contract is logged (never its value — it is attacker-controlled) and dropped. The request proceeds exactly as it would have. |
 | **Storage** | `api_tokens.client_identity`, plus `client_identity_last_seen_at`, bumped on **every** valid presentation, not only on change. A changed identity overwrites — last writer wins. |
 
@@ -73,6 +74,32 @@ arrives as.
 It is **forward-only**: the migration adds nullable columns and backfills nothing. Existing tokens
 stay `null` until a client actually presents a header, and a request without the header leaves a
 stored identity untouched.
+
+### Listing tokens
+
+`GET {prefix}/` — where `{prefix}` is `built-for-cloud.credential_api.prefix`, default
+`api/credentials` — returns a JSON array of token rows, **ordered by `created_at`, oldest first**.
+The endpoint is guarded by the `bfc.token.admin` middleware: no bearer token is `401`, a token
+without the admin scope is `403`.
+
+Every row has exactly these seven keys, always present:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `name` | `string` | The logical token name. |
+| `last_used_at` | `string\|null` | ISO-8601 with microseconds, UTC — e.g. `2026-08-24T10:28:08.000000Z`. |
+| `expires_at` | `string\|null` | Same format. `null` means it never expires. |
+| `revoked_at` | `string\|null` | Same format. |
+| `abilities` | `string[]` | `[]` when the token has none — never `null`. |
+| `client_identity` | `string\|null` | The opaque client identity, **verbatim**. `null` means no client has ever presented this token. |
+| `client_identity_last_seen_at` | `string\|null` | Same format as the other timestamps. `null` whenever `client_identity` is `null`. |
+
+The secret never appears: neither the plaintext token nor its `token_hash` is part of a row.
+
+The two `client_identity` fields are **additive and nullable** — they were added after the first
+five. A consumer validating this response strictly should permit them rather than reject the row,
+and must treat `null` as meaningful (no client has ever presented that token) rather than coercing
+it to an empty string.
 
 ## Administering from the Cloud CLI
 

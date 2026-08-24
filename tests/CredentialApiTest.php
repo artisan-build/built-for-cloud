@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\ClientIdentity;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Orchestra\Testbench\Attributes\WithConfig;
 use PHPUnit\Framework\Attributes\DataProvider;
 
@@ -138,6 +140,159 @@ final class CredentialApiTest extends TestCase
         $this->assertStringNotContainsString($hash, (string) $response->getContent());
     }
 
+    // AC1 — the recorded identity comes back byte-identical. Recorded through the REAL PR1 path
+    // (a request carrying the header), not a factory write, so the recording half and the
+    // listing half drifting apart would fail this.
+    #[DataProvider('roundTripIdentities')]
+    public function test_it_lists_the_client_identity_recorded_against_a_token(string $identity): void
+    {
+        $headers = $this->credentialAdminHeaders();
+
+        $this->getJson('/api/credentials', $headers + [ClientIdentity::HEADER => $identity])->assertOk();
+
+        $response = $this->getJson('/api/credentials', $headers)->assertOk();
+
+        $response->assertJsonPath('0.name', 'admin');
+
+        // Assert the DECODED value, deliberately -- NOT a byte comparison of the raw body.
+        // json_encode escapes U+2028 as \u2028 and a quote as \", which decode back to the
+        // identical string. Comparing raw bytes here would be wrong, not stricter.
+        $this->assertSame($identity, $response->json('0.client_identity'));
+        $this->assertNotNull($response->json('0.client_identity_last_seen_at'));
+    }
+
+    // AC2 — present AND null, not absent. Pinned separately so omitting the keys cannot pass.
+    public function test_a_token_that_never_carried_a_client_identity_lists_both_keys_as_null(): void
+    {
+        $headers = $this->credentialAdminHeaders();
+
+        ApiToken::factory()->create(['name' => 'never-seen']);
+
+        $response = $this->getJson('/api/credentials', $headers)->assertOk();
+
+        $rows = $response->json();
+        $index = array_search('never-seen', array_column($rows, 'name'), true);
+
+        $this->assertNotFalse($index);
+        $this->assertArrayHasKey('client_identity', $rows[$index]);
+        $this->assertArrayHasKey('client_identity_last_seen_at', $rows[$index]);
+
+        $response->assertJsonPath($index.'.client_identity', null)
+            ->assertJsonPath($index.'.client_identity_last_seen_at', null);
+    }
+
+    // AC3 + AC5 — the exact key set of a row. An accidental extra field (token_hash, id) fails
+    // here, and so does a dropped pre-existing one.
+    public function test_a_listing_row_exposes_exactly_the_expected_keys(): void
+    {
+        $plaintext = 'list-secret';
+
+        ApiToken::factory()->create([
+            'name' => 'ci',
+            'token_hash' => hash('sha256', $plaintext),
+            'abilities' => [Scope::Admin->value],
+        ]);
+
+        $response = $this->getJson('/api/credentials', $this->credentialAdminHeaders())->assertOk();
+
+        $rows = $response->json();
+
+        $this->assertNotSame([], $rows);
+
+        foreach ($rows as $row) {
+            $this->assertSame([
+                'name',
+                'last_used_at',
+                'expires_at',
+                'revoked_at',
+                'abilities',
+                'client_identity',
+                'client_identity_last_seen_at',
+            ], array_keys($row));
+        }
+
+        $content = (string) $response->getContent();
+
+        $this->assertStringNotContainsString('token_hash', $content);
+        $this->assertStringNotContainsString(hash('sha256', $plaintext), $content);
+        $this->assertStringNotContainsString($plaintext, $content);
+    }
+
+    // AC3 — insertion order and created_at order are made to DISAGREE on purpose. SQLite returns
+    // rows in insertion order when there is no ORDER BY, so seeding them in the order we expect
+    // back would let the orderBy be deleted outright with the suite still green.
+    public function test_the_listing_is_still_ordered_by_created_at(): void
+    {
+        $base = Carbon::parse('2026-08-24 12:00:00');
+
+        $this->travelTo($base);
+        $headers = $this->credentialAdminHeaders();
+
+        // Inserted second, created LAST.
+        $this->travelTo($base->copy()->addMinutes(2));
+        ApiToken::factory()->create(['name' => 'third']);
+
+        // Inserted last, created SECOND.
+        $this->travelTo($base->copy()->addMinutes(1));
+        ApiToken::factory()->create(['name' => 'second']);
+
+        $this->travelBack();
+
+        $response = $this->getJson('/api/credentials', $headers)->assertOk();
+
+        $this->assertSame(['admin', 'second', 'third'], array_column($response->json(), 'name'));
+    }
+
+    // AC3 — the pre-existing fields carry their STORED VALUES, not just their keys. Without this
+    // a column dropped from the SELECT list still lists its key, silently as null.
+    public function test_the_listing_returns_the_pre_existing_fields_with_their_stored_values(): void
+    {
+        $lastUsedAt = Carbon::parse('2026-08-01 09:00:00');
+        $expiresAt = Carbon::parse('2026-09-01 09:00:00');
+        $revokedAt = Carbon::parse('2026-08-15 09:00:00');
+
+        ApiToken::factory()->create([
+            'name' => 'valued',
+            'token_hash' => hash('sha256', 'valued-secret'),
+            'last_used_at' => $lastUsedAt,
+            'expires_at' => $expiresAt,
+            'revoked_at' => $revokedAt,
+            'abilities' => [Scope::Consume->value],
+        ]);
+
+        $row = $this->listingRowFor('valued', $this->credentialAdminHeaders());
+
+        $this->assertSame($lastUsedAt->toJSON(), $row['last_used_at']);
+        $this->assertSame($expiresAt->toJSON(), $row['expires_at']);
+        $this->assertSame($revokedAt->toJSON(), $row['revoked_at']);
+        $this->assertSame([Scope::Consume->value], $row['abilities']);
+    }
+
+    // AC3 — abilities is deliberately coerced to [] and must never list as null.
+    public function test_a_token_with_no_abilities_lists_an_empty_array(): void
+    {
+        ApiToken::factory()->create(['name' => 'no-abilities', 'abilities' => null]);
+
+        $row = $this->listingRowFor('no-abilities', $this->credentialAdminHeaders());
+
+        $this->assertSame([], $row['abilities']);
+    }
+
+    // AC4 — regression: PR1 touched this middleware. The listing stays admin-token-guarded.
+    public function test_the_listing_remains_admin_token_guarded(): void
+    {
+        ApiToken::factory()->create([
+            'name' => 'consume',
+            'token_hash' => hash('sha256', 'consume-secret'),
+            'abilities' => [Scope::Consume->value],
+        ]);
+
+        $this->getJson('/api/credentials')->assertUnauthorized();
+
+        $this->getJson('/api/credentials', ['Authorization' => 'Bearer consume-secret'])
+            ->assertForbidden();
+    }
+
     #[DataProvider('rejectedBearerTokens')]
     public function test_it_rejects_non_admin_unknown_expired_missing_and_fallback_bearer_tokens(string $case, ?string $bearer, int $status): void
     {
@@ -183,6 +338,39 @@ final class CredentialApiTest extends TestCase
             'name' => 'ci',
             'abilities' => $abilities,
         ], $this->credentialAdminHeaders())->assertUnprocessable();
+    }
+
+    /**
+     * Values the contract permits that are awkward for json_encode: quotes and backslashes get
+     * escaped, U+2028 becomes \u2028, and whitespace must survive untrimmed.
+     *
+     * @return array<string, array{string}>
+     */
+    public static function roundTripIdentities(): array
+    {
+        return [
+            'uuid' => ['9f8b1c34-0a2e-4f77-9c1d-6b0f2a5e7d31'],
+            'multi-byte' => ['клиент-ідентичність'],
+            'double quote' => ['client"quoted'],
+            'backslash' => ['client\\path\\id'],
+            'unicode line separator' => ["a\u{2028}b"],
+            'surrounding whitespace' => ['  spaced  '],
+        ];
+    }
+
+    /**
+     * @param  array{Authorization: string}  $headers
+     * @return array<string, mixed>
+     */
+    private function listingRowFor(string $name, array $headers): array
+    {
+        $rows = $this->getJson('/api/credentials', $headers)->assertOk()->json();
+
+        $index = array_search($name, array_column($rows, 'name'), true);
+
+        $this->assertNotFalse($index, "No listing row named {$name}.");
+
+        return $rows[$index];
     }
 
     /**
