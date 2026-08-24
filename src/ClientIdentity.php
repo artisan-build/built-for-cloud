@@ -11,6 +11,12 @@ use Illuminate\Http\Request;
  *
  * The value is an OPAQUE identifier: compare it byte-wise, store it verbatim, and never
  * treat it as a credential. It grants nothing on its own.
+ *
+ * One deliberate server-side narrowing of the shipped wire contract: a NUL byte is rejected.
+ * PostgreSQL truncates a bound value at the first NUL silently rather than erroring, so
+ * accepting one would mean storing an identity that differs from the one presented -- and
+ * would let two distinct identities collide on one row. We cannot honour store-verbatim for
+ * it on every driver, so we drop it the way we drop any other value we will not accept.
  */
 final class ClientIdentity
 {
@@ -42,6 +48,10 @@ final class ClientIdentity
 
         if (str_contains($value, "\r") || str_contains($value, "\n")) {
             return 'contains a line break';
+        }
+
+        if (str_contains($value, "\0")) {
+            return 'contains a null byte';
         }
 
         if (! mb_check_encoding($value, 'UTF-8')) {

@@ -82,8 +82,10 @@ final class TokenRegistry
      * must never break the customer's request, so an absent header touches nothing, a malformed
      * one is logged and dropped, and a Throwable from either the write or the log is swallowed.
      * The write can legitimately fail: the column inherits the consuming app's charset, so a
-     * contract-VALID identity (a NUL byte on PostgreSQL, a four-byte emoji on a utf8mb3 table)
-     * can throw. That is a reason to guard the write, not to narrow the shipped contract.
+     * contract-VALID identity -- a four-byte emoji on a utf8mb3 or latin1 table -- can throw in
+     * strict mode. That is a reason to guard the write, not to narrow the contract further.
+     * (A NUL byte is a different problem and is rejected up front by ClientIdentity: PostgreSQL
+     * truncates it silently instead of throwing, so no guard here would ever see it.)
      */
     public function recordClientIdentityFromRequest(Request $request, ApiToken $token): void
     {

@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\ClientIdentity;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Contracts\Http\Kernel;
+use Illuminate\Database\QueryException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
@@ -309,6 +310,87 @@ final class ClientIdentityTest extends TestCase
         $this->assertNull($this->adminToken()->client_identity);
     }
 
+    // FIX A — a NUL byte is rejected up front. PostgreSQL truncates a bound value at the first
+    // NUL SILENTLY rather than erroring, so accepting one would break store-verbatim and let two
+    // distinct identities collide on one row. Verified against PostgreSQL 18.0: "client\0one"
+    // stores as "client", and "client\0one"/"client\0two" collide.
+    public function test_it_rejects_a_client_identity_containing_a_null_byte(): void
+    {
+        $identity = "client\0one";
+
+        $this->assertTrue(mb_check_encoding($identity, 'UTF-8'));
+        $this->assertSame(10, strlen($identity));
+        $this->assertFalse(ClientIdentity::isValid($identity));
+        $this->assertSame('contains a null byte', ClientIdentity::rejectionReason($identity));
+
+        $this->getJson('/api/credentials', $this->adminHeaders() + [ClientIdentity::HEADER => $identity])
+            ->assertOk();
+
+        $this->assertNull($this->adminToken()->client_identity);
+    }
+
+    // FIX C1 — pin the contract's central number. Every other case derives its expectation from
+    // the constant, so mutating 255 itself would otherwise go unnoticed.
+    public function test_the_byte_limit_is_two_hundred_and_fifty_five(): void
+    {
+        $this->assertSame(255, ClientIdentity::MAX_BYTES);
+        $this->assertTrue(ClientIdentity::isValid(str_repeat('a', 255)));
+        $this->assertFalse(ClientIdentity::isValid(str_repeat('a', 256)));
+    }
+
+    // FIX B — a driver message routinely echoes the bound value back, and the identity is
+    // attacker-controlled. The failure log must carry the exception CLASS and never the bytes.
+    public function test_it_never_logs_the_identity_when_the_write_fails(): void
+    {
+        $identity = 'needle-a1b2c3d4-identity';
+        $headers = $this->adminHeaders();
+
+        Schema::table('api_tokens', function (Blueprint $table): void {
+            $table->dropColumn('client_identity');
+        });
+
+        // Precondition: the exception really does leak the identity, so this test is not vacuous.
+        try {
+            (new TokenRegistry)->recordClientIdentity($this->adminToken(), $identity);
+            $this->fail('expected the write to throw once the column is gone');
+        } catch (QueryException $e) {
+            $this->assertStringContainsString($identity, $e->getMessage());
+        }
+
+        $records = [];
+        Log::shouldReceive('warning')->andReturnUsing(
+            function (string $message, array $context = []) use (&$records): void {
+                $records[] = [$message, $context];
+            }
+        );
+
+        $this->getJson('/api/credentials', $headers + [ClientIdentity::HEADER => $identity])
+            ->assertOk();
+
+        // FIX C3: exactly one report -- an emptied catch block would produce none.
+        $this->assertCount(1, $records);
+        [$message, $context] = $records[0];
+
+        $this->assertSame(QueryException::class, $context['exception']);
+        $this->assertStringNotContainsString($identity, $message.json_encode($context));
+    }
+
+    // FIX C2 — the absent-header early return. Without it every headerless request would emit a
+    // warning; DB state is identical either way, so only the log can catch this.
+    public function test_a_request_without_the_header_logs_nothing(): void
+    {
+        $records = [];
+        Log::shouldReceive('warning')->andReturnUsing(
+            function (string $message, array $context = []) use (&$records): void {
+                $records[] = [$message, $context];
+            }
+        );
+
+        $this->getJson('/api/credentials', $this->adminHeaders())->assertOk();
+
+        $this->assertSame([], $records);
+    }
+
     public function test_the_registry_refuses_to_record_an_invalid_identity(): void
     {
         $token = ApiToken::factory()->create(['name' => 'direct']);
@@ -367,8 +449,9 @@ final class ClientIdentityTest extends TestCase
     public static function contractViolations(): array
     {
         return [
-            '256 bytes' => [str_repeat('a', self::MAX_BYTES + 1)],
+            '256 bytes' => [str_repeat('a', 256)],
             '400 bytes of 200 characters' => [str_repeat('é', 200)],
+            'null byte' => ["client\0one"],
             'carriage return' => ["a\rb"],
             'line feed' => ["a\nb"],
             'empty' => [''],
@@ -382,7 +465,7 @@ final class ClientIdentityTest extends TestCase
     public static function boundaryIdentities(): array
     {
         return [
-            'single byte characters' => [str_repeat('a', self::MAX_BYTES)],
+            'single byte characters' => [str_repeat('a', 255)],
             'multi byte characters' => [str_repeat('é', 127).'a'],
         ];
     }
@@ -395,10 +478,12 @@ final class ClientIdentityTest extends TestCase
         return [
             'zero bytes' => ['', false],
             'one byte' => ['a', true],
-            '255 bytes' => [str_repeat('a', self::MAX_BYTES), true],
+            '255 bytes' => [str_repeat('a', 255), true],
             '255 bytes multi-byte' => [str_repeat('é', 127).'a', true],
-            '256 bytes' => [str_repeat('a', self::MAX_BYTES + 1), false],
+            '256 bytes' => [str_repeat('a', 256), false],
             '400 bytes of 200 characters' => [str_repeat('é', 200), false],
+            'null byte' => ["a\0b", false],
+            'trailing null byte' => ["ab\0", false],
             'carriage return' => ["a\rb", false],
             'line feed' => ["a\nb", false],
             'invalid utf-8' => ["\xC3\x28", false],
