@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud;
 
 use Carbon\CarbonInterface;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
+use Throwable;
 
 final class TokenRegistry
 {
@@ -73,6 +76,39 @@ final class TokenRegistry
     }
 
     /**
+     * Record the client identity carried by a request, if it carries a conforming one.
+     *
+     * Best-effort by design, and the only entry point request handling should use. Attribution
+     * must never break the customer's request, so an absent header touches nothing, a malformed
+     * one is logged and dropped, and a Throwable from either the write or the log is swallowed.
+     * The write can legitimately fail: the column inherits the consuming app's charset, so a
+     * contract-VALID identity (a NUL byte on PostgreSQL, a four-byte emoji on a utf8mb3 table)
+     * can throw. That is a reason to guard the write, not to narrow the shipped contract.
+     */
+    public function recordClientIdentityFromRequest(Request $request, ApiToken $token): void
+    {
+        $values = $request->headers->all(ClientIdentity::HEADER);
+
+        if ($values === []) {
+            return;
+        }
+
+        try {
+            $identity = ClientIdentity::fromRequest($request);
+
+            if ($identity !== null) {
+                $this->recordClientIdentity($token, $identity);
+
+                return;
+            }
+
+            $this->warnAboutMalformedClientIdentity($values);
+        } catch (Throwable $e) {
+            $this->reportClientIdentityFailure($e);
+        }
+    }
+
+    /**
      * Record the opaque client identity that presented this token.
      *
      * The value is stored verbatim; `client_identity_last_seen_at` is bumped on every valid
@@ -92,6 +128,38 @@ final class TokenRegistry
         $token->refresh();
 
         return true;
+    }
+
+    /**
+     * @param  array<int, string|null>  $values
+     */
+    private function warnAboutMalformedClientIdentity(array $values): void
+    {
+        $only = count($values) === 1 ? $values[array_key_first($values)] : null;
+
+        // Never log the value itself: it is attacker-controlled and unvalidated.
+        Log::warning('Built for Cloud discarded a malformed client identity header.', [
+            'header' => ClientIdentity::HEADER,
+            'values' => count($values),
+            'bytes' => is_string($only) ? strlen($only) : null,
+            'reason' => is_string($only)
+                ? ClientIdentity::rejectionReason($only)
+                : 'not exactly one header value',
+        ]);
+    }
+
+    private function reportClientIdentityFailure(Throwable $e): void
+    {
+        try {
+            // Only the exception CLASS: a driver message can echo the bound value back, and the
+            // identity is attacker-controlled. Failing to log must not escape either.
+            Log::warning('Built for Cloud could not record a client identity.', [
+                'header' => ClientIdentity::HEADER,
+                'exception' => $e::class,
+            ]);
+        } catch (Throwable) {
+            // Nothing left to do without breaking the request this is meant to protect.
+        }
     }
 
     /**

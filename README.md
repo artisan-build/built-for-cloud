@@ -60,6 +60,11 @@ authenticated, so a control plane holding the owner token can attribute a token 
 | **Non-fatal** | A header that violates the contract is logged (never its value — it is attacker-controlled) and dropped. The request proceeds exactly as it would have. |
 | **Storage** | `api_tokens.client_identity`, plus `client_identity_last_seen_at`, bumped on **every** valid presentation, not only on change. A changed identity overwrites — last writer wins. |
 
+The single-value rule is enforced only where the server preserves header multiplicity (Octane,
+Swoole, RoadRunner); under PHP-FPM or Apache, repeated header lines are folded into one
+comma-joined value before PHP sees it, and that folded value is stored as the opaque string it
+arrives as.
+
 It is **forward-only**: the migration adds nullable columns and backfills nothing. Existing tokens
 stay `null` until a client actually presents a header, and a request without the header leaves a
 stored identity untouched.

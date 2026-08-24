@@ -11,10 +11,13 @@ use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Orchestra\Testbench\Attributes\WithConfig;
 use PHPUnit\Framework\Attributes\DataProvider;
+use RuntimeException;
 
 #[WithConfig('built-for-cloud.credential_api.enabled', true, false)]
 final class ClientIdentityTest extends TestCase
@@ -153,16 +156,32 @@ final class ClientIdentityTest extends TestCase
         $this->assertFalse(ApiToken::query()->whereNotNull('client_identity')->exists());
     }
 
-    // AC6 — forward-only: the columns arrive nullable and empty.
-    public function test_the_client_identity_columns_are_forward_only(): void
+    // AC6 — forward-only. The ordering has to be REAL: the legacy row must already exist when
+    // this PR's migration runs, or a backfill in up() would sail straight past the assertion.
+    public function test_the_migration_does_not_backfill_pre_existing_tokens(): void
     {
+        $migration = require __DIR__.'/../database/migrations/2026_08_24_000001_add_client_identity_to_api_tokens_table.php';
+
+        // Wind the schema back to how it stood before this PR.
+        $migration->down();
+
+        $this->assertFalse(Schema::hasColumn('api_tokens', 'client_identity'));
+        $this->assertFalse(Schema::hasColumn('api_tokens', 'client_identity_last_seen_at'));
+
+        // A token that predates the migration.
+        $legacy = ApiToken::factory()->create(['name' => 'legacy']);
+
+        // Now run this PR's migration on its own, with that row already in the table.
+        $migration->up();
+
         $this->assertTrue(Schema::hasColumns('api_tokens', ['client_identity', 'client_identity_last_seen_at']));
 
-        $token = ApiToken::factory()->create(['name' => 'legacy']);
+        // Read past the model so no cast or cached attribute can mask a backfill.
+        $row = DB::table('api_tokens')->where('id', $legacy->getKey())->first();
 
-        $this->assertNull($token->client_identity);
-        $this->assertNull($token->client_identity_last_seen_at);
-        $this->assertFalse(ApiToken::query()->whereNotNull('client_identity')->exists());
+        $this->assertNotNull($row);
+        $this->assertNull($row->client_identity);
+        $this->assertNull($row->client_identity_last_seen_at);
     }
 
     // AC6 — an absent header must not null out what is already stored.
@@ -214,6 +233,80 @@ final class ClientIdentityTest extends TestCase
         $this->getJson('/api/credentials', $headers + [ClientIdentity::HEADER => 'new-client'])->assertOk();
 
         $this->assertSame('new-client', $this->adminToken()->client_identity);
+    }
+
+    // FIX 1 — the onboarding verify endpoint authenticates a real durable token too.
+    public function test_it_records_the_client_identity_on_the_onboarding_verify_endpoint(): void
+    {
+        $plaintext = 'durable-secret';
+        ApiToken::factory()->create([
+            'name' => 'person@example.test',
+            'token_hash' => hash('sha256', $plaintext),
+            'abilities' => [Scope::Consume->value],
+        ]);
+
+        $this->postJson('/bfc/onboarding/verify', [], [
+            'Authorization' => 'Bearer '.$plaintext,
+            ClientIdentity::HEADER => 'onboarding-client',
+        ])->assertOk()->assertJsonPath('ok', true);
+
+        $token = ApiToken::query()->where('name', 'person@example.test')->firstOrFail();
+
+        $this->assertSame('onboarding-client', $token->client_identity);
+        $this->assertNotNull($token->client_identity_last_seen_at);
+    }
+
+    // FIX 1 — and a violating header does not disturb that endpoint's normal response.
+    public function test_a_malformed_client_identity_does_not_disturb_the_onboarding_verify_endpoint(): void
+    {
+        $plaintext = 'durable-secret';
+        ApiToken::factory()->create([
+            'name' => 'person@example.test',
+            'token_hash' => hash('sha256', $plaintext),
+            'abilities' => [Scope::Consume->value],
+        ]);
+
+        $this->postJson('/bfc/onboarding/verify', [], [
+            'Authorization' => 'Bearer '.$plaintext,
+            ClientIdentity::HEADER => str_repeat('a', self::MAX_BYTES + 1),
+        ])->assertOk()->assertExactJson([
+            'ok' => true,
+            'name' => 'person@example.test',
+            'scope' => Scope::Consume->value,
+        ]);
+
+        $this->assertNull(ApiToken::query()->where('name', 'person@example.test')->firstOrFail()->client_identity);
+    }
+
+    // FIX 2 — a write that throws must not reach the customer. The column inherits the consuming
+    // app's charset, so a contract-VALID identity can genuinely fail to store; dropping the column
+    // reproduces that at the driver level without a test double.
+    public function test_a_failing_client_identity_write_does_not_break_the_request(): void
+    {
+        $headers = $this->adminHeaders();
+
+        $expected = $this->getJson('/api/credentials', $headers)->assertOk()->json();
+
+        Schema::table('api_tokens', function (Blueprint $table): void {
+            $table->dropColumn('client_identity');
+        });
+
+        $this->getJson('/api/credentials', $headers + [ClientIdentity::HEADER => 'doomed-client'])
+            ->assertOk()
+            ->assertExactJson($expected);
+    }
+
+    // FIX 2 — nor may a log handler that is itself broken. Both the malformed-header warning and
+    // the failure warning that follows it throw here; neither may escape.
+    public function test_a_failing_log_handler_does_not_break_the_request(): void
+    {
+        Log::shouldReceive('warning')->andThrow(new RuntimeException('log handler is down'));
+
+        $this->getJson('/api/credentials', $this->adminHeaders() + [
+            ClientIdentity::HEADER => str_repeat('a', self::MAX_BYTES + 1),
+        ])->assertOk();
+
+        $this->assertNull($this->adminToken()->client_identity);
     }
 
     public function test_the_registry_refuses_to_record_an_invalid_identity(): void
