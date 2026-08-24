@@ -73,6 +73,28 @@ final class TokenRegistry
     }
 
     /**
+     * Record the opaque client identity that presented this token.
+     *
+     * The value is stored verbatim; `client_identity_last_seen_at` is bumped on every valid
+     * presentation, not only when the identity changes. Last writer wins.
+     */
+    public function recordClientIdentity(ApiToken $token, string $identity): bool
+    {
+        if (! ClientIdentity::isValid($identity)) {
+            return false;
+        }
+
+        ApiToken::query()->whereKey($token->getKey())->update([
+            'client_identity' => $identity,
+            'client_identity_last_seen_at' => now(),
+        ]);
+
+        $token->refresh();
+
+        return true;
+    }
+
+    /**
      * @param  list<string>  $abilities
      */
     public function store(string $name, string $hash, ?CarbonInterface $expiresAt = null, array $abilities = []): ApiToken
