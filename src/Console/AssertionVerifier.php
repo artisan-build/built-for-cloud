@@ -46,15 +46,20 @@ use Throwable;
  *  7. **audience** — THIS deployment's identity: an assertion minted for
  *     another deployment is worthless here, which is the property that
  *     makes theft of one bundle a one-deployment problem;
- *  8. **TTL bound** — the app enforces D12's 60–120s upper bound ITSELF
- *     rather than trusting the issuer to have been honest about it. A
- *     token whose `iat`→`exp` span is a week is refused while still
- *     perfectly unexpired;
- *  9. **clocks** — `exp` is hard (at `exp` the assertion is dead), and
- *     the configured skew is spent ONLY on the not-yet-valid side, where
- *     a deployment clock trailing the issuer's would otherwise refuse a
- *     freshly minted token. Skew that extended `exp` would silently make
- *     every assertion outlive the bound the previous rule just enforced.
+ *  8. **not yet valid** — an `iat`/`nbf` further ahead than the
+ *     configured skew. The skew is spent HERE and only here, where a
+ *     deployment clock trailing the issuer's would otherwise refuse a
+ *     freshly minted token; it buys nothing on the expiry side;
+ *  9. **TTL bound, on two clocks** — the app enforces D12's 60-120s
+ *     upper bound ITSELF rather than trusting the issuer to have been
+ *     honest about it, and it enforces it against BOTH the token's own
+ *     `iat`→`exp` span and this server's wall clock (`exp` may not sit
+ *     further than the bound from now). The claimed span alone is not
+ *     enough: a mint dated a few seconds ahead — inside the skew, so
+ *     rule 8 lets it through — would claim a legal 120-second life and
+ *     still be acceptable here for 120 + skew seconds. Two clocks, one
+ *     bound, so no skew can stretch the window past it;
+ * 10. **expiry** — `exp` is hard: at `exp` the assertion is dead.
  *
  * Every refusal leaves as {@see AssertionRefused} with one uniform,
  * reason-free message; the {@see AssertionRefusalReason} is for the
@@ -146,16 +151,10 @@ final class AssertionVerifier
             throw AssertionRefused::because(AssertionRefusalReason::AudienceMismatch);
         }
 
-        $lifetime = $expiresAt->getTimestamp() - $issuedAt->getTimestamp();
-
-        if ($lifetime <= 0) {
-            throw AssertionRefused::because(AssertionRefusalReason::InvalidClaims);
-        }
-
-        if ($lifetime > $this->maxTtlSeconds()) {
-            throw AssertionRefused::because(AssertionRefusalReason::TtlTooLong);
-        }
-
+        // The not-yet-valid clock rule comes FIRST of the three time
+        // rules: a token minted well into the future is a clock
+        // disagreement, and the audit record should say so rather than
+        // report the over-long window that same future date implies.
         $skew = $this->clockSkewSeconds();
 
         if ($issuedAt->getTimestamp() > $now->getTimestamp() + $skew
@@ -163,11 +162,31 @@ final class AssertionVerifier
             throw AssertionRefused::because(AssertionRefusalReason::NotYetValid);
         }
 
+        $lifetime = $expiresAt->getTimestamp() - $issuedAt->getTimestamp();
+
+        if ($lifetime <= 0) {
+            throw AssertionRefused::because(AssertionRefusalReason::InvalidClaims);
+        }
+
+        $maxTtl = $this->maxTtlSeconds();
+
+        // The bound holds on the token's OWN clock AND on this server's.
+        // The claimed span alone is not enough: a mint dated a few
+        // seconds ahead (inside the skew, so the rule above lets it
+        // through) would claim a legal 120-second life and still be
+        // acceptable here for 120 + skew seconds. The wall-clock half
+        // caps the window this app will actually honour, whatever `iat`
+        // claims — which is what makes the one-sided skew above
+        // incapable of stretching an assertion past the bound.
+        if ($lifetime > $maxTtl || $expiresAt->getTimestamp() > $now->getTimestamp() + $maxTtl) {
+            throw AssertionRefused::because(AssertionRefusalReason::TtlTooLong);
+        }
+
         if ($now->getTimestamp() >= $expiresAt->getTimestamp()) {
             throw AssertionRefused::because(AssertionRefusalReason::Expired);
         }
 
-        return new Assertion(
+        return Assertion::fromVerifiedClaims(
             issuer: $issuer,
             subject: $subject,
             displayName: $displayName,
@@ -273,10 +292,18 @@ final class AssertionVerifier
     }
 
     /**
-     * A required RFC 3339 timestamp claim. The shape is matched BEFORE
-     * parsing so that relative and free-form date strings — which a
-     * lenient parser would happily turn into a time — are refused as
+     * A required timestamp claim in RFC 3339 SHAPE. The shape is matched
+     * before parsing so that relative and free-form date strings — which
+     * a lenient parser would happily turn into a time — are refused as
      * the malformed claims they are.
+     *
+     * Shape, not full validity: a well-formed-but-impossible date such
+     * as `2026-02-30T00:00:00+00:00` is normalized by the parser rather
+     * than refused. That is left alone deliberately. These claims arrive
+     * signed by the one trusted issuer (D18), the normalized value is
+     * still subject to every clock and TTL rule above it, and a stricter
+     * calendar check would buy nothing an attacker could otherwise
+     * spend.
      *
      * @param  array<string, mixed>  $claims
      */
@@ -313,19 +340,25 @@ final class AssertionVerifier
     }
 
     /**
-     * THIS deployment's identity, mirroring the `hmac.audience`
-     * precedent: null falls back to `app.url`. Unlike hmac's there is no
-     * generic literal fallback — an audience nobody configured would put
-     * every unconfigured deployment in the fleet under the SAME
-     * audience, which is exactly the cross-deployment replay D12 exists
-     * to prevent.
+     * THIS deployment's identity — and it must be configured
+     * EXPLICITLY. Deliberately unlike the `hmac.audience` precedent,
+     * which falls back to `app.url` and then to a literal: D12's
+     * per-deployment audience is a containment boundary that has to hold
+     * on its own, independently of key custody, and `app.url` is not
+     * reliably per-deployment. `http://localhost`, a cloned `.env`, or a
+     * shared internal load-balancer hostname would quietly file several
+     * deployments under one audience — and an audience two deployments
+     * share is an audience that stops a stolen assertion at neither.
+     *
+     * So an unset audience is a misconfiguration and fails closed and
+     * loudly here, rather than verifying against a value nobody chose.
      */
     private function audience(): string
     {
-        $audience = config('built-for-cloud.console.audience') ?? config('app.url');
+        $audience = config('built-for-cloud.console.audience');
 
         if (! is_string($audience) || $audience === '') {
-            throw new RuntimeException('Console assertions require built-for-cloud.console.audience (or app.url) to be configured.');
+            throw new RuntimeException('Console assertions require built-for-cloud.console.audience to be configured explicitly; it deliberately does not fall back to app.url.');
         }
 
         return $audience;

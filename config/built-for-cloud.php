@@ -154,11 +154,14 @@ return [
     | change.
     |
     | `audience` — THIS deployment's identity, verified against the
-    | token's `aud`. Null falls back to `app.url`, mirroring the
-    | `hmac.audience` precedent above. This is the value that makes a
-    | stolen assertion worthless at any other deployment, so a deployment
-    | with neither this nor `app.url` set refuses to verify at all rather
-    | than share a default audience with the rest of the fleet.
+    | token's `aud`, and REQUIRED: unlike `hmac.audience` above it does
+    | not fall back to `app.url` or to any literal. This is the value
+    | that makes a stolen assertion worthless at any other deployment,
+    | and that containment has to hold on its own, independently of key
+    | custody. `app.url` is not reliably per-deployment — `http://localhost`,
+    | a cloned .env, or a shared load-balancer hostname would file
+    | several deployments under one audience — so an unset audience
+    | refuses to verify at all rather than quietly share one.
     |
     | `assertion_max_ttl_seconds` — the upper bound this app enforces on
     | an assertion's own `iat`-to-`exp` span (D12 mints at 60-120s). A

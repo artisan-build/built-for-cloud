@@ -12,17 +12,27 @@ use Throwable;
 /**
  * A console assertion did not verify (Console PRD D12). ONE exception
  * class for every refusal, carrying ONE uniform, reason-free message:
- * {@see self::MESSAGE}. Whoever presented the token learns only that it
- * was refused — never whether the signature was wrong, the key unknown,
- * the audience another deployment's, or the clock past `exp`. That
- * uniformity is the anti-oracle property {@see AssertionVerifier} exists
- * to hold: an attacker probing the enter endpoint with a stolen or
- * forged assertion must not be able to use the app's answers to work out
- * which part to fix next.
+ * {@see self::MESSAGE}. The CLASS and the MESSAGE are identical for all
+ * thirteen reasons, so nothing an attacker reads back — from the
+ * exception, or from the uniform response the enter endpoint renders
+ * from it — says whether the signature was wrong, the key unknown, the
+ * audience another deployment's, or the clock past `exp`.
  *
- * The machine-readable {@see AssertionRefusalReason} rides alongside for
- * the AUDIT RECORD the enter endpoint writes — the server may know
- * precisely why; the caller may not.
+ * That is a bound on what the ANSWER carries, not on every channel: a
+ * refusal decided before the Ed25519 verification (an unknown, pending
+ * or retired `kid`) returns measurably sooner than one decided after it,
+ * so key state remains distinguishable by TIMING. That is a deliberate
+ * non-goal — the assertion's own audience binding and single-use burn
+ * are what make a stolen or forged token worthless, and constant-time
+ * padding here would cost real latency on a page-load path to hide
+ * which key id a prober already chose. What the message must never do
+ * is hand the answer over for free, and it does not.
+ *
+ * {@see AssertionVerifier} throws this and nothing else, so the enter
+ * endpoint has exactly one refusal shape to render. The machine-readable
+ * {@see AssertionRefusalReason} rides alongside for the AUDIT RECORD
+ * that endpoint writes — the server may know precisely why; the caller
+ * may not.
  *
  * `$previous` carries the underlying cryptographic failure where one
  * exists, for operator debugging in server-side logs only. It never
