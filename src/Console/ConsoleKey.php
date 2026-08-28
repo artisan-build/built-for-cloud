@@ -13,9 +13,12 @@ use Illuminate\Database\Eloquent\Model;
  * One per-deployment verification key: the PUBLIC half of the keypair
  * the vendor signs console assertions with (Console PRD D12). This model
  * has no private-key property, its table has no private-key column, and
- * {@see ConsoleKeyring} refuses to store anything but 32 public bytes —
- * theft of this app's whole database yields no ability to mint an
- * assertion for this deployment or any other.
+ * nothing in this package signs anything — so theft of this app's whole
+ * database yields no ability to mint an assertion for this deployment or
+ * any other. (That guarantee rests on the provisioning protocol and on
+ * the absence of a signing path, not on {@see ConsoleKeyring}'s
+ * validation, which cannot tell a 32-byte seed from a public key; the
+ * keyring's class docblock spells that out.)
  *
  * The lifecycle is three states, and the transitions are deliberately
  * separate operations:

@@ -10,16 +10,31 @@ use Carbon\CarbonImmutable;
 use InvalidArgumentException;
 use ParagonIE\Paseto\Exception\PasetoException;
 use ParagonIE\Paseto\Keys\Version4\AsymmetricPublicKey;
+use Throwable;
 
 /**
  * The app's copy of the vendor's per-deployment PUBLIC keys (Console PRD
  * D12). It is the console half of what {@see HmacKeyring} is to the hmac
  * kind — a key id selects exactly one key, never a "try them all" loop —
- * with one decisive difference: **this ring holds no secret material of
- * any kind.** There is no store method for a private key, no column that
- * can hold one, and no code path that would use one. The vendor signs;
- * this app only verifies; a full dump of this table hands an attacker
- * nothing but the ability to check signatures they still cannot produce.
+ * with one decisive difference: **this ring is not built to hold secret
+ * material.** There is no store method for a private key, no column
+ * named for one, and — decisively — NO CODE PATH ANYWHERE IN THIS
+ * PACKAGE THAT SIGNS. The vendor signs; this app only verifies; a full
+ * dump of this table hands an attacker nothing but the ability to check
+ * signatures they still cannot produce.
+ *
+ * Be precise about where that guarantee comes from, because
+ * {@see normalizePublicKey()} cannot supply it. An Ed25519 SEED — the
+ * private half in its compact 32-byte form — is 32 bytes like a public
+ * key, and roughly one seed in twenty happens to encode a valid curve
+ * point, at which point nothing distinguishes it from a public key by
+ * inspection. The custody property is therefore held by the PROVISIONING
+ * PROTOCOL (the vendor hands over the public half; nothing here ever
+ * asks for, transports, or accepts a private one) and by this package
+ * having nothing to sign with, NOT by the validation below. What the
+ * validation does buy is that mis-delivered, truncated or corrupt
+ * material fails loudly at delivery instead of silently refusing every
+ * assertion at 3am.
  *
  * Rotation is make-before-break and its two halves are two operations:
  *
@@ -43,9 +58,11 @@ use ParagonIE\Paseto\Keys\Version4\AsymmetricPublicKey;
 final class ConsoleKeyring
 {
     /**
-     * Ed25519 public keys are 32 bytes — 64 hex characters. Nothing
-     * else is storable, which is also what makes a 64-BYTE Ed25519
-     * SECRET key (128 hex characters) unstorable here by construction.
+     * Ed25519 public keys are 32 bytes — 64 hex characters. Nothing of
+     * another length stores, which does rule out the 64-BYTE expanded
+     * Ed25519 secret key (128 hex characters); it does NOT rule out a
+     * 32-byte seed, which is the same size as a public key. See the
+     * custody paragraph in the class docblock.
      */
     public const int PUBLIC_KEY_BYTES = 32;
 
@@ -185,10 +202,16 @@ final class ConsoleKeyring
     }
 
     /**
-     * Normalize a delivered public key to storage form, refusing
-     * anything that is not exactly 32 bytes — a wrong-length string, a
-     * PEM blob, an unparseable encoding, or (the one worth naming) a
-     * 64-byte Ed25519 SECRET key, which this package must never hold.
+     * Normalize a delivered public key to storage form, refusing an
+     * unparseable encoding, anything that is not exactly 32 bytes (a
+     * truncated key, a PEM blob, the 64-byte expanded secret key), and
+     * any 32 bytes that are not a usable Ed25519 point.
+     *
+     * The point check is what makes a delivery fail at delivery: a
+     * mistyped or corrupted key that merely LOOKS like 32 bytes would
+     * otherwise file happily and then refuse every assertion minted
+     * against it. It is not a custody control — see the class docblock
+     * for where custody actually comes from.
      */
     public static function normalizePublicKey(string $publicKey): string
     {
@@ -198,7 +221,39 @@ final class ConsoleKeyring
             throw new InvalidArgumentException('A console key must be a 32-byte Ed25519 public key.');
         }
 
+        if (! self::isUsableEd25519Point($raw)) {
+            throw new InvalidArgumentException('A console key must be 32 bytes encoding a usable Ed25519 point.');
+        }
+
         return bin2hex($raw);
+    }
+
+    /**
+     * Whether 32 bytes are a canonical, non-small-order Ed25519 point on
+     * the main subgroup — libsodium's own `crypto_core_ed25519_is_valid_point`
+     * test, reached the only way PHP exposes it.
+     *
+     * PHP's ext-sodium ships the `crypto_core_*` family for ristretto255
+     * ONLY; there is no `sodium_crypto_core_ed25519_is_valid_point()` to
+     * call. `crypto_sign_ed25519_pk_to_curve25519()` runs the identical
+     * three checks internally — small order, decodable, on the main
+     * subgroup — and fails if any of them does, so converting the key
+     * and discarding the result is the available spelling of the same
+     * question. It is present with or without ext-sodium: paseto's own
+     * dependency sodium_compat polyfills the function, and its pure-PHP
+     * path refuses the same values — throwing RangeException rather than
+     * SodiumException for some of them, which is why the catch below is
+     * on Throwable and not on one exception class.
+     */
+    private static function isUsableEd25519Point(string $rawKeyBytes): bool
+    {
+        try {
+            sodium_crypto_sign_ed25519_pk_to_curve25519($rawKeyBytes);
+        } catch (Throwable) {
+            return false;
+        }
+
+        return true;
     }
 
     /**

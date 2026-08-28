@@ -18,13 +18,15 @@ return new class extends Migration
             // ever compete to verify the same token.
             $table->string('key_id', 64)->unique();
 
-            // The PUBLIC half only, lower-case hex, 32 bytes = 64 chars —
-            // and the column is 64 wide precisely SO THAT it cannot hold
-            // a 64-byte Ed25519 secret key (128 hex chars). There is no
-            // private-key column here and there never will be: the
-            // vendor holds the private half of every per-deployment
-            // keypair, so stealing this entire database compromises no
-            // deployment's signing authority (Console PRD D12).
+            // The PUBLIC half only, lower-case hex, 32 bytes = 64 chars.
+            // The column is 64 wide so a 64-byte expanded Ed25519 secret
+            // key (128 hex chars) cannot fit; note a 32-byte SEED is the
+            // same size as a public key and would, so the width is a
+            // guard against one shape of mistake, not a custody control.
+            // Custody comes from the vendor holding every private half
+            // and this package having no code that signs — which is why
+            // stealing this entire database compromises no deployment's
+            // signing authority (Console PRD D12).
             $table->string('public_key', 64);
 
             // Make-before-break rotation, as two SEPARATE steps: a key
