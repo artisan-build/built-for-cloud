@@ -192,7 +192,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `DELETE /bfc/credentials/{id}` | `metadata` | empty `204` body |
 | `POST /bfc/credentials/{id}/rotate` | `content` | the `delivery` single reveal, plus summary rows |
 | `POST /bfc/credentials/{id}/activate` | `content` | no secret ever — but the summary row carries free-text names and subject refs |
-| `POST /bfc/subjects/offboard` | `metadata` | `{"offboarded": true, "fully_contained": bool}` / `{"accepted": true}` — bounded booleans only |
+| `POST /bfc/subjects/offboard` | `metadata` | `{"offboarded": true, "fully_contained": bool}` / `{"accepted": true, "fully_contained": bool}` — bounded booleans only |
 
 Vendor-side reads of `metadata`-classified endpoints will be governed by the reserved
 `metadata:read` ability family (see [the Console reservations](#reserved--console-fast-follow-not-implemented)).
@@ -1038,9 +1038,13 @@ fields) the subject pair is required.
   nothing, writes no new audit rows, and changes nothing). `fully_contained` is `false` when
   a containment step could not complete inside the transaction (see the compensation above);
   re-run the idempotent verb after fixing the store to retry the step.
-- **Integration path: `202 {"accepted": true}` — always**, whatever the gate decided
-  (applied, ignored-older, or replayed); the body carries nothing a caller could probe gate
-  state from.
+- **Integration path: `202 {"accepted": true, "fully_contained": bool}` — always**,
+  whatever the gate decided (applied, ignored-older, or replayed). `fully_contained` is the
+  ONE deliberate exception to decision-uniformity on this verb: an applying event whose
+  containment could not complete a step reports `false` — the operator must learn the sweep
+  did not finish, at the stated price of revealing that the event applied and hit an
+  unreachable store. An ignored or replayed event ran no containment and always reports
+  `true`; the body carries nothing else a caller could probe gate state from.
 - **403** — `{"message": "..."}`: the declaration's verb matrix denies `offboard` for the
   subject. **422** — `{"message": "..."}`: shared input validation (unknown `subject_type`,
   missing `subject_ref`, a partial integration-event group, an out-of-bounds or non-integer

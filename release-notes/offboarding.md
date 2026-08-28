@@ -22,8 +22,10 @@ database session store on the default connection can share the credential transa
 rows delete atomically with the revocations. A database store on another connection deletes
 after commit (a failure there is logged, exception class only); every other driver's storage
 cannot be enumerated per user. Every step the transaction could not complete is NAMED in the
-result (`incompleteSteps`), the HTTP response reports `fully_contained: false`, and the CLI
-prints a warning — a compensated offboard is never reported as a complete sweep. In all
+result (`incompleteSteps`), the HTTP response reports `fully_contained: false` — on the
+integration acknowledgement too (the one deliberate exception to that path's
+decision-uniformity: an operator must learn the sweep did not finish) — and the CLI prints a
+warning on both paths. A compensated offboard is never reported as a complete sweep. In all
 compensated cases the registry row commits WITH the revocations, so the containment holds
 whatever survives in session storage; the (idempotent) verb can be re-run to retry the step.
 

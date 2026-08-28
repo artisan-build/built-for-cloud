@@ -319,14 +319,14 @@ it('rides the shared version gate: a replayed or older offboard event is transac
 
     // An OLDER offboard event (version 6 < 7): uniform acknowledgement,
     // and NOTHING was contained.
-    offboardViaHttp($event('evt-offboard-6', 6))->assertStatus(202)->assertExactJson(['accepted' => true]);
+    offboardViaHttp($event('evt-offboard-6', 6))->assertStatus(202)->assertExactJson(['accepted' => true, 'fully_contained' => true]);
 
     expect($credential->credential->refresh()->revoked_at)->toBeNull()
         ->and(OffboardedSubject::query()->count())->toBe(0);
 
     // A NEWER event (version 8): same uniform acknowledgement, and the
     // containment ran — including the invite history's pending code.
-    offboardViaHttp($event('evt-offboard-8', 8))->assertStatus(202)->assertExactJson(['accepted' => true]);
+    offboardViaHttp($event('evt-offboard-8', 8))->assertStatus(202)->assertExactJson(['accepted' => true, 'fully_contained' => true]);
 
     expect($credential->credential->refresh()->revoked_at)->not->toBeNull()
         ->and(Invitation::query()->whereNull('accepted_at')->count())->toBe(0)
@@ -339,7 +339,7 @@ it('rides the shared version gate: a replayed or older offboard event is transac
         'subject_ref' => 'sponsor-login',
     ]);
 
-    offboardViaHttp($event('evt-offboard-8', 8))->assertStatus(202)->assertExactJson(['accepted' => true]);
+    offboardViaHttp($event('evt-offboard-8', 8))->assertStatus(202)->assertExactJson(['accepted' => true, 'fully_contained' => true]);
 
     expect($later->credential->refresh()->revoked_at)->toBeNull();
 
@@ -416,6 +416,53 @@ it('reports containment INCOMPLETE when the session store is outside the transac
 
     expect($deferredFailure)->toHaveCount(1)
         ->and($deferredFailure[0]['context'])->toBe(['exception' => InvalidArgumentException::class]);
+});
+
+it('reports an incomplete containment step through the integration acknowledgement too (r3 fold)', function (): void {
+    // A bound user makes the sessions step run; the array session driver
+    // (the test default) makes it unreachable — the forced compensation
+    // gap the direct path already reports.
+    $user = User::query()->create([
+        'name' => 'Person',
+        'email' => 'person@example.com',
+        'password' => 'irrelevant',
+    ]);
+
+    $this->mintCredential([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'sponsor-y',
+        'user_id' => (string) $user->getKey(),
+    ]);
+
+    // The applying integration event acks — but NOT clean: the
+    // containment status rides the acknowledgement.
+    offboardViaHttp([
+        'integration_namespace' => 'ns-y',
+        'event_id' => 'evt-y-1',
+        'entitlement_version' => 1,
+        'external_subject' => 'sponsor-y',
+    ])->assertStatus(202)->assertExactJson(['accepted' => true, 'fully_contained' => false]);
+
+    // The CLI transport warns identically on its applying event.
+    $this->artisan('bfc:subject:offboard', [
+        '--integration-namespace' => 'ns-y',
+        '--event-id' => 'evt-y-2',
+        '--entitlement-version' => '2',
+        '--external-subject' => 'sponsor-y',
+        '--local' => true,
+    ])
+        ->expectsOutputToContain('Offboard event acknowledged.')
+        ->expectsOutputToContain('Containment INCOMPLETE')
+        ->assertSuccessful();
+
+    // An IGNORED event ran no containment and acks clean — the only
+    // uniformity trade is the incompleteness report itself.
+    offboardViaHttp([
+        'integration_namespace' => 'ns-y',
+        'event_id' => 'evt-y-0',
+        'entitlement_version' => 1,
+        'external_subject' => 'sponsor-y',
+    ])->assertStatus(202)->assertExactJson(['accepted' => true, 'fully_contained' => true]);
 });
 
 it('makes a concurrent first offboard idempotent via the registry\'s unique subject key (Fix 6)', function (): void {
@@ -818,7 +865,7 @@ it('binds the version gate to the offboard target: a decoy external subject cann
         'event_id' => 'evt-decoy-2',
         'entitlement_version' => 1,
         'external_subject' => 'decoy',
-    ])->assertStatus(202)->assertExactJson(['accepted' => true]);
+    ])->assertStatus(202)->assertExactJson(['accepted' => true, 'fully_contained' => true]);
 
     expect($victim->credential->refresh()->revoked_at)->toBeNull()
         ->and(OffboardedSubject::subjectIsOffboarded(new Subject(SubjectType::ExternalConsumer, 'decoy')))->toBeTrue()

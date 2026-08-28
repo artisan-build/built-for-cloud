@@ -43,7 +43,15 @@ final class ManageSubjects
         }
 
         if ($result->acknowledged) {
-            return response()->json(['accepted' => true], 202);
+            // The acknowledgement stays uniform across applied / ignored /
+            // replayed — except for `fully_contained` (rework 3 fold): the
+            // incompleteness report outranks decision-uniformity on this
+            // verb, so an applying event that could not complete a
+            // containment step says so instead of acking clean.
+            return response()->json([
+                'accepted' => true,
+                'fully_contained' => $result->fullyContained(),
+            ], 202);
         }
 
         // `fully_contained` is the honest report (rework Fix 3): false

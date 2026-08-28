@@ -11,6 +11,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\IntegrationEventContention;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\OffboardOptions;
+use ArtisanBuild\BuiltForCloud\OffboardResult;
 use Illuminate\Console\Command;
 
 /**
@@ -60,8 +61,11 @@ final class SubjectOffboardCommand extends Command
 
         if ($result->acknowledged) {
             // The gate's uniform answer, matching the HTTP transport:
-            // applied, ignored-older, and replayed are indistinguishable.
+            // applied, ignored-older, and replayed are indistinguishable —
+            // except that an incomplete containment step is reported here
+            // too (rework 3 fold), exactly as on the direct path.
             $this->line('Offboard event acknowledged.');
+            $this->warnOnIncompleteContainment($result);
 
             return self::SUCCESS;
         }
@@ -77,16 +81,25 @@ final class SubjectOffboardCommand extends Command
             $result->deactivatedUsers,
         ));
 
-        // The honest report (rework Fix 3): a step the offboard
-        // transaction could not complete is named, never rounded up to
-        // containment. The registry rejection stands regardless.
-        if (! $result->fullyContained()) {
-            $this->warn(
-                'Containment INCOMPLETE — unreachable step(s): '.implode(', ', $result->incompleteSteps)
-                .'. The registry rejection stands (the guards refuse the principal); fix the store and re-run this idempotent command to retry.',
-            );
-        }
+        $this->warnOnIncompleteContainment($result);
 
         return self::SUCCESS;
+    }
+
+    /**
+     * The honest report (rework Fix 3): a step the offboard transaction
+     * could not complete is named, never rounded up to containment. The
+     * registry rejection stands regardless.
+     */
+    private function warnOnIncompleteContainment(OffboardResult $result): void
+    {
+        if ($result->fullyContained()) {
+            return;
+        }
+
+        $this->warn(
+            'Containment INCOMPLETE — unreachable step(s): '.implode(', ', $result->incompleteSteps)
+            .'. The registry rejection stands (the guards refuse the principal); fix the store and re-run this idempotent command to retry.',
+        );
     }
 }

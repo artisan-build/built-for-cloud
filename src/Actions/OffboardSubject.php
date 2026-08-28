@@ -247,7 +247,7 @@ final class OffboardSubject
             $entitlement->forceFill(['entitlement_version' => $options->entitlementVersion])->save();
         }
 
-        $this->contain($subject, $actor, $options->integrationNamespace);
+        $contained = $this->contain($subject, $actor, $options->integrationNamespace);
 
         // An applying offboard also cancels every pending invitation its
         // own (namespace, subject) history issued — a stolen invite code
@@ -264,7 +264,11 @@ final class OffboardSubject
 
         $this->recordEvent($options, applied: true);
 
-        return OffboardResult::acknowledged();
+        // The containment status rides the acknowledgement (rework 3
+        // fold): an applying event that could not complete a step reports
+        // it exactly like the direct path — never a clean ack for an
+        // incomplete sweep.
+        return OffboardResult::acknowledged($contained->incompleteSteps);
     }
 
     private function recordEvent(OffboardOptions $options, bool $applied): void

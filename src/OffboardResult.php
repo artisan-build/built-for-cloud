@@ -38,9 +38,20 @@ final readonly class OffboardResult
         public array $incompleteSteps = [],
     ) {}
 
-    public static function acknowledged(): self
+    /**
+     * The integration path's uniform acknowledgement. It carries the
+     * containment's incomplete steps (an ignored or replayed event ran no
+     * containment, so it acknowledges clean): the incompleteness REPORT
+     * deliberately outranks decision-uniformity for this verb — an
+     * operator must learn that containment did not finish, at the stated
+     * price of revealing that the event applied AND hit an unreachable
+     * store.
+     *
+     * @param  list<string>  $incompleteSteps
+     */
+    public static function acknowledged(array $incompleteSteps = []): self
     {
-        return new self(acknowledged: true, applied: false);
+        return new self(acknowledged: true, applied: false, incompleteSteps: $incompleteSteps);
     }
 
     public function fullyContained(): bool
