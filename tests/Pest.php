@@ -60,7 +60,30 @@ function auditIssueCode(?string $email, int $ttlSeconds = 3600): string
  */
 function consoleKeypair(): AsymmetricSecretKey
 {
-    return AsymmetricSecretKey::generate(new Version4);
+    // Regenerate past an upstream paseto bug, roughly 1 key in 1040:
+    // `AsymmetricSecretKey::raw()` runs the SIGNING key's bytes through
+    // `Util::dos2unix()`, a text CRLF normalization applied to binary
+    // material, so a 64-byte key that happens to contain the adjacent
+    // pair 0x0D 0x0A comes back 63 bytes and libsodium refuses to sign
+    // with it. Measured 17 short keys in 20,000 generations, matching
+    // the predicted 63/65536.
+    //
+    // DO NOT DELETE THIS LOOP because it looks paranoid: without it the
+    // whole console suite fails roughly one run in twelve, inside
+    // `consoleMint()`, with an error that names neither this helper nor
+    // the code under test. It is signing-side ONLY — the public key's
+    // own `raw()` does no such normalization, so verification, which is
+    // all this package ever does, is unaffected and needs no guard in
+    // `src/`.
+    foreach (range(1, 16) as $ignored) {
+        $secret = AsymmetricSecretKey::generate(new Version4);
+
+        if (strlen($secret->raw()) === SODIUM_CRYPTO_SIGN_SECRETKEYBYTES) {
+            return $secret;
+        }
+    }
+
+    throw new RuntimeException('Could not generate a signing key paseto is willing to sign with.');
 }
 
 /**
