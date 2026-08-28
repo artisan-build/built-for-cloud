@@ -278,20 +278,148 @@ it('bounds the name+scope sweep to the colliding name and scope', function (): v
         ->and($registry->resolve($sameNameDifferentScope))->toBe('person@example.test');
 });
 
-it('spares a rotation grace-window row from the name+scope sweep', function (): void {
+it('spares a genuinely rotated row from the name+scope sweep', function (): void {
     $registry = app(TokenRegistry::class);
 
     $gracePlaintext = mintApiToken('person@example.test', [Scope::Consume->value]);
 
-    // Rotation stamps the outgoing row with the 1h grace expiry and mints a
-    // same-name successor — the signal the sweep recognises.
+    // rotate() stamps rotated_at — the provenance the sweep trusts.
     $registry->rotate('person@example.test', hash('sha256', 'rotated-'.bin2hex(random_bytes(8))));
 
     $claimCode = issueOnboardingToken('person@example.test');
     test()->postJson('/bfc/onboarding/exchange', ['token' => $claimCode])->assertCreated();
 
-    // The grace row still resolves for the remainder of its window.
+    // The rotated row still resolves for the remainder of its grace window.
     expect($registry->resolve($gracePlaintext))->toBe('person@example.test');
+});
+
+it('sweeps a crafted same-name short-TTL token that only mimics rotation', function (): void {
+    // The shape the old heuristic spared: a 30-minute-TTL token of the
+    // colliding name+scope beside a same-name later row. It carries no
+    // rotation provenance, so it must die in the sweep — otherwise TWO live
+    // durables survive an exchange.
+    $craftedPlaintext = 'crafted-'.bin2hex(random_bytes(8));
+
+    ApiToken::query()->create([
+        'name' => 'person@example.test',
+        'token_hash' => hash('sha256', $craftedPlaintext),
+        'abilities' => [Scope::Consume->value],
+        'expires_at' => now()->addMinutes(30),
+    ]);
+
+    mintApiToken('person@example.test', [Scope::Admin->value]);
+
+    $claimCode = issueOnboardingToken('person@example.test');
+    $exchange = test()->postJson('/bfc/onboarding/exchange', ['token' => $claimCode]);
+    $exchange->assertCreated();
+
+    $registry = app(TokenRegistry::class);
+
+    // The crafted token died; the fresh durable is the only live
+    // consume-scoped one (at-most-one-live holds).
+    expect($registry->resolve($craftedPlaintext))->toBeNull()
+        ->and($registry->resolve((string) $exchange->json('durable_token')))->toBe('person@example.test');
+});
+
+it('stamps rotated_at on the outgoing row for normal and emergency rotation', function (): void {
+    $registry = app(TokenRegistry::class);
+
+    $normalPlaintext = mintApiToken('normal-rotation', [Scope::Consume->value]);
+    $registry->rotate('normal-rotation', hash('sha256', 'n-'.bin2hex(random_bytes(8))));
+
+    $emergencyPlaintext = mintApiToken('emergency-rotation', [Scope::Consume->value]);
+    $registry->rotate('emergency-rotation', hash('sha256', 'e-'.bin2hex(random_bytes(8))), emergency: true);
+
+    $normalRow = ApiToken::query()->where('token_hash', hash('sha256', $normalPlaintext))->firstOrFail();
+    $emergencyRow = ApiToken::query()->where('token_hash', hash('sha256', $emergencyPlaintext))->firstOrFail();
+
+    expect($normalRow->rotated_at)->not->toBeNull()
+        ->and($emergencyRow->rotated_at)->not->toBeNull();
+});
+
+it('fails authentication when an already-used durable dies after the resolving read', function (): void {
+    [, $durable] = burnExchange('fastpath@example.test');
+
+    $registry = app(TokenRegistry::class);
+
+    // First use burns and sets last_used_at: later resolutions take the
+    // fast path.
+    expect($registry->resolve($durable))->toBe('fastpath@example.test');
+
+    $died = false;
+
+    DB::listen(function (QueryExecuted $query) use (&$died, $durable): void {
+        if (! $died
+            && preg_match('/^\s*select\b/i', $query->sql) === 1
+            && str_contains($query->sql, 'api_tokens')
+            && str_contains($query->sql, 'token_hash')) {
+            $died = true;
+
+            ApiToken::query()
+                ->where('token_hash', hash('sha256', $durable))
+                ->update(['expires_at' => now()->subSecond()]);
+        }
+    });
+
+    // The fast-path bump carries the resolvability predicate: zero affected
+    // rows is an authentication failure, not a silent bump.
+    expect($registry->resolve($durable))->toBeNull()
+        ->and($died)->toBeTrue();
+
+    expect(ApiToken::query()->where('token_hash', hash('sha256', $durable))->firstOrFail()->request_count)->toBe(1);
+});
+
+it('fails authentication when the row dies between the first-use gate and the recovery bump', function (): void {
+    [$claimCode, $durable] = burnExchange('recovery@example.test');
+
+    $registry = app(TokenRegistry::class);
+
+    $competed = false;
+    $killed = false;
+
+    DB::listen(function (QueryExecuted $query) use (&$competed, &$killed, $durable): void {
+        // During A's resolving read, another process's usage bump lands:
+        // A's first-use conditional will return zero rows.
+        if (! $competed
+            && preg_match('/^\s*select\b/i', $query->sql) === 1
+            && str_contains($query->sql, 'api_tokens')
+            && str_contains($query->sql, 'token_hash')) {
+            $competed = true;
+
+            ApiToken::query()
+                ->where('token_hash', hash('sha256', $durable))
+                ->update(['last_used_at' => now()]);
+
+            return;
+        }
+
+        // Between A's zero-row first-use gate (the update whose WHERE
+        // carries `last_used_at IS NULL`) and A's recovery bump, the row
+        // dies.
+        if ($competed
+            && ! $killed
+            && preg_match('/^\s*update\b/i', $query->sql) === 1
+            && str_contains($query->sql, 'api_tokens')
+            && str_contains($query->sql, 'is null')) {
+            $killed = true;
+
+            ApiToken::query()
+                ->where('token_hash', hash('sha256', $durable))
+                ->update(['expires_at' => now()->subSecond()]);
+        }
+    });
+
+    // The recovery bump re-asserts resolvability and fails: no auth, no
+    // bump, and A consumes nothing.
+    expect($registry->resolve($durable))->toBeNull()
+        ->and($competed)->toBeTrue()
+        ->and($killed)->toBeTrue();
+
+    $code = OnboardingToken::query()
+        ->where('token_hash', OnboardingToken::hashToken($claimCode))
+        ->firstOrFail();
+
+    expect($code->consumed_at)->toBeNull();
 });
 
 it('never sweeps a durable linked to a different unconsumed code', function (): void {

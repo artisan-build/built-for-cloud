@@ -54,10 +54,11 @@ Providers with no observable first use declare `at_exchange` via `DeclaresBurnMo
 consumed at redemption, under lock. A provider declaring `at_exchange` does not implement the hitch
 claim contract and must not advertise it.
 
-The first-use gate re-asserts the full resolvability predicate at write time: a durable revoked or
-expired between the resolving read and the usage write — a re-claim racing a first use — **fails
-authentication** rather than completing a request on a dead credential, and the code stays governed
-by whatever durable it links to now.
+**Every** usage write — the first-use gate, the already-used fast path, and the recovery path —
+re-asserts the full resolvability predicate at write time and gates authentication on affected
+rows: a durable revoked or expired at any point between the resolving read and the usage write — a
+re-claim racing a first use included — **fails authentication** rather than completing a request on
+a dead credential, and the code stays governed by whatever durable it links to now.
 
 The concurrency behaviours above are verified by **single-connection interleaved tests**: the test
 substrate (in-memory sqlite) is per-connection and single-writer, so it structurally cannot host a
@@ -72,13 +73,17 @@ every `code_already_claimed` as a revoke-and-re-issue, not automatically as an i
 ## The name+scope sweep, bounded
 
 Exchange's name+scope revocation (the one issue no longer performs) is bounded so an accidental
-name collision cannot kill an unrelated integration: a row inside a rotation grace window (an
-expiry within the 1-hour grace, no `revoked_at`, and a same-name successor minted after it)
-survives the sweep, and so does a durable linked to a different unconsumed claim code. **The
-remaining collision domain is stated honestly:** durable names are free text with no unique index,
-so a resolvable token that shares the exact name AND holds the scope — outside those two
-exclusions — is still revoked by an exchange for that name. The unified store's subject binding
-(PRD 1.19) dissolves this domain; until then, distinct integrations should not share a name.
+name collision cannot kill an unrelated integration, and the exclusions are **provenance-based,
+not shape-based**: `api_tokens` gains an additive nullable `rotated_at` column that only
+`TokenRegistry::rotate()` stamps (normal and emergency rotation alike — it means "this row was
+superseded by rotation"). The sweep spares rows carrying that marker — their grace expiry already
+bounds them — and durables linked to a different unconsumed claim code. A token that merely *looks*
+like a grace row (a short TTL beside a same-name successor) carries no marker and dies in the
+sweep like any other collision. **The remaining collision domain is stated honestly:** durable
+names are free text with no unique index, so a resolvable token that shares the exact name AND
+holds the scope — outside those two exclusions — is still revoked by an exchange for that name.
+The unified store's subject binding (PRD 1.19) dissolves this domain; until then, distinct
+integrations should not share a name.
 
 ## For integrators
 

@@ -91,15 +91,27 @@ final class TokenRegistry
     private function recordUsage(ApiToken $row): bool
     {
         if ($row->last_used_at !== null) {
-            ApiToken::query()->whereKey($row->getKey())->update([
-                'request_count' => DB::raw('request_count + 1'),
-                'last_used_at' => now(),
-            ]);
-
-            return true;
+            return $this->recordSubsequentUse($row);
         }
 
         return $this->burnFirstUse($row);
+    }
+
+    /**
+     * The already-used path. The bump itself re-asserts resolvability and
+     * is gated on affected rows: zero rows means the credential died
+     * between the resolving read and this write, and a dead row neither
+     * authenticates nor takes a bump.
+     */
+    private function recordSubsequentUse(ApiToken $row): bool
+    {
+        return ApiToken::query()
+            ->whereKey($row->getKey())
+            ->resolvable()
+            ->update([
+                'request_count' => DB::raw('request_count + 1'),
+                'last_used_at' => now(),
+            ]) === 1;
     }
 
     private function burnFirstUse(ApiToken $row): bool
@@ -134,28 +146,14 @@ final class TokenRegistry
 
             if (! $wasFirst) {
                 // Zero affected rows means EITHER someone else's first use
-                // won OR the row changed under us. Re-read to tell them
-                // apart.
-                $stillResolvable = ApiToken::query()
-                    ->whereKey($row->getKey())
-                    ->resolvable()
-                    ->exists();
-
-                if (! $stillResolvable) {
-                    // Revoked or expired between our read and our write: the
-                    // authentication FAILS, and a dead row gets no usage
-                    // bump. The code is left to its current linkage — if a
-                    // re-claim relinked it, the new durable governs it now.
-                    return false;
-                }
-
-                // Still live, merely already used: today's fast-path bump.
-                ApiToken::query()->whereKey($row->getKey())->update([
-                    'request_count' => DB::raw('request_count + 1'),
-                    'last_used_at' => now(),
-                ]);
-
-                return true;
+                // won OR the row changed under us. The recovery bump itself
+                // decides: it carries the resolvability predicate and is
+                // gated on affected rows, so a row revoked or expired at any
+                // point up to THIS write fails authentication with no bump —
+                // and if it succeeds, the row was live and merely already
+                // used. The code is left to its current linkage either way —
+                // if a re-claim relinked it, the new durable governs it now.
+                return $this->recordSubsequentUse($row);
             }
 
             // We were first: consume the code in the SAME transaction as the
@@ -393,11 +391,18 @@ final class TokenRegistry
         $newToken = $this->store($name, $newHash);
         $expiresAt = $emergency ? now() : now()->addHour();
 
+        // `rotated_at` is the provenance marker — "superseded by rotation" —
+        // that only this verb may assert, emergency included. The claim-code
+        // exchange sweep spares marked rows; their expiry already bounds
+        // them.
         ApiToken::query()
             ->where('name', $name)
             ->whereKeyNot($newToken->getKey())
             ->resolvable()
-            ->update(['expires_at' => $expiresAt]);
+            ->update([
+                'expires_at' => $expiresAt,
+                'rotated_at' => now(),
+            ]);
 
         return $newToken;
     }

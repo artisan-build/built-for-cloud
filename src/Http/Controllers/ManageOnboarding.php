@@ -248,11 +248,11 @@ final class ManageOnboarding
      * is BOUNDED to keep an accidental name collision from killing an
      * unrelated integration:
      *
-     * - A row in a rotation grace window survives. `rotate()`'s signal is
-     *   an expiry it set within the 1-hour grace, no `revoked_at`, and a
-     *   same-name successor minted at-or-after the row — revocation paths
-     *   always stamp `revoked_at`, so its absence beside a near expiry and
-     *   a successor is the honest marker available.
+     * - A row superseded by rotation survives: `rotated_at` is provenance
+     *   only `TokenRegistry::rotate()` asserts, and the grace expiry that
+     *   verb set already bounds the row. No shape heuristic — a crafted
+     *   short-TTL token of the same name+scope carries no marker and dies
+     *   in the sweep like any other collision.
      * - A durable linked to a DIFFERENT unconsumed code survives: it is
      *   governed by that code's own make-before-break lifecycle.
      *
@@ -287,40 +287,12 @@ final class ManageOnboarding
                 continue;
             }
 
-            if ($this->inRotationGraceWindow($token, $tokens)) {
+            if ($token->rotated_at !== null) {
                 continue;
             }
 
             $this->revokeLockedDurable($token);
         }
-    }
-
-    /**
-     * @param  list<ApiToken>  $sameNameTokens
-     */
-    private function inRotationGraceWindow(ApiToken $token, array $sameNameTokens): bool
-    {
-        if ($token->expires_at === null || $token->revoked_at !== null) {
-            return false;
-        }
-
-        if ($token->expires_at->greaterThan(now()->addHour())) {
-            return false;
-        }
-
-        foreach ($sameNameTokens as $candidate) {
-            if ($candidate->getKey() === $token->getKey()) {
-                continue;
-            }
-
-            if ($candidate->created_at !== null
-                && $token->created_at !== null
-                && $candidate->created_at->greaterThanOrEqualTo($token->created_at)) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private function revokeDurableById(string $tokenId): void
