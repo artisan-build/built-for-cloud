@@ -178,6 +178,13 @@ it('remints the owner token locally with --local, revoking the previous owner ro
 // the surface itself is tested, not just the behaviour. (The one command
 // with a secret-shaped argument, bfc:token:revoke-self, REFUSES it; that
 // refusal is pinned by its own suite.)
+//
+// LIMITATION, stated honestly: this is a BLACKLIST of secret-shaped input
+// names, so it catches a future option that NAMES itself like a secret,
+// not one that smuggles a secret under an innocent name ("--value",
+// "--data"). The real guarantee is D7's rule enforced in review and by
+// the leak-harness tests on each command's behaviour; this test is the
+// tripwire, not the proof.
 
 it('accepts no secret-bearing argument or option on any new or changed command surface', function (): void {
     $commands = [
@@ -194,7 +201,10 @@ it('accepts no secret-bearing argument or option on any new or changed command s
         'bfc:ownership:remint-owner-token',
     ];
 
-    $forbidden = ['secret', 'password', 'plaintext', 'credential', 'private-key'];
+    $forbidden = [
+        'secret', 'password', 'plaintext', 'credential', 'private-key',
+        'token', 'bearer', 'claim-code', 'key', 'auth',
+    ];
 
     foreach ($commands as $name) {
         $definition = Artisan::all()[$name]->getDefinition();

@@ -50,11 +50,21 @@ them as arguments, and captured output beyond the single reveal is leak-harness-
 
 `bfc:install:operator-credential` mints a REAL, revocable, `operator`-subject credential through
 the same mint action (`--local` semantics: in-process, direct database) and prints it once to the
-TTY. Install scaffolds run it instead of generating a `FALLBACK_TOKEN`; nothing on that path
-writes or reads the fallback. `fallback-token:generate` and the `fallback_token` config key are
-**deprecated** (warn + docblock), not deleted — live 0.4.x apps still carry fallbacks, the
-fail-closed MCP gate stays as the belt, and a later major removes them. The unified-store guard
-has never consulted the fallback.
+TTY. It is **wired into the install scaffold**: the scaffold concern (`WritesInstallEnv` gains
+`mintInstallOperatorCredential()`) runs it as part of an app's install command,
+**idempotently** — a re-run skips with a notice when a live operator credential already exists
+(`--force` mints another deliberately). And the credential **works on the surface
+it exists to manage**: the `/bfc/credentials` gate accepts either a legacy admin `api_tokens`
+token or a unified-store operator credential holding `credential:admin` — the ability the
+installer mints with — with the audit actor reflecting which store authenticated.
+
+`fallback-token:generate` and the `fallback_token` config key are **deprecated** (warn +
+docblock), not deleted — live 0.4.x apps still carry fallbacks, the fail-closed MCP gate stays
+as the belt, and a later major removes them. Scope of the claim, stated precisely: the bfc guard
+and every unified-store path never consult the fallback, and the installer path never writes or
+reads one; the legacy `TokenRegistry::resolve()` still honours it for 0.4.x consumers, and the
+admin gates still CONSULT the config — solely to REJECT a presented fallback with a
+distinguishable 403 rather than a misleading 401 (explicit and tested on the new gate).
 
 ## API_VERSION 2 and the public contract (PRD 0.2, GATE-3)
 
@@ -81,6 +91,15 @@ first use consumes the linked claim code and emits `first_used` in one transacti
 revoked between resolve and use no longer authenticates (previously the unified guard stamped
 `last_used_at` unconditionally).
 
+**The store transition cannot strand a durable.** `onboarding_tokens` gains an additive nullable
+`durable_store` column, stamped at exchange (null backfills to `api_tokens`, the only store that
+existed). Make-before-break always revokes the code's linked durable in its RECORDED store,
+never the currently declared one; the name/scope sweep covers the current target store **plus**
+the recorded store of the code's own linked durable — the stated choice: it covers the
+transition exactly without extending the documented name-collision domain into a store the code
+never touched. Burn lookups honour the same discriminator (an `api_tokens` linkage is the legacy
+registry's to burn; a `credentials` linkage the unified recorder's).
+
 ## Mint paths emit `issued`
 
 The unified mint emits `issued` on both transports, always. The legacy mint paths were cheap and
@@ -91,6 +110,19 @@ record `issued` (ids only) in the same transaction as the store.
 
 `ContractAssertions` gains `assertBuiltForCloudTransportParityContract()` (additive): for each
 two-transport verb it runs the SAME action through the CLI (`--local`) and HTTP and asserts
-identical outcomes — row state, audit events, delivery-shape content — under the app's active
-declaration (a declaration that refuses must refuse on BOTH transports, leaving no row). Run it
-in CI next to the existing contract assertions; the package runs it too.
+identical outcomes — row state, audit events, delivery-shape content, for the `bearer` AND
+`basic_auth` deliveries — under the app's active declaration. A declaration that refuses must
+refuse on BOTH transports **with the same refusal** (the HTTP 403 message appears in the CLI's
+error output), leaving no row. Run it in CI next to the existing contract assertions; the
+package runs it too.
+
+**Scope of the guarantee:** parity is defined over the verb's own inputs (subject, options,
+abilities, target row). `authorizeVerb` receives each transport's real request by design —
+`resolveSubject` needs real context — so a declaration keying authorization on request internals
+is app-owned divergence, outside what the suite asserts.
+
+**Validation is shared too:** both transports build options through `MintOptions::fromInput()`,
+so junk is rejected identically (`InvalidCredentialInput` → CLI failure exit / HTTP 422, same
+message): a non-integer `code-ttl` like `60junk` is refused, never truncated, and **an empty
+abilities list normalizes to null** (both grant nothing; summaries serialize the one canonical
+shape).

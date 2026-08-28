@@ -172,15 +172,27 @@ trait ContractAssertions
 
     /**
      * The transport-parity suite (PRD 1.0 + 1.6): for each two-transport
-     * verb — mint, list, revoke — exercise the SAME action through BOTH
-     * transports (`--local` CLI and HTTP) and assert identical outcomes:
-     * row state, audit events, delivery-shape content. Run this in a
-     * consuming app's CI; a verb that behaves differently per transport is
-     * a bug by definition (a verb one transport lacks even more so).
+     * verb — mint (bearer AND basic_auth deliveries), list, revoke —
+     * exercise the SAME action through BOTH transports (`--local` CLI and
+     * HTTP) and assert identical outcomes: row state, audit events,
+     * delivery-shape content. Run this in a consuming app's CI; a verb
+     * that behaves differently per transport is a bug by definition (a
+     * verb one transport lacks even more so).
      *
      * The suite runs under the app's ACTIVE declaration. If that
      * declaration denies the issue verb, the parity it asserts is refusal
-     * parity — both transports must refuse, and neither may leave a row.
+     * parity — both transports must refuse with the same refusal (the
+     * HTTP 403 message appears in the CLI's error output), and neither
+     * may leave a row.
+     *
+     * SCOPE OF THE GUARANTEE: parity is defined over the verb's own
+     * inputs — subject, options, abilities, the target row. The
+     * declaration's authorizeVerb hook receives each transport's REAL
+     * request by design (resolveSubject needs real context), so a
+     * declaration that keys authorization on request internals (headers,
+     * IPs, session state) introduces app-owned divergence between the
+     * transports; that divergence is the app's choice and outside what
+     * this suite asserts.
      */
     public function assertBuiltForCloudTransportParityContract(): void
     {
@@ -189,6 +201,7 @@ trait ContractAssertions
         $this->assertBuiltForCloudListTransportParity();
 
         if ($rows !== null) {
+            $this->assertBuiltForCloudBasicAuthTransportParity();
             $this->assertBuiltForCloudRevokeTransportParity($rows['cli'], $rows['http']);
         }
     }
@@ -219,8 +232,19 @@ trait ContractAssertions
 
         if ($httpResponse->status() === 403) {
             // Refusal parity: what one transport refuses, the other must
-            // refuse identically — and neither leaves a row behind.
+            // refuse identically — same refusal (the HTTP message appears
+            // verbatim in the CLI's error output, because both come from
+            // the one action's exception) — and neither leaves a row.
             Assert::assertNotSame(0, $cliExit, 'HTTP refused the mint but the CLI performed it: the transports disagree.');
+
+            $httpMessage = (string) $httpResponse->json('message');
+
+            Assert::assertNotSame('', $httpMessage, 'The HTTP refusal carried no message.');
+            Assert::assertStringContainsString(
+                $httpMessage,
+                $cliOutput,
+                'The CLI refused with a different message than HTTP: the transports disagree on the refusal.',
+            );
             Assert::assertSame(
                 0,
                 Credential::query()->whereIn('subject_ref', [$cliRef, $httpRef])->count(),
@@ -268,6 +292,59 @@ trait ContractAssertions
         Assert::assertSame([LifecycleEventType::Issued->value], $this->builtForCloudEventsFor($httpRow->id));
 
         return ['cli' => $cliRow, 'http' => $httpRow];
+    }
+
+    /**
+     * The basic_auth delivery, compared across transports: same shape,
+     * the row id as the presentation-only username, and each password
+     * hashing to its own row's stored digest.
+     */
+    public function assertBuiltForCloudBasicAuthTransportParity(): void
+    {
+        $admin = $this->mintBuiltForCloudAdminToken('parity-basic-admin');
+
+        $cliRef = 'parity-basic-cli-'.bin2hex(random_bytes(4));
+        $httpRef = 'parity-basic-http-'.bin2hex(random_bytes(4));
+
+        $cliExit = Artisan::call('bfc:credential:mint', [
+            'subject-type' => 'external_consumer',
+            'subject-ref' => $cliRef,
+            '--kind' => 'basic',
+            '--local' => true,
+        ]);
+        $cliOutput = Artisan::output();
+
+        $httpResponse = $this->postJson('/bfc/credentials', [
+            'subject_type' => 'external_consumer',
+            'subject_ref' => $httpRef,
+            'kind' => 'basic',
+        ], $this->builtForCloudBearerHeaders($admin));
+
+        if ($httpResponse->status() === 403) {
+            Assert::assertNotSame(0, $cliExit, 'HTTP refused the basic mint but the CLI performed it: the transports disagree.');
+
+            return;
+        }
+
+        $httpResponse->assertCreated();
+        Assert::assertSame(0, $cliExit, 'The CLI basic mint failed where the HTTP mint succeeded: the transports disagree.');
+
+        /** @var Credential $cliRow */
+        $cliRow = Credential::query()->where('subject_ref', $cliRef)->sole();
+        /** @var Credential $httpRow */
+        $httpRow = Credential::query()->where('subject_ref', $httpRef)->sole();
+
+        // The pair, on each transport: username = the row id (presentation
+        // only), password = the secret, revealed once.
+        Assert::assertStringContainsString('auth.json username: '.$cliRow->id, $cliOutput);
+        Assert::assertSame(1, preg_match('/shown once: (\S+)/', $cliOutput, $matches), 'The CLI basic mint revealed no password.');
+        Assert::assertSame($cliRow->secret_hash, hash('sha256', $matches[1]));
+
+        Assert::assertSame('basic_auth', $httpResponse->json('delivery.shape'));
+        Assert::assertSame($httpRow->id, $httpResponse->json('delivery.username'));
+        Assert::assertSame($httpRow->secret_hash, hash('sha256', (string) $httpResponse->json('delivery.password')));
+
+        Assert::assertEquals($cliRow->kind, $httpRow->kind, 'The basic-minted rows disagree on kind across transports.');
     }
 
     public function assertBuiltForCloudListTransportParity(): void

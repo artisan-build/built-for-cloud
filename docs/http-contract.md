@@ -176,7 +176,11 @@ code burns depends on the app's declared burn mode: `at_exchange` consumes the c
 
 Which store the durable lands in is the app's declaration: `api_tokens` by default; an app
 rebuilt on the unified store receives a `credentials` row instead (same wire shape here either
-way — the difference is visible in which listing the row appears in).
+way — the difference is visible in which listing the row appears in). Each code records which
+store its durable was minted into, and make-before-break always revokes in the RECORDED store —
+so an app switching stores between exchanges never strands a still-live durable in the old one
+(the name/scope sweep covers the current target store plus the recorded store of the code's own
+linked durable).
 
 ### POST /bfc/onboarding/verify
 
@@ -274,8 +278,31 @@ The two-segment `/id/{id}` path exists so a token literally named `id` still del
 
 The two-transport verbs (PRD 1.0): each of these routes runs the **same action class** as its
 `--local` artisan command (`bfc:credential:mint` / `list` / `revoke`), so the two transports
-cannot diverge. Always mounted, at a fixed path, *admin token*. Rotation for this store ships in
-a later release.
+cannot diverge. Always mounted, at a fixed path. Rotation for this store ships in a later
+release.
+
+**Authentication on these three routes** accepts either credential shape:
+
+- a legacy **admin `api_tokens` token** (exactly what every other admin route accepts), or
+- a **unified-store `operator` credential** holding the `credential:admin` ability — what
+  `bfc:install:operator-credential` mints at install time, so a fresh install can manage its
+  credentials with the one secret it was handed. A valid unified credential without operator
+  authority is `403`; the deprecated `FALLBACK_TOKEN` is explicitly rejected with a
+  distinguishable `403` message. Audit actors reflect the store that authenticated
+  (`admin_token` vs `operator_integration`).
+
+**The scope of the transport-parity guarantee:** parity is defined over the verb's own inputs —
+the subject, the options, the abilities, the target row. The declaration's `authorizeVerb` hook
+receives each transport's real request by design (subject derivation needs real context), so a
+declaration that keys its authorization on request internals (headers, IPs, session state)
+introduces app-owned divergence between the transports. That divergence is the app's choice and
+its responsibility — it is outside what this contract (and the shipped parity suite) guarantees.
+
+Input validation is shared: both transports normalize options through one input object and
+reject the same junk with the same message (HTTP as a `422 {"message": ...}`, the CLI as a
+failure exit). A non-integer `code_ttl_seconds` (e.g. `"60junk"`) is rejected, never truncated.
+**An empty `abilities` list normalizes to `null`** — both grant nothing, and summaries always
+serialize the one canonical shape (`null`).
 
 Summary rows share one shape:
 

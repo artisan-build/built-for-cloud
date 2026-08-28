@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresPresentationCadence;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Scope;
@@ -50,6 +51,46 @@ final class CredentialApiTest extends TestCase
         $this->assertTrue(ApiToken::query()->where('name', 'ci')->where('token_hash', $hash)->exists());
         $this->assertFalse(ApiToken::query()->where('token_hash', $plaintext)->exists());
         $this->assertSame('ci', (new TokenRegistry)->resolve($plaintext));
+    }
+
+    /**
+     * AC8's legacy HTTP leg: the mint route records `issued` — audit row
+     * AND outbox row, one transaction, ids only — the same shape the
+     * token:create leg pins in its own suite.
+     */
+    public function test_the_legacy_mint_route_records_issued_with_audit_and_outbox_rows(): void
+    {
+        $response = $this->postJson('/api/credentials', [
+            'name' => 'issued-ci',
+        ], $this->credentialAdminHeaders());
+
+        $response->assertCreated();
+
+        $plaintext = (string) $response->json('plaintext');
+        $token = ApiToken::query()->where('name', 'issued-ci')->sole();
+        $gateToken = ApiToken::query()->where('name', 'admin')->sole();
+
+        $event = CredentialAuditEvent::query()
+            ->where('credential_id', (string) $token->getKey())
+            ->sole();
+
+        // The event: issued, attributed to the admin token the gate
+        // authenticated — the HTTP transport's honest actor.
+        $this->assertSame(LifecycleEventType::Issued, $event->event);
+        $this->assertSame(AuditActorType::AdminToken, $event->actor_type);
+        $this->assertSame((string) $gateToken->getKey(), $event->actor_ref);
+
+        // The outbox row rode the same emission.
+        $this->assertTrue(CredentialOutboxEntry::query()->where('audit_event_id', $event->id)->exists());
+
+        // Ids only, never values: the minted plaintext (and its hash)
+        // appear nowhere on the audit row.
+        foreach ((array) $event->getAttributes() as $value) {
+            if (is_string($value)) {
+                $this->assertStringNotContainsString($plaintext, $value);
+                $this->assertStringNotContainsString($token->token_hash, $value);
+            }
+        }
     }
 
     public function test_it_issues_an_admin_token_through_the_credential_api(): void

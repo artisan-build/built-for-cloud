@@ -15,6 +15,13 @@ use Orchestra\Testbench\Attributes\WithConfig;
  * registered package route appears in docs/http-contract.md, and every
  * route the doc names is real. The credential API is enabled here so its
  * flag-gated routes register and get checked too.
+ *
+ * RECOGNITION CAVEAT: package routes are recognized by their action's
+ * class name (the ArtisanBuild\BuiltForCloud namespace prefix). A package
+ * route registered with a CLOSURE has the action name "Closure" and would
+ * escape this net — every package route today uses a controller class,
+ * and any future closure route must either become one or be added to the
+ * exclusion list with a reason.
  */
 #[WithConfig('built-for-cloud.credential_api.enabled', true, false)]
 final class HttpContractDocTest extends TestCase
