@@ -35,6 +35,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\Listeners\QueueOwnershipWebhook;
@@ -102,6 +103,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router->aliasMiddleware('bfc.auth', EnsureUserIsAuthenticated::class);
             $router->aliasMiddleware('bfc.admin', EnsureUserIsAdmin::class);
             $router->aliasMiddleware('bfc.token.admin', EnsureAdminToken::class);
+            $router->aliasMiddleware('bfc.credential.admin', EnsureCredentialAdmin::class);
             $router->aliasMiddleware('bfc.ability', EnsureCredentialAbility::class);
 
             $router->get('/bfc/meta', MetaController::class)
@@ -128,15 +130,18 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             // The unified store's verb routes (PRD 1.0): the HTTP half of
             // the two-transport rule, at a FIXED /bfc/ path like every
             // other package surface (PRD 1.12's precedent) — part of the
-            // versioned public contract (docs/http-contract.md).
+            // versioned public contract (docs/http-contract.md). Their gate
+            // accepts a legacy admin token OR the installer-minted operator
+            // credential (PRD 1.20 — the credential must work on the
+            // surface it exists to manage).
             $router->get('/bfc/credentials', [ManageCredentials::class, 'index'])
-                ->middleware('bfc.token.admin');
+                ->middleware('bfc.credential.admin');
 
             $router->post('/bfc/credentials', [ManageCredentials::class, 'store'])
-                ->middleware('bfc.token.admin');
+                ->middleware('bfc.credential.admin');
 
             $router->delete('/bfc/credentials/{id}', [ManageCredentials::class, 'destroy'])
-                ->middleware('bfc.token.admin');
+                ->middleware('bfc.credential.admin');
 
             if ((bool) config('built-for-cloud.credential_api.enabled', false)) {
                 $router->prefix(trim((string) config('built-for-cloud.credential_api.prefix', 'api/credentials'), '/'))

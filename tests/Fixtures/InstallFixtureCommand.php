@@ -36,6 +36,10 @@ final class InstallFixtureCommand extends Command
 
         $this->pinComposerConstraint($composerPath, $package, $major);
 
+        // The install-time operator credential (PRD 1.20): minted through
+        // the scaffold, idempotently — a re-run skips with a notice.
+        $this->mintInstallOperatorCredential();
+
         $this->summarize([
             'env changed' => $changed,
             'package' => $package,

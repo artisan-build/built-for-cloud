@@ -15,8 +15,12 @@ use Illuminate\Console\Command;
  * never be revoked, audited, or attributed. The command (and the
  * `fallback_token` config it feeds) stays functional because live 0.4.x
  * apps still carry fallbacks — and the fail-closed MCP gate remains the
- * belt while any do — but nothing in the framework's own paths creates or
- * reads one any more, and a later major removes it.
+ * belt while any do. Scope of the retirement, stated precisely: the bfc
+ * guard and every unified-store path never consult the fallback; the
+ * legacy `TokenRegistry::resolve()` still honours it for 0.4.x consumers;
+ * and the admin gates still CONSULT the config — solely to REJECT a
+ * presented fallback with a distinguishable 403 rather than a misleading
+ * 401. A later major removes all of it.
  */
 final class FallbackTokenGenerateCommand extends Command
 {

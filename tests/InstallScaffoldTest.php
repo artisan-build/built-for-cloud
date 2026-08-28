@@ -3,9 +3,14 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Commands\Concerns\WritesInstallEnv;
+use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\InstallFixtureCommand;
 use Illuminate\Contracts\Console\Kernel;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
+
+uses(RefreshDatabase::class);
 
 final class InstallScaffoldHarness
 {
@@ -132,7 +137,7 @@ it('throws when composer constraints cannot be written', function (): void {
         ->toThrow(RuntimeException::class, "Unable to write composer.json at {$path}.");
 });
 
-it('runs end to end from a consuming artisan command', function (): void {
+it('runs end to end from a consuming artisan command, minting the operator credential through the scaffold', function (): void {
     app(Kernel::class)->registerCommand(new InstallFixtureCommand);
 
     $dir = install_scaffold_temp_dir();
@@ -149,11 +154,49 @@ it('runs end to end from a consuming artisan command', function (): void {
         '--major' => '4',
     ]);
 
+    $output = Artisan::output();
     $composer = json_decode((string) file_get_contents($composerPath), true, flags: JSON_THROW_ON_ERROR);
 
     expect($exitCode)->toBe(InstallFixtureCommand::SUCCESS)
         ->and((string) file_get_contents($envPath))->toContain("SOME_FLAG=\"from flag\"\n")
         ->and((string) file_get_contents($envPath))->toContain("INSTALL_PACKAGE=vendor/pkg\n")
         ->and($composer['require']['vendor/pkg'])->toBe('^4')
-        ->and(Artisan::output())->toContain('Install summary:');
+        ->and($output)->toContain('Install summary:');
+
+    // PRD 1.20 through the SCAFFOLD entry point, not the command alone:
+    // the install run minted the operator credential and revealed its
+    // secret exactly once, through the installer command's own output —
+    // and never wrote a FALLBACK_TOKEN.
+    $credential = Credential::query()->sole();
+
+    preg_match('/shown once: (\S+)/', $output, $matches);
+
+    expect($credential->subject_type)->toBe(SubjectType::Operator)
+        ->and($credential->secret_hash)->toBe(hash('sha256', $matches[1]))
+        ->and(substr_count($output, $matches[1]))->toBe(1)
+        ->and((string) file_get_contents($envPath))->not->toContain('FALLBACK_TOKEN');
+});
+
+it('re-runs the install scaffold without silently minting a second operator credential', function (): void {
+    app(Kernel::class)->registerCommand(new InstallFixtureCommand);
+
+    $dir = install_scaffold_temp_dir();
+    $arguments = [
+        '--env-path' => $dir.'/.env',
+        '--composer-path' => $dir.'/composer.json',
+    ];
+
+    file_put_contents($dir.'/composer.json', json_encode(['name' => 'test/app'], JSON_PRETTY_PRINT).PHP_EOL);
+
+    expect(Artisan::call('fixture:install', $arguments))->toBe(InstallFixtureCommand::SUCCESS)
+        ->and(Credential::query()->count())->toBe(1);
+
+    // The re-run: skip WITH a notice — never a silent second credential.
+    expect(Artisan::call('fixture:install', $arguments))->toBe(InstallFixtureCommand::SUCCESS);
+
+    $rerunOutput = Artisan::output();
+
+    expect($rerunOutput)->toContain('already exists; skipping the install mint')
+        ->and($rerunOutput)->not->toContain('shown once')
+        ->and(Credential::query()->count())->toBe(1);
 });
