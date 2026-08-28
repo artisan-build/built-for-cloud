@@ -16,7 +16,6 @@ use Illuminate\Console\Command;
 use Illuminate\Contracts\Cache\Lock as LockContract;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Cache;
-use RuntimeException;
 
 /**
  * Stage 3 of the APP_KEY rotation over the hmac store (SEC-V3-08): after
@@ -114,17 +113,14 @@ final class HmacRewrapCommand extends Command
             // expired and someone else took the lock), ABORT the sweep
             // immediately: continuing to write without the lock is
             // exactly the overlap the lock exists to forbid. The rows
-            // already crossed stay crossed; a re-run resumes. (Every
-            // framework store's lock is a cache Lock; a third-party lock
-            // without refresh support keeps its original lease.)
+            // already crossed stay crossed; a re-run resumes. Every
+            // framework store's lock is an Illuminate\Cache\Lock, which
+            // has refresh() from laravel/framework v13.16.0 — the floor
+            // this package requires. A lock from outside that hierarchy
+            // is not renewed at all: it keeps its original lease and the
+            // sweep runs on without renewal.
             if ($lock instanceof Lock) {
-                try {
-                    $renewed = $lock->refresh(self::LOCK_SECONDS);
-                } catch (RuntimeException) {
-                    $renewed = true;
-                }
-
-                if (! $renewed) {
+                if (! $lock->refresh(self::LOCK_SECONDS)) {
                     $this->error(
                         'The rewrap lock lease could not be renewed — ownership was lost mid-sweep. Aborting so two '
                         .'sweeps can never overlap; progress is kept, re-run bfc:hmac:rewrap to resume.',
