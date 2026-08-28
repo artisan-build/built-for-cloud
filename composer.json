@@ -13,7 +13,9 @@
         "illuminate/notifications": "^13.17",
         "illuminate/process": "^13.17",
         "illuminate/routing": "^13.17",
-        "illuminate/support": "^13.17"
+        "illuminate/support": "^13.17",
+        "paragonie/paseto": "^3.5",
+        "paragonie/sodium_compat": "^1|^2"
     },
     "require-dev": {
         "larastan/larastan": "^3.9",

@@ -138,6 +138,58 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | The Console (delegated operator entry, Console PRD D12/D18)
+    |--------------------------------------------------------------------------
+    |
+    | The verification bounds for a delegated console assertion — a PASETO
+    | v4.public token, signed by the vendor with the PRIVATE half of a
+    | per-deployment keypair, carrying the operator who is entering this
+    | app. This app holds only the PUBLIC halves (the `bfc_console_keys`
+    | ring): stealing this whole database yields no ability to mint one.
+    |
+    | `issuer` — the single issuer this fleet trusts (D18: exactly one
+    | issuer in v1, which is also what bounds per-issuer authority). An
+    | assertion naming any other issuer is refused. There is deliberately
+    | no list here: a second trusted issuer is a decision, not a config
+    | change.
+    |
+    | `audience` — THIS deployment's identity, verified against the
+    | token's `aud`, and REQUIRED: unlike `hmac.audience` above it does
+    | not fall back to `app.url` or to any literal. This is the value
+    | that makes a stolen assertion worthless at any other deployment,
+    | and that containment has to hold on its own, independently of key
+    | custody. `app.url` is not reliably per-deployment — `http://localhost`,
+    | a cloned .env, or a shared load-balancer hostname would file
+    | several deployments under one audience — so an unset audience
+    | refuses to verify at all rather than quietly share one.
+    |
+    | `assertion_max_ttl_seconds` — the upper bound this app enforces on
+    | an assertion's own `iat`-to-`exp` span (D12 mints at 60-120s). A
+    | token claiming a longer life is refused WHILE STILL UNEXPIRED: the
+    | app enforces the bound itself rather than trusting the issuer to
+    | have been honest about it. The 60-second LOWER bound is a mint-side
+    | concern and is deliberately not enforced here.
+    |
+    | `clock_skew_seconds` — how far the issuer's clock may run AHEAD of
+    | this one before a freshly minted assertion is refused as not yet
+    | valid. It is spent on that side only: `exp` is hard, because skew
+    | that extended expiry would quietly stretch every assertion past the
+    | TTL bound the previous key just enforced.
+    |
+    | The session clocks (D7's sliding idle and absolute cap) are NOT
+    | here: they belong to the delegated guard, not to the assertion.
+    |
+    */
+
+    'console' => [
+        'issuer' => env('BUILT_FOR_CLOUD_CONSOLE_ISSUER'),
+        'audience' => env('BUILT_FOR_CLOUD_CONSOLE_AUDIENCE'),
+        'assertion_max_ttl_seconds' => env('BUILT_FOR_CLOUD_CONSOLE_ASSERTION_MAX_TTL', 120),
+        'clock_skew_seconds' => env('BUILT_FOR_CLOUD_CONSOLE_CLOCK_SKEW', 5),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Client Identity Observation
     |--------------------------------------------------------------------------
     |
