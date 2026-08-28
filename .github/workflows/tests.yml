@@ -35,3 +35,37 @@ jobs:
 
       - name: Run Tests
         run: composer test
+
+  lowest:
+    name: tests (lowest deps)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@7c071dfe9dc99bdf297fa79cb49ea005b9fcadbc # v2
+        with:
+          php-version: '8.4'
+          tools: composer:v2
+          coverage: none
+
+      # `update`, not `install`: with no committed lock, `install` resolves the
+      # NEWEST version satisfying each constraint, which is exactly the blind
+      # spot this lane exists to close (bfc#37). `--prefer-stable` is mandatory
+      # alongside `--prefer-lowest` or dev/alpha releases of transitive packages
+      # get dragged in and the failures are pure noise.
+      - name: Install Lowest Dependencies
+        run: composer update --prefer-lowest --prefer-stable --no-interaction --prefer-dist
+
+      # When this lane goes red the first question is always "what did it
+      # actually install" — put the answer in the log.
+      - name: Show Resolved Versions
+        run: composer show laravel/framework | head -3
+
+      # Tests only: phpstan and pint at the floor produce version-dependent
+      # noise, and both are already covered on the fresh-install lane above.
+      - name: Run Tests
+        run: composer test
