@@ -139,10 +139,12 @@ function consoleMint(AsymmetricSecretKey $secret, array $claims, string $keyId =
  */
 function consoleFlipCharacter(string $token, int $offset): string
 {
-    $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    // Every replacement is itself a base64url character, and the swap
+    // is total rather than alphabet-conditional: a tamper helper that
+    // sometimes left the token untouched would make a signature test
+    // pass for the wrong reason on the runs where it did nothing.
     $position = $offset < 0 ? strlen($token) + $offset : $offset;
-    $current = $token[$position];
-    $token[$position] = $current === 'a' ? 'b' : (str_contains($alphabet, $current) ? 'a' : $current);
+    $token[$position] = $token[$position] === 'a' ? 'b' : 'a';
 
     return $token;
 }
