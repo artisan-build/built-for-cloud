@@ -9,5 +9,6 @@ use Illuminate\Foundation\Testing\TestCase;
 abstract class ContractTestCase extends TestCase
 {
     use ContractAssertions;
+    use DetectsSecretLeaks;
     use WithCredentials;
 }
