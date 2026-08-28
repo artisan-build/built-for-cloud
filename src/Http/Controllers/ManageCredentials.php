@@ -18,6 +18,8 @@ use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
+use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
+use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\MintResult;
 use ArtisanBuild\BuiltForCloud\RevokeOutcome;
@@ -26,6 +28,7 @@ use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -45,9 +48,21 @@ final class ManageCredentials
 {
     public const CADENCE_HEADER = 'BFC-Presentation-Cadence';
 
-    public function index(ListCredentials $list): JsonResponse
+    public function index(Request $request, ListCredentials $list): JsonResponse
     {
         $summaries = $list();
+
+        // GATE-3.7: the credential listing is an operator SENSITIVE READ,
+        // audited through the PR4 stream (ids only — which actor listed,
+        // never what the listing carried). Transactional like every other
+        // stream append: a read that cannot be audited does not serve.
+        DB::transaction(function () use ($request): void {
+            app(LifecycleEventRecorder::class)->record(
+                event: LifecycleEventType::SensitiveRead,
+                actor: $this->actor($request),
+                note: 'operator credential listing (GET /bfc/credentials)',
+            );
+        });
 
         $response = response()->json(array_map(
             static fn (CredentialSummary $summary): array => $summary->toArray(),

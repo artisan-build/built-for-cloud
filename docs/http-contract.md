@@ -10,6 +10,13 @@ Every route below is verified mechanically: a package test enumerates the regist
 asserts each appears here, and that every route this document names is real. A route heading has
 the form `### METHOD /path`.
 
+One mounting switch exists, and only one: the surface-selection key (PRD 1.14,
+`built-for-cloud.surfaces.routes`) can unmount this **entire HTTP surface as one family** —
+for apps that use the package's store and CLI without serving its HTTP contract. No single
+route is individually configurable, no route ever moves behind a prefix except the legacy
+credential API's documented one, and an instance that serves any of this contract serves all
+of it.
+
 ## Versioning and compatibility
 
 Two discriminators, reported by [`GET /bfc/meta`](#get-bfcmeta):
@@ -92,6 +99,24 @@ Additive unless marked otherwise:
   while an APP_KEY rewrap is in progress. Summary rows are unchanged. The lifecycle event
   stream gains `activated`.
 
+- New route `POST /bfc/claim` — the hitch claim contract (PRD 1.12 / OSS-8), additive: the
+  same claim-code primitive as the onboarding exchange, in hitch's published wire shape
+  (`claim_code` in, `200 {"version", "token", "name", "expires_at"}` out, the same error
+  enum), unconditional at a fixed path.
+- New route `POST /bfc/subjects/offboard` — the offboard verb (PRD 1.15, SEC-V3-04):
+  full account containment behind the `subject:offboard` ability, riding the invite verb's
+  shared integration version gate for integration-driven offboards. The lifecycle event
+  stream gains `offboarded`.
+- **The operator ability vocabulary ships (PRD 1.10 + GATE-3.7).** All additive, and a
+  NARROWING only for credentials that never existed before it: the operator routes now
+  authorize per verb family (`credential:read` / `credential:mint` / `credential:rotate` /
+  `credential:revoke` / `subject:offboard` / `audit:read`), with `credential:admin` as the
+  explicit admin-equivalent break-glass (every previously minted operator credential holds
+  it, so nothing already issued loses access) and `mcp:read` / `mcp:admin` as the per-tool
+  MCP pair. Operator writes are rate-limited (`bfc-operator-write`); operator sensitive
+  reads, denials, and token-auth failures are audited (`sensitive_read` / `denied_action`
+  lifecycle events, ids only).
+
 **api_version 1** — the 0.3.x baseline: `/bfc/meta`, `/bfc/ownership/*`, the pre-0.4 credential
 API listing shape.
 
@@ -103,6 +128,28 @@ API listing shape.
   the credential API. Missing/unknown token → `401`; a valid token without `admin` → `403`.
 - **Public routes** are unauthenticated but rate-limited per IP: `bfc-public` (60/min) and
   `bfc-claim` (10/min), returning `429` beyond the limit.
+- **Operator routes** (the `/bfc/credentials`, `/bfc/invitations` and `/bfc/subjects` verbs)
+  additionally accept a unified-store `operator` credential, authorized **per verb family**
+  (GATE-3.7 least privilege). The ability vocabulary: `credential:read` (the listing — an
+  audited sensitive read), `credential:mint` (mint + invitations), `credential:rotate`
+  (rotate + the hmac activate cutover, same family), `credential:revoke`, `subject:offboard`,
+  and `audit:read` (vocabulary now; the first audit-read surface will enforce it). The MCP
+  pair `mcp:read` / `mcp:admin` is the per-tool vocabulary consuming apps wire in front of
+  each MCP tool (read vs destructive administration — distinct grants, checked exact-match;
+  no operator ability implies either). `metadata:read` remains RESERVED, unissued and
+  unenforced. There is **no wildcard**; a credential with no abilities can do nothing. The
+  one admin-equivalent name is **`credential:admin`** — the explicit break-glass, expanding
+  to exactly the six operator abilities above (never the MCP pair); it is what
+  `bfc:install:operator-credential` mints, and holding that literal name in the abilities
+  list is how a break-glass credential is marked. A legacy admin `api_tokens` row remains
+  admin-equivalent on these routes.
+- **Operator rate limits:** write and expensive operator verbs (mint, rotate, activate,
+  revoke, invite, offboard) are limited per operator credential + IP (`bfc-operator-write`,
+  60/min, keyed on the sha256 of the presented bearer so failed-auth hammering shares the
+  bound) under a global ceiling of 600/min, returning `429` beyond either.
+- **Operator observability:** every operator sensitive read, denied action, and token-auth
+  failure on the operator gate appends a `sensitive_read` / `denied_action` event to the
+  audit stream — ids only, never presented secrets.
 - Validation failures on JSON bodies return Laravel's standard
   `422 {"message": ..., "errors": {field: [...]}}` shape.
 
@@ -130,6 +177,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/ownership/release` | `content` | single reveal of the ownership claim code |
 | `POST /bfc/ownership/cancel-transfer` | `metadata` | `{"ok": true}` — a bounded boolean |
 | `POST /bfc/onboarding/issue` | `content` | single reveal of the claim code, plus a free-text email address |
+| `POST /bfc/claim` | `content` | single reveal of the durable secret (`token`), plus the free-text suggested name |
 | `POST /bfc/onboarding/exchange` | `content` | single reveal of the durable secret, plus the free-text credential name |
 | `POST /bfc/onboarding/verify` | `content` | carries the free-text credential name |
 | `POST /bfc/invitations` | `content` | single reveal of the invitation code, plus a free-text email address |
@@ -144,6 +192,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `DELETE /bfc/credentials/{id}` | `metadata` | empty `204` body |
 | `POST /bfc/credentials/{id}/rotate` | `content` | the `delivery` single reveal, plus summary rows |
 | `POST /bfc/credentials/{id}/activate` | `content` | no secret ever — but the summary row carries free-text names and subject refs |
+| `POST /bfc/subjects/offboard` | `metadata` | `{"offboarded": true, "fully_contained": bool}` / `{"accepted": true, "fully_contained": bool}` — bounded booleans only |
 
 Vendor-side reads of `metadata`-classified endpoints will be governed by the reserved
 `metadata:read` ability family (see [the Console reservations](#reserved--console-fast-follow-not-implemented)).
@@ -183,8 +232,11 @@ plane holds this instance.
 ### POST /bfc/ownership/claim
 
 Public (`bfc-claim` throttle). Exchange a one-time ownership claim token for the owner's admin
-token. The claim token comes from the install migration's TTY output, from
-`bfc:ownership:mint-claim`, or from a release handoff.
+token. The claim token comes from `bfc:ownership:mint-claim` (TTY, shown once) or from a
+release handoff. The install migration's initial mint deliberately yields NO deliverable
+token: its plaintext is dropped, never logged (the D7 fix — a logged claim token is an
+admin-yielding secret in the application log), so an unclaimed environment re-mints with the
+command.
 
 **Request** — `{"token": "<claim token>", "notify_callback": "https://..." | null}`
 (`notify_callback` optional: where ownership webhooks are delivered.)
@@ -239,6 +291,48 @@ the durable it buys. `scope` defaults to `consume`. Issuing an addressed code su
 pending code for the same address+scope but never touches a live durable credential.
 
 - **201** — `{"claim_code": "...", "email": "a@b.c" | null}` — the single reveal of the code.
+
+### POST /bfc/claim
+
+Public (`bfc-claim` throttle). **The hitch claim contract** (PRD 1.12 / OSS-8): the wire face
+any `hitch install <url> --claim <code> --claim-url <this route>` client — or anything else
+speaking hitch's published claim contract — exchanges against. It runs the SAME single-use
+claim-code primitive as [`POST /bfc/onboarding/exchange`](#post-bfconboardingexchange)
+(make-before-break semantics included); only the field names and success status differ,
+because the shape here is hitch's, not this package's. Mounted **unconditionally at this
+fixed path** — never behind a configurable prefix, never behind its own env flag.
+
+**Request** — `{"claim_code": "<claim code>", "version": 1}`. The code travels in the body,
+never the URL. `version` is **required** — it is the contract version the client speaks
+(hitch always sends it); a missing or non-`1` version is refused as `unsupported_version`,
+and a malformed or missing `claim_code` is `invalid_code` (never a Laravel `422` — the enum
+shapes every failure on this surface). The onboarding exchange keeps its documented
+`version` default; only this hitch-conformant face is strict.
+
+- **200** —
+
+```json
+{
+  "version": 1,
+  "token": "tok_…",
+  "name": "ci",
+  "expires_at": null
+}
+```
+
+  `token` is the **single reveal** of the durable secret. `name` is the suggested server
+  name (advisory — the client's own `--name` wins); `expires_at` is the durable's expiry as
+  RFC 3339 or `null` (advisory). There is deliberately no `server_url` field. The response
+  may grow additive fields; clients ignore what they do not know.
+
+- Errors: the enum above, `{"version": 1, "error": "<enum>", "message": "..."}` — clients
+  branch on `error`, never the status. A re-claim before the token's first use returns a
+  usable token (a FRESH one; the pending previous mint is revoked in the same transaction —
+  at most one live token per code, ever); after first use, `code_already_claimed`.
+- A code that redeems a **signing key** is refused as `invalid_code` — before any burn, so
+  the code stays presentable on `POST /bfc/onboarding/exchange`, the surface that can
+  deliver it. The hitch success shape requires a bearer `token`, which a pending signing-key
+  delivery cannot honestly fill.
 
 ### POST /bfc/onboarding/exchange
 
@@ -419,9 +513,10 @@ and retrying is safe.
   transport.
 
 **Authority note:** the version gate trusts any caller this route's gate admits — any admin
-token or `credential:admin` operator credential can advance any integration namespace.
-Namespace-scoped operator abilities arrive with the MCP/ability-vocabulary work; until then,
-give each integration its own credential for AUDIT attribution, not authority isolation.
+token or `credential:mint`/`credential:admin` operator credential can advance any
+integration namespace. The 1.10 ability vocabulary is per **verb family**, deliberately not
+per namespace; give each integration its own credential for AUDIT attribution, not
+authority isolation.
 
 Emits an `issued` audit event (ids only, never the code) in the issue's own transaction; the
 app's accept surface emits `exchanged` the same way.
@@ -561,15 +656,20 @@ The two-transport verbs (PRD 1.0): each of these routes runs the **same action c
 cannot diverge. Always mounted, at a fixed path. Rotation for this store ships in a later
 release.
 
-**Authentication on these three routes** accepts either credential shape:
+**Authentication on these routes** accepts either credential shape:
 
-- a legacy **admin `api_tokens` token** (exactly what every other admin route accepts), or
-- a **unified-store `operator` credential** holding the `credential:admin` ability — what
-  `bfc:install:operator-credential` mints at install time, so a fresh install can manage its
-  credentials with the one secret it was handed. A valid unified credential without operator
-  authority is `403`; the deprecated `FALLBACK_TOKEN` is explicitly rejected with a
-  distinguishable `403` message. Audit actors reflect the store that authenticated
-  (`admin_token` vs `operator_integration`).
+- a legacy **admin `api_tokens` token** (exactly what every other admin route accepts —
+  admin-equivalent on every verb), or
+- a **unified-store `operator` credential** holding the route's **verb-family ability**
+  (see [Authentication](#authentication)): `credential:read` for the listing,
+  `credential:mint` for mint, `credential:rotate` for rotate AND activate,
+  `credential:revoke` for revoke — or the explicit admin-equivalent `credential:admin`,
+  which is what `bfc:install:operator-credential` mints at install time, so a fresh install
+  can manage its credentials with the one secret it was handed. A valid unified credential
+  without the verb's authority is `403` (and the denial is audited); the deprecated
+  `FALLBACK_TOKEN` is explicitly rejected with a distinguishable `403` message. Audit actors
+  reflect the store that authenticated (`admin_token` vs `operator_integration`). Write
+  verbs ride the `bfc-operator-write` limiter.
 
 **The scope of the transport-parity guarantee:** parity is defined over the verb's own inputs —
 the subject, the options, the abilities, the target row. The declaration's `authorizeVerb` hook
@@ -857,6 +957,104 @@ own pace. Nothing is left untracked at any point — the listing shows the old r
 the old → new lineage, and if the human misses the window the old row is already dead and the
 new one already works. Use `emergency` only when the old secret is known-compromised, because
 it trades the installation window away.
+
+---
+
+## Subjects — the offboard verb
+
+### POST /bfc/subjects/offboard
+
+*Admin token or operator credential holding `subject:offboard`* (its own verb-family
+ability — the widest verb, deliberately not granted by `credential:mint` or
+`credential:revoke`); the same two-transport rule (`bfc:subject:offboard --local` runs the
+identical action). Rate-limited via `bfc-operator-write`.
+
+**Full account containment** (PRD 1.15, SEC-V3-04). Deactivates a subject and, in one
+action: revokes EVERY bound credential in EVERY lifecycle state (active, rotation-grace,
+and pending — unexchanged enrollments and pending hmac signing keys included, in both the
+unified store and subject-stamped `api_tokens` rows); consumes the principal's outstanding
+claim codes (and their never-used make-before-break durables); cancels the principal's
+pending invitations; deletes the principal's password-reset tokens; invalidates sessions;
+and writes the containment registry on which the `bfc` guard — and the auth-foundation
+session middleware — reject the offboarded subject and its deactivated bound users on
+every request thereafter.
+
+**Session compensation, stated — and surfaced:** a database session store on the default
+connection is cleared inside the offboard transaction. A database store on another
+connection is cleared after commit (deferred is not done — the response reports it); any
+other driver's storage cannot be enumerated per user. Every step the transaction could not
+complete is named in the result and the direct-path response answers
+`"fully_contained": false` — a compensated offboard is never reported as a complete sweep.
+In every compensated case the registry row commits WITH the credential revocations, so
+whatever survives in session storage, the principal is rejected at every
+**package-enforced** point: the `bfc` guard, the operator gate, the hmac verifier, and the
+auth-foundation middleware (`bfc.auth` and `bfc.admin` both) — which also invalidate a
+surviving session on its first appearance. **The honest boundary:** a consuming app's OWN
+plain `auth`-guarded routes are outside the package's reach; the app must consult the
+documented integration point — `OffboardedSubject::userIsOffboarded($userId)` /
+`OffboardedSubject::rejects($credential)` — or stack the package middleware on them. The
+package cannot invalidate an arbitrary session store it does not own, and does not claim
+to.
+
+**Request:**
+
+```json
+{
+  "subject_type": "external_consumer",
+  "subject_ref": "acme",
+  "integration_namespace": "github-sponsors",
+  "event_id": "evt_0002",
+  "entitlement_version": 8,
+  "external_subject": "sponsor-login"
+}
+```
+
+The four integration-event fields are **all-or-none**, exactly as on the invite verb — and
+they ride the SAME version gate (the shared `integration_events` / `integration_entitlements`
+tables), so one monotonic entitlement version per (`integration_namespace`,
+`external_subject`) orders invites and offboards together: an offboard event **not newer**
+than the latest accepted version is transactionally acknowledged-and-ignored, and a
+replayed `event_id` answers idempotently with no state change.
+
+**The gate is bound to the target.** On the integration path the offboard TARGET is derived
+server-side from the gated identity — `subject_type: external_consumer`,
+`subject_ref: <external_subject>`, the same binding the invite verb applies — so the identity
+whose version the gate checks is exactly the identity that gets contained. `subject_type` /
+`subject_ref` may be omitted on this path; if supplied they must equal the derivation, and a
+mismatch is refused (`422`) — an event can never pass a decoy identity's gate while naming a
+different victim. And the gate is bound by **namespace** too: every gate effect is keyed on
+the (`integration_namespace`, `external_subject`) pair, so a namespace with NO entitlement
+history for an external subject that already has history under another namespace is refused
+(`422`, nothing recorded, nothing advanced) — a decoy namespace cannot ride its own empty
+gate to contain a subject whose real gate stands at a higher version. A namespace with its
+own established history is ordered by that history as before; a subject with no history
+anywhere can be gate-established by any authorized namespace. On the direct path (no event
+fields) the subject pair is required.
+
+**The two response shapes, keyed on the REQUEST (never on state):**
+
+- **Direct path (no integration event): `200 {"offboarded": true, "fully_contained": bool}`**
+  — identical shape for a first containment and an idempotent repeat (a repeat revokes
+  nothing, writes no new audit rows, and changes nothing). `fully_contained` is `false` when
+  a containment step could not complete inside the transaction (see the compensation above);
+  re-run the idempotent verb after fixing the store to retry the step.
+- **Integration path: `202 {"accepted": true, "fully_contained": bool}` — always**,
+  whatever the gate decided (applied, ignored-older, or replayed). `fully_contained` is the
+  ONE deliberate exception to decision-uniformity on this verb: an applying event whose
+  containment could not complete a step reports `false` — the operator must learn the sweep
+  did not finish, at the stated price of revealing that the event applied and hit an
+  unreachable store. An ignored or replayed event ran no containment and always reports
+  `true`; the body carries nothing else a caller could probe gate state from.
+- **403** — `{"message": "..."}`: the declaration's verb matrix denies `offboard` for the
+  subject. **422** — `{"message": "..."}`: shared input validation (unknown `subject_type`,
+  missing `subject_ref`, a partial integration-event group, an out-of-bounds or non-integer
+  `entitlement_version`, an over-length field). **500** — `{"message": "..."}`: the gate
+  lost every bounded contention attempt; nothing was applied, retrying is safe. Identical
+  refusals on the CLI transport.
+
+Audit shape (D8, one shape): a single `offboarded` lifecycle event carrying the acting
+principal and the contained subject (ids only), plus one ordinary `revoked` event per
+credential death with reason `offboarding`. A repeat offboard appends nothing.
 
 ---
 

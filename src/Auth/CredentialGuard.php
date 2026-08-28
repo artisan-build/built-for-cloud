@@ -94,6 +94,12 @@ final class CredentialGuard implements Guard
 
         $this->attempted = true;
 
+        // Full account containment (PRD 1.15, SEC-V3-04) needs no check
+        // here: the resolver itself refuses an offboarded principal —
+        // {@see CredentialResolver}, the containment choke point — so an
+        // offboarded subject, or a credential bound to a deactivated
+        // user, never resolves in the first place, indistinguishably from
+        // an unknown secret.
         $credential = $this->resolveCredential($request);
 
         if ($credential === null) {

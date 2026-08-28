@@ -23,6 +23,33 @@ final class InvalidCredentialInput extends InvalidArgumentException
         return new self(sprintf('Unknown credential kind "%s".', $kind));
     }
 
+    public static function unknownSubjectType(string $subjectType): self
+    {
+        return new self(sprintf('Unknown subject type "%s".', $subjectType));
+    }
+
+    public static function missingSubjectRef(): self
+    {
+        return new self('A subject ref is required.');
+    }
+
+    public static function integrationNamespaceNotBound(): self
+    {
+        return new self(
+            'This external subject already has version-gate history under a different integration namespace; '
+            .'a namespace with no history for it cannot advance its gate or offboard it. '
+            .'Send the event under the bound namespace, or use the direct offboard path.',
+        );
+    }
+
+    public static function integrationSubjectMismatch(): self
+    {
+        return new self(
+            'An integration-driven offboard targets the subject its gated external_subject binds to; '
+            .'a different subject_type/subject_ref cannot be supplied. Omit the pair, or use the direct path without an integration event.',
+        );
+    }
+
     public static function nonIntegerCodeTtl(): self
     {
         return new self('The enrollment-code ttl must be a whole number of seconds — no units, no trailing text.');

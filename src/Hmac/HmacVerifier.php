@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud\Hmac;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
+use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\Subject;
 use Illuminate\Support\Facades\Cache;
 
@@ -94,7 +95,13 @@ final class HmacVerifier
             ->active()
             ->first();
 
-        if ($credential === null) {
+        // Full account containment (PRD 1.15, SEC-V3-04): a key whose
+        // subject — or bound user — is offboarded is NOT SELECTABLE, with
+        // the same indistinct answer as any other selection miss (rule 5:
+        // no oracle). The registry check rides key selection because this
+        // verifier resolves credentials directly rather than via the bfc
+        // guard, and containment must hold at every authentication point.
+        if ($credential === null || OffboardedSubject::rejects($credential)) {
             throw HmacVerificationFailed::unusableKey();
         }
 

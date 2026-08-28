@@ -18,6 +18,7 @@ use ArtisanBuild\BuiltForCloud\Commands\InvitationIssueCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand;
+use ArtisanBuild\BuiltForCloud\Commands\SubjectOffboardCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenCreateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenListCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenRevokeCommand;
@@ -36,6 +37,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageInvitations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
@@ -88,10 +90,22 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-        $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+        // Surface selection (PRD 1.14, fleet F2): each family below is
+        // mounted only when its `built-for-cloud.surfaces.*` key says so
+        // — whole families, never single routes (the claim surfaces are
+        // deliberately not env-gatable one by one, PRD 1.12). Everything
+        // defaults ON. The guard driver, rate limiters, middleware
+        // aliases, and config publishing are not surfaces: they mount
+        // nothing and an app with routes off still uses them for its own
+        // routes.
+        if ($this->surfaceEnabled('migrations')) {
+            $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+        }
 
-        Event::listen(OwnershipReleasePending::class, QueueOwnershipWebhook::class);
-        Event::listen(OwnershipTransferred::class, QueueOwnershipWebhook::class);
+        if ($this->surfaceEnabled('listeners')) {
+            Event::listen(OwnershipReleasePending::class, QueueOwnershipWebhook::class);
+            Event::listen(OwnershipTransferred::class, QueueOwnershipWebhook::class);
+        }
 
         $this->registerRateLimiters();
 
@@ -115,107 +129,158 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             // consuming apps put it in front of signed-message routes.
             $router->aliasMiddleware('bfc.hmac', VerifyHmacSignature::class);
 
-            $router->get('/bfc/meta', MetaController::class)
-                ->middleware('throttle:bfc-public');
-
-            $router->post('/bfc/ownership/claim', [ManageOwnership::class, 'claim'])
-                ->middleware('throttle:bfc-claim');
-
-            $router->post('/bfc/ownership/release', [ManageOwnership::class, 'release'])
-                ->middleware('bfc.token.admin');
-
-            $router->post('/bfc/ownership/cancel-transfer', [ManageOwnership::class, 'cancelTransfer'])
-                ->middleware('bfc.token.admin');
-
-            $router->post('/bfc/onboarding/issue', [ManageOnboarding::class, 'issue'])
-                ->middleware('bfc.token.admin');
-
-            $router->post('/bfc/onboarding/exchange', [ManageOnboarding::class, 'exchange'])
-                ->middleware('throttle:bfc-claim');
-
-            $router->post('/bfc/onboarding/verify', [ManageOnboarding::class, 'verify'])
-                ->middleware('throttle:bfc-public');
-
-            // The unified store's verb routes (PRD 1.0): the HTTP half of
-            // the two-transport rule, at a FIXED /bfc/ path like every
-            // other package surface (PRD 1.12's precedent) — part of the
-            // versioned public contract (docs/http-contract.md). Their gate
-            // accepts a legacy admin token OR the installer-minted operator
-            // credential (PRD 1.20 — the credential must work on the
-            // surface it exists to manage).
-            $router->get('/bfc/credentials', [ManageCredentials::class, 'index'])
-                ->middleware('bfc.credential.admin');
-
-            $router->post('/bfc/credentials', [ManageCredentials::class, 'store'])
-                ->middleware('bfc.credential.admin');
-
-            $router->delete('/bfc/credentials/{id}', [ManageCredentials::class, 'destroy'])
-                ->middleware('bfc.credential.admin');
-
-            $router->post('/bfc/credentials/{id}/rotate', [ManageCredentials::class, 'rotate'])
-                ->middleware('bfc.credential.admin');
-
-            // The hmac signing cutover (PRD 1.21, SEC-V3-01): a separate
-            // operator-authorized verb — the claim exchange delivers and
-            // never activates, so the flip needs its own route.
-            $router->post('/bfc/credentials/{id}/activate', [ManageCredentials::class, 'activate'])
-                ->middleware('bfc.credential.admin');
-
-            // The machine-callable invite verb (PRD 1.13, SEC-V3-05): the
-            // HTTP half of its two transports, behind the same
-            // credential-admin gate as the unified verb routes — an
-            // integration triggers the INVITATION, never a key mint.
-            $router->post('/bfc/invitations', [ManageInvitations::class, 'store'])
-                ->middleware('bfc.credential.admin');
-
-            if ((bool) config('built-for-cloud.credential_api.enabled', false)) {
-                $router->prefix(trim((string) config('built-for-cloud.credential_api.prefix', 'api/credentials'), '/'))
-                    ->middleware('bfc.token.admin')
-                    ->group(function (Router $router): void {
-                        $router->get('/', [ManageTokens::class, 'index']);
-                        $router->get('/client-observations', ClientObservations::class);
-                        $router->post('/', [ManageTokens::class, 'store']);
-                        // The precise verb rides its own two-segment path, so
-                        // it can never collide with the one-segment name route
-                        // below — a token literally named "id" still deletes
-                        // by name.
-                        $router->delete('/id/{id}', [ManageTokens::class, 'destroyById']);
-                        // Rotation's primary verb on this store too (PRD
-                        // 1.7): by id, on the same collision-proof path.
-                        $router->post('/id/{id}/rotate', [ManageTokens::class, 'rotateById']);
-                        $router->delete('/{name}', [ManageTokens::class, 'destroy']);
-                    });
+            if ($this->surfaceEnabled('routes')) {
+                $this->mountRoutes($router);
             }
         }
 
         if ($this->app->runningInConsole()) {
-            $this->commands([
-                CreateAdminCommand::class,
-                CredentialActivateCommand::class,
-                CredentialListCommand::class,
-                CredentialMintCommand::class,
-                CredentialRevokeCommand::class,
-                CredentialRotateCommand::class,
-                FallbackTokenGenerateCommand::class,
-                HmacRewrapCommand::class,
-                InstallOperatorCredentialCommand::class,
-                InvitationIssueCommand::class,
-                OutboxDrainCommand::class,
-                OwnershipMintClaimCommand::class,
-                OwnershipRemintOwnerTokenCommand::class,
-                TokenCreateCommand::class,
-                TokenListCommand::class,
-                TokenRevokeCommand::class,
-                TokenRevokeSelfCommand::class,
-                TokenRotateCommand::class,
-                TokenUsageCommand::class,
-                WarnExpiringCredentialsCommand::class,
-            ]);
+            if ($this->surfaceEnabled('commands')) {
+                $this->registerCommands();
+            }
 
             $this->publishes([
                 __DIR__.'/../config/built-for-cloud.php' => $this->app->configPath('built-for-cloud.php'),
             ], 'built-for-cloud-config');
         }
+    }
+
+    private function surfaceEnabled(string $surface): bool
+    {
+        return (bool) config('built-for-cloud.surfaces.'.$surface, true);
+    }
+
+    /**
+     * The HTTP surface family (PRD 1.14): mounted whole, or not at all.
+     */
+    private function mountRoutes(Router $router): void
+    {
+        $router->get('/bfc/meta', MetaController::class)
+            ->middleware('throttle:bfc-public');
+
+        $router->post('/bfc/ownership/claim', [ManageOwnership::class, 'claim'])
+            ->middleware('throttle:bfc-claim');
+
+        $router->post('/bfc/ownership/release', [ManageOwnership::class, 'release'])
+            ->middleware('bfc.token.admin');
+
+        $router->post('/bfc/ownership/cancel-transfer', [ManageOwnership::class, 'cancelTransfer'])
+            ->middleware('bfc.token.admin');
+
+        // The hitch claim-contract route (PRD 1.12 / OSS-8): the wire
+        // face of hitch/docs/claim-contract.md over the same claim
+        // primitive as the onboarding exchange. Unconditional at a
+        // FIXED path like every /bfc/* surface — never behind a
+        // configurable prefix, never behind its own env flag.
+        $router->post('/bfc/claim', [ManageOnboarding::class, 'claim'])
+            ->middleware('throttle:bfc-claim');
+
+        $router->post('/bfc/onboarding/issue', [ManageOnboarding::class, 'issue'])
+            ->middleware('bfc.token.admin');
+
+        $router->post('/bfc/onboarding/exchange', [ManageOnboarding::class, 'exchange'])
+            ->middleware('throttle:bfc-claim');
+
+        $router->post('/bfc/onboarding/verify', [ManageOnboarding::class, 'verify'])
+            ->middleware('throttle:bfc-public');
+
+        // The unified store's verb routes (PRD 1.0): the HTTP half of
+        // the two-transport rule, at a FIXED /bfc/ path like every
+        // other package surface (PRD 1.12's precedent) — part of the
+        // versioned public contract (docs/http-contract.md). Their gate
+        // accepts a legacy admin token OR the installer-minted operator
+        // credential (PRD 1.20 — the credential must work on the
+        // surface it exists to manage), and each route names its
+        // verb-family ability (GATE-3.7 least privilege): the
+        // admin-equivalent `credential:admin` satisfies every one, a
+        // narrower operator credential only its own family. Write and
+        // expensive verbs additionally carry the per-operator-
+        // credential + per-IP rate limiter (throttle FIRST, so even
+        // failing auth attempts are bounded).
+        $router->get('/bfc/credentials', [ManageCredentials::class, 'index'])
+            ->middleware('bfc.credential.admin:'.OperatorAbility::CredentialRead->value);
+
+        $router->post('/bfc/credentials', [ManageCredentials::class, 'store'])
+            ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::CredentialMint->value]);
+
+        $router->delete('/bfc/credentials/{id}', [ManageCredentials::class, 'destroy'])
+            ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::CredentialRevoke->value]);
+
+        $router->post('/bfc/credentials/{id}/rotate', [ManageCredentials::class, 'rotate'])
+            ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::CredentialRotate->value]);
+
+        // The hmac signing cutover (PRD 1.21, SEC-V3-01): a separate
+        // operator-authorized verb — the claim exchange delivers and
+        // never activates, so the flip needs its own route. Its
+        // operator ability is the rotate FAMILY (activation completes
+        // rotation's dance); the declaration matrix's own `activate`
+        // verb stays the finer split.
+        $router->post('/bfc/credentials/{id}/activate', [ManageCredentials::class, 'activate'])
+            ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::CredentialRotate->value]);
+
+        // The machine-callable invite verb (PRD 1.13, SEC-V3-05): the
+        // HTTP half of its two transports, behind the same operator
+        // gate as the unified verb routes — an integration triggers
+        // the INVITATION, never a key mint. Its family is `mint` (an
+        // invitation is a minted claim code).
+        $router->post('/bfc/invitations', [ManageInvitations::class, 'store'])
+            ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::CredentialMint->value]);
+
+        // The offboard verb (PRD 1.15, SEC-V3-04): full account
+        // containment behind its OWN verb-family ability — the widest
+        // verb, so a stolen mint- or revoke-scoped credential cannot
+        // reach it.
+        $router->post('/bfc/subjects/offboard', [ManageSubjects::class, 'offboard'])
+            ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::SubjectOffboard->value]);
+
+        if ((bool) config('built-for-cloud.credential_api.enabled', false)) {
+            $router->prefix(trim((string) config('built-for-cloud.credential_api.prefix', 'api/credentials'), '/'))
+                ->middleware('bfc.token.admin')
+                ->group(function (Router $router): void {
+                    $router->get('/', [ManageTokens::class, 'index']);
+                    $router->get('/client-observations', ClientObservations::class);
+                    $router->post('/', [ManageTokens::class, 'store']);
+                    // The precise verb rides its own two-segment path, so
+                    // it can never collide with the one-segment name route
+                    // below — a token literally named "id" still deletes
+                    // by name.
+                    $router->delete('/id/{id}', [ManageTokens::class, 'destroyById']);
+                    // Rotation's primary verb on this store too (PRD
+                    // 1.7): by id, on the same collision-proof path.
+                    $router->post('/id/{id}/rotate', [ManageTokens::class, 'rotateById']);
+                    $router->delete('/{name}', [ManageTokens::class, 'destroy']);
+                });
+        }
+    }
+
+    /**
+     * The artisan command family (PRD 1.14).
+     */
+    private function registerCommands(): void
+    {
+        $this->commands([
+            CreateAdminCommand::class,
+            CredentialActivateCommand::class,
+            CredentialListCommand::class,
+            CredentialMintCommand::class,
+            CredentialRevokeCommand::class,
+            CredentialRotateCommand::class,
+            FallbackTokenGenerateCommand::class,
+            HmacRewrapCommand::class,
+            InstallOperatorCredentialCommand::class,
+            InvitationIssueCommand::class,
+            OutboxDrainCommand::class,
+            OwnershipMintClaimCommand::class,
+            OwnershipRemintOwnerTokenCommand::class,
+            SubjectOffboardCommand::class,
+            TokenCreateCommand::class,
+            TokenListCommand::class,
+            TokenRevokeCommand::class,
+            TokenRevokeSelfCommand::class,
+            TokenRotateCommand::class,
+            TokenUsageCommand::class,
+            WarnExpiringCredentialsCommand::class,
+        ]);
     }
 
     /**
@@ -231,5 +296,28 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         RateLimiter::for('bfc-public', fn (Request $request): Limit => Limit::perMinute(60)->by($request->ip() ?? 'unknown'));
 
         RateLimiter::for('bfc-claim', fn (Request $request): Limit => Limit::perMinute(10)->by($request->ip() ?? 'unknown'));
+
+        // GATE-3.7 (rework Fix 5): write and expensive operator verbs
+        // carry THREE independent bounds —
+        //   1. per CREDENTIAL (sha256 of the presented bearer — the
+        //      limiter runs before the gate resolves a row id, and the
+        //      digest identifies the credential without persisting its
+        //      plaintext), so a stolen credential is bounded ACROSS IPs;
+        //   2. per IP, so rotating invalid bearer strings from one
+        //      address buys no fresh budget per string; and
+        //   3. the global ceiling.
+        // A single compound credential|IP bucket would defeat both: a new
+        // IP would refresh a stolen credential's budget, and a new bearer
+        // string would refresh an attacker IP's.
+        RateLimiter::for('bfc-operator-write', function (Request $request): array {
+            $bearer = $request->bearerToken();
+            $credentialKey = $bearer === null || $bearer === '' ? 'anonymous' : hash('sha256', $bearer);
+
+            return [
+                Limit::perMinute(60)->by('bfc-op-cred|'.$credentialKey),
+                Limit::perMinute(60)->by('bfc-op-ip|'.($request->ip() ?? 'unknown')),
+                Limit::perMinute(600)->by('bfc-operator-write-global'),
+            ];
+        });
     }
 }
