@@ -15,8 +15,11 @@ use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Closure;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use InvalidArgumentException;
 use Orchestra\Testbench\Attributes\WithConfig;
 
 /**
@@ -127,13 +130,13 @@ final class SubjectsAuthorityTest extends TestCase
     {
         $headers = $this->adminHeaders();
 
-        ApiToken::factory()->create([
+        $first = ApiToken::factory()->create([
             'name' => 'mixed',
             'token_hash' => hash('sha256', 'mixed-allowed-secret'),
             'subject_type' => SubjectType::ExternalConsumer->value,
             'subject_ref' => 'tenant-a',
         ]);
-        ApiToken::factory()->create([
+        $second = ApiToken::factory()->create([
             'name' => 'mixed',
             'token_hash' => hash('sha256', 'mixed-denied-secret'),
             'subject_type' => SubjectType::ExternalConsumer->value,
@@ -147,14 +150,87 @@ final class SubjectsAuthorityTest extends TestCase
         $this->assertSame('mixed', (new TokenRegistry)->resolve('mixed-allowed-secret'));
         $this->assertSame('mixed', (new TokenRegistry)->resolve('mixed-denied-secret'));
 
-        // With every row permitted, the name verb keeps its existing semantics: EVERY resolvable
-        // row of the name dies in one request.
+        // With every row permitted, the name verb keeps its existing semantics — EVERY resolvable
+        // row of the name dies in one request — and the response reports exactly which ids died.
         $this->bindMatrix(static fn (): bool => true);
 
-        $this->deleteJson('/api/credentials/mixed', [], $headers)->assertNoContent();
+        $response = $this->deleteJson('/api/credentials/mixed', [], $headers)->assertOk();
+
+        $this->assertEqualsCanonicalizing([$first->id, $second->id], $response->json('revoked_ids'));
 
         $this->assertNull((new TokenRegistry)->resolve('mixed-allowed-secret'));
         $this->assertNull((new TokenRegistry)->resolve('mixed-denied-secret'));
+    }
+
+    // REWORK Fix 2 — the reviewer's race, made deterministic: authorization and revocation must
+    // act on the SAME id set. A same-named row landing after the locked select (here: injected
+    // the moment that select runs, before the revocation write) is simply not in this
+    // revocation — it survives even though a name-keyed write would have killed it without
+    // authorization, and the response reports the set that actually died.
+    public function test_a_row_created_after_authorization_is_not_in_the_revocation(): void
+    {
+        $headers = $this->adminHeaders();
+
+        $allowed = ApiToken::factory()->create([
+            'name' => 'raced',
+            'token_hash' => hash('sha256', 'raced-allowed-secret'),
+            'subject_type' => SubjectType::ExternalConsumer->value,
+            'subject_ref' => 'tenant-a',
+        ]);
+
+        // The late row below is a legacy (null-subject) row this matrix would DENY.
+        $this->bindMatrix(static fn (CredentialVerb $verb, ?Subject $subject): bool => $verb !== CredentialVerb::Revoke || $subject?->ref === 'tenant-a');
+
+        $inserted = false;
+
+        DB::listen(function (QueryExecuted $query) use (&$inserted): void {
+            if ($inserted
+                || ! str_starts_with(strtolower(ltrim($query->sql)), 'select')
+                || ! in_array('raced', $query->bindings, true)) {
+                return;
+            }
+
+            $inserted = true;
+
+            ApiToken::factory()->create([
+                'name' => 'raced',
+                'token_hash' => hash('sha256', 'raced-late-secret'),
+            ]);
+        });
+
+        $response = $this->deleteJson('/api/credentials/raced', [], $headers)->assertOk();
+
+        $this->assertTrue($inserted, 'The race was never injected — the test proved nothing.');
+
+        $response->assertExactJson(['revoked_ids' => [$allowed->id]]);
+
+        $this->assertNull((new TokenRegistry)->resolve('raced-allowed-secret'));
+        $this->assertSame('raced', (new TokenRegistry)->resolve('raced-late-secret'));
+    }
+
+    // REWORK Fix 3 — a subject is a PAIR or nothing: a half-declared subject would map to null
+    // in subject() and silently inherit legacy authority under a tenant-scoped matrix, so the
+    // model refuses both partial shapes. Both-null stays the (only) legacy shape.
+    public function test_a_subject_type_without_a_ref_is_refused_at_the_model(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        ApiToken::factory()->create([
+            'name' => 'half-declared',
+            'subject_type' => SubjectType::ExternalConsumer->value,
+            'subject_ref' => null,
+        ]);
+    }
+
+    public function test_a_subject_ref_without_a_type_is_refused_at_the_model(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        ApiToken::factory()->create([
+            'name' => 'half-declared',
+            'subject_type' => null,
+            'subject_ref' => 'tenant-a',
+        ]);
     }
 
     // Locked AC4 — list_metadata granularity is PER-ROW FILTERING: denied rows drop out of the

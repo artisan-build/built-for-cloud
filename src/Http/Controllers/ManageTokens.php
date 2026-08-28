@@ -17,6 +17,7 @@ use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpFoundation\Response;
@@ -142,28 +143,48 @@ final class ManageTokens
 
     /**
      * Revoke by NAME — the CLI-compatibility verb. It revokes EVERY
-     * resolvable row of the name (existing semantics, unchanged); the
-     * by-id route below is the precise verb. FAIL CLOSED against the
-     * matrix: if the declaration denies `revoke` for ANY resolvable row of
-     * the name, the whole request 403s and nothing is revoked — a name is
-     * not a licence to kill whichever subset happens to be permitted.
+     * resolvable row of the name (existing semantics); the by-id route
+     * below is the precise verb. FAIL CLOSED against the matrix: if the
+     * declaration denies `revoke` for ANY resolvable row of the name, the
+     * whole request 403s and nothing is revoked — a name is not a licence
+     * to kill whichever subset happens to be permitted.
+     *
+     * The rows are selected UNDER the revocation's own transaction, locked,
+     * authorized as an id set, and the write is keyed on exactly that set —
+     * never re-queried by name — so what dies is precisely what was
+     * authorized. A same-named row created after the locked select is not
+     * in this revocation; the response body reports the ids that actually
+     * died so the caller is never guessing.
      */
-    public function destroy(Request $request, string $name): Response
+    public function destroy(Request $request, string $name): JsonResponse
     {
-        $targets = ApiToken::query()
-            ->where('name', $name)
-            ->resolvable()
-            ->get(['id', 'subject_type', 'subject_ref']);
+        $actor = $this->actor($request);
 
-        foreach ($targets as $target) {
-            if (! $this->verbAllowed(CredentialVerb::Revoke, $target->subject(), $request)) {
-                abort(403);
+        /** @var list<string> $revokedIds */
+        $revokedIds = DB::transaction(function () use ($request, $name, $actor): array {
+            /** @var list<array{id: string, subject: ?Subject}> $targets */
+            $targets = ApiToken::query()
+                ->where('name', $name)
+                ->resolvable()
+                ->lockForUpdate()
+                ->get(['id', 'subject_type', 'subject_ref'])
+                ->map(static fn (ApiToken $token): array => ['id' => $token->id, 'subject' => $token->subject()])
+                ->all();
+
+            foreach ($targets as $target) {
+                if (! $this->verbAllowed(CredentialVerb::Revoke, $target['subject'], $request)) {
+                    abort(403);
+                }
             }
-        }
 
-        $this->tokens->revoke($name, $this->actor($request));
+            $ids = array_column($targets, 'id');
 
-        return response()->noContent();
+            $this->tokens->revokeIds($ids, $actor);
+
+            return $ids;
+        });
+
+        return response()->json(['revoked_ids' => $revokedIds]);
     }
 
     /**

@@ -116,13 +116,16 @@ final class CredentialApiTest extends TestCase
     public function test_it_revokes_a_credential_api_token(): void
     {
         $plaintext = 'ci-secret';
-        ApiToken::factory()->create([
+        $token = ApiToken::factory()->create([
             'name' => 'ci',
             'token_hash' => hash('sha256', $plaintext),
         ]);
 
+        // The name verb reports WHAT actually died — the caller is never
+        // guessing which rows a name resolved to.
         $this->deleteJson('/api/credentials/ci', [], $this->credentialAdminHeaders())
-            ->assertNoContent();
+            ->assertOk()
+            ->assertExactJson(['revoked_ids' => [$token->id]]);
 
         $this->assertNull((new TokenRegistry)->resolve($plaintext));
 
@@ -463,6 +466,61 @@ final class CredentialApiTest extends TestCase
         $this->assertSame(AuditReason::OperatorRequest, $event->reason_code);
         $this->assertSame(AuditActorType::AdminToken, $event->actor_type);
         $this->assertSame($admin->id, $event->actor_ref);
+    }
+
+    // REWORK Fix 1 — the anomalous row: revoked_at set, no effective expiry (an import, a manual
+    // repair). It lists as revoked while legacy resolution — which ignores revoked_at,
+    // test-pinned in TokenCoreTest — still authenticates it. Revoke-by-id must kill what it
+    // claims to kill: the row stops resolving, the death is audited, and the original
+    // revocation stamp is preserved. Never a silent 204 on a still-live row.
+    public function test_revoke_by_id_kills_an_anomalous_row_that_reports_revoked_but_still_resolves(): void
+    {
+        $headers = $this->credentialAdminHeaders();
+
+        $originalRevokedAt = Carbon::parse('2026-08-20 12:00:00');
+
+        $zombie = ApiToken::factory()->create([
+            'name' => 'zombie',
+            'token_hash' => hash('sha256', 'zombie-secret'),
+            'revoked_at' => $originalRevokedAt,
+            'expires_at' => null,
+        ]);
+
+        // The anomaly, demonstrated: reported dead, still authenticating.
+        $this->assertSame('revoked', $this->listingRowFor('zombie', $headers)['status']);
+        $this->assertSame('zombie', (new TokenRegistry)->resolve('zombie-secret'));
+
+        $this->deleteJson('/api/credentials/id/'.$zombie->id, [], $headers)->assertNoContent();
+
+        $this->assertNull((new TokenRegistry)->resolve('zombie-secret'));
+
+        $zombie->refresh();
+        $this->assertSame($originalRevokedAt->toJSON(), $zombie->revoked_at?->toJSON());
+        $this->assertNotNull($zombie->expires_at);
+
+        $this->assertSame(1, CredentialAuditEvent::query()
+            ->where('event', LifecycleEventType::Revoked->value)
+            ->where('credential_id', $zombie->id)
+            ->count());
+    }
+
+    // REWORK Fix 1 — a row that is already DEAD (expired: the one state that no longer
+    // authenticates) is a truthful idempotent no-op: 204, no audit event.
+    public function test_revoke_by_id_of_an_expired_row_is_a_no_op_with_no_event(): void
+    {
+        $headers = $this->credentialAdminHeaders();
+
+        $expired = ApiToken::factory()->create([
+            'name' => 'lapsed',
+            'expires_at' => now()->subMinute(),
+        ]);
+
+        $this->deleteJson('/api/credentials/id/'.$expired->id, [], $headers)->assertNoContent();
+
+        $this->assertSame(0, CredentialAuditEvent::query()
+            ->where('event', LifecycleEventType::Revoked->value)
+            ->where('credential_id', $expired->id)
+            ->count());
     }
 
     public function test_revoke_by_id_returns_404_for_an_unknown_id(): void

@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use InvalidArgumentException;
 
 /**
  * @property string $id
@@ -36,6 +37,25 @@ final class ApiToken extends Model
     use HasFactory;
 
     use HasUuids;
+
+    /**
+     * A subject is declared as a PAIR or not at all: `subject_type` and
+     * `subject_ref` together, or both null (the legacy shape). A partial
+     * pair would silently map to null in subject() and inherit legacy
+     * authority under a tenant-scoped matrix — refused at the model, the
+     * package's enforcement point (the same stance as the credentials
+     * store's public-key rule).
+     */
+    protected static function booted(): void
+    {
+        self::saving(function (ApiToken $token): void {
+            if (($token->subject_type === null) !== ($token->subject_ref === null)) {
+                throw new InvalidArgumentException(
+                    'A subject is declared as a pair: subject_type and subject_ref together, or both null (legacy).',
+                );
+            }
+        });
+    }
 
     public $incrementing = false;
 
@@ -92,10 +112,16 @@ final class ApiToken extends Model
     }
 
     /**
-     * The row's declared subject, or null when the row predates subjects
+     * The row's declared subject, or null when the row predates subjects —
+     * BOTH columns null is the one shape that means legacy
      * (declare-don't-guess: a legacy row is never retro-classified). A
      * subject identifies what a revocation costs; it never authenticates
      * or authorizes anything.
+     *
+     * A partial pair cannot be written through the model (the saving hook
+     * throws); the null-if-either-null mapping stays as defence against a
+     * raw write, so a half-declared subject can never masquerade as a
+     * declared one.
      */
     public function subject(): ?Subject
     {
@@ -113,6 +139,13 @@ final class ApiToken extends Model
      * Every `api_tokens` row structurally carries the usage signal, so
      * {@see ReportedStatus::Unknown} is never produced here — see that
      * enum for why the case exists anyway.
+     *
+     * One anomaly class, named honestly: a row with `revoked_at` set but
+     * no effective expiry (an import, a manual repair) reports `revoked`
+     * here while legacy resolution — which ignores `revoked_at`,
+     * test-pinned — still authenticates it. No package verb can produce
+     * or leave behind that state any more (`revoke()`/`revokeById()` both
+     * stamp expiry), and `revokeById()` repairs it on contact.
      */
     public function reportedStatus(): ReportedStatus
     {

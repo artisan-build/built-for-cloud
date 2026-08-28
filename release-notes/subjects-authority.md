@@ -30,8 +30,12 @@ consumer build on.
 
 ## The five subject types (D2's cost-of-revocation table)
 
-`subject_type` and `subject_ref` are now nullable columns on `api_tokens` (null = the row
-predates subjects; declare-don't-guess, never a retro-classification). What one revocation costs:
+`subject_type` and `subject_ref` are now nullable columns on `api_tokens`. **A subject is
+declared as a pair or not at all:** both columns together, or both null — and both-null is the
+one shape that means "this row predates subjects" (declare-don't-guess, never a
+retro-classification). A partial pair is refused at the model's saving hook, because it would
+silently map to the legacy null subject and inherit legacy authority under a tenant-scoped
+matrix. What one revocation costs:
 
 | `subject_type`      | what one revocation costs                                                     |
 |---------------------|-------------------------------------------------------------------------------|
@@ -48,9 +52,22 @@ predates subjects; declare-don't-guess, never a retro-classification). What one 
   and keeps authenticating. Emits the `revoked` audit event with the acting admin token and
   reason `operator_request`. 404 for an unknown id; idempotently 204 for a row already dead (one
   death, one audit event). Same admin gate as every other credential-API route.
-- **`DELETE /api/credentials/{name}` stays for CLI compatibility** and keeps its existing
+- **Revoke-by-id kills whatever still resolves — never a silent no-op on a live row.** Its
+  predicate is resolvability, not `revoked_at`: legacy resolution ignores `revoked_at`
+  (test-pinned; `revoke()` has always set both columns), so an anomalous row carrying
+  `revoked_at` with no effective expiry (an import, a manual repair) lists as `revoked` while
+  still authenticating. Revoke-by-id repairs that anomaly on contact: it stamps `expires_at`
+  (keeping the original `revoked_at` where one exists) and emits the audit event a real death
+  deserves. "Already dead" — the idempotent 204 with no event — means EXPIRED, the one state
+  that no longer authenticates. No package verb can produce or leave behind the anomalous state.
+- **`DELETE /api/credentials/{name}` stays for CLI compatibility** and keeps its revocation
   semantics: it revokes EVERY resolvable row of that name. By-id is the verb to prefer wherever a
   row id is known.
+- **The name verb authorizes and revokes the SAME id set.** The rows are selected and locked
+  under the revocation's own transaction, that id set is run through the verb matrix, and the
+  revocation write is keyed on exactly those ids — never re-queried by name — so nothing can die
+  unauthorized. A same-named row created after the locked select is simply not in this
+  revocation, and the response body reports the ids that actually died.
 
 ## Status semantics (`unknown` never escalates)
 
@@ -92,6 +109,20 @@ nothing existing was renamed, removed, or reordered ahead of the pre-existing ke
 **Added routes:**
 
 - `DELETE /api/credentials/id/{id}` — revoke-by-id (semantics above).
+
+**Changed response:**
+
+- `DELETE /api/credentials/{name}` now returns `200` with `{"revoked_ids": [...]}` — the ids
+  that actually died — instead of an empty `204`. A name can resolve to several rows (and, under
+  a narrowing matrix plus concurrency, to fewer than a caller might assume), so the response
+  states the actual outcome rather than leaving the caller to guess. This is the one
+  non-additive wire change in this release; callers that only checked for success keep working
+  on any 2xx check, and the route, method, and path are unchanged.
+
+**Schema note:**
+
+- `api_tokens.subject_type` + `api_tokens.subject_ref` (nullable pair; both-or-neither enforced
+  at the model — both-null means the row predates subjects).
 
 **Containment, unchanged and re-proven:** the listing's exact-key-set invariant test now pins the
 extended key set — an accidental `token_hash`, `secret_hash`, or any secret-adjacent column still
