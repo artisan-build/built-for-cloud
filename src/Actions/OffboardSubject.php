@@ -29,6 +29,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Throwable;
@@ -58,11 +59,20 @@ use Throwable;
  * credential transaction — those rows are deleted atomically with the
  * revocations. A database store on ANOTHER connection is deleted in an
  * after-commit hook (it cannot join the transaction), and any other
- * driver's storage cannot be enumerated per user at all. In both
- * compensated cases the registry row — which DOES commit with the
- * revocations — is the containment: the guards reject the principal
- * whatever still sits in session storage, and the auth-foundation
- * middleware invalidates a surviving session on its first appearance.
+ * driver's storage cannot be enumerated per user at all. Every such case
+ * is SURFACED, never silent (rework Fix 3): the result's
+ * `incompleteSteps` names it, the direct-path response reports
+ * `fully_contained: false`, and a deferred delete's failure is logged
+ * class-only. The registry row — which DOES commit with the revocations
+ * — is the containment either way: the `bfc` guard, the operator gate,
+ * the hmac verifier, and the auth-foundation middleware (`bfc.auth` AND
+ * `bfc.admin`) reject the principal whatever still sits in session
+ * storage, invalidating a surviving session on its first appearance.
+ * THE HONEST BOUNDARY: a consuming app's OWN plain `auth`-guarded routes
+ * are outside the package's reach — the app must consult
+ * {@see OffboardedSubject::userIsOffboarded} (or stack the package
+ * middleware) on them; the package cannot invalidate an arbitrary
+ * session store it does not own.
  *
  * IDEMPOTENT: a second offboard of a contained subject is a no-op — the
  * same result shape with zero counts, and NO duplicate audit rows (one
@@ -315,7 +325,19 @@ final class OffboardSubject
         $deletedResetTokens = $this->deleteResetTokens($emails);
 
         // 6 — sessions (see the compensation statement in the class doc).
-        $deletedSessions = $this->invalidateSessions($userIds);
+        // A step this transaction cannot complete is SURFACED, never
+        // silently swallowed (rework Fix 3): named in the result and
+        // logged, ids-free, so nobody reads a compensated offboard as a
+        // fully contained one.
+        [$deletedSessions, $incompleteStep] = $this->invalidateSessions($userIds);
+
+        $incompleteSteps = $incompleteStep === null ? [] : [$incompleteStep];
+
+        if ($incompleteSteps !== []) {
+            Log::warning('Built for Cloud offboard could not complete every containment step in-transaction; the registry rejection stands. Re-run the offboard after fixing the store to retry.', [
+                'incomplete_steps' => $incompleteSteps,
+            ]);
+        }
 
         // 7 — the registry rows the guards enforce, committed WITH the
         // revocations above: the containment survives whatever a
@@ -343,6 +365,7 @@ final class OffboardSubject
             deletedResetTokens: $deletedResetTokens,
             deletedSessions: $deletedSessions,
             deactivatedUsers: $deactivatedUsers,
+            incompleteSteps: $incompleteSteps,
         );
     }
 
@@ -551,18 +574,33 @@ final class OffboardSubject
     }
 
     /**
-     * Session invalidation, with the stated compensation: same-connection
-     * database stores delete inside this transaction; a database store on
-     * another connection deletes after commit (it cannot join the
-     * transaction); any other driver relies on the registry + guard
-     * rejection entirely.
+     * Session invalidation, with the stated compensation (rework Fix 3 —
+     * surfaced, never silent): same-connection database stores delete
+     * inside this transaction and the step is COMPLETE. A database store
+     * on another connection cannot join the transaction: its delete is
+     * deferred to after commit, a deferral failure is logged (exception
+     * class only), and the step is reported INCOMPLETE either way —
+     * deferred is not done. Any other driver's storage cannot be
+     * enumerated per user at all and is reported incomplete outright. In
+     * every incomplete case the registry row commits WITH the
+     * revocations, so the guards reject the principal whatever survives
+     * in session storage — containment holds; the REPORT stays honest.
      *
      * @param  list<string>  $userIds
+     * @return array{int, string|null} [deleted rows, incomplete-step slug or null]
      */
-    private function invalidateSessions(array $userIds): int
+    private function invalidateSessions(array $userIds): array
     {
-        if ($userIds === [] || config('session.driver') !== 'database') {
-            return 0;
+        if ($userIds === []) {
+            return [0, null];
+        }
+
+        if (config('session.driver') !== 'database') {
+            // Nothing to enumerate: cookie/file/cache-backed stores keep
+            // no per-user index the package can sweep. The registry +
+            // bfc.auth/bfc.admin rejection (and the app's own documented
+            // check on its plain `auth` routes) is the containment.
+            return [0, 'sessions:driver-not-enumerable'];
         }
 
         $table = (string) config('session.table', 'sessions');
@@ -570,27 +608,33 @@ final class OffboardSubject
 
         if ($connection === null || $connection === config('database.default')) {
             if (! Schema::hasTable($table)) {
-                return 0;
+                return [0, 'sessions:table-missing'];
             }
 
-            return DB::table($table)->whereIn('user_id', $userIds)->delete();
+            return [DB::table($table)->whereIn('user_id', $userIds)->delete(), null];
         }
 
-        // The compensation for a session store this transaction cannot
-        // reach: best-effort after commit; the registry rejection is the
-        // containment either way.
+        // Deferred, not done: the delete runs after commit, its failure is
+        // logged, and the step is flagged incomplete regardless — the
+        // caller re-runs the idempotent offboard to verify.
         DB::afterCommit(static function () use ($connection, $table, $userIds): void {
             try {
                 DB::connection(is_string($connection) ? $connection : null)
                     ->table($table)
                     ->whereIn('user_id', $userIds)
                     ->delete();
-            } catch (Throwable) {
-                // The registry row already committed; the guards reject.
+            } catch (Throwable $exception) {
+                try {
+                    Log::warning('Built for Cloud offboard could not delete sessions on the configured session connection after commit; the registry rejection stands.', [
+                        'exception' => $exception::class,
+                    ]);
+                } catch (Throwable) {
+                    // Failing to log must not surface past the commit.
+                }
             }
         });
 
-        return 0;
+        return [0, 'sessions:deferred-other-connection'];
     }
 
     /**

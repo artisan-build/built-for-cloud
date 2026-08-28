@@ -32,7 +32,9 @@ use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
+use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
@@ -144,7 +146,7 @@ it('contains the whole account in one action: every credential state, codes, inv
 
     offboardViaHttp(['subject_type' => 'external_consumer', 'subject_ref' => 'acme'])
         ->assertOk()
-        ->assertExactJson(['offboarded' => true]);
+        ->assertExactJson(['offboarded' => true, 'fully_contained' => true]);
 
     // Every credential in every lifecycle state is dead — active, grace,
     // pending bearer, pending hmac, and the legacy row.
@@ -258,12 +260,12 @@ it('is idempotent: a second offboard is a no-op with the same response shape and
     $headers = offboardHeaders();
 
     $first = $this->postJson('/bfc/subjects/offboard', ['subject_type' => 'external_consumer', 'subject_ref' => 'acme'], $headers);
-    $first->assertOk()->assertExactJson(['offboarded' => true]);
+    $first->assertOk()->assertExactJson(['offboarded' => true, 'fully_contained' => true]);
 
     $auditAfterFirst = CredentialAuditEvent::query()->count();
 
     $second = $this->postJson('/bfc/subjects/offboard', ['subject_type' => 'external_consumer', 'subject_ref' => 'acme'], $headers);
-    $second->assertOk()->assertExactJson(['offboarded' => true]);
+    $second->assertOk()->assertExactJson(['offboarded' => true, 'fully_contained' => true]);
 
     // No duplicate deaths, no duplicate subject event; the sensitive-read
     // / denial channels are untouched by a clean repeat too.
@@ -346,6 +348,73 @@ it('rides the shared version gate: a replayed or older offboard event is transac
     ])->assertStatus(422);
 });
 
+it('rejects an offboarded user on bfc.admin too, whatever session store kept the session alive (Fix 3)', function (): void {
+    Route::middleware(['web', 'bfc.admin'])->get('/offboard-admin-guarded', fn (): array => ['ok' => true]);
+
+    // The default array session store: the offboard transaction deletes
+    // nothing here — the middleware check IS the containment.
+    $user = User::query()->create([
+        'name' => 'Admin Person',
+        'email' => 'person@example.com',
+        'password' => 'irrelevant',
+    ]);
+    $user->forceFill(['is_admin' => true])->save();
+
+    // Positive control: the admin passes the gate before containment.
+    $this->actingAs($user)->get('/offboard-admin-guarded')->assertOk();
+
+    offboardViaHttp(['subject_type' => 'user_principal', 'subject_ref' => 'person@example.com'])->assertOk();
+
+    // The surviving session presents itself on a bfc.admin-only route
+    // (no bfc.auth stacked): rejected, and invalidated.
+    $this->actingAs($user)->withSession(['residue' => 'still-here']);
+    $this->get('/offboard-admin-guarded')->assertForbidden();
+
+    expect(session()->has('residue'))->toBeFalse();
+});
+
+it('reports containment INCOMPLETE when the session store is outside the transaction\'s reach (Fix 3)', function (): void {
+    $user = User::query()->create([
+        'name' => 'Person',
+        'email' => 'person@example.com',
+        'password' => 'irrelevant',
+    ]);
+
+    // (i) A non-enumerable driver (the array default): the response says
+    // so instead of claiming a full sweep.
+    offboardViaHttp(['subject_type' => 'user_principal', 'subject_ref' => 'person@example.com'])
+        ->assertOk()
+        ->assertExactJson(['offboarded' => true, 'fully_contained' => false]);
+
+    // (ii) A database store on ANOTHER connection: deferred is not done —
+    // the step is named, and the after-commit delete's failure is logged
+    // by exception class, never swallowed.
+    config(['session.driver' => 'database', 'session.connection' => 'bogus_sessions_connection']);
+
+    $records = [];
+
+    Event::listen(MessageLogged::class, function (MessageLogged $event) use (&$records): void {
+        $records[] = ['message' => $event->message, 'context' => $event->context];
+    });
+
+    $result = app(OffboardSubject::class)(OffboardOptions::fromInput([
+        'subject_type' => 'user_principal',
+        'subject_ref' => 'person@example.com',
+    ]));
+
+    expect($result->fullyContained())->toBeFalse()
+        ->and($result->incompleteSteps)->toBe(['sessions:deferred-other-connection'])
+        ->and(OffboardedSubject::userIsOffboarded((string) $user->getKey()))->toBeTrue();
+
+    $deferredFailure = array_values(array_filter(
+        $records,
+        fn (array $record): bool => str_contains($record['message'], 'could not delete sessions'),
+    ));
+
+    expect($deferredFailure)->toHaveCount(1)
+        ->and($deferredFailure[0]['context'])->toBe(['exception' => InvalidArgumentException::class]);
+});
+
 it('makes a concurrent first offboard idempotent via the registry\'s unique subject key (Fix 6)', function (): void {
     // The schema constraint itself: two subject rows for the same
     // (subject_type, subject_ref) cannot both exist.
@@ -402,7 +471,7 @@ it('makes a concurrent first offboard idempotent via the registry\'s unique subj
 
     offboardViaHttp(['subject_type' => 'external_consumer', 'subject_ref' => 'acme'])
         ->assertOk()
-        ->assertExactJson(['offboarded' => true]);
+        ->assertExactJson(['offboarded' => true, 'fully_contained' => true]);
 
     expect($injected)->toBeTrue()
         ->and(OffboardedSubject::query()->forSubject(new Subject(SubjectType::ExternalConsumer, 'acme'))

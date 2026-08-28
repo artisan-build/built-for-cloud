@@ -11,9 +11,21 @@ namespace ArtisanBuild\BuiltForCloud;
  * with the invite verb). On the direct path, `applied` is false when the
  * subject was ALREADY contained (the idempotent no-op: same result
  * shape, zero counts, no new audit rows).
+ *
+ * `incompleteSteps` (rework Fix 3) names every containment step the
+ * offboard could NOT complete inside its own transaction — a session
+ * store on another connection whose delete is deferred, or a session
+ * driver whose storage cannot be enumerated per user at all. An offboard
+ * with incomplete steps is NOT reported fully contained: the registry +
+ * guard rejection still holds the line, but the operator is told which
+ * storage the sweep could not reach, and re-running the (idempotent)
+ * verb after fixing the store retries the step.
  */
 final readonly class OffboardResult
 {
+    /**
+     * @param  list<string>  $incompleteSteps
+     */
     public function __construct(
         public bool $acknowledged,
         public bool $applied,
@@ -23,10 +35,16 @@ final readonly class OffboardResult
         public int $deletedResetTokens = 0,
         public int $deletedSessions = 0,
         public int $deactivatedUsers = 0,
+        public array $incompleteSteps = [],
     ) {}
 
     public static function acknowledged(): self
     {
         return new self(acknowledged: true, applied: false);
+    }
+
+    public function fullyContained(): bool
+    {
+        return $this->incompleteSteps === [];
     }
 }

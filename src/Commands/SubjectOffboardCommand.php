@@ -77,6 +77,16 @@ final class SubjectOffboardCommand extends Command
             $result->deactivatedUsers,
         ));
 
+        // The honest report (rework Fix 3): a step the offboard
+        // transaction could not complete is named, never rounded up to
+        // containment. The registry rejection stands regardless.
+        if (! $result->fullyContained()) {
+            $this->warn(
+                'Containment INCOMPLETE — unreachable step(s): '.implode(', ', $result->incompleteSteps)
+                .'. The registry rejection stands (the guards refuse the principal); fix the store and re-run this idempotent command to retry.',
+            );
+        }
+
         return self::SUCCESS;
     }
 }

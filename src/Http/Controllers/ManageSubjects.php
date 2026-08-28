@@ -46,7 +46,16 @@ final class ManageSubjects
             return response()->json(['accepted' => true], 202);
         }
 
-        return response()->json(['offboarded' => true]);
+        // `fully_contained` is the honest report (rework Fix 3): false
+        // when a containment step could not complete inside the offboard
+        // transaction (an unreachable or deferred session store). The
+        // registry rejection holds either way; the caller re-runs the
+        // idempotent verb after fixing the store. Bounded booleans only —
+        // the endpoint stays `metadata`-classified.
+        return response()->json([
+            'offboarded' => true,
+            'fully_contained' => $result->fullyContained(),
+        ]);
     }
 
     /**

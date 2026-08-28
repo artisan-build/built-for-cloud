@@ -192,7 +192,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `DELETE /bfc/credentials/{id}` | `metadata` | empty `204` body |
 | `POST /bfc/credentials/{id}/rotate` | `content` | the `delivery` single reveal, plus summary rows |
 | `POST /bfc/credentials/{id}/activate` | `content` | no secret ever — but the summary row carries free-text names and subject refs |
-| `POST /bfc/subjects/offboard` | `metadata` | `{"offboarded": true}` / `{"accepted": true}` — bounded booleans only |
+| `POST /bfc/subjects/offboard` | `metadata` | `{"offboarded": true, "fully_contained": bool}` / `{"accepted": true}` — bounded booleans only |
 
 Vendor-side reads of `metadata`-classified endpoints will be governed by the reserved
 `metadata:read` ability family (see [the Console reservations](#reserved--console-fast-follow-not-implemented)).
@@ -977,12 +977,22 @@ and writes the containment registry on which the `bfc` guard — and the auth-fo
 session middleware — reject the offboarded subject and its deactivated bound users on
 every request thereafter.
 
-**Session compensation, stated:** a database session store on the default connection is
-cleared inside the offboard transaction. A database store on another connection is cleared
-after commit; any other driver's storage cannot be enumerated per user. In every
-compensated case the registry row commits WITH the credential revocations, so whatever
-survives in session storage, the principal's next request is rejected (and a surviving
-session is invalidated on that first appearance).
+**Session compensation, stated — and surfaced:** a database session store on the default
+connection is cleared inside the offboard transaction. A database store on another
+connection is cleared after commit (deferred is not done — the response reports it); any
+other driver's storage cannot be enumerated per user. Every step the transaction could not
+complete is named in the result and the direct-path response answers
+`"fully_contained": false` — a compensated offboard is never reported as a complete sweep.
+In every compensated case the registry row commits WITH the credential revocations, so
+whatever survives in session storage, the principal is rejected at every
+**package-enforced** point: the `bfc` guard, the operator gate, the hmac verifier, and the
+auth-foundation middleware (`bfc.auth` and `bfc.admin` both) — which also invalidate a
+surviving session on its first appearance. **The honest boundary:** a consuming app's OWN
+plain `auth`-guarded routes are outside the package's reach; the app must consult the
+documented integration point — `OffboardedSubject::userIsOffboarded($userId)` /
+`OffboardedSubject::rejects($credential)` — or stack the package middleware on them. The
+package cannot invalidate an arbitrary session store it does not own, and does not claim
+to.
 
 **Request:**
 
@@ -1014,9 +1024,11 @@ different victim. On the direct path (no event fields) the pair is required.
 
 **The two response shapes, keyed on the REQUEST (never on state):**
 
-- **Direct path (no integration event): `200 {"offboarded": true}`** — identical for a
-  first containment and an idempotent repeat (a repeat revokes nothing, writes no new audit
-  rows, and changes nothing).
+- **Direct path (no integration event): `200 {"offboarded": true, "fully_contained": bool}`**
+  — identical shape for a first containment and an idempotent repeat (a repeat revokes
+  nothing, writes no new audit rows, and changes nothing). `fully_contained` is `false` when
+  a containment step could not complete inside the transaction (see the compensation above);
+  re-run the idempotent verb after fixing the store to retry the step.
 - **Integration path: `202 {"accepted": true}` — always**, whatever the gate decided
   (applied, ignored-older, or replayed); the body carries nothing a caller could probe gate
   state from.

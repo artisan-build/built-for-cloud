@@ -17,12 +17,25 @@ running the same `OffboardSubject` action) deactivates a subject and, in one act
   and the auth-foundation middleware (`bfc.auth`) rejects a deactivated user's session and
   invalidates it on its first appearance.
 
-**Session compensation, stated (the PRD requires the statement):** only a database session
-store on the default connection can share the credential transaction — those rows delete
-atomically with the revocations. A database store on another connection deletes after commit;
-every other driver's storage cannot be enumerated per user. In all compensated cases the
-registry row commits WITH the revocations, so the containment holds whatever survives in
-session storage.
+**Session compensation, stated (the PRD requires the statement) — and surfaced:** only a
+database session store on the default connection can share the credential transaction — those
+rows delete atomically with the revocations. A database store on another connection deletes
+after commit (a failure there is logged, exception class only); every other driver's storage
+cannot be enumerated per user. Every step the transaction could not complete is NAMED in the
+result (`incompleteSteps`), the HTTP response reports `fully_contained: false`, and the CLI
+prints a warning — a compensated offboard is never reported as a complete sweep. In all
+compensated cases the registry row commits WITH the revocations, so the containment holds
+whatever survives in session storage; the (idempotent) verb can be re-run to retry the step.
+
+**The enforcement boundary, precisely:** the package rejects an offboarded principal at every
+point IT authenticates — the `bfc` guard, the operator gate (`bfc.credential.admin`), the
+hmac verifier's key selection, and the auth-foundation middleware (`bfc.auth` AND
+`bfc.admin`, which also invalidate a surviving session on first appearance). A consuming
+app's OWN plain `auth`-guarded routes are outside the package's reach: the app must consult
+the documented integration point — `OffboardedSubject::userIsOffboarded($userId)` for a
+session user, `OffboardedSubject::rejects($credential)` for a credential — or stack the
+package middleware on those routes. The package cannot invalidate an arbitrary session store
+it does not own, and does not claim that containment.
 
 **Idempotent:** a second offboard is a no-op — same response shape, zero counts, no new audit
 rows. **One audit shape (D8):** a single `offboarded` lifecycle event carrying the acting
