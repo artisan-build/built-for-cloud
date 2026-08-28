@@ -121,8 +121,10 @@ package works out of the box.
 The `ArtisanBuild\BuiltForCloud\Testing\WithCredentials` trait mints
 credential rows whose plaintext lives only in test memory. The returned
 carrier is sealed: it refuses PHP serialization and JSON encoding (both
-throw) and has no string conversion, so queued payloads, cache writes and
-object loggers cannot carry the secret out of the test:
+throw), has no string conversion, and holds the plaintext outside the
+object, so native export and debug paths (`var_export`, `print_r`,
+`var_dump`, `get_object_vars`) show no secret either — queued payloads,
+cache writes and object loggers cannot carry it out of the test:
 
 ```php
 $minted = $this->mintCredential(['abilities' => ['credential:read']]);

@@ -177,22 +177,22 @@ it('never returns or logs the plaintext secret on any new code path', function (
     $ok->assertOk();
     $denied->assertUnauthorized();
 
-    expect($ok->getContent())->not->toContain($minted->plaintext)
-        ->and($denied->getContent())->not->toContain($revoked->plaintext);
+    expect($ok->getContent())->not->toContain($minted->plaintext())
+        ->and($denied->getContent())->not->toContain($revoked->plaintext());
 
     foreach ($logged as $event) {
-        expect($event->message)->not->toContain($minted->plaintext)
-            ->and($event->message)->not->toContain($revoked->plaintext);
+        expect($event->message)->not->toContain($minted->plaintext())
+            ->and($event->message)->not->toContain($revoked->plaintext());
 
         $context = json_encode($event->context);
 
-        expect($context)->not->toContain($minted->plaintext)
-            ->and($context)->not->toContain($revoked->plaintext);
+        expect($context)->not->toContain($minted->plaintext())
+            ->and($context)->not->toContain($revoked->plaintext());
     }
 
     // The hash is at rest; the plaintext never is.
-    expect(Credential::query()->where('secret_hash', $minted->plaintext)->exists())->toBeFalse()
-        ->and($minted->credential->refresh()->secret_hash)->toBe(hash('sha256', $minted->plaintext));
+    expect(Credential::query()->where('secret_hash', $minted->plaintext())->exists())->toBeFalse()
+        ->and($minted->credential->refresh()->secret_hash)->toBe(hash('sha256', $minted->plaintext()));
 });
 
 it('supports actingAsCredential for route tests', function (): void {
@@ -212,7 +212,7 @@ it('refuses to serialize a minted test credential', function (): void {
     try {
         serialize($minted);
     } catch (Throwable $e) {
-        expect($e->getMessage())->not->toContain($minted->plaintext);
+        expect($e->getMessage())->not->toContain($minted->plaintext());
     }
 });
 
@@ -224,12 +224,37 @@ it('refuses to json-encode a minted test credential', function (): void {
     try {
         json_encode($minted);
     } catch (Throwable $e) {
-        expect($e->getMessage())->not->toContain($minted->plaintext);
+        expect($e->getMessage())->not->toContain($minted->plaintext());
     }
 
     // The headers a test actually needs keep working.
-    expect($minted->bearerHeader())->toBe('Bearer '.$minted->plaintext)
-        ->and($minted->basicHeader('u'))->toBe('Basic '.base64_encode('u:'.$minted->plaintext));
+    expect($minted->bearerHeader())->toBe('Bearer '.$minted->plaintext())
+        ->and($minted->basicHeader('u'))->toBe('Basic '.base64_encode('u:'.$minted->plaintext()));
+});
+
+it('does not leak the plaintext through native export and debug paths', function (): void {
+    $minted = $this->mintCredential();
+    $plaintext = $minted->plaintext();
+
+    // The plaintext lives outside the object, so var_export, print_r,
+    // var_dump, get_object_vars and a reflection property walk all come up
+    // empty-handed.
+    expect(var_export($minted, true))->not->toContain($plaintext)
+        ->and(print_r($minted, true))->not->toContain($plaintext);
+
+    ob_start();
+    var_dump($minted);
+    $dumped = (string) ob_get_clean();
+
+    expect($dumped)->not->toContain($plaintext)
+        ->and(json_encode(get_object_vars($minted)))->not->toContain($plaintext);
+
+    foreach ((new ReflectionObject($minted))->getProperties() as $property) {
+        expect($property->getValue($minted))->not->toBe($plaintext);
+    }
+
+    // And the carrier still presents it where the test needs it.
+    expect($minted->bearerHeader())->toBe('Bearer '.$plaintext);
 });
 
 it('fails closed when session-user resolution throws', function (): void {
