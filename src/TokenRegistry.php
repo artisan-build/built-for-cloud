@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
+use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
 use Carbon\CarbonInterface;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Request;
@@ -429,58 +431,209 @@ final class TokenRegistry
         ]);
     }
 
+    /**
+     * Rotate by NAME — the CLI-compatibility verb, now with D6's corrected
+     * semantics (SEC-5): it resolves the ONE resolvable row of the name and
+     * delegates to {@see rotateById}, and it REFUSES whenever more than one
+     * resolvable row shares the name — never picking a winner, because with
+     * matching names one row can expire in an hour and another never, and
+     * nothing says which lifetime the replacement should inherit. It also
+     * refuses a name with NO resolvable row: rotation replaces; the mint
+     * verbs create.
+     */
     public function rotate(string $name, string $newHash, bool $emergency = false, ?AuditActor $actor = null): ApiToken
     {
-        return DB::transaction(function () use ($name, $newHash, $emergency, $actor): ApiToken {
-            $newToken = $this->store($name, $newHash);
-            $expiresAt = $emergency ? now() : now()->addHour();
+        /** @var list<string> $sourceIds */
+        $sourceIds = ApiToken::query()
+            ->where('name', $name)
+            ->resolvable()
+            ->pluck('id')
+            ->all();
 
-            /** @var list<string> $supersededIds */
-            $supersededIds = ApiToken::query()
-                ->where('name', $name)
-                ->whereKeyNot($newToken->getKey())
+        if (count($sourceIds) > 1) {
+            throw RotationRefused::ambiguousName($name, count($sourceIds));
+        }
+
+        if ($sourceIds === []) {
+            throw RotationRefused::unknownName($name);
+        }
+
+        // The name path cannot reach cutover completion: a stamped row
+        // with a live same-name successor is two resolvable rows (the
+        // ambiguity refusal above), and with the successor dead the
+        // completion does not qualify — so the returned token is always
+        // the row minted from $newHash, and callers may print the
+        // matching plaintext.
+        return $this->rotateById($sourceIds[0], $newHash, $emergency, $actor)->token;
+    }
+
+    /**
+     * Rotate by ID — the primary verb (PRD 1.7, D6). The replacement
+     * inherits the EXACT ability set, the subject binding, and the
+     * remaining expiry of the row it replaces (the D6 defect fix: the old
+     * implementation stored the replacement unscoped and non-expiring, and
+     * `hasAbility()` fails closed, so rotation BROKE every scoped caller).
+     *
+     * Two phases, matching the unified store's rotate verb:
+     *
+     * 1. ONE transaction mints the replacement, stamps `rotated_at` on the
+     *    old row — the provenance marker only this verb may assert,
+     *    emergency included; the claim-code exchange sweep spares marked
+     *    rows — and records `issued` + `rotated` (old → new lineage, D8).
+     *    A follow-up write failing rolls all of it back: no orphan, retry
+     *    works (failure path A).
+     * 2. A separate write sets the old row's grace expiry (one hour; NOW
+     *    under emergency), never extending an earlier one. If it fails,
+     *    the replacement stands and {@see RotationCutoverIncomplete} names
+     *    the still-live old row (failure path B).
+     *
+     * Re-invoking the verb on a `rotated_at`-stamped row NEVER mints again
+     * (the lineage never forks): with a lineage-verified live successor it
+     * performs the CUTOVER COMPLETION — the retirement write only, audited
+     * with its own reason — which is failure path B's recovery under the
+     * rotation's own authority, and the emergency kill of a graced old
+     * row. With no live successor it refuses. On the completion path the
+     * caller's $newHash is never stored, and the result says so
+     * ({@see LegacyRotationResult}) — a transport must not present its
+     * pre-generated plaintext.
+     */
+    public function rotateById(string $id, string $newHash, bool $emergency = false, ?AuditActor $actor = null): LegacyRotationResult
+    {
+        /** @var LegacyRotationResult $result */
+        $result = DB::transaction(function () use ($id, $newHash, $emergency, $actor): LegacyRotationResult {
+            /** @var ApiToken|null $source */
+            $source = ApiToken::query()
+                ->whereKey($id)
                 ->resolvable()
                 ->lockForUpdate()
-                ->pluck('id')
-                ->all();
+                ->first();
 
-            // `rotated_at` is the provenance marker — "superseded by rotation" —
-            // that only this verb may assert, emergency included. The claim-code
-            // exchange sweep spares marked rows; their expiry already bounds
-            // them.
-            if ($supersededIds !== []) {
+            if ($source === null) {
+                throw RotationRefused::sourceNotResolvable($id);
+            }
+
+            if ($source->rotated_at !== null) {
+                return $this->completeRotationCutover($source, $actor);
+            }
+
+            $newToken = $this->store(
+                $source->name,
+                $newHash,
+                $source->expires_at,
+                $source->abilities ?? [],
+            );
+
+            // The subject binding rides along (PRD 1.7 point 3); store()
+            // predates subjects, so it is stamped here, same transaction.
+            if ($source->subject_type !== null) {
                 ApiToken::query()
-                    ->whereIn('id', $supersededIds)
+                    ->whereKey($newToken->getKey())
                     ->update([
-                        'expires_at' => $expiresAt,
-                        'rotated_at' => now(),
+                        'subject_type' => $source->subject_type,
+                        'subject_ref' => $source->subject_ref,
                     ]);
             }
 
-            // The stream, same transaction: the replacement was issued, and
-            // each superseded row was rotated with its lineage (old -> new —
-            // what makes rotation auditable, D8).
+            ApiToken::query()
+                ->whereKey($source->getKey())
+                ->update(['rotated_at' => now()]);
+
             $reason = $emergency ? AuditReason::Emergency : AuditReason::Rotation;
 
             $this->recorder()->record(
                 event: LifecycleEventType::Issued,
                 credentialId: (string) $newToken->getKey(),
                 actor: $actor,
+                credentialExpiresAt: $source->expires_at,
                 reason: $reason,
             );
 
-            foreach ($supersededIds as $supersededId) {
-                $this->recorder()->record(
-                    event: LifecycleEventType::Rotated,
-                    credentialId: $supersededId,
-                    actor: $actor,
-                    reason: $reason,
-                    supersededByCredentialId: (string) $newToken->getKey(),
-                );
-            }
+            $this->recorder()->record(
+                event: LifecycleEventType::Rotated,
+                credentialId: (string) $source->getKey(),
+                actor: $actor,
+                reason: $reason,
+                supersededByCredentialId: (string) $newToken->getKey(),
+            );
 
-            return $newToken;
+            return new LegacyRotationResult($newToken, (string) $source->getKey());
         });
+
+        try {
+            $this->retireRotatedRow($id, $emergency);
+        } catch (Throwable $exception) {
+            throw RotationCutoverIncomplete::retirementFailed($id, (string) $result->token->getKey(), $exception);
+        }
+
+        return new LegacyRotationResult($result->token->refresh(), $result->supersededId, $result->completedCutover);
+    }
+
+    /**
+     * The completion half of {@see rotateById}: the stamped row's live
+     * successor is looked up through the audit lineage and must itself
+     * still resolve — only then does re-invoking the verb retire the old
+     * row (the phase-2 write that follows in rotateById), audited with
+     * its own reason and minting NOTHING. Not a revoke bypass: an
+     * unstamped row never reaches here, and a stamped row whose chain is
+     * dead refuses.
+     */
+    private function completeRotationCutover(ApiToken $source, ?AuditActor $actor): LegacyRotationResult
+    {
+        $id = (string) $source->getKey();
+        $successorId = $this->rotationSuccessorOf($id);
+
+        /** @var ApiToken|null $successor */
+        $successor = $successorId === null
+            ? null
+            : ApiToken::query()->whereKey($successorId)->resolvable()->first();
+
+        if ($successor === null) {
+            throw RotationRefused::alreadyRotated($id, $successorId);
+        }
+
+        $this->recorder()->record(
+            event: LifecycleEventType::Rotated,
+            credentialId: $id,
+            actor: $actor,
+            reason: AuditReason::CutoverCompletion,
+            supersededByCredentialId: (string) $successor->getKey(),
+        );
+
+        return new LegacyRotationResult($successor, $id, true);
+    }
+
+    /**
+     * The most recent successor the audit lineage records for a rotated
+     * row, so a refused re-rotation can point at the row to rotate
+     * instead.
+     */
+    private function rotationSuccessorOf(string $id): ?string
+    {
+        $successor = CredentialAuditEvent::query()
+            ->where('credential_id', $id)
+            ->where('event', LifecycleEventType::Rotated->value)
+            ->orderByDesc('occurred_at')
+            ->value('superseded_by_credential_id');
+
+        return is_string($successor) && $successor !== '' ? $successor : null;
+    }
+
+    /**
+     * The cutover (phase 2): the superseded row's expiry becomes the grace
+     * end, at which point it dies by its own expiry — no reaper. The
+     * guarded predicate is the never-extend rule: a row already expiring
+     * earlier keeps its earlier death.
+     */
+    private function retireRotatedRow(string $id, bool $emergency): void
+    {
+        $graceEnd = $emergency ? now() : now()->addHour();
+
+        ApiToken::query()
+            ->whereKey($id)
+            ->where(function ($query) use ($graceEnd): void {
+                $query->whereNull('expires_at')->orWhere('expires_at', '>', $graceEnd);
+            })
+            ->update(['expires_at' => $graceEnd]);
     }
 
     /**

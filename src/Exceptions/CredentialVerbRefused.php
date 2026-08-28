@@ -49,4 +49,35 @@ final class CredentialVerbRefused extends RuntimeException
     {
         return new self(sprintf('The "%s" credential kind is not mintable in this release.', $kind));
     }
+
+    /**
+     * D6 point 6's third row, refused EXPLICITLY rather than falling
+     * through to bearer semantics: hmac rotation is the pending→active
+     * cutover (rotate creates the new key pending while the old keeps
+     * signing; delivery installs it receiver-side; activation cuts over)
+     * and ships with the hmac kind itself (D9).
+     */
+    public static function kindNotRotatable(string $kind): self
+    {
+        return new self(sprintf(
+            'The "%s" credential kind does not rotate in this release: its rotation is the pending-then-activate '
+            .'cutover (rotate mints the new key pending, delivery installs it receiver-side, activation cuts signing '
+            .'over), which ships with the kind itself. Nothing fell through to bearer semantics.',
+            $kind,
+        ));
+    }
+
+    /**
+     * The fail-closed override answer (PRD 1.7, D6 point 4): overrides are
+     * opt-in via AuthorizesRotationOverrides, so "not opted in" and
+     * "opted in and denied" refuse identically — a caller learns only
+     * that THIS override is not authorized, never which gate said no.
+     */
+    public static function overrideNotAuthorized(): self
+    {
+        return new self(
+            'The declaration does not authorize this rotation override for this subject. '
+            .'Overrides are opt-in: a declaration that has not opted in denies every one.',
+        );
+    }
 }

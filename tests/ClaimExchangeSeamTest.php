@@ -224,3 +224,65 @@ it('sweeps the live same-subject durable on exchange (D1d) while sparing rows go
     expect($standing->refresh()->revoked_at)->not->toBeNull()
         ->and($governed->refresh()->revoked_at)->toBeNull();
 });
+
+it('spares a unified row in rotation grace from the exchange sweep — the same row without the marker dies', function (): void {
+    bindUnifiedStore();
+
+    // Two same-subject, same-scope rows: one superseded by rotation and
+    // living out its grace window (rotated_at set, grace expiry), one an
+    // unmarked collision. PR3 fixed exactly this on api_tokens; the
+    // unified sweep must honor the same provenance — killing a grace row
+    // would break the make-before-break window rotation exists to provide.
+    $graced = Credential::factory()->create([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'rotated@example.test',
+        'abilities' => [Scope::Consume->value],
+        'rotated_at' => now(),
+        'expires_at' => now()->addHour(),
+    ]);
+
+    $unmarked = Credential::factory()->create([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'rotated@example.test',
+        'abilities' => [Scope::Consume->value],
+    ]);
+
+    $code = auditIssueCode('rotated@example.test');
+
+    $this->postJson('/bfc/onboarding/exchange', ['token' => $code])->assertCreated();
+
+    expect($graced->refresh()->revoked_at)->toBeNull()
+        ->and($unmarked->refresh()->revoked_at)->not->toBeNull();
+});
+
+it('sweeps a stamped row whose expiry is not grace-bounded — the exemption requires the shape rotation actually leaves', function (): void {
+    bindUnifiedStore();
+
+    // An INCOMPLETE phase-B cutover: stamped, but retirement failed, so
+    // nothing bounds the row. The marker alone must not exempt it — spared,
+    // it would sit outside the sweep forever.
+    $unbounded = Credential::factory()->create([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'stamped@example.test',
+        'abilities' => [Scope::Consume->value],
+        'rotated_at' => now(),
+        'expires_at' => null,
+    ]);
+
+    // Stamped with an expiry BEYOND the grace horizon: also not the shape
+    // the rotate verb leaves — swept.
+    $overlong = Credential::factory()->create([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'stamped@example.test',
+        'abilities' => [Scope::Consume->value],
+        'rotated_at' => now(),
+        'expires_at' => now()->addDays(30),
+    ]);
+
+    $code = auditIssueCode('stamped@example.test');
+
+    $this->postJson('/bfc/onboarding/exchange', ['token' => $code])->assertCreated();
+
+    expect($unbounded->refresh()->revoked_at)->not->toBeNull()
+        ->and($overlong->refresh()->revoked_at)->not->toBeNull();
+});

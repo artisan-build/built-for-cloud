@@ -5,13 +5,16 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Actions\Concerns;
 
 use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesCredentialVerbs;
+use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresPresentationCadence;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresUnsupportedSummaryFields;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
+use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
 use ArtisanBuild\BuiltForCloud\Subject;
+use Carbon\CarbonInterface;
 use Illuminate\Http\Request;
 
 /**
@@ -49,6 +52,50 @@ trait ConsultsDeclaration
         }
 
         return $declaration->authorizeVerb($verb, $subject, $this->currentRequest());
+    }
+
+    /**
+     * The declared mint ceilings ({@see ConstrainsMintedCredentials}),
+     * applied to a RESULT shape — the abilities and expiry a credential
+     * row would carry. One implementation for every verb that creates a
+     * row: the mint verb checks the requested shape, and a rotation
+     * OVERRIDE checks the replacement's effective shape, because an
+     * override may never produce a credential a mint of that shape could
+     * not have been authorized for. Refusal, never substitution: the
+     * package does not quietly narrow abilities or stamp a shorter expiry
+     * — TTL defaults on durables are a DO-NOT-BUILD.
+     *
+     * @param  list<string>|null  $abilities
+     */
+    private function refuseWideningPastCeilings(Subject $subject, ?array $abilities, ?CarbonInterface $expiresAt): void
+    {
+        $declaration = $this->declaration();
+
+        if (! $declaration instanceof ConstrainsMintedCredentials) {
+            return;
+        }
+
+        $grantable = $declaration->grantableAbilities($subject);
+
+        if ($grantable !== null) {
+            foreach ($abilities ?? [] as $ability) {
+                if (! in_array($ability, $grantable, true)) {
+                    throw CredentialVerbRefused::abilityWidening($ability);
+                }
+            }
+        }
+
+        $maxLifetimeSeconds = $declaration->maxCredentialLifetimeSeconds($subject);
+
+        if ($maxLifetimeSeconds === null) {
+            return;
+        }
+
+        // No expiry at all outlives any ceiling; a later expiry widens past
+        // it. Both are the caller's to fix by choosing.
+        if ($expiresAt === null || $expiresAt->isAfter(now()->addSeconds($maxLifetimeSeconds))) {
+            throw CredentialVerbRefused::lifetimeWidening();
+        }
     }
 
     private function declaredCadence(): ?int

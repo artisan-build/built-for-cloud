@@ -6,10 +6,19 @@ namespace ArtisanBuild\BuiltForCloud\Commands;
 
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\CloudCommandRunner;
+use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
+use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
 use ArtisanBuild\BuiltForCloud\TokenGenerator;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Console\Command;
 
+/**
+ * The legacy `api_tokens` rotation. Name-based here for CLI compatibility,
+ * with D6's corrected semantics underneath: the registry refuses whenever
+ * more than one resolvable row shares the name (rotate by id instead —
+ * `POST /api/credentials/id/{id}/rotate`), and the replacement inherits the
+ * source's exact abilities, subject binding and remaining expiry.
+ */
 final class TokenRotateCommand extends Command
 {
     protected $signature = 'token:rotate {name} {--emergency} {--execute} {--hash=} {--environment=} {--local}';
@@ -22,20 +31,23 @@ final class TokenRotateCommand extends Command
         $emergency = (bool) $this->option('emergency');
 
         if ((bool) $this->option('execute')) {
-            $registry->rotate($name, (string) $this->option('hash'), $emergency, AuditActor::cliOperator());
-            $this->line($emergency ? "Token {$name} rotated with emergency expiry." : "Token {$name} rotated with one hour grace.");
+            if (! $this->rotateLocally($registry, $name, (string) $this->option('hash'), $emergency)) {
+                return self::FAILURE;
+            }
 
             return self::SUCCESS;
         }
 
         $generated = $generator->generate();
 
-        // `--local` (PRD 1.11): the EXISTING legacy rotation, run against
-        // the local database with zero Cloud dependency — transport
-        // plumbing only. The unified rotate verb is a later release.
+        // `--local` (PRD 1.11): the legacy rotation, run against the local
+        // database with zero Cloud dependency — transport plumbing only.
+        // The unified store's verb is `bfc:credential:rotate`.
         if ((bool) $this->option('local')) {
-            $registry->rotate($name, $generated->hash, $emergency, AuditActor::cliOperator());
-            $this->line($emergency ? "Token {$name} rotated with emergency expiry." : "Token {$name} rotated with one hour grace.");
+            if (! $this->rotateLocally($registry, $name, $generated->hash, $emergency)) {
+                return self::FAILURE;
+            }
+
             $this->line('Save this token - shown once: '.$generated->plaintext);
 
             return self::SUCCESS;
@@ -58,6 +70,27 @@ final class TokenRotateCommand extends Command
         $this->line('Save this token - shown once: '.$generated->plaintext);
 
         return self::SUCCESS;
+    }
+
+    /**
+     * The shared write half of the --execute and --local paths: a refusal
+     * (ambiguous name, nothing to rotate) or an incomplete cutover becomes
+     * a clean failure exit carrying the one shared error message — never a
+     * stack trace, never a secret.
+     */
+    private function rotateLocally(TokenRegistry $registry, string $name, string $hash, bool $emergency): bool
+    {
+        try {
+            $registry->rotate($name, $hash, $emergency, AuditActor::cliOperator());
+        } catch (RotationRefused|RotationCutoverIncomplete $failure) {
+            $this->error($failure->getMessage());
+
+            return false;
+        }
+
+        $this->line($emergency ? "Token {$name} rotated with emergency expiry." : "Token {$name} rotated with one hour grace.");
+
+        return true;
     }
 
     private function stringOption(string $key): ?string

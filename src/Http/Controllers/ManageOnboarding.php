@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
+use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditReason;
@@ -482,9 +483,16 @@ final class ManageOnboarding
      * The unified-store half of the D1d sweep: same exclusions, expressed
      * on `credentials` columns. The tenancy key here is `subject_ref` (the
      * unified minter sets it from the claim's name), the scope is an
-     * ability, and there is no rotation-grace exclusion yet because the
-     * unified rotate verb — the only writer of grace rows — ships in a
-     * later release.
+     * ability, and — exactly as on `api_tokens` — a row superseded by
+     * rotation survives, because the sweep killing it would break the
+     * make-before-break window rotation exists to provide.
+     *
+     * The exemption requires the SHAPE the rotate verb actually leaves,
+     * not the marker alone ({@see inRotationGrace}): a bare `rotated_at`
+     * with no bounded expiry describes an INCOMPLETE cutover (failure
+     * path B) — a row nothing bounds — and sparing it would exempt it
+     * from the sweep forever. Such a row is swept like any ordinary
+     * collision.
      *
      * @return list<string> the ids of the durables actually revoked
      */
@@ -518,12 +526,33 @@ final class ManageOnboarding
                 continue;
             }
 
+            if ($this->inRotationGrace($credential)) {
+                continue;
+            }
+
             $credential->forceFill(['revoked_at' => now()])->save();
 
             $revoked[] = (string) $credential->getKey();
         }
 
         return $revoked;
+    }
+
+    /**
+     * Whether a row carries the honest rotation-grace shape: the
+     * `rotated_at` stamp AND a bounded expiry consistent with the grace
+     * horizon (non-null, no later than the stamp plus the maximum grace
+     * window). Only the rotate verb leaves this combination — the stamp
+     * arrives with (or before) an expiry the verb bounds — so the sweep
+     * can trust the shape where it must not trust the marker alone.
+     */
+    private function inRotationGrace(Credential $credential): bool
+    {
+        return $credential->rotated_at !== null
+            && $credential->expires_at !== null
+            && ! $credential->expires_at->isAfter(
+                $credential->rotated_at->copy()->addSeconds(RotateCredential::GRACE_SECONDS),
+            );
     }
 
     /**

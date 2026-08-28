@@ -16,6 +16,23 @@ enum AuditReason: string
     case HolderRequest = 'holder_request';
     case Offboarding = 'offboarding';
     case Rotation = 'rotation';
+
+    /**
+     * A rotation that changed abilities or lifetime under the explicit
+     * override flag (PRD 1.7): its own reason code, with the delta in the
+     * event's note, so a routine rotation and a privilege change are never
+     * the same audit row.
+     */
+    case Override = 'override';
+
+    /**
+     * A re-invoked rotation that RETIRED a stamped old row whose live
+     * successor already stood (PRD 1.7 rework 3): the narrowly-scoped
+     * completion of a failed phase-B cutover (or the emergency kill of a
+     * graced old row), performed under the rotate verb's own authority.
+     * Nothing is minted on this path.
+     */
+    case CutoverCompletion = 'cutover_completion';
     case Superseded = 'superseded';
     case Emergency = 'emergency';
     case Expired = 'expired';

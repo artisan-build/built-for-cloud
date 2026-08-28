@@ -55,4 +55,40 @@ final class InvalidCredentialInput extends InvalidArgumentException
     {
         return new self(sprintf('An ability name is at most %d characters.', $max));
     }
+
+    public static function nonBooleanFlag(string $flag): self
+    {
+        return new self(sprintf('The "%s" parameter must be a boolean.', $flag));
+    }
+
+    /**
+     * Predictability beats cleverness (PRD 1.7): default rotation preserves
+     * abilities and expiry EXACTLY, and any requested change — widening,
+     * narrowing, or a different lifetime — is refused without the explicit
+     * override flag. The package never decides that a narrowing was
+     * probably fine.
+     */
+    public static function rotationChangeRequiresOverride(): self
+    {
+        return new self(
+            'Rotation preserves the exact abilities and remaining expiry. To change either on the replacement, '
+            .'pass the explicit override flag; without it any change — widening or narrowing — is refused.',
+        );
+    }
+
+    public static function rotationOverrideWithoutChanges(): self
+    {
+        return new self(
+            'The override flag was passed with nothing to override: supply the replacement abilities and/or expiry '
+            .'the override changes.',
+        );
+    }
+
+    public static function cutoverCompletionTakesNoOverrides(): self
+    {
+        return new self(
+            'This credential was already superseded: re-invoking rotate completes the cutover by retiring it — '
+            .'nothing is minted, so override options do not apply here.',
+        );
+    }
 }
