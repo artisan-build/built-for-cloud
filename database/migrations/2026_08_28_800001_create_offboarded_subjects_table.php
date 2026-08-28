@@ -14,14 +14,17 @@ return new class extends Migration
             $table->uuid('id')->primary();
             $table->string('subject_type');
             $table->string('subject_ref');
-            // Null on the subject's own containment row; set on the rows
-            // naming each bound user the offboard deactivated — the guard
-            // rejects those users on every request thereafter.
-            $table->string('user_id')->nullable();
+            // Empty string on the subject's own containment row; set on
+            // the rows naming each bound user the offboard deactivated —
+            // the guard rejects those users on every request thereafter.
+            // NOT NULL deliberately: NULLs never collide under a unique
+            // index, and the subject row's uniqueness is what makes two
+            // racing first offboards idempotent instead of double-writing.
+            $table->string('user_id')->default('');
             $table->timestamp('offboarded_at');
             $table->timestamps();
 
-            $table->index(['subject_type', 'subject_ref']);
+            $table->unique(['subject_type', 'subject_ref', 'user_id']);
             $table->index('user_id');
         });
     }

@@ -102,18 +102,20 @@ final class OffboardSubject
             throw CredentialVerbRefused::byMatrix(CredentialVerb::Offboard);
         }
 
-        if (! $options->integrationEventComplete()) {
-            /** @var OffboardResult */
-            return DB::transaction(fn (): OffboardResult => $this->contain($subject, $actor));
-        }
+        // BOTH paths ride the bounded contention rescue: each retry
+        // re-decides in a fresh transaction against whatever a concurrent
+        // writer committed — a gate-row race on the integration path, or
+        // the registry's unique subject key on a concurrent first
+        // offboard (rework Fix 6; the retry re-reads the winner's row as
+        // already-contained). No attempt leaves partial state.
+        $decide = $options->integrationEventComplete()
+            ? fn (): OffboardResult => $this->decideIntegrationEvent($options, $subject, $actor)
+            : fn (): OffboardResult => $this->contain($subject, $actor);
 
-        // The same bounded contention rescue as the invite verb: each
-        // retry re-decides in a fresh transaction against whatever a
-        // concurrent delivery committed; no attempt leaves partial state.
         for ($attempt = 1; $attempt <= IssueInvitation::GATE_ATTEMPTS; $attempt++) {
             try {
                 /** @var OffboardResult */
-                return DB::transaction(fn (): OffboardResult => $this->decideIntegrationEvent($options, $subject, $actor));
+                return DB::transaction($decide);
             } catch (UniqueConstraintViolationException) {
                 // Loop; the next attempt re-decides from scratch.
             }
@@ -240,7 +242,7 @@ final class OffboardSubject
     {
         $alreadyContained = OffboardedSubject::query()
             ->forSubject($subject)
-            ->whereNull('user_id')
+            ->where('user_id', OffboardedSubject::SUBJECT_ROW)
             ->lockForUpdate()
             ->exists();
 
@@ -597,11 +599,16 @@ final class OffboardSubject
     private function writeRegistry(Subject $subject, array $userIds, bool $alreadyContained): int
     {
         if (! $alreadyContained) {
+            // The (subject_type, subject_ref, user_id) unique key is what
+            // makes a concurrent first offboard safe (rework Fix 6): the
+            // loser's insert violates, the whole attempt rolls back, and
+            // the bounded retry re-reads the winner's committed row as
+            // alreadyContained — the idempotent no-op.
             OffboardedSubject::query()->create([
                 'id' => (string) Str::uuid(),
                 'subject_type' => $subject->type->value,
                 'subject_ref' => $subject->ref,
-                'user_id' => null,
+                'user_id' => OffboardedSubject::SUBJECT_ROW,
                 'offboarded_at' => now(),
             ]);
         }

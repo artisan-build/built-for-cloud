@@ -29,6 +29,7 @@ use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -267,7 +268,7 @@ it('is idempotent: a second offboard is a no-op with the same response shape and
     // No duplicate deaths, no duplicate subject event; the sensitive-read
     // / denial channels are untouched by a clean repeat too.
     expect(CredentialAuditEvent::query()->count())->toBe($auditAfterFirst)
-        ->and(OffboardedSubject::query()->whereNull('user_id')->count())->toBe(1);
+        ->and(OffboardedSubject::query()->where('user_id', OffboardedSubject::SUBJECT_ROW)->count())->toBe(1);
 
     // The action reports the repeat honestly: applied=false, zero counts.
     $result = app(OffboardSubject::class)(
@@ -343,6 +344,70 @@ it('rides the shared version gate: a replayed or older offboard event is transac
         'subject_ref' => 'sponsor-login',
         'integration_namespace' => 'github-sponsors',
     ])->assertStatus(422);
+});
+
+it('makes a concurrent first offboard idempotent via the registry\'s unique subject key (Fix 6)', function (): void {
+    // The schema constraint itself: two subject rows for the same
+    // (subject_type, subject_ref) cannot both exist.
+    DB::table('offboarded_subjects')->insert([
+        'id' => (string) Str::uuid(),
+        'subject_type' => 'external_consumer',
+        'subject_ref' => 'race-proof',
+        'user_id' => OffboardedSubject::SUBJECT_ROW,
+        'offboarded_at' => now(),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    expect(fn (): bool => DB::table('offboarded_subjects')->insert([
+        'id' => (string) Str::uuid(),
+        'subject_type' => 'external_consumer',
+        'subject_ref' => 'race-proof',
+        'user_id' => OffboardedSubject::SUBJECT_ROW,
+        'offboarded_at' => now(),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]))->toThrow(UniqueConstraintViolationException::class);
+
+    // The race, insert-between: a competing containment row lands AFTER
+    // this offboard's already-contained read and BEFORE its insert. The
+    // insert violates the unique key, the attempt rolls back whole, and
+    // the bounded retry re-decides — never a 500, never a double write.
+    $credential = $this->mintCredential([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'acme',
+    ]);
+
+    $injected = false;
+
+    DB::listen(function ($query) use (&$injected): void {
+        if ($injected
+            || ! str_contains($query->sql, 'offboarded_subjects')
+            || ! str_starts_with(strtolower(ltrim($query->sql)), 'select')) {
+            return;
+        }
+
+        $injected = true;
+
+        DB::table('offboarded_subjects')->insert([
+            'id' => (string) Str::uuid(),
+            'subject_type' => 'external_consumer',
+            'subject_ref' => 'acme',
+            'user_id' => OffboardedSubject::SUBJECT_ROW,
+            'offboarded_at' => now(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    });
+
+    offboardViaHttp(['subject_type' => 'external_consumer', 'subject_ref' => 'acme'])
+        ->assertOk()
+        ->assertExactJson(['offboarded' => true]);
+
+    expect($injected)->toBeTrue()
+        ->and(OffboardedSubject::query()->forSubject(new Subject(SubjectType::ExternalConsumer, 'acme'))
+            ->where('user_id', OffboardedSubject::SUBJECT_ROW)->count())->toBe(1)
+        ->and($credential->credential->refresh()->revoked_at)->not->toBeNull();
 });
 
 it('consumes a pending code linked to an already-revoked durable (Fix 7)', function (): void {
