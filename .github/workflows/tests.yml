@@ -63,7 +63,7 @@ jobs:
       # When this lane goes red the first question is always "what did it
       # actually install" — put the answer in the log.
       - name: Show Resolved Versions
-        run: composer show laravel/framework | head -3
+        run: composer show laravel/framework | grep '^versions' || composer show laravel/framework
 
       # Tests only: phpstan and pint at the floor produce version-dependent
       # noise, and both are already covered on the fresh-install lane above.
