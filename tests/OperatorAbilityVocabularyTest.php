@@ -10,7 +10,10 @@ use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\MintedTestCredential;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
+use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\RateLimiter;
 
 uses(RefreshDatabase::class, WithCredentials::class);
 
@@ -207,7 +210,7 @@ it('audits token-auth failures on the operator gate without echoing the presente
         ->and((string) $failures[0]->note)->not->toContain($garbage);
 });
 
-it('rate-limits operator writes per credential with a global ceiling', function (): void {
+it('rate-limits operator writes per credential AND per IP independently (Fix 5)', function (): void {
     $minter = operatorCredential([OperatorAbility::CredentialMint->value]);
 
     for ($i = 1; $i <= 60; $i++) {
@@ -217,22 +220,95 @@ it('rate-limits operator writes per credential with a global ceiling', function 
         ], ['Authorization' => $minter->bearerHeader()])->assertCreated();
     }
 
-    // The 61st write from the SAME credential + IP is throttled…
+    // The 61st write from the same credential is throttled — from the
+    // SAME IP…
     $this->postJson('/bfc/credentials', [
         'subject_type' => 'external_consumer',
         'subject_ref' => 'burst-61',
     ], ['Authorization' => $minter->bearerHeader()])->assertStatus(429);
 
-    // …while a different operator credential still writes: the key is per
-    // operator credential + IP, bounded above by the global ceiling.
+    // …and from a DIFFERENT IP: a stolen credential is bounded across
+    // every address it is replayed from (the per-credential bucket).
+    $this->withServerVariables(['REMOTE_ADDR' => '10.1.1.1'])
+        ->postJson('/bfc/credentials', [
+            'subject_type' => 'external_consumer',
+            'subject_ref' => 'burst-ip-hop',
+        ], ['Authorization' => $minter->bearerHeader()])->assertStatus(429);
+
+    // A different credential from the EXHAUSTED IP is throttled too (the
+    // per-IP bucket — a fresh bearer string buys no fresh budget)…
     $other = operatorCredential([OperatorAbility::CredentialMint->value]);
 
-    $this->postJson('/bfc/credentials', [
-        'subject_type' => 'external_consumer',
-        'subject_ref' => 'other-cred',
-    ], ['Authorization' => $other->bearerHeader()])->assertCreated();
+    $this->withServerVariables(['REMOTE_ADDR' => '127.0.0.1'])
+        ->postJson('/bfc/credentials', [
+            'subject_type' => 'external_consumer',
+            'subject_ref' => 'other-cred-same-ip',
+        ], ['Authorization' => $other->bearerHeader()])->assertStatus(429);
+
+    // …while the same different credential from a fresh IP writes: the
+    // two bounds are independent, not one compound bucket.
+    $this->withServerVariables(['REMOTE_ADDR' => '10.2.2.2'])
+        ->postJson('/bfc/credentials', [
+            'subject_type' => 'external_consumer',
+            'subject_ref' => 'other-cred-fresh-ip',
+        ], ['Authorization' => $other->bearerHeader()])->assertCreated();
 
     // Reads are deliberately not write-throttled.
     $reader = operatorCredential([OperatorAbility::CredentialRead->value]);
     $this->getJson('/bfc/credentials', ['Authorization' => $reader->bearerHeader()])->assertOk();
+});
+
+it('bounds invalid-bearer rotation from one IP by the per-IP bucket (Fix 5)', function (): void {
+    // Sixty distinct garbage bearers from one address: each gets its own
+    // per-credential bucket, but they all share the ONE per-IP bucket…
+    for ($i = 1; $i <= 60; $i++) {
+        $this->withServerVariables(['REMOTE_ADDR' => '10.3.3.3'])
+            ->postJson('/bfc/credentials', [
+                'subject_type' => 'external_consumer',
+                'subject_ref' => 'x',
+            ], ['Authorization' => 'Bearer invalid-'.$i.'-'.bin2hex(random_bytes(8))])
+            ->assertUnauthorized();
+    }
+
+    // …so the 61st rotated bearer is throttled before it even reaches
+    // the auth gate.
+    $this->withServerVariables(['REMOTE_ADDR' => '10.3.3.3'])
+        ->postJson('/bfc/credentials', [
+            'subject_type' => 'external_consumer',
+            'subject_ref' => 'x',
+        ], ['Authorization' => 'Bearer invalid-61-'.bin2hex(random_bytes(8))])
+        ->assertStatus(429);
+});
+
+it('registers the three independent operator-write limits, global ceiling included', function (): void {
+    // Unit-level, so deleting any bound — the 600/min global ceiling in
+    // particular — turns this red without 600 HTTP requests.
+    $limiter = RateLimiter::limiter('bfc-operator-write');
+
+    expect($limiter)->not->toBeNull();
+
+    $request = Request::create('/bfc/credentials', 'POST', server: [
+        'REMOTE_ADDR' => '9.9.9.9',
+        'HTTP_AUTHORIZATION' => 'Bearer probe-secret',
+    ]);
+
+    /** @var list<Limit> $limits */
+    $limits = $limiter($request);
+
+    expect($limits)->toHaveCount(3);
+
+    $byKey = collect($limits)->keyBy(fn (Limit $limit): string => (string) $limit->key);
+
+    // Per credential: keyed on the presented bearer's sha256, 60/min.
+    $credentialKey = 'bfc-op-cred|'.hash('sha256', 'probe-secret');
+    expect($byKey->has($credentialKey))->toBeTrue()
+        ->and($byKey->get($credentialKey)->maxAttempts)->toBe(60);
+
+    // Per IP: 60/min.
+    expect($byKey->has('bfc-op-ip|9.9.9.9'))->toBeTrue()
+        ->and($byKey->get('bfc-op-ip|9.9.9.9')->maxAttempts)->toBe(60);
+
+    // The global ceiling: one shared bucket, 600/min.
+    expect($byKey->has('bfc-operator-write-global'))->toBeTrue()
+        ->and($byKey->get('bfc-operator-write-global')->maxAttempts)->toBe(600);
 });

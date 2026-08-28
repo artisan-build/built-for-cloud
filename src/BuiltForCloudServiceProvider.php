@@ -297,19 +297,25 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
 
         RateLimiter::for('bfc-claim', fn (Request $request): Limit => Limit::perMinute(10)->by($request->ip() ?? 'unknown'));
 
-        // GATE-3.7: write and expensive operator verbs are limited per
-        // operator credential + IP, under a global ceiling. The
-        // per-credential key is the sha256 of the presented bearer (the
-        // limiter runs before the gate resolves a row id, and the digest
-        // identifies the credential without persisting its plaintext —
-        // the same at-rest form the stores use); missing bearers share
-        // one bucket per IP, so failed-auth hammering is bounded too.
+        // GATE-3.7 (rework Fix 5): write and expensive operator verbs
+        // carry THREE independent bounds —
+        //   1. per CREDENTIAL (sha256 of the presented bearer — the
+        //      limiter runs before the gate resolves a row id, and the
+        //      digest identifies the credential without persisting its
+        //      plaintext), so a stolen credential is bounded ACROSS IPs;
+        //   2. per IP, so rotating invalid bearer strings from one
+        //      address buys no fresh budget per string; and
+        //   3. the global ceiling.
+        // A single compound credential|IP bucket would defeat both: a new
+        // IP would refresh a stolen credential's budget, and a new bearer
+        // string would refresh an attacker IP's.
         RateLimiter::for('bfc-operator-write', function (Request $request): array {
             $bearer = $request->bearerToken();
             $credentialKey = $bearer === null || $bearer === '' ? 'anonymous' : hash('sha256', $bearer);
 
             return [
-                Limit::perMinute(60)->by($credentialKey.'|'.($request->ip() ?? 'unknown')),
+                Limit::perMinute(60)->by('bfc-op-cred|'.$credentialKey),
+                Limit::perMinute(60)->by('bfc-op-ip|'.($request->ip() ?? 'unknown')),
                 Limit::perMinute(600)->by('bfc-operator-write-global'),
             ];
         });
