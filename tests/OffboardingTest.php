@@ -702,6 +702,88 @@ it('binds the version gate to the offboard target: a decoy external subject cann
         ->and((int) IntegrationEntitlement::query()->where('external_subject', 'victim')->value('entitlement_version'))->toBe(8);
 });
 
+it('refuses a decoy NAMESPACE for a subject gate-bound elsewhere (r3 Fix 2)', function (): void {
+    $admin = ['Authorization' => 'Bearer '.auditAdminToken('ns-bind-admin')];
+
+    // The victim's gate stands at version 7 under its REAL namespace.
+    $this->postJson('/bfc/invitations', [
+        'ttl_seconds' => 3600,
+        'integration_namespace' => 'ns',
+        'event_id' => 'evt-invite-7',
+        'entitlement_version' => 7,
+        'external_subject' => 'victim',
+    ], $admin)->assertStatus(202);
+
+    $victim = $this->mintCredential([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'victim',
+    ]);
+
+    // The remaining cut the re-review named: a DECOY NAMESPACE with the
+    // victim's external_subject at version 1 — its own gate is empty, but
+    // the pair binding refuses it: nothing contained, recorded, or
+    // advanced.
+    offboardViaHttp([
+        'integration_namespace' => 'decoy-ns',
+        'event_id' => 'evt-dns-1',
+        'entitlement_version' => 1,
+        'external_subject' => 'victim',
+    ])->assertStatus(422);
+
+    expect($victim->credential->refresh()->revoked_at)->toBeNull()
+        ->and(OffboardedSubject::query()->count())->toBe(0)
+        ->and(IntegrationEntitlement::query()->where('integration_namespace', 'decoy-ns')->exists())->toBeFalse()
+        ->and(IntegrationEvent::query()->where('event_id', 'evt-dns-1')->exists())->toBeFalse();
+
+    // Binding, not ordering: even a HIGH version under the unbound
+    // namespace refuses.
+    offboardViaHttp([
+        'integration_namespace' => 'decoy-ns',
+        'event_id' => 'evt-dns-2',
+        'entitlement_version' => 99,
+        'external_subject' => 'victim',
+    ])->assertStatus(422);
+
+    expect($victim->credential->refresh()->revoked_at)->toBeNull();
+
+    // The real namespace still gates exactly as before: old ignored…
+    offboardViaHttp([
+        'integration_namespace' => 'ns',
+        'event_id' => 'evt-real-6',
+        'entitlement_version' => 6,
+        'external_subject' => 'victim',
+    ])->assertStatus(202);
+
+    expect($victim->credential->refresh()->revoked_at)->toBeNull();
+
+    // …newer applies.
+    offboardViaHttp([
+        'integration_namespace' => 'ns',
+        'event_id' => 'evt-real-8',
+        'entitlement_version' => 8,
+        'external_subject' => 'victim',
+    ])->assertStatus(202);
+
+    expect($victim->credential->refresh()->revoked_at)->not->toBeNull()
+        ->and(OffboardedSubject::subjectIsOffboarded(new Subject(SubjectType::ExternalConsumer, 'victim')))->toBeTrue();
+
+    // A subject with no history ANYWHERE can be gate-established by any
+    // authorized namespace — the refusal is a binding rule, not a lockout.
+    $fresh = $this->mintCredential([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'fresh-subject',
+    ]);
+
+    offboardViaHttp([
+        'integration_namespace' => 'brand-new-ns',
+        'event_id' => 'evt-fresh-1',
+        'entitlement_version' => 1,
+        'external_subject' => 'fresh-subject',
+    ])->assertStatus(202);
+
+    expect($fresh->credential->refresh()->revoked_at)->not->toBeNull();
+});
+
 it('runs the identical action on the CLI transport, --local required', function (): void {
     $credential = $this->mintCredential([
         'subject_type' => SubjectType::ExternalConsumer,

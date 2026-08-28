@@ -1022,7 +1022,14 @@ server-side from the gated identity — `subject_type: external_consumer`,
 whose version the gate checks is exactly the identity that gets contained. `subject_type` /
 `subject_ref` may be omitted on this path; if supplied they must equal the derivation, and a
 mismatch is refused (`422`) — an event can never pass a decoy identity's gate while naming a
-different victim. On the direct path (no event fields) the pair is required.
+different victim. And the gate is bound by **namespace** too: every gate effect is keyed on
+the (`integration_namespace`, `external_subject`) pair, so a namespace with NO entitlement
+history for an external subject that already has history under another namespace is refused
+(`422`, nothing recorded, nothing advanced) — a decoy namespace cannot ride its own empty
+gate to contain a subject whose real gate stands at a higher version. A namespace with its
+own established history is ordered by that history as before; a subject with no history
+anywhere can be gate-established by any authorized namespace. On the direct path (no event
+fields) the subject pair is required.
 
 **The two response shapes, keyed on the REQUEST (never on state):**
 

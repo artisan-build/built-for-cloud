@@ -196,6 +196,29 @@ final class OffboardSubject
             ->lockForUpdate()
             ->first();
 
+        // The gate and the TARGET are one identity (rework 3 Fix 2). The
+        // contained subject is the bare external_subject (PR8's invite
+        // binding), but every gate effect is keyed on the (namespace,
+        // external_subject) PAIR — so a namespace with NO entitlement
+        // history for an external subject that already has history under
+        // another namespace is REFUSED: a decoy namespace cannot ride its
+        // own empty gate to contain a victim whose real gate stands at a
+        // higher version. A namespace that HAS its own history is ordered
+        // by that history exactly as before (several namespaces may
+        // legitimately share an external-subject string; each is bound by
+        // its own gate once established). Nothing is recorded or advanced
+        // on the refusal.
+        if ($entitlement === null) {
+            $boundElsewhere = IntegrationEntitlement::query()
+                ->where('external_subject', $options->externalSubject)
+                ->where('integration_namespace', '!=', $options->integrationNamespace)
+                ->exists();
+
+            if ($boundElsewhere) {
+                throw InvalidCredentialInput::integrationNamespaceNotBound();
+            }
+        }
+
         if ($entitlement !== null && $options->entitlementVersion <= $entitlement->entitlement_version) {
             $this->recordEvent($options, applied: false);
 

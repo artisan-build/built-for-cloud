@@ -33,6 +33,15 @@ final class InvalidCredentialInput extends InvalidArgumentException
         return new self('A subject ref is required.');
     }
 
+    public static function integrationNamespaceNotBound(): self
+    {
+        return new self(
+            'This external subject already has version-gate history under a different integration namespace; '
+            .'a namespace with no history for it cannot advance its gate or offboard it. '
+            .'Send the event under the bound namespace, or use the direct offboard path.',
+        );
+    }
+
     public static function integrationSubjectMismatch(): self
     {
         return new self(
