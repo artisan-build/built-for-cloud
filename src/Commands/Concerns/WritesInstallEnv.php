@@ -10,6 +10,37 @@ use RuntimeException;
 
 trait WritesInstallEnv
 {
+    /**
+     * The install scaffold's mint step (PRD 1.20): an app's install
+     * command calls this to mint the operator credential a fresh install
+     * needs instead of a `FALLBACK_TOKEN`. It runs
+     * `bfc:install:operator-credential` in-process (the --local mint
+     * action; zero Cloud dependency), with the one-time TTY reveal
+     * flowing through the calling command's own output.
+     *
+     * IDEMPOTENT: the underlying command skips with a notice when a live
+     * operator credential already exists, so re-running an installer
+     * never silently mints a second credential.
+     */
+    final public function mintInstallOperatorCredential(?string $ref = null, ?string $name = null): int
+    {
+        if (! $this instanceof Command) {
+            throw new RuntimeException('WritesInstallEnv::mintInstallOperatorCredential must be used from an Illuminate console command.');
+        }
+
+        $options = [];
+
+        if ($ref !== null) {
+            $options['--ref'] = $ref;
+        }
+
+        if ($name !== null) {
+            $options['--name'] = $name;
+        }
+
+        return $this->call('bfc:install:operator-credential', $options);
+    }
+
     final public function setEnvironmentValue(string $contents, string $key, string $value): string
     {
         $line = $key.'='.$this->formatEnvironmentValue($value);

@@ -12,7 +12,7 @@ use Illuminate\Console\Command;
 
 final class TokenRotateCommand extends Command
 {
-    protected $signature = 'token:rotate {name} {--emergency} {--execute} {--hash=} {--environment=}';
+    protected $signature = 'token:rotate {name} {--emergency} {--execute} {--hash=} {--environment=} {--local}';
 
     protected $description = 'Rotate a Built for Cloud API token';
 
@@ -29,6 +29,17 @@ final class TokenRotateCommand extends Command
         }
 
         $generated = $generator->generate();
+
+        // `--local` (PRD 1.11): the EXISTING legacy rotation, run against
+        // the local database with zero Cloud dependency — transport
+        // plumbing only. The unified rotate verb is a later release.
+        if ((bool) $this->option('local')) {
+            $registry->rotate($name, $generated->hash, $emergency, AuditActor::cliOperator());
+            $this->line($emergency ? "Token {$name} rotated with emergency expiry." : "Token {$name} rotated with one hour grace.");
+            $this->line('Save this token - shown once: '.$generated->plaintext);
+
+            return self::SUCCESS;
+        }
         $environment = $runner->resolveEnvironment($this->stringOption('environment'));
         $command = 'token:rotate '.$this->quote($name).' --execute --hash='.$generated->hash;
 

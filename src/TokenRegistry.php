@@ -123,9 +123,16 @@ final class TokenRegistry
             // two transactions deadlock against each other. Holding the lock
             // also freezes the linkage: no re-claim can relink the code
             // while this burn is in flight.
+            // Only codes RECORDED into this store (null = the api_tokens
+            // backfill): a linkage into the unified store is burned by the
+            // unified recorder, never here.
             /** @var list<OnboardingToken> $pendingCodes */
             $pendingCodes = OnboardingToken::query()
                 ->where('durable_token_id', $row->getKey())
+                ->where(function ($query): void {
+                    $query->whereNull('durable_store')
+                        ->orWhere('durable_store', DurableStore::ApiTokens->value);
+                })
                 ->whereNull('consumed_at')
                 ->lockForUpdate()
                 ->get(['id', 'email'])
@@ -205,6 +212,10 @@ final class TokenRegistry
         /** @var OnboardingToken|null */
         return OnboardingToken::query()
             ->where('durable_token_id', $row->getKey())
+            ->where(function ($query): void {
+                $query->whereNull('durable_store')
+                    ->orWhere('durable_store', DurableStore::ApiTokens->value);
+            })
             ->whereNotNull('consumed_at')
             ->orderByDesc('consumed_at')
             ->first(['id', 'email']);

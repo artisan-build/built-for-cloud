@@ -7,11 +7,17 @@ namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditReason;
+use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\BurnMode;
 use ArtisanBuild\BuiltForCloud\ClaimError;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresBurnMode;
+use ArtisanBuild\BuiltForCloud\Contracts\DeclaresDurableStore;
 use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
+use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
+use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintedSecret;
@@ -45,10 +51,25 @@ final class ManageOnboarding
 
     public function __construct(
         private readonly TokenRegistry $tokens,
-        private readonly DurableCredentialMinter $minter,
-        private readonly CredentialDeclaration $declaration,
         private readonly LifecycleEventRecorder $recorder,
     ) {}
+
+    /**
+     * Resolved per call, never via the constructor: the router caches
+     * controller instances per route, so an injected declaration (or the
+     * minter derived from it) would outlive a rebinding — a long-lived
+     * worker would keep exchanging into the store an app's declaration no
+     * longer targets. ManageTokens and the guard resolve the same way.
+     */
+    private function declaration(): CredentialDeclaration
+    {
+        return app(CredentialDeclaration::class);
+    }
+
+    private function minter(): DurableCredentialMinter
+    {
+        return app(DurableCredentialMinter::class);
+    }
 
     public function issue(Request $request): JsonResponse
     {
@@ -182,22 +203,43 @@ final class ManageOnboarding
             // code ever exists. Exchange performs BOTH revocations (D1d): by
             // the code's own durable link, and by name+scope for the live
             // durable that issue no longer revokes.
+            //
+            // Every revocation acts on the store the durable was RECORDED
+            // into, never on whatever the declaration currently targets: a
+            // declaration switching stores between exchanges must not
+            // strand a still-live durable in the old one.
             $revokedIds = [];
 
             if ($code->durable_token_id !== null) {
-                $revokedIds[] = $this->revokeDurableById($code->durable_token_id);
+                $revokedIds[] = $this->revokeDurableById($code->durable_token_id, $code->durableStore());
             }
 
             $name = $code->email ?? 'claim-'.$code->id;
 
-            $revokedIds = array_values(array_filter([
-                ...$revokedIds,
-                ...$this->revokeActiveDurable($name, $code->scope, $code->id),
-            ]));
+            // The sweep's store set — the stated choice (Fix 3): the
+            // CURRENT target store plus the recorded store of this code's
+            // own linked durable. That covers the store transition exactly
+            // (the pre-switch durable's store is recorded on the code)
+            // without extending the documented name-collision domain into
+            // a store this code never touched.
+            $sweepStores = [$this->durableStore()];
 
-            $minted = $this->minter->mint($name, $code->scope);
+            if ($code->durable_token_id !== null && ! in_array($code->durableStore(), $sweepStores, true)) {
+                $sweepStores[] = $code->durableStore();
+            }
 
-            $code->forceFill(['durable_token_id' => $minted->token->getKey()])->save();
+            foreach ($sweepStores as $sweepStore) {
+                $revokedIds = [...$revokedIds, ...$this->revokeActiveDurable($name, $code->scope, $code->id, $sweepStore)];
+            }
+
+            $revokedIds = array_values(array_filter($revokedIds));
+
+            $minted = $this->minter()->mint($name, $code->scope);
+
+            $code->forceFill([
+                'durable_token_id' => $minted->token->getKey(),
+                'durable_store' => $this->durableStore(),
+            ])->save();
 
             // The stream, same transaction (SEC-V3-09): the exchange itself,
             // then each revocation it performed with its supersession
@@ -240,6 +282,10 @@ final class ManageOnboarding
             return ClaimError::InvalidCode->respond('The request presented no credential to verify.');
         }
 
+        if ($this->durableStore() === DurableStore::Credentials) {
+            return $this->verifyUnifiedDurable($request, $bearer);
+        }
+
         try {
             // Resolution is the burn point for `first_use` providers: the
             // atomic first-use transition inside resolveModel() consumes the
@@ -263,6 +309,37 @@ final class ManageOnboarding
         ]);
     }
 
+    /**
+     * The verify surface for a declaration whose durables live in the
+     * unified store: the same wire contract, resolved against
+     * `credentials`. Usage recording is the burn point here exactly as
+     * `resolveModel()` is for `api_tokens` — a first use consumes the
+     * claim code in the same transaction, and a row that died between the
+     * resolving read and the usage write does not verify.
+     */
+    private function verifyUnifiedDurable(Request $request, string $bearer): JsonResponse
+    {
+        try {
+            $credential = app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $bearer);
+
+            if ($credential !== null && ! app(CredentialUsageRecorder::class)->recordUsage($credential)) {
+                $credential = null;
+            }
+        } catch (Throwable $exception) {
+            return $this->serverError($exception);
+        }
+
+        if ($credential === null) {
+            return ClaimError::CodeNotFound->respond('No live credential matches the one presented.');
+        }
+
+        return response()->json([
+            'ok' => true,
+            'name' => $credential->name,
+            'scope' => $credential->abilities[0] ?? null,
+        ]);
+    }
+
     private function serverError(Throwable $exception): JsonResponse
     {
         try {
@@ -281,9 +358,27 @@ final class ManageOnboarding
 
     private function burnMode(): BurnMode
     {
-        return $this->declaration instanceof DeclaresBurnMode
-            ? $this->declaration->burnMode()
+        $declaration = $this->declaration();
+
+        return $declaration instanceof DeclaresBurnMode
+            ? $declaration->burnMode()
             : BurnMode::FirstUse;
+    }
+
+    /**
+     * Which store the seam mints into (PRD 1.0): `api_tokens` unless the
+     * declaration opts into the unified store. The exchange's
+     * make-before-break revocations follow the SAME answer — a code's
+     * durable link and the name+scope sweep both act on the store the
+     * durable actually lives in.
+     */
+    private function durableStore(): DurableStore
+    {
+        $declaration = $this->declaration();
+
+        return $declaration instanceof DeclaresDurableStore
+            ? $declaration->durableCredentialStore()
+            : DurableStore::ApiTokens;
     }
 
     /**
@@ -304,9 +399,10 @@ final class ManageOnboarding
 
         foreach ($tokens as $token) {
             // A pending code's durable link is a never-used make-before-break
-            // token; superseding the code invalidates it. A durable that has
-            // been USED belongs to a consumed code and is never touched here.
-            if ($token->durable_token_id !== null && $this->revokeDurableById($token->durable_token_id) !== null) {
+            // token; superseding the code invalidates it — in the store it
+            // was RECORDED into. A durable that has been USED belongs to a
+            // consumed code and is never touched here.
+            if ($token->durable_token_id !== null && $this->revokeDurableById($token->durable_token_id, $token->durableStore()) !== null) {
                 $revoked[] = [$token->durable_token_id, $token->id];
             }
 
@@ -337,8 +433,12 @@ final class ManageOnboarding
     /**
      * @return list<string> the ids of the durables actually revoked
      */
-    private function revokeActiveDurable(string $name, string $scope, string $exchangingCodeId): array
+    private function revokeActiveDurable(string $name, string $scope, string $exchangingCodeId, DurableStore $store): array
     {
+        if ($store === DurableStore::Credentials) {
+            return $this->revokeActiveUnifiedDurable($name, $scope, $exchangingCodeId);
+        }
+
         /** @var list<ApiToken> $tokens */
         $tokens = ApiToken::query()
             ->resolvable()
@@ -379,10 +479,77 @@ final class ManageOnboarding
     }
 
     /**
+     * The unified-store half of the D1d sweep: same exclusions, expressed
+     * on `credentials` columns. The tenancy key here is `subject_ref` (the
+     * unified minter sets it from the claim's name), the scope is an
+     * ability, and there is no rotation-grace exclusion yet because the
+     * unified rotate verb — the only writer of grace rows — ships in a
+     * later release.
+     *
+     * @return list<string> the ids of the durables actually revoked
+     */
+    private function revokeActiveUnifiedDurable(string $name, string $scope, string $exchangingCodeId): array
+    {
+        /** @var list<Credential> $credentials */
+        $credentials = Credential::query()
+            ->where('kind', CredentialKind::Bearer->value)
+            ->where('subject_ref', $name)
+            ->active()
+            ->lockForUpdate()
+            ->get()
+            ->all();
+
+        /** @var list<string> $linkedToOtherCodes */
+        $linkedToOtherCodes = OnboardingToken::query()
+            ->whereKeyNot($exchangingCodeId)
+            ->whereNull('consumed_at')
+            ->whereNotNull('durable_token_id')
+            ->pluck('durable_token_id')
+            ->all();
+
+        $revoked = [];
+
+        foreach ($credentials as $credential) {
+            if (! $credential->hasAbility($scope)) {
+                continue;
+            }
+
+            if (in_array($credential->getKey(), $linkedToOtherCodes, true)) {
+                continue;
+            }
+
+            $credential->forceFill(['revoked_at' => now()])->save();
+
+            $revoked[] = (string) $credential->getKey();
+        }
+
+        return $revoked;
+    }
+
+    /**
+     * Revoke a linked durable in the store it was RECORDED into (never the
+     * currently declared store — the linkage outlives declaration changes).
+     *
      * @return string|null the revoked durable's id, or null when no row matched
      */
-    private function revokeDurableById(string $tokenId): ?string
+    private function revokeDurableById(string $tokenId, DurableStore $store): ?string
     {
+        if ($store === DurableStore::Credentials) {
+            /** @var Credential|null $credential */
+            $credential = Credential::query()
+                ->whereKey($tokenId)
+                ->lockForUpdate()
+                ->first();
+
+            if ($credential === null) {
+                return null;
+            }
+
+            $credential->forceFill(['revoked_at' => $credential->revoked_at ?? now()])->save();
+
+            return (string) $credential->getKey();
+        }
+
         /** @var ApiToken|null $token */
         $token = ApiToken::query()
             ->whereKey($tokenId)

@@ -21,11 +21,13 @@ return [
     | Fallback Token
     |--------------------------------------------------------------------------
     |
-    | A single plaintext "fallback" token, read straight from the environment.
-    | Any caller presenting it authenticates without a database token row. It
-    | exists for bootstrap and low-friction internal use only — delete it from
-    | the environment to disable it, and provision per-app database tokens for
-    | production workloads.
+    | DEPRECATED (PRD 1.20): the install path now mints a real, revocable,
+    | operator-subject credential instead (bfc:install:operator-credential);
+    | an env pseudo-credential can never be revoked, audited, or attributed.
+    | This key stays read because live 0.4.x apps still carry fallbacks —
+    | delete FALLBACK_TOKEN from the environment to disable it. Nothing in
+    | the framework's own paths writes or depends on it any more (the
+    | unified-store guard never consults it), and a later major removes it.
     |
     | When null, fallback authentication is disabled entirely.
     |

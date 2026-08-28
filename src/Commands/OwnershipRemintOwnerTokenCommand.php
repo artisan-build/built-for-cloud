@@ -25,7 +25,7 @@ use InvalidArgumentException;
  */
 final class OwnershipRemintOwnerTokenCommand extends Command
 {
-    protected $signature = 'bfc:ownership:remint-owner-token {--execute} {--hash=} {--environment=}';
+    protected $signature = 'bfc:ownership:remint-owner-token {--execute} {--hash=} {--environment=} {--local}';
 
     protected $description = 'Mint a replacement admin owner token for the current owner and revoke the previous one';
 
@@ -33,6 +33,19 @@ final class OwnershipRemintOwnerTokenCommand extends Command
     {
         if ((bool) $this->option('execute')) {
             return $this->remintLocally($registry, (string) $this->option('hash'));
+        }
+
+        // `--local` (PRD 1.11): owner-token recovery with zero Cloud
+        // dependency — generate here, remint here, print once.
+        if ((bool) $this->option('local')) {
+            $generated = $generator->generate();
+            $status = $this->remintLocally($registry, $generated->hash);
+
+            if ($status === self::SUCCESS) {
+                $this->line('Save this token - shown once: '.$generated->plaintext);
+            }
+
+            return $status;
         }
 
         $generated = $generator->generate();

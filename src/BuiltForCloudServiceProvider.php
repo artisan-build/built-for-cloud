@@ -6,7 +6,11 @@ namespace ArtisanBuild\BuiltForCloud;
 
 use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
 use ArtisanBuild\BuiltForCloud\Commands\CreateAdminCommand;
+use ArtisanBuild\BuiltForCloud\Commands\CredentialListCommand;
+use ArtisanBuild\BuiltForCloud\Commands\CredentialMintCommand;
+use ArtisanBuild\BuiltForCloud\Commands\CredentialRevokeCommand;
 use ArtisanBuild\BuiltForCloud\Commands\FallbackTokenGenerateCommand;
+use ArtisanBuild\BuiltForCloud\Commands\InstallOperatorCredentialCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand;
@@ -18,17 +22,20 @@ use ArtisanBuild\BuiltForCloud\Commands\TokenRotateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenUsageCommand;
 use ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
+use ArtisanBuild\BuiltForCloud\Contracts\DeclaresDurableStore;
 use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
 use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\Listeners\QueueOwnershipWebhook;
@@ -50,7 +57,19 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
 
         $this->app->singleton(UsageReporter::class, NullUsageReporter::class);
 
-        $this->app->bind(DurableCredentialMinter::class, ApiTokenMinter::class);
+        // The seam (PRD 1.0): exchange mints durables through this binding
+        // only. `api_tokens` stays the default; an app's declaration opts
+        // into the unified store at rebuild time (DeclaresDurableStore).
+        $this->app->bind(DurableCredentialMinter::class, function (Application $app): DurableCredentialMinter {
+            $declaration = $app->make(CredentialDeclaration::class);
+
+            if ($declaration instanceof DeclaresDurableStore
+                && $declaration->durableCredentialStore() === DurableStore::Credentials) {
+                return $app->make(UnifiedStoreCredentialMinter::class);
+            }
+
+            return $app->make(ApiTokenMinter::class);
+        });
 
         $this->app->bind(CredentialDeclaration::class, function (Application $app): CredentialDeclaration {
             /** @var class-string<CredentialDeclaration> $declaration */
@@ -84,6 +103,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router->aliasMiddleware('bfc.auth', EnsureUserIsAuthenticated::class);
             $router->aliasMiddleware('bfc.admin', EnsureUserIsAdmin::class);
             $router->aliasMiddleware('bfc.token.admin', EnsureAdminToken::class);
+            $router->aliasMiddleware('bfc.credential.admin', EnsureCredentialAdmin::class);
             $router->aliasMiddleware('bfc.ability', EnsureCredentialAbility::class);
 
             $router->get('/bfc/meta', MetaController::class)
@@ -107,6 +127,22 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router->post('/bfc/onboarding/verify', [ManageOnboarding::class, 'verify'])
                 ->middleware('throttle:bfc-public');
 
+            // The unified store's verb routes (PRD 1.0): the HTTP half of
+            // the two-transport rule, at a FIXED /bfc/ path like every
+            // other package surface (PRD 1.12's precedent) — part of the
+            // versioned public contract (docs/http-contract.md). Their gate
+            // accepts a legacy admin token OR the installer-minted operator
+            // credential (PRD 1.20 — the credential must work on the
+            // surface it exists to manage).
+            $router->get('/bfc/credentials', [ManageCredentials::class, 'index'])
+                ->middleware('bfc.credential.admin');
+
+            $router->post('/bfc/credentials', [ManageCredentials::class, 'store'])
+                ->middleware('bfc.credential.admin');
+
+            $router->delete('/bfc/credentials/{id}', [ManageCredentials::class, 'destroy'])
+                ->middleware('bfc.credential.admin');
+
             if ((bool) config('built-for-cloud.credential_api.enabled', false)) {
                 $router->prefix(trim((string) config('built-for-cloud.credential_api.prefix', 'api/credentials'), '/'))
                     ->middleware('bfc.token.admin')
@@ -127,7 +163,11 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([
                 CreateAdminCommand::class,
+                CredentialListCommand::class,
+                CredentialMintCommand::class,
+                CredentialRevokeCommand::class,
                 FallbackTokenGenerateCommand::class,
+                InstallOperatorCredentialCommand::class,
                 OutboxDrainCommand::class,
                 OwnershipMintClaimCommand::class,
                 OwnershipRemintOwnerTokenCommand::class,

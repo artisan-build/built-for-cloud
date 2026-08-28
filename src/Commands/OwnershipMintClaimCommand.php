@@ -21,7 +21,7 @@ use InvalidArgumentException;
  */
 final class OwnershipMintClaimCommand extends Command
 {
-    protected $signature = 'bfc:ownership:mint-claim {--execute} {--hash=} {--environment=}';
+    protected $signature = 'bfc:ownership:mint-claim {--execute} {--hash=} {--environment=} {--local}';
 
     protected $description = 'Mint a pending ownership claim token for an unclaimed environment';
 
@@ -29,6 +29,19 @@ final class OwnershipMintClaimCommand extends Command
     {
         if ((bool) $this->option('execute')) {
             return $this->mintLocally($minter, (string) $this->option('hash'));
+        }
+
+        // `--local` (PRD 1.11): the off-Cloud owner-recovery path without
+        // computing a sha256 by hand — generate here, mint here, print once.
+        if ((bool) $this->option('local')) {
+            $generated = $minter->generate();
+            $status = $this->mintLocally($minter, $generated->hash);
+
+            if ($status === self::SUCCESS) {
+                $this->line('Save this claim token - shown once: '.$generated->plaintext);
+            }
+
+            return $status;
         }
 
         $generated = $minter->generate();

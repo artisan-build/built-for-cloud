@@ -12,13 +12,15 @@ use RuntimeException;
 
 final class TokenListCommand extends Command
 {
-    protected $signature = 'token:list {--execute} {--json} {--environment=}';
+    protected $signature = 'token:list {--execute} {--json} {--environment=} {--local}';
 
     protected $description = 'List Built for Cloud API tokens';
 
     public function handle(CloudCommandRunner $runner): int
     {
-        if ((bool) $this->option('execute')) {
+        // `--local` (PRD 1.11) reads the local database exactly as the
+        // remote half does on its own machine; no Cloud binary involved.
+        if ((bool) $this->option('execute') || (bool) $this->option('local')) {
             $rows = $this->rows();
 
             if ((bool) $this->option('json')) {

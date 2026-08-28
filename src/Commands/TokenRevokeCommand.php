@@ -11,7 +11,7 @@ use Illuminate\Console\Command;
 
 final class TokenRevokeCommand extends Command
 {
-    protected $signature = 'token:revoke {name} {--execute} {--environment=}';
+    protected $signature = 'token:revoke {name} {--execute} {--environment=} {--local}';
 
     protected $description = 'Revoke Built for Cloud API tokens by name';
 
@@ -19,7 +19,8 @@ final class TokenRevokeCommand extends Command
     {
         $name = (string) $this->argument('name');
 
-        if ((bool) $this->option('execute')) {
+        // `--local` (PRD 1.11) acts on the local database directly.
+        if ((bool) $this->option('execute') || (bool) $this->option('local')) {
             $count = $registry->revoke($name, AuditActor::cliOperator());
             $this->line("Revoked {$count} active row(s) for {$name}");
 
