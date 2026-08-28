@@ -28,6 +28,7 @@ use ArtisanBuild\BuiltForCloud\MintedSecret;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
+use Carbon\CarbonInterface;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -136,6 +137,47 @@ final class ManageOnboarding
         return is_string($tokenId) && $tokenId !== '' ? AuditActor::adminToken($tokenId) : null;
     }
 
+    /**
+     * The hitch claim-contract route (PRD 1.12 / OSS-8 / EXEC-11):
+     * `POST /bfc/claim`, the wire face of `hitch/docs/claim-contract.md`
+     * over the SAME claim-code primitive the onboarding exchange runs —
+     * request field `claim_code`, success `200 {"version", "token",
+     * "name", "expires_at"}`, the stable error enum, make-before-break.
+     * Mounted unconditionally at a fixed `/bfc/` path: never behind a
+     * configurable prefix, never behind its own env flag (the
+     * surface-selection key can only unmount the whole HTTP surface
+     * family, PRD 1.14).
+     *
+     * A code that redeems a SIGNING KEY is refused here before any state
+     * changes — the hitch contract's success shape has a required `token`
+     * a signing-key delivery cannot honestly fill; its exchange surface
+     * is `POST /bfc/onboarding/exchange`.
+     */
+    public function claim(Request $request): JsonResponse
+    {
+        // The contract shapes every failure, so validation never falls
+        // through to Laravel's 422: a missing or non-string code is the
+        // enum's `invalid_code`, and a version this server does not speak
+        // is `unsupported_version` whatever type it arrived as.
+        $version = $request->input('version', 1);
+
+        if ($version !== 1) {
+            return ClaimError::UnsupportedVersion->respond('This server speaks claim contract version 1.');
+        }
+
+        $presented = $request->input('claim_code');
+
+        if (! is_string($presented) || preg_match('/^[0-9a-f]{64}$/', $presented) !== 1) {
+            return ClaimError::InvalidCode->respond('That claim code is not in the expected format. Check it for typos and try again.');
+        }
+
+        try {
+            return $this->performExchange($presented, hitchShape: true);
+        } catch (Throwable $exception) {
+            return $this->serverError($exception);
+        }
+    }
+
     public function exchange(Request $request): JsonResponse
     {
         /** @var array{token: string, version?: int|null} $validated */
@@ -208,9 +250,9 @@ final class ManageOnboarding
             ->exists();
     }
 
-    private function performExchange(string $presented): JsonResponse
+    private function performExchange(string $presented, bool $hitchShape = false): JsonResponse
     {
-        return DB::transaction(function () use ($presented): JsonResponse {
+        return DB::transaction(function () use ($presented, $hitchShape): JsonResponse {
             /** @var OnboardingToken|null $code */
             $code = OnboardingToken::query()
                 ->where('token_hash', OnboardingToken::hashToken($presented))
@@ -227,6 +269,15 @@ final class ManageOnboarding
 
             if ($code->expires_at->lessThanOrEqualTo(now())) {
                 return ClaimError::CodeExpired->respond('This code has expired. Ask the issuer for a new one.');
+            }
+
+            // The hitch claim surface cannot deliver a signing key (its
+            // success shape REQUIRES a bearer `token`), so a signing-key
+            // code refuses HERE — authoritatively, inside the locked
+            // transaction, and BEFORE any burn: a refused code must stay
+            // presentable on the surface that can serve it.
+            if ($hitchShape && $this->codeLinksToSigningKey($code)) {
+                return ClaimError::InvalidCode->respond('This code redeems a signing key, which this claim surface cannot deliver. Exchange it at POST /bfc/onboarding/exchange instead.');
             }
 
             // Under `at_exchange` (a provider with no observable first use),
@@ -325,11 +376,49 @@ final class ManageOnboarding
                 );
             }
 
+            if ($hitchShape) {
+                // The hitch claim contract's success shape (200, not 201
+                // — the contract fixes the status): the durable secret as
+                // `token`, the suggested `name` (advisory; the client's
+                // --name always wins), and the durable's own expiry as
+                // RFC 3339 or null. Additive growth is allowed; these
+                // four fields are the contract.
+                /** @var CarbonInterface|null $expiresAt */
+                $expiresAt = $minted->token->expires_at;
+
+                return response()->json([
+                    'version' => 1,
+                    'token' => $minted->secret->reveal(),
+                    'name' => $name,
+                    'expires_at' => $expiresAt?->toRfc3339String(),
+                ]);
+            }
+
             return response()->json([
                 'durable_token' => $minted->secret->reveal(),
                 'name' => $name,
             ], 201);
         });
+    }
+
+    /**
+     * Whether the code's linked durable is an hmac signing key — the
+     * authoritative, in-transaction form of the advisory
+     * {@see presentedDeliversSigningKey} pre-read, consulted by the hitch
+     * claim surface to refuse before anything burns. Any lifecycle state
+     * counts: even a dead signing-key link is not something this surface
+     * can honestly answer for.
+     */
+    private function codeLinksToSigningKey(OnboardingToken $code): bool
+    {
+        if ($code->durable_token_id === null || $code->durableStore() !== DurableStore::Credentials) {
+            return false;
+        }
+
+        return Credential::query()
+            ->whereKey($code->durable_token_id)
+            ->where('kind', CredentialKind::Hmac->value)
+            ->exists();
     }
 
     /**

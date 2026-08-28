@@ -92,6 +92,10 @@ Additive unless marked otherwise:
   while an APP_KEY rewrap is in progress. Summary rows are unchanged. The lifecycle event
   stream gains `activated`.
 
+- New route `POST /bfc/claim` — the hitch claim contract (PRD 1.12 / OSS-8), additive: the
+  same claim-code primitive as the onboarding exchange, in hitch's published wire shape
+  (`claim_code` in, `200 {"version", "token", "name", "expires_at"}` out, the same error
+  enum), unconditional at a fixed path.
 - **The operator ability vocabulary ships (PRD 1.10 + GATE-3.7).** All additive, and a
   NARROWING only for credentials that never existed before it: the operator routes now
   authorize per verb family (`credential:read` / `credential:mint` / `credential:rotate` /
@@ -162,6 +166,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/ownership/release` | `content` | single reveal of the ownership claim code |
 | `POST /bfc/ownership/cancel-transfer` | `metadata` | `{"ok": true}` — a bounded boolean |
 | `POST /bfc/onboarding/issue` | `content` | single reveal of the claim code, plus a free-text email address |
+| `POST /bfc/claim` | `content` | single reveal of the durable secret (`token`), plus the free-text suggested name |
 | `POST /bfc/onboarding/exchange` | `content` | single reveal of the durable secret, plus the free-text credential name |
 | `POST /bfc/onboarding/verify` | `content` | carries the free-text credential name |
 | `POST /bfc/invitations` | `content` | single reveal of the invitation code, plus a free-text email address |
@@ -271,6 +276,46 @@ the durable it buys. `scope` defaults to `consume`. Issuing an addressed code su
 pending code for the same address+scope but never touches a live durable credential.
 
 - **201** — `{"claim_code": "...", "email": "a@b.c" | null}` — the single reveal of the code.
+
+### POST /bfc/claim
+
+Public (`bfc-claim` throttle). **The hitch claim contract** (PRD 1.12 / OSS-8): the wire face
+any `hitch install <url> --claim <code> --claim-url <this route>` client — or anything else
+speaking hitch's published claim contract — exchanges against. It runs the SAME single-use
+claim-code primitive as [`POST /bfc/onboarding/exchange`](#post-bfconboardingexchange)
+(make-before-break semantics included); only the field names and success status differ,
+because the shape here is hitch's, not this package's. Mounted **unconditionally at this
+fixed path** — never behind a configurable prefix, never behind its own env flag.
+
+**Request** — `{"claim_code": "<claim code>", "version": 1}`. The code travels in the body,
+never the URL. `version` is the contract version the client speaks; anything but `1` is
+refused as `unsupported_version`, and a malformed or missing `claim_code` is `invalid_code`
+(never a Laravel `422` — the enum shapes every failure on this surface).
+
+- **200** —
+
+```json
+{
+  "version": 1,
+  "token": "tok_…",
+  "name": "ci",
+  "expires_at": null
+}
+```
+
+  `token` is the **single reveal** of the durable secret. `name` is the suggested server
+  name (advisory — the client's own `--name` wins); `expires_at` is the durable's expiry as
+  RFC 3339 or `null` (advisory). There is deliberately no `server_url` field. The response
+  may grow additive fields; clients ignore what they do not know.
+
+- Errors: the enum above, `{"version": 1, "error": "<enum>", "message": "..."}` — clients
+  branch on `error`, never the status. A re-claim before the token's first use returns a
+  usable token (a FRESH one; the pending previous mint is revoked in the same transaction —
+  at most one live token per code, ever); after first use, `code_already_claimed`.
+- A code that redeems a **signing key** is refused as `invalid_code` — before any burn, so
+  the code stays presentable on `POST /bfc/onboarding/exchange`, the surface that can
+  deliver it. The hitch success shape requires a bearer `token`, which a pending signing-key
+  delivery cannot honestly fill.
 
 ### POST /bfc/onboarding/exchange
 

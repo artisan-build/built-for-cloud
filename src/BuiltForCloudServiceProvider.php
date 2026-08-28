@@ -127,6 +127,14 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router->post('/bfc/ownership/cancel-transfer', [ManageOwnership::class, 'cancelTransfer'])
                 ->middleware('bfc.token.admin');
 
+            // The hitch claim-contract route (PRD 1.12 / OSS-8): the wire
+            // face of hitch/docs/claim-contract.md over the same claim
+            // primitive as the onboarding exchange. Unconditional at a
+            // FIXED path like every /bfc/* surface — never behind a
+            // configurable prefix, never behind its own env flag.
+            $router->post('/bfc/claim', [ManageOnboarding::class, 'claim'])
+                ->middleware('throttle:bfc-claim');
+
             $router->post('/bfc/onboarding/issue', [ManageOnboarding::class, 'issue'])
                 ->middleware('bfc.token.admin');
 
