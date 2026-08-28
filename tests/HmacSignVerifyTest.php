@@ -248,6 +248,81 @@ it('rejects a replayed nonce inside the window, and a replay outliving the windo
     }
 });
 
+it('rejects a replay at the exact edge of the acceptance window: the nonce entry outlives the last verifiable instant (rework Fix 2)', function (): void {
+    config()->set('built-for-cloud.hmac.timestamp_tolerance_seconds', 300);
+
+    $credential = activeKeyFor('acme');
+
+    // The worst case: a future-dated message accepted at the EARLIEST
+    // possible instant (ts = now + tolerance, inclusive). Its timestamp
+    // stays verifiable until ts + tolerance = now + 2×tolerance — the
+    // exact edge the nonce entry must still cover.
+    $header = headerSignedBy($credential, 'body', timestamp: now()->getTimestamp() + 300);
+
+    expect(app(HmacVerifier::class)->verify(hmacSubject(), $header, 'body')->id)->toBe($credential->id);
+
+    $this->travel(600)->seconds();
+
+    // At exactly V + 2×tolerance the timestamp is still inside the
+    // inclusive bound — and the replay must STILL be caught, by the
+    // nonce, because the entry's TTL carries a margin past the window.
+    try {
+        app(HmacVerifier::class)->verify(hmacSubject(), $header, 'body');
+        $this->fail('Verification should have refused.');
+    } catch (HmacVerificationFailed $failed) {
+        expect($failed->reason)->toBe('replayed_nonce');
+    }
+});
+
+it('caps accepted verifications per key per window, so one credential cannot fill the nonce store (rework Fix 3)', function (): void {
+    config()->set('built-for-cloud.hmac.verification_rate_ceiling', 3);
+
+    $credential = activeKeyFor('acme');
+    $bystander = activeKeyFor('other');
+
+    // Legitimate traffic under the ceiling verifies.
+    foreach (range(1, 3) as $i) {
+        $header = headerSignedBy($credential, 'body-'.$i);
+
+        expect(app(HmacVerifier::class)->verify(hmacSubject(), $header, 'body-'.$i)->id)->toBe($credential->id);
+    }
+
+    // The fourth ACCEPTED verification inside the window is refused —
+    // before its nonce is stored, so the store never grows past the
+    // ceiling for this key.
+    $overflow = headerSignedBy($credential, 'body-4');
+
+    try {
+        app(HmacVerifier::class)->verify(hmacSubject(), $overflow, 'body-4');
+        $this->fail('Verification should have refused.');
+    } catch (HmacVerificationFailed $failed) {
+        expect($failed->reason)->toBe('rate_limited');
+    }
+
+    // The ceiling is PER KEY: another credential's traffic is untouched.
+    $bystanderHeader = headerSignedBy($bystander, 'body');
+
+    expect(app(HmacVerifier::class)->verify(hmacSubject('other'), $bystanderHeader, 'body')->id)->toBe($bystander->id);
+});
+
+it('rejects a leading-zero timestamp: the canonical wire form is injective (rework Fix 6)', function (): void {
+    $credential = activeKeyFor('acme');
+    $valid = headerSignedBy($credential, 'body');
+
+    preg_match('/ts=(\d+)/', $valid, $matches);
+
+    foreach (['0'.$matches[1], '000'.$matches[1]] as $padded) {
+        $tampered = str_replace('ts='.$matches[1], 'ts='.$padded, $valid);
+
+        try {
+            app(HmacVerifier::class)->verify(hmacSubject(), $tampered, 'body');
+            $this->fail('Verification should have refused ts='.$padded);
+        } catch (HmacVerificationFailed $failed) {
+            expect($failed->reason)->toBe('malformed_header');
+        }
+    }
+});
+
 it('rejects an unknown key id with the same indistinct answer as every selection miss', function (): void {
     activeKeyFor('acme');
     $ghost = Credential::factory()->hmac()->activated()->make([
@@ -415,6 +490,41 @@ it('gates a route through bfc.hmac: the declaration derives the subject server-s
         'HTTP_'.str_replace('-', '_', strtoupper(HmacEnvelope::HEADER)) => headerSignedBy($other, $body),
         'CONTENT_TYPE' => 'application/json',
     ], content: $body)->assertUnauthorized();
+});
+
+it('answers the uniform 401 through bfc.hmac when the key STATE is broken — an unreadable ring key is no oracle and no 500 (rework Fix 7)', function (): void {
+    app()->bind(CredentialDeclaration::class, static fn (): CredentialDeclaration => new class implements CredentialDeclaration, ResolvesHmacSubjects
+    {
+        public function resolveHmacSubject(Request $request): ?Subject
+        {
+            return new Subject(SubjectType::ExternalConsumer, 'acme');
+        }
+
+        public function resolveSubject(Request $request): ?Subject
+        {
+            return null;
+        }
+
+        public function authorize(Credential $credential, ?string $ability, Request $request): bool
+        {
+            return true;
+        }
+    });
+
+    Route::post('/hooks-broken-ring', fn (): array => ['ok' => true])->middleware('bfc.hmac');
+
+    $credential = activeKeyFor('acme');
+    $header = headerSignedBy($credential, 'body');
+
+    // The row's ciphertext key leaves the ring AFTER the header was
+    // computed: verification now hits HmacKeyUnreadable.
+    Credential::query()->whereKey($credential->id)->update(['secret_key_version' => 'feedfacefeedface']);
+
+    $this->call('POST', '/hooks-broken-ring', server: [
+        'HTTP_'.str_replace('-', '_', strtoupper(HmacEnvelope::HEADER)) => $header,
+    ], content: 'body')
+        ->assertUnauthorized()
+        ->assertJsonPath('message', 'The request signature could not be verified.');
 });
 
 it('fails closed through bfc.hmac when the declaration cannot derive subjects at all', function (): void {

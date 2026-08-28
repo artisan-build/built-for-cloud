@@ -75,4 +75,17 @@ final class HmacVerificationFailed extends RuntimeException
     {
         return new self('The signed nonce was already consumed inside the replay window.', 'replayed_nonce');
     }
+
+    /**
+     * The cardinality bound (rework Fix 3): accepted verifications per
+     * key per replay window are capped, so a single credential cannot
+     * fill the shared nonce store with unique entries.
+     */
+    public static function rateLimited(int $ceiling): self
+    {
+        return new self(sprintf(
+            'This key exceeded the ceiling of %d accepted verifications inside the replay window.',
+            $ceiling,
+        ), 'rate_limited');
+    }
 }

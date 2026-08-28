@@ -30,14 +30,25 @@ use Illuminate\Support\Facades\Cache;
  *    key, a dead key: ONE indistinct answer, no oracle;
  * 6. a signature that does not match the canonical envelope
  *    (constant-time compare);
- * 7. a replayed nonce. The nonce is consumed ONLY AFTER the signature
+ * 7. a per-key rate ceiling on ACCEPTED verifications
+ *    (`built-for-cloud.hmac.verification_rate_ceiling`, default 1000 per
+ *    replay window): checked after the signature verified — only holders
+ *    of the key can spend its budget — and before any nonce is stored,
+ *    so one credential can never grow the nonce store past its ceiling;
+ * 8. a replayed nonce. The nonce is consumed ONLY AFTER the signature
  *    verified — consuming earlier would let an attacker burn a victim's
- *    nonce with a garbage signature. Storage is the bounded default
- *    cache: one entry per (key id, nonce), TTL = 2× the timestamp
- *    tolerance, which provably covers the whole acceptance window — a
- *    message first verified at V satisfies V ≥ ts − tolerance, so any
- *    replay after the entry expires at V + 2×tolerance ≥ ts + tolerance
- *    is already stale by rule 4.
+ *    nonce with a garbage signature.
+ *
+ * The nonce/rate store is BOUNDED on both axes: TTL — every entry lives
+ * one replay window, 2×tolerance + 60s of margin, which covers the whole
+ * INCLUSIVE timestamp-acceptance window with room (a message first
+ * verified at V satisfies V ≥ ts − tolerance; the last instant its
+ * timestamp still verifies is ts + tolerance ≤ V + 2×tolerance, strictly
+ * inside the entry's life — so a nonce accepted once cannot be accepted
+ * again anywhere in its valid window, boundary included); and
+ * CARDINALITY — at most `verification_rate_ceiling` nonce entries (plus
+ * one counter) per key per window, so no credential can exhaust the
+ * shared cache with unique nonces.
  */
 final class HmacVerifier
 {
@@ -93,15 +104,42 @@ final class HmacVerifier
             throw HmacVerificationFailed::invalidSignature();
         }
 
+        // One replay window for the nonce entries AND the rate counter:
+        // 2× the tolerance plus a stated margin, so the entry strictly
+        // outlives the inclusive timestamp-acceptance window (see the
+        // class docblock for the arithmetic).
+        $windowSeconds = $tolerance * 2 + 60;
+
+        // The cardinality bound: accepted verifications per key per
+        // window. Only signature-valid requests reach this counter, so
+        // nobody without the key can spend a credential's budget — and
+        // because it is checked BEFORE the nonce is stored, the nonce
+        // store holds at most `ceiling` entries per key per window.
+        $ceiling = $this->rateCeiling();
+        $rateKey = 'bfc:hmac:rate:'.$envelope->keyId;
+
+        Cache::add($rateKey, 0, $windowSeconds);
+
+        if ((int) Cache::increment($rateKey) > $ceiling) {
+            throw HmacVerificationFailed::rateLimited($ceiling);
+        }
+
         $nonceKey = 'bfc:hmac:nonce:'.hash('sha256', $envelope->keyId.'|'.$envelope->nonce);
 
-        if (! Cache::add($nonceKey, 1, $tolerance * 2)) {
+        if (! Cache::add($nonceKey, 1, $windowSeconds)) {
             throw HmacVerificationFailed::replayedNonce();
         }
 
         Credential::query()->whereKey($credential->id)->update(['last_used_at' => now()]);
 
         return $credential;
+    }
+
+    private function rateCeiling(): int
+    {
+        $ceiling = config('built-for-cloud.hmac.verification_rate_ceiling', 1000);
+
+        return is_numeric($ceiling) && (int) $ceiling > 0 ? (int) $ceiling : 1000;
     }
 
     private function timestampTolerance(): int

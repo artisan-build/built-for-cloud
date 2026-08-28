@@ -79,8 +79,11 @@ final readonly class HmacEnvelope
      */
     public static function parse(string $header): array
     {
+        // `ts` is canonical-form-injective: no leading zeros, so exactly
+        // ONE wire spelling maps to each integer — `01` and `1` cannot be
+        // two headers over one canonical string.
         $pattern = '/^v1,alg=([a-z0-9-]{1,32}),key=('.self::KEY_PATTERN.'),event=('.self::EVENT_PATTERN.'),'
-            .'ts=(\d{1,12}),nonce=('.self::NONCE_PATTERN.'),aud=('.self::AUDIENCE_PATTERN.'),sig=([0-9a-f]{64})$/';
+            .'ts=(0|[1-9]\d{0,11}),nonce=('.self::NONCE_PATTERN.'),aud=('.self::AUDIENCE_PATTERN.'),sig=([0-9a-f]{64})$/';
 
         if (preg_match($pattern, $header, $matches) !== 1) {
             throw HmacVerificationFailed::malformedHeader();
