@@ -11,6 +11,10 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
+use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier;
 use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintOptions;
@@ -375,6 +379,114 @@ it('runs the identical action on the CLI transport, --local required', function 
         'subject_ref' => 'acme',
         '--local' => true,
     ])->assertFailed();
+});
+
+/**
+ * A valid signature header computed from a row's own stored key —
+ * bypassing the signer's selection, for probing the verifier directly.
+ */
+function offboardSignedHeader(Credential $credential, string $body): string
+{
+    $envelope = new HmacEnvelope(
+        keyId: $credential->id,
+        eventType: 'test.event',
+        timestamp: now()->getTimestamp(),
+        nonce: bin2hex(random_bytes(16)),
+        audience: (string) config('app.url'),
+    );
+
+    $key = app(HmacKeyring::class)->decrypt((string) $credential->secret_ciphertext, $credential->secret_key_version);
+
+    return $envelope->headerValue(hash_hmac('sha256', $envelope->canonical($body), $key));
+}
+
+it('rejects an offboarded bound user\'s operator credential on the operator gate itself (Fix 2)', function (): void {
+    $user = User::query()->create([
+        'name' => 'Person',
+        'email' => 'person@example.com',
+        'password' => 'irrelevant',
+    ]);
+
+    // An operator credential under a DIFFERENT subject, bound to the user
+    // — fully authorized on the operator gate before containment.
+    $operator = $this->mintCredential([
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => 'control-plane',
+        'abilities' => [OperatorAbility::ADMIN],
+        'user_id' => (string) $user->getKey(),
+    ]);
+
+    $this->getJson('/bfc/credentials', ['Authorization' => $operator->bearerHeader()])->assertOk();
+
+    offboardViaHttp(['subject_type' => 'user_principal', 'subject_ref' => 'person@example.com'])->assertOk();
+
+    // The gate resolves credentials directly (not via auth:bfc), so this
+    // is the gate's OWN registry check biting — the row itself was never
+    // revoked (its subject was not the offboarded one).
+    $this->getJson('/bfc/credentials', ['Authorization' => $operator->bearerHeader()])->assertUnauthorized();
+
+    expect($operator->credential->refresh()->revoked_at)->toBeNull();
+
+    // Mutations too: the same credential reaches no verb.
+    $this->postJson('/bfc/credentials', [
+        'subject_type' => 'external_consumer',
+        'subject_ref' => 'someone',
+    ], ['Authorization' => $operator->bearerHeader()])->assertUnauthorized();
+});
+
+it('makes an offboarded subject\'s hmac key unselectable by the verifier, post-containment mints included (Fix 2)', function (): void {
+    offboardViaHttp(['subject_type' => 'external_consumer', 'subject_ref' => 'acme'])->assertOk();
+
+    // Minted AFTER containment, fully active — the registry is keyed on
+    // the subject, not the credential row, so this must still be dead.
+    /** @var Credential $key */
+    $key = Credential::factory()->hmac()->activated()->create([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'acme',
+    ]);
+
+    $body = '{"event":"shipment.created"}';
+    $header = offboardSignedHeader($key, $body);
+
+    expect(fn (): Credential => app(HmacVerifier::class)->verify(
+        new Subject(SubjectType::ExternalConsumer, 'acme'),
+        $header,
+        $body,
+    ))->toThrow(HmacVerificationFailed::class);
+
+    // Positive control: an identical key under a NON-offboarded subject
+    // verifies — the rejection above is the registry, not the harness.
+    /** @var Credential $controlKey */
+    $controlKey = Credential::factory()->hmac()->activated()->create([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'other',
+    ]);
+
+    $controlBody = '{"event":"shipment.created"}';
+    $verified = app(HmacVerifier::class)->verify(
+        new Subject(SubjectType::ExternalConsumer, 'other'),
+        offboardSignedHeader($controlKey, $controlBody),
+        $controlBody,
+    );
+
+    expect($verified->id)->toBe($controlKey->id);
+});
+
+it('rejects credentials minted AFTER containment for the offboarded subject on every gate (Fix 2)', function (): void {
+    offboardViaHttp(['subject_type' => 'operator', 'subject_ref' => 'rogue-plane'])->assertOk();
+
+    // A post-containment operator mint for the offboarded subject: active
+    // row, admin-equivalent abilities — and still dead everywhere.
+    $postMint = $this->mintCredential([
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => 'rogue-plane',
+        'abilities' => [OperatorAbility::ADMIN],
+    ]);
+
+    $this->getJson('/offboard-guarded', ['Authorization' => $postMint->bearerHeader()])->assertUnauthorized();
+    $this->getJson('/bfc/credentials', ['Authorization' => $postMint->bearerHeader()])->assertUnauthorized();
+
+    expect($postMint->credential->refresh()->revoked_at)->toBeNull();
 });
 
 it('consults the declaration verb matrix under the offboard verb', function (): void {

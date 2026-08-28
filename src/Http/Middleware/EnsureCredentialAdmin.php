@@ -10,6 +10,7 @@ use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
+use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -136,6 +137,19 @@ final class EnsureCredentialAdmin
         $credential = $this->credentials->resolve(CredentialKind::Bearer, $bearer);
 
         if ($credential !== null) {
+            // Full account containment (PRD 1.15, SEC-V3-04): the
+            // offboarded registry is consulted at EVERY point a credential
+            // authenticates — this gate resolves directly rather than via
+            // the bfc guard, so it carries its own check. Before usage
+            // recording: an offboarded principal's presentation is not a
+            // use, and must not first-use-burn anything. 401, matching the
+            // guard's indistinguishable rejection.
+            if (OffboardedSubject::rejects($credential)) {
+                $this->auditDenial($request, 'token_auth_failure: offboarded principal', AuditActor::operatorIntegration($credential->id));
+
+                abort(401);
+            }
+
             if (! $this->usage->recordUsage($credential)) {
                 $this->auditDenial($request, 'token_auth_failure: credential died before use', null);
 
