@@ -26,6 +26,11 @@ use Illuminate\Support\Facades\Schema;
  * recipients not yet marked. The send and its marker are still two writes:
  * a crash between them re-sends to that ONE recipient — the honest
  * at-least-once window this design accepts.
+ *
+ * `claim_token` is the ownership fence: each claim writes a fresh token,
+ * and every later write for the row (markers, release, completion) is
+ * conditioned on it, so a stale owner whose claim expired and was taken
+ * over cannot clobber the new owner's markers or claim state.
  */
 return new class extends Migration
 {
@@ -37,6 +42,7 @@ return new class extends Migration
             $table->string('dedup_key')->unique();
             $table->unsignedInteger('attempts')->default(0);
             $table->timestamp('claimed_at')->nullable();
+            $table->uuid('claim_token')->nullable();
             $table->timestamp('delivered_at')->nullable()->index();
             $table->json('delivered_recipients')->nullable();
             $table->string('last_error')->nullable();

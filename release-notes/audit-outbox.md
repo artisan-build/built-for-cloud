@@ -57,7 +57,11 @@ lifecycle notifications through one transactional stream (PRD 1.9 / D8, 1.16, 1.
   dies mid-delivery leaves its row claimable again after the claim TTL
   (`built-for-cloud.audit.outbox.claim_ttl_seconds`, default 600 — keep it comfortably above your
   slowest mail send times the recipients per event); a subscriber that throws releases its claim
-  with the exception class recorded and never breaks the caller.
+  with the exception class recorded and never breaks the caller. Every claim writes a unique
+  ownership token and every later write for the row — markers, release, completion — is fenced on
+  it, with a fenced re-read before each send: a stalled consumer whose expired claim was taken
+  over halts at its next write instead of erasing the new owner's markers, re-sending to
+  recipients the new owner already delivered, or clearing a claim it no longer holds.
   **The honest delivery contract:** deduplication happens at ENQUEUE (the unique `dedup_key`,
   default the audit event id — a free string, so later integration event-id machinery, SEC-V3-05,
   needs no schema change); sends are tracked PER RECIPIENT on the row, each marked immediately

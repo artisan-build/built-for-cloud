@@ -259,6 +259,122 @@ it('never fails the committed request when the post-commit drain breaks', functi
     Notification::assertSentOnDemandTimes(CredentialLifecycleNotification::class, 1);
 });
 
+it('makes every stale-owner write a no-op once a newer owner holds the row', function (): void {
+    Notification::fake();
+    config()->set('built-for-cloud.notifications.policy', ['revoked' => ['holder']]);
+    config()->set('built-for-cloud.credentials.declaration', ConfigMapHolderDeclaration::class);
+
+    $credentialId = (string) Str::uuid();
+    config()->set('built-for-cloud-tests.holder_map', [$credentialId => 'holder@example.test']);
+
+    $auditEvent = CredentialAuditEvent::query()->create([
+        'id' => (string) Str::uuid(),
+        'event' => LifecycleEventType::Revoked,
+        'credential_id' => $credentialId,
+        'occurred_at' => now(),
+    ]);
+
+    // A drain (owner T1) stalled long enough for its claim to expire.
+    $entry = CredentialOutboxEntry::query()->create([
+        'id' => (string) Str::uuid(),
+        'audit_event_id' => $auditEvent->id,
+        'dedup_key' => $auditEvent->id,
+        'claimed_at' => now()->subSeconds(601),
+        'claim_token' => 'stale-owner-token',
+        'attempts' => 1,
+    ]);
+
+    // A new owner re-claims (fresh token), delivers, marks, completes.
+    expect(app(OutboxDrainer::class)->drain())->toBe(1);
+
+    $entry->refresh();
+    expect($entry->claim_token)->not->toBeNull()
+        ->and($entry->claim_token)->not->toBe('stale-owner-token')
+        ->and($entry->delivered_at)->not->toBeNull()
+        ->and(array_keys($entry->delivered_recipients ?? []))->toBe(['holder@example.test']);
+
+    $newOwnerState = $entry->getAttributes();
+
+    // The stale owner wakes up and issues its three write shapes, each
+    // fenced on the token it still holds: marker update, release,
+    // completion. Every one is a no-op.
+    $staleMarkerWrite = CredentialOutboxEntry::query()
+        ->whereKey($entry->id)
+        ->where('claim_token', 'stale-owner-token')
+        ->update(['delivered_recipients' => json_encode(['clobbered@example.test' => now()->toIso8601String()])]);
+
+    $staleRelease = CredentialOutboxEntry::query()
+        ->whereKey($entry->id)
+        ->where('claim_token', 'stale-owner-token')
+        ->update(['claimed_at' => null, 'claim_token' => null, 'last_error' => RuntimeException::class]);
+
+    $staleCompletion = CredentialOutboxEntry::query()
+        ->whereKey($entry->id)
+        ->where('claim_token', 'stale-owner-token')
+        ->whereNull('delivered_at')
+        ->update(['delivered_at' => now()]);
+
+    expect($staleMarkerWrite)->toBe(0)
+        ->and($staleRelease)->toBe(0)
+        ->and($staleCompletion)->toBe(0)
+        // The row is byte-for-byte the new owner's state.
+        ->and($entry->refresh()->getAttributes())->toBe($newOwnerState);
+
+    Notification::assertSentOnDemandTimes(CredentialLifecycleNotification::class, 1);
+});
+
+it('stops a stale owner mid-loop after a takeover, sending no further recipients', function (): void {
+    config()->set('mail.default', 'array');
+    config()->set('built-for-cloud.notifications.issuer', 'issuer@example.test');
+    config()->set('built-for-cloud.notifications.policy', ['revoked' => ['issuer', 'holder']]);
+    config()->set('built-for-cloud.credentials.declaration', ConfigMapHolderDeclaration::class);
+
+    $registry = app(TokenRegistry::class);
+    $token = $registry->store('fence-target', hash('sha256', 'fence-secret'));
+
+    config()->set('built-for-cloud-tests.holder_map', [$token->id => 'holder@example.test']);
+
+    // During owner A's FIRST send (the issuer's), a takeover happens: A's
+    // claim is presumed expired and owner B re-claims the row and delivers
+    // everything. A's marker write for the issuer must then hit zero rows
+    // and A must stop — the holder is never sent by A.
+    $armed = true;
+
+    Event::listen(MessageSending::class, function () use (&$armed): void {
+        if (! $armed) {
+            return;
+        }
+
+        $armed = false;
+
+        DB::table('credential_outbox')->update([
+            'claim_token' => 'takeover-token',
+            'claimed_at' => now(),
+            'delivered_recipients' => json_encode([
+                'issuer@example.test' => now()->toIso8601String(),
+                'holder@example.test' => now()->toIso8601String(),
+            ]),
+        ]);
+    });
+
+    $registry->revoke('fence-target');
+
+    // A's issuer send had already left; nothing further followed it.
+    expect($armed)->toBeFalse()
+        ->and(sentMailAddresses())->toBe(['issuer@example.test']);
+
+    // The row is B's, untouched by A: B's markers, B's claim, no
+    // completion stamped by a non-owner.
+    $entry = CredentialOutboxEntry::query()->latest('created_at')->latest('id')->firstOrFail();
+    expect($entry->claim_token)->toBe('takeover-token')
+        ->and(array_keys($entry->delivered_recipients ?? []))->toBe(['issuer@example.test', 'holder@example.test'])
+        ->and($entry->delivered_at)->toBeNull();
+
+    // And no later drain re-sends under B's live claim.
+    expect(app(OutboxDrainer::class)->drain())->toBe(0)
+        ->and(sentMailAddresses())->toBe(['issuer@example.test']);
+});
+
 it('enforces the delivery dedup key at insert', function (): void {
     $auditEvent = CredentialAuditEvent::query()->create([
         'id' => (string) Str::uuid(),

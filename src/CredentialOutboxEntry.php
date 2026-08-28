@@ -20,11 +20,15 @@ use Illuminate\Database\Eloquent\Model;
  * succeeded; a retry sends only to addresses not in the map. The row is
  * `delivered_at`-stamped once every resolved recipient is marked.
  *
+ * `claim_token` fences ownership: every write after a claim carries it, so
+ * a stale consumer whose claim was taken over writes nothing.
+ *
  * @property string $id
  * @property string $audit_event_id
  * @property string $dedup_key
  * @property int $attempts
  * @property CarbonInterface|null $claimed_at
+ * @property string|null $claim_token
  * @property CarbonInterface|null $delivered_at
  * @property array<string, string>|null $delivered_recipients
  * @property string|null $last_error
@@ -51,6 +55,7 @@ final class CredentialOutboxEntry extends Model
         'dedup_key',
         'attempts',
         'claimed_at',
+        'claim_token',
         'delivered_at',
         'delivered_recipients',
         'last_error',
