@@ -56,9 +56,9 @@ it('releases ownership for make before break and keeps the old owner valid until
 
     $release = $this->postJson('/bfc/ownership/release', [], ownerHeaders($ownerPlaintext));
 
-    $release->assertCreated()->assertJsonStructure(['swap_token']);
+    $release->assertCreated()->assertJsonStructure(['ownership_claim_code']);
 
-    $swapToken = (string) $release->json('swap_token');
+    $swapToken = (string) $release->json('ownership_claim_code');
     $ownership = Ownership::current();
 
     expect($ownership?->pending_claim_id)->not->toBeNull()
@@ -160,7 +160,7 @@ function releaseOwnership(string $ownerPlaintext): string
     $response = test()->postJson('/bfc/ownership/release', [], ownerHeaders($ownerPlaintext));
     $response->assertCreated();
 
-    return (string) $response->json('swap_token');
+    return (string) $response->json('ownership_claim_code');
 }
 
 /**

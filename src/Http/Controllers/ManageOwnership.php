@@ -128,7 +128,7 @@ final class ManageOwnership
                 ));
             }
 
-            return response()->json(['swap_token' => $swapToken], 201);
+            return response()->json(['ownership_claim_code' => $swapToken], 201);
         });
     }
 

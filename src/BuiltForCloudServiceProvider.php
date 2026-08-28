@@ -15,6 +15,7 @@ use ArtisanBuild\BuiltForCloud\Commands\TokenRevokeCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenRotateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenUsageCommand;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
+use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
 use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
@@ -45,6 +46,8 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/built-for-cloud.php', 'built-for-cloud');
 
         $this->app->singleton(UsageReporter::class, NullUsageReporter::class);
+
+        $this->app->bind(DurableCredentialMinter::class, ApiTokenMinter::class);
 
         $this->app->bind(CredentialDeclaration::class, function (Application $app): CredentialDeclaration {
             /** @var class-string<CredentialDeclaration> $declaration */

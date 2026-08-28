@@ -19,6 +19,7 @@ use Illuminate\Database\Eloquent\Model;
  * @property int $request_count
  * @property CarbonInterface|null $expires_at
  * @property CarbonInterface|null $revoked_at
+ * @property CarbonInterface|null $rotated_at
  * @property array<int, string>|null $abilities
  * @property string|null $client_identity
  * @property CarbonInterface|null $client_identity_last_seen_at
@@ -49,6 +50,7 @@ final class ApiToken extends Model
         'request_count',
         'expires_at',
         'revoked_at',
+        'rotated_at',
         'abilities',
         'client_identity',
         'client_identity_last_seen_at',
@@ -63,6 +65,7 @@ final class ApiToken extends Model
             'last_used_at' => 'datetime',
             'expires_at' => 'datetime',
             'revoked_at' => 'datetime',
+            'rotated_at' => 'datetime',
             'request_count' => 'integer',
             'abilities' => 'array',
             'client_identity_last_seen_at' => 'datetime',

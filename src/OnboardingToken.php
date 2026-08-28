@@ -11,7 +11,7 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * @property string $id
- * @property string $email
+ * @property string|null $email
  * @property string $scope
  * @property string $token_hash
  * @property string|null $durable_token_id

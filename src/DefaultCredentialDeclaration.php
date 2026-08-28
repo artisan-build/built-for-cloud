@@ -5,15 +5,22 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud;
 
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
+use ArtisanBuild\BuiltForCloud\Contracts\DeclaresBurnMode;
 use Illuminate\Http\Request;
 
 /**
  * The declaration the package ships so it works out of the box: no subject
- * derivation, and authorization defers entirely to the credential's own
- * lifecycle and abilities (which the guard and middleware already enforce).
+ * derivation, authorization defers entirely to the credential's own
+ * lifecycle and abilities (which the guard and middleware already enforce),
+ * and claim codes burn on first use — the `api_tokens` provider's mode.
  */
-final class DefaultCredentialDeclaration implements CredentialDeclaration
+final class DefaultCredentialDeclaration implements CredentialDeclaration, DeclaresBurnMode
 {
+    public function burnMode(): BurnMode
+    {
+        return BurnMode::FirstUse;
+    }
+
     public function resolveSubject(Request $request): ?Subject
     {
         return null;

@@ -112,7 +112,7 @@ function webhookReleaseOwnership(string $ownerPlaintext): string
     $response = test()->postJson('/bfc/ownership/release', [], webhookOwnerHeaders($ownerPlaintext));
     $response->assertCreated();
 
-    return (string) $response->json('swap_token');
+    return (string) $response->json('ownership_claim_code');
 }
 
 function webhookCreateOwnershipClaim(string $plainTextToken): string
