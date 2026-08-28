@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Commands;
 
+use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\CloudCommandRunner;
 use ArtisanBuild\BuiltForCloud\TokenGenerator;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
@@ -21,7 +22,7 @@ final class TokenRotateCommand extends Command
         $emergency = (bool) $this->option('emergency');
 
         if ((bool) $this->option('execute')) {
-            $registry->rotate($name, (string) $this->option('hash'), $emergency);
+            $registry->rotate($name, (string) $this->option('hash'), $emergency, AuditActor::cliOperator());
             $this->line($emergency ? "Token {$name} rotated with emergency expiry." : "Token {$name} rotated with one hour grace.");
 
             return self::SUCCESS;

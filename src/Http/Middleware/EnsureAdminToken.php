@@ -35,6 +35,11 @@ final class EnsureAdminToken
             $this->tokens->recordClientIdentityFromRequest($request, $token);
 
             if ($token->hasScope(Scope::Admin)) {
+                // Stash WHO authenticated so downstream surfaces can audit
+                // their mutations to this admin token (D8's actor model).
+                // The id, never the credential.
+                $request->attributes->set('bfc.actor_token_id', (string) $token->getKey());
+
                 return $next($request);
             }
 

@@ -124,6 +124,88 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | The Three Lifetimes (PRD 1.3)
+    |--------------------------------------------------------------------------
+    |
+    | Three separately bounded lifetimes govern everything this package
+    | mints, and only ONE of them ever has a default:
+    |
+    | 1. CLAIM CODE — ttl_seconds is REQUIRED on issue and package-bounded
+    |    to 60 seconds .. 7 days. The short life belongs on the code.
+    | 2. DURABLE CREDENTIAL — expiry is CALLER-CHOSEN and there is NO
+    |    default, ever. Revocation-on-event (offboarding, rotation,
+    |    self-revoke), not expiry, is the intended end of a durable's life.
+    |    When an issuer DOES choose an `expires_at`, the holder is warned
+    |    before it lapses (`bfc:credentials:warn-expiring`, below) —
+    |    conditional on that choice, never a nudge toward making it.
+    | 3. ROTATION GRACE — the superseded credential survives rotation by
+    |    1 hour, or 0 with --emergency.
+    |
+    | `expiry_warning_hours` is how far ahead of a CHOSEN durable expiry the
+    | `expiring` event fires. It warns; it never extends or expires anything.
+    |
+    */
+
+    'lifetimes' => [
+        'expiry_warning_hours' => env('BUILT_FOR_CLOUD_EXPIRY_WARNING_HOURS', 72),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Audit Stream & Outbox
+    |--------------------------------------------------------------------------
+    |
+    | Every credential lifecycle transition appends an event to the
+    | instance-side, append-only `credential_audit_events` table (ids only,
+    | never secret values) plus a `credential_outbox` row in the SAME
+    | transaction. Notifications consume the outbox after commit.
+    |
+    | `claim_ttl_seconds` is how long an outbox claim is honoured before a
+    | consumer that died mid-delivery is presumed dead and the row becomes
+    | claimable again. Keep it comfortably above your slowest mail send
+    | times the recipients per event: a claim that expires mid-send lets a
+    | second consumer re-deliver to a recipient whose marker has not landed
+    | yet. Sends are tracked per recipient, so an expired claim never
+    | re-sends to recipients already marked.
+    |
+    */
+
+    'audit' => [
+        'outbox' => [
+            'claim_ttl_seconds' => env('BUILT_FOR_CLOUD_OUTBOX_CLAIM_TTL', 600),
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Lifecycle Notification Policy
+    |--------------------------------------------------------------------------
+    |
+    | ONE policy: lifecycle event => declared recipients (`issuer`,
+    | `holder`). The defaults are SEC-6's two notices — the issuer is told
+    | when a code is exchanged, the intended recipient is told on first
+    | use — plus the conditional expiry warning. Override the policy per
+    | app to extend it.
+    |
+    | `issuer` is this instance's issuer notice inbox; null means issuer
+    | rows notify no one. "holder" resolves via the code's addressed
+    | recipient, else the app declaration's DeclaresHolderResolution — and
+    | an unbound subject (a CI key, an app token) resolves to NOBODY rather
+    | than falling back to spamming the operator.
+    |
+    */
+
+    'notifications' => [
+        'issuer' => env('BUILT_FOR_CLOUD_ISSUER_NOTIFICATION_EMAIL'),
+        'policy' => [
+            'exchanged' => ['issuer'],
+            'first_used' => ['holder'],
+            'expiring' => ['holder'],
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Auth Foundation
     |--------------------------------------------------------------------------
     |
