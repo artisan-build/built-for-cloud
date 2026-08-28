@@ -59,20 +59,27 @@ table's stored values, where a value that is exactly
 `hash('sha256', marker)` is allowed, the intended at-rest form), **queue**
 (the real enqueued artifact: JobQueued payloads, the raw body of every
 processing job — the sync driver's observable point — the serialized job
-object itself, and a sweep of `Queue::fake()`'s pushed jobs), **cache**
+object itself, and a sweep of `Queue::fake()`'s pushed jobs;
+`Queue::fakeFor()` is out of scope since Laravel restores the real
+manager before finalization, and `pushRaw` payloads are not swept), **cache**
 (every value written), and the **session** payload. Per-artifact helpers
 cover the rest: `assertResponseCarriesNoSecret` (body + headers),
 `assertConsoleOutputCarriesNoSecret`, and `assertExceptionCarriesNoSecret`
 (message, rendered trace, context, the whole previous chain).
 
 Detection sees through recoverable encodings, not just literal bytes:
-every captured string is also scanned URL-decoded, JSON-unescaped, and
-with every base64-alphabet run decoded — which is what catches a logged
-`Basic base64(user:secret)` header. If the watched action throws, the
+every captured string is also scanned URL-decoded, JSON-unescaped (every
+escape, surrogate pairs included), and with base64-alphabet runs decoded
+— tolerating prefix junk, MIME wrapping, and one nested base64 level —
+which is what catches a logged `Basic base64(user:secret)` header. These
+are the common ACCIDENTAL encodings, because accidental egress is the
+harness's threat model; deliberate obfuscation (hex, compression, custom
+encodings) is outside its scope. If the watched action throws, the
 captured channels are still asserted: a leak fails the test naming both
 signals; a clean throw propagates untouched. Failure messages name the
-leaking channel and the matched form, and never echo the leaked content.
-No state bleeds between tests.
+leaking channel and the matched form, never echo the leaked content, and
+redact the marker and its recoverable encodings. No state bleeds between
+tests.
 
 Every channel ships with a falsifiability self-test that deliberately
 plants the marker in that channel — literal and encoded, throwing and

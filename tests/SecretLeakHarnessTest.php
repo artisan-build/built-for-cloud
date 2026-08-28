@@ -398,3 +398,110 @@ it('detects a marker in a job pushed onto a faked queue', function (): void {
         ->and($failure->getMessage())->toContain('faked queue')
         ->and($failure->getMessage())->not->toContain($marker);
 });
+
+it('detects a base64 marker glued behind a query-string prefix', function (): void {
+    $marker = leakMarker();
+
+    $failure = plantAndCatch(function () use ($marker): void {
+        Log::info('callback: https://example.test/cb?token='.base64_encode($marker));
+    }, $marker);
+
+    expect($failure)->toBeInstanceOf(AssertionFailedError::class)
+        ->and($failure->getMessage())->toContain('[log]')
+        ->and($failure->getMessage())->toContain('base64-decoded');
+});
+
+it('detects mime-wrapped base64 carrying the marker', function (): void {
+    $marker = leakMarker();
+
+    $failure = plantAndCatch(function () use ($marker): void {
+        Log::info("mail body:\n".chunk_split(base64_encode('payload user:'.$marker), 76));
+    }, $marker);
+
+    expect($failure)->toBeInstanceOf(AssertionFailedError::class)
+        ->and($failure->getMessage())->toContain('[log]')
+        ->and($failure->getMessage())->toContain('base64-decoded');
+});
+
+it('detects a short marker hidden in base64', function (): void {
+    $marker = substr(bin2hex(random_bytes(3)), 0, 6);
+
+    $failure = plantAndCatch(function () use ($marker): void {
+        Log::info('stub: '.base64_encode($marker));
+    }, $marker);
+
+    expect($failure)->toBeInstanceOf(AssertionFailedError::class)
+        ->and($failure->getMessage())->toContain('[log]')
+        ->and($failure->getMessage())->toContain('base64-decoded');
+});
+
+it('detects a double-base64-encoded marker', function (): void {
+    $marker = leakMarker();
+
+    $failure = plantAndCatch(function () use ($marker): void {
+        Log::info('wrapped twice: '.base64_encode(base64_encode($marker)));
+    }, $marker);
+
+    expect($failure)->toBeInstanceOf(AssertionFailedError::class)
+        ->and($failure->getMessage())->toContain('[log]')
+        ->and($failure->getMessage())->toContain('base64-decoded');
+});
+
+it('detects a marker containing a newline planted via json_encode', function (): void {
+    $marker = "leak\n".bin2hex(random_bytes(12));
+
+    $failure = plantAndCatch(function () use ($marker): void {
+        Log::info('raw body: '.json_encode(['token' => $marker]));
+    }, $marker);
+
+    expect($failure)->toBeInstanceOf(AssertionFailedError::class)
+        ->and($failure->getMessage())->toContain('[log]')
+        ->and($failure->getMessage())->toContain('json-unescaped');
+});
+
+it('detects a marker containing an emoji planted via json_encode', function (): void {
+    $marker = 'leak😀'.bin2hex(random_bytes(8));
+
+    $failure = plantAndCatch(function () use ($marker): void {
+        Log::info('raw body: '.json_encode(['token' => $marker]));
+    }, $marker);
+
+    expect($failure)->toBeInstanceOf(AssertionFailedError::class)
+        ->and($failure->getMessage())->toContain('[log]')
+        ->and($failure->getMessage())->toContain('json-unescaped');
+});
+
+it('redacts the encoded form of the marker from failure output', function (): void {
+    $marker = leakMarker();
+
+    $failure = plantAndCatch(function () use ($marker): void {
+        Log::info('planted '.$marker);
+
+        throw new DomainException('upstream said: '.base64_encode($marker));
+    }, $marker);
+
+    expect($failure)->toBeInstanceOf(AssertionFailedError::class)
+        ->and($failure->getMessage())->toContain('[log]')
+        ->and($failure->getMessage())->toContain('DomainException')
+        ->and($failure->getMessage())->not->toContain($marker)
+        ->and($failure->getMessage())->not->toContain(base64_encode($marker));
+});
+
+it('re-registers listeners after the application is refreshed', function (): void {
+    $first = leakMarker();
+
+    $this->assertNoSecretLeakage($first, function (): void {
+        Log::info('all quiet before the refresh');
+    });
+
+    $this->refreshApplication();
+
+    $second = leakMarker();
+
+    $failure = plantAndCatch(function () use ($second): void {
+        Log::info('planted '.$second);
+    }, $second);
+
+    expect($failure)->toBeInstanceOf(AssertionFailedError::class)
+        ->and($failure->getMessage())->toContain('[log]');
+});

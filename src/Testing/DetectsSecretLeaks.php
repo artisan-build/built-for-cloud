@@ -41,7 +41,10 @@ use Throwable;
  *   event, the raw body of every job that starts processing (the sync
  *   driver's observable point), the serialized form of the job object
  *   itself (clone effects included), and — when the Queue facade is faked
- *   — a finalization sweep over the fake's pushed jobs.
+ *   — a finalization sweep over the fake's pushed jobs. `Queue::fakeFor()`
+ *   is out of scope (Laravel restores the real manager before
+ *   finalization — use `Queue::fake()`), and `pushRaw` payloads are not
+ *   swept.
  * - **cache** — every value written to the cache during the action.
  * - **session** — the entire session payload after the action.
  *
@@ -53,11 +56,15 @@ use Throwable;
  *
  * Every captured string is scanned for the marker in each RECOVERABLE
  * form, not just the literal bytes: plain substring, URL-decoded,
- * JSON-unescaped (\uXXXX and escape sequences), and base64 — every
- * base64-alphabet run of 16+ characters is decoded and its bytes scanned,
- * which is what catches a logged `Basic base64(user:secret)` header
- * whatever the prefix alignment. Failures name the channel in square
- * brackets, name the form that matched, and redact the marker itself.
+ * JSON-unescaped (every escape, surrogate pairs included), and base64 —
+ * base64-alphabet runs are decoded (tolerating prefix junk, MIME
+ * wrapping, and one nested base64 level) and their bytes scanned, which
+ * is what catches a logged `Basic base64(user:secret)` header whatever
+ * the prefix alignment. These are the COMMON ACCIDENTAL encodings,
+ * because the threat model is accidental egress — deliberate obfuscation
+ * (hex, compression, custom encodings) is outside this harness's scope.
+ * Failures name the channel in square brackets, name the form that
+ * matched, and redact the marker and its recoverable encodings.
  *
  * If the watched action throws, recording still stops and the captured
  * channels are still asserted: a leak fails the test (the failure names
@@ -79,6 +86,8 @@ trait DetectsSecretLeaks
     private bool $leakWatchActive = false;
 
     private bool $leakWatchHooksRegistered = false;
+
+    private ?int $leakWatchHooksAppId = null;
 
     /** @var list<array{channel: string, detail: string}> */
     private array $observedLeaks = [];
@@ -121,7 +130,7 @@ trait DetectsSecretLeaks
                 Assert::fail(
                     "The secret marker escaped:\n".implode("\n", $leaks)
                     ."\nThe watched action also threw ".$exception::class.': '
-                    .str_replace($marker, '[REDACTED-SECRET-MARKER]', $exception->getMessage()),
+                    .$this->redactMarker($exception->getMessage(), $marker),
                 );
             }
 
@@ -299,11 +308,22 @@ trait DetectsSecretLeaks
 
     private function registerLeakWatchHooks(): void
     {
-        if ($this->leakWatchHooksRegistered) {
+        if ($this->app === null) {
+            Assert::fail('beginLeakWatch() requires a booted application.');
+        }
+
+        // Listeners live on the application's dispatcher: refreshing the
+        // application discards them while the flag would stay true, so the
+        // registration is keyed on the current instance and repeated when
+        // it changes.
+        $appId = spl_object_id($this->app);
+
+        if ($this->leakWatchHooksRegistered && $this->leakWatchHooksAppId === $appId) {
             return;
         }
 
         $this->leakWatchHooksRegistered = true;
+        $this->leakWatchHooksAppId = $appId;
 
         Event::listen(MessageLogged::class, function (MessageLogged $event): void {
             if ($this->leakWatchActive) {
@@ -446,6 +466,11 @@ trait DetectsSecretLeaks
     /**
      * Scan a captured string for the marker in every recoverable form.
      * Returns the name of the form that matched, or null when clean.
+     *
+     * The forms are the COMMON ACCIDENTAL encodings — plain, URL, JSON,
+     * base64 (one nested level) — because the threat model is accidental
+     * egress. Deliberate obfuscation (hex, compression, custom encodings)
+     * is outside this harness's scope.
      */
     private function leakingFormOf(string $captured, string $marker): ?string
     {
@@ -465,12 +490,35 @@ trait DetectsSecretLeaks
             return 'json-unescaped';
         }
 
-        if (preg_match_all('#[A-Za-z0-9+/\-_=]{16,}#', $captured, $matches) > 0) {
-            foreach ($matches[0] as $run) {
-                $decoded = base64_decode(strtr(rtrim($run, '='), '-_', '+/'), true);
+        // MIME-style wrapping splits one base64 token across lines; a
+        // whitespace-stripped copy restores it to a single run.
+        $stripped = str_replace(["\r", "\n", "\t", ' '], '', $captured);
 
-                if ($decoded !== false && str_contains($decoded, $marker)) {
+        $haystacks = $stripped === $captured ? [$captured] : [$captured, $stripped];
+
+        foreach ($haystacks as $haystack) {
+            foreach ($this->decodedBase64Runs($haystack, $marker) as $decoded) {
+                if (str_contains($decoded, $marker)) {
                     return 'base64-decoded';
+                }
+
+                $innerUrl = rawurldecode($decoded);
+
+                if ($innerUrl !== $decoded && str_contains($innerUrl, $marker)) {
+                    return 'base64-decoded';
+                }
+
+                $innerJson = $this->jsonUnescape($decoded);
+
+                if ($innerJson !== $decoded && str_contains($innerJson, $marker)) {
+                    return 'base64-decoded';
+                }
+
+                // One more base64 level catches double-encoding; no deeper.
+                foreach ($this->decodedBase64Runs($decoded, $marker) as $doubleDecoded) {
+                    if (str_contains($doubleDecoded, $marker)) {
+                        return 'base64-decoded';
+                    }
                 }
             }
         }
@@ -479,8 +527,63 @@ trait DetectsSecretLeaks
     }
 
     /**
-     * Undo JSON string escaping (\uXXXX sequences and the simple escapes)
-     * so an escaped marker cannot hide behind its encoding.
+     * Decode every base64-alphabet run in the text, tolerating prefix junk
+     * that joined a run: on a strict-decode failure, the token after the
+     * last interior '=' and the start offsets 1..3 are retried before
+     * giving up. The run-length threshold follows the marker's encoded
+     * length so a short marker's encoding is not ignored.
+     *
+     * @return list<string>
+     */
+    private function decodedBase64Runs(string $text, string $marker): array
+    {
+        $threshold = max(8, min(16, strlen(base64_encode($marker))));
+
+        if (preg_match_all('#[A-Za-z0-9+/\-_=]{'.$threshold.',}#', $text, $matches) === 0) {
+            return [];
+        }
+
+        $decoded = [];
+
+        foreach ($matches[0] as $run) {
+            $candidates = [$run];
+
+            // '=' only legally terminates base64; one mid-run means prefix
+            // junk joined the token (`token=...`) — the real token starts
+            // after the last interior '='.
+            $interior = strrpos(rtrim($run, '='), '=');
+
+            if ($interior !== false) {
+                $candidates[] = substr($run, $interior + 1);
+            }
+
+            foreach ($candidates as $candidate) {
+                for ($offset = 0; $offset <= 3; $offset++) {
+                    $slice = substr($candidate, $offset);
+
+                    if (strlen($slice) < $threshold) {
+                        break;
+                    }
+
+                    $bytes = base64_decode(strtr(rtrim($slice, '='), '-_', '+/'), true);
+
+                    if ($bytes !== false) {
+                        $decoded[] = $bytes;
+
+                        break;
+                    }
+                }
+            }
+        }
+
+        return $decoded;
+    }
+
+    /**
+     * Undo JSON string escaping — every simple escape (\b \f \n \r \t \"
+     * \/ \\), lone \uXXXX sequences, and UTF-16 surrogate pairs combined
+     * into their real code point — so an escaped marker cannot hide behind
+     * its encoding.
      */
     private function jsonUnescape(string $captured): string
     {
@@ -488,24 +591,78 @@ trait DetectsSecretLeaks
             return $captured;
         }
 
-        $unescaped = (string) preg_replace_callback(
-            '/\\\\u([0-9a-fA-F]{4})/',
-            static fn (array $match): string => mb_convert_encoding(pack('H*', $match[1]), 'UTF-8', 'UTF-16BE'),
+        return (string) preg_replace_callback(
+            '/\\\\u([Dd][89ABab][0-9A-Fa-f]{2})\\\\u([Dd][C-Fc-f][0-9A-Fa-f]{2})|\\\\u([0-9A-Fa-f]{4})|\\\\(["\/\\\\bfnrt])/',
+            static function (array $match): string {
+                if ($match[1] !== '') {
+                    $high = (int) hexdec($match[1]);
+                    $low = (int) hexdec($match[2]);
+
+                    return (string) mb_chr(0x10000 + (($high - 0xD800) << 10) + ($low - 0xDC00), 'UTF-8');
+                }
+
+                if (($match[3] ?? '') !== '') {
+                    return mb_convert_encoding(pack('H*', $match[3]), 'UTF-8', 'UTF-16BE');
+                }
+
+                return match ($match[4]) {
+                    'b' => "\x08",
+                    'f' => "\x0C",
+                    'n' => "\n",
+                    'r' => "\r",
+                    't' => "\t",
+                    default => $match[4],
+                };
+            },
             $captured,
         );
-
-        return str_replace(['\\/', '\\"', '\\\\'], ['/', '"', '\\'], $unescaped);
     }
 
     private function recordLeak(string $channel, string $detail, string $marker): void
     {
-        $redacted = str_replace($marker, '[REDACTED-SECRET-MARKER]', $detail);
+        $redacted = $this->redactMarker($detail, $marker);
 
         if (mb_strlen($redacted) > 300) {
             $redacted = mb_substr($redacted, 0, 300).'…';
         }
 
         $this->observedLeaks[] = ['channel' => $channel, 'detail' => $redacted];
+    }
+
+    /**
+     * Replace the marker — and its recoverable encodings, which a printed
+     * message can no more carry than the literal — with a placeholder.
+     */
+    private function redactMarker(string $text, string $marker): string
+    {
+        $standard = base64_encode($marker);
+        $urlSafe = strtr($standard, '+/', '-_');
+
+        $needles = [
+            $marker,
+            $standard,
+            rtrim($standard, '='),
+            $urlSafe,
+            rtrim($urlSafe, '='),
+        ];
+
+        $urlEncoded = rawurlencode($marker);
+
+        if ($urlEncoded !== $marker) {
+            $needles[] = $urlEncoded;
+        }
+
+        $jsonEncoded = json_encode($marker);
+
+        if (is_string($jsonEncoded)) {
+            $jsonEscaped = substr($jsonEncoded, 1, -1);
+
+            if ($jsonEscaped !== '' && $jsonEscaped !== $marker) {
+                $needles[] = $jsonEscaped;
+            }
+        }
+
+        return str_replace(array_unique($needles), '[REDACTED-SECRET-MARKER]', $text);
     }
 
     private function stringifyForLeakScan(mixed $value): string
