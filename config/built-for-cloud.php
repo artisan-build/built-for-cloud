@@ -93,6 +93,35 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | HMAC Signing (the hmac credential kind, PRD 1.21)
+    |--------------------------------------------------------------------------
+    |
+    | The verification bounds of the canonical envelope (SEC-V3-07).
+    |
+    | `timestamp_tolerance_seconds` — how far a signed timestamp may sit
+    | from this server's clock, in either direction. The replay-nonce
+    | window is derived as exactly 2x this value (one cache entry per
+    | key+nonce, bounded by TTL), which provably covers the whole
+    | timestamp-acceptance window: any replay outliving its nonce entry is
+    | already stale by the timestamp rule.
+    |
+    | `audience` — the audience string this app signs FOR and verifies AS
+    | (a re-targeted message signed for another audience is rejected).
+    | Null falls back to `app.url`.
+    |
+    | The hmac ENCRYPTION keyring deliberately has no config here: it
+    | rides APP_KEY + APP_PREVIOUS_KEYS (SEC-V3-08) — see bfc:hmac:rewrap
+    | and release-notes/hmac-kind.md for the staged rotation runbook.
+    |
+    */
+
+    'hmac' => [
+        'timestamp_tolerance_seconds' => env('BUILT_FOR_CLOUD_HMAC_TIMESTAMP_TOLERANCE', 300),
+        'audience' => env('BUILT_FOR_CLOUD_HMAC_AUDIENCE'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Client Identity Observation
     |--------------------------------------------------------------------------
     |

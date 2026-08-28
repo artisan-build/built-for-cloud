@@ -42,6 +42,7 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\VerifyHmacSignature;
 use ArtisanBuild\BuiltForCloud\Listeners\QueueOwnershipWebhook;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -109,6 +110,9 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router->aliasMiddleware('bfc.token.admin', EnsureAdminToken::class);
             $router->aliasMiddleware('bfc.credential.admin', EnsureCredentialAdmin::class);
             $router->aliasMiddleware('bfc.ability', EnsureCredentialAbility::class);
+            // The verify half of the hmac pair (PRD 1.21, SEC-V3-07):
+            // consuming apps put it in front of signed-message routes.
+            $router->aliasMiddleware('bfc.hmac', VerifyHmacSignature::class);
 
             $router->get('/bfc/meta', MetaController::class)
                 ->middleware('throttle:bfc-public');
