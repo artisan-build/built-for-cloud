@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
 use ArtisanBuild\BuiltForCloud\Commands\CreateAdminCommand;
 use ArtisanBuild\BuiltForCloud\Commands\FallbackTokenGenerateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand;
@@ -13,6 +14,7 @@ use ArtisanBuild\BuiltForCloud\Commands\TokenListCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenRevokeCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenRotateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenUsageCommand;
+use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
@@ -22,12 +24,16 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\Listeners\QueueOwnershipWebhook;
+use Illuminate\Auth\AuthManager;
 use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Router;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
@@ -39,6 +45,14 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/built-for-cloud.php', 'built-for-cloud');
 
         $this->app->singleton(UsageReporter::class, NullUsageReporter::class);
+
+        $this->app->bind(CredentialDeclaration::class, function (Application $app): CredentialDeclaration {
+            /** @var class-string<CredentialDeclaration> $declaration */
+            $declaration = config('built-for-cloud.credentials.declaration') ?? DefaultCredentialDeclaration::class;
+
+            /** @var CredentialDeclaration */
+            return $app->make($declaration);
+        });
     }
 
     public function boot(): void
@@ -50,6 +64,13 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
 
         $this->registerRateLimiters();
 
+        Auth::resolved(function (AuthManager $auth): void {
+            $auth->extend('bfc', function (Application $app, string $name, array $config): CredentialGuard {
+                /** @var array<string, mixed> $config */
+                return new CredentialGuard($app, $name, $config);
+            });
+        });
+
         if ($this->app->bound('router')) {
             /** @var Router $router */
             $router = $this->app['router'];
@@ -57,6 +78,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router->aliasMiddleware('bfc.auth', EnsureUserIsAuthenticated::class);
             $router->aliasMiddleware('bfc.admin', EnsureUserIsAdmin::class);
             $router->aliasMiddleware('bfc.token.admin', EnsureAdminToken::class);
+            $router->aliasMiddleware('bfc.ability', EnsureCredentialAbility::class);
 
             $router->get('/bfc/meta', MetaController::class)
                 ->middleware('throttle:bfc-public');

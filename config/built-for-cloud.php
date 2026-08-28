@@ -62,6 +62,35 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Unified Credential Store
+    |--------------------------------------------------------------------------
+    |
+    | The one store and the one guard. Point any guard in your app's
+    | `auth.guards` config at the `bfc` driver to authenticate requests
+    | against the `credentials` table. The guard NEVER consults the fallback
+    | token above — env pseudo-credentials have no path into the new store.
+    |
+    | `guard` names the app's bfc-driven guard, used by the `bfc.ability`
+    | middleware to find the authenticated credential.
+    |
+    | `declaration` is an executable class implementing CredentialDeclaration
+    | (resolveSubject/authorize hooks the framework calls). Null uses the
+    | package default, which authorizes everything the credential's own
+    | lifecycle and abilities already allow.
+    |
+    | `session_guard` names the session guard consulted ONLY to reject
+    | mismatched simultaneous principals. Null uses `auth.defaults.guard`.
+    |
+    */
+
+    'credentials' => [
+        'guard' => env('BUILT_FOR_CLOUD_CREDENTIAL_GUARD', 'bfc'),
+        'declaration' => null,
+        'session_guard' => null,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Client Identity Observation
     |--------------------------------------------------------------------------
     |
