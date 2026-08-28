@@ -40,6 +40,7 @@ use InvalidArgumentException;
  * @property string|null $public_key
  * @property CredentialStatus $status
  * @property CarbonInterface|null $revoked_at
+ * @property CarbonInterface|null $rotated_at
  * @property CarbonInterface|null $expires_at
  * @property CarbonInterface|null $last_used_at
  * @property CarbonInterface|null $created_at
@@ -73,6 +74,7 @@ final class Credential extends Model implements Authenticatable
         'public_key',
         'status',
         'revoked_at',
+        'rotated_at',
         'expires_at',
         'last_used_at',
     ];
@@ -102,6 +104,7 @@ final class Credential extends Model implements Authenticatable
             'status' => CredentialStatus::class,
             'abilities' => 'array',
             'revoked_at' => 'datetime',
+            'rotated_at' => 'datetime',
             'expires_at' => 'datetime',
             'last_used_at' => 'datetime',
         ];

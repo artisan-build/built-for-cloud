@@ -615,7 +615,7 @@ it('never serializes a hash or secret column in the listing', function (): void 
     expect((string) $response->getContent())->not->toContain('secret_hash')
         ->and(array_keys($response->json()[0]))->toBe([
             'id', 'kind', 'subject_type', 'subject_ref', 'name', 'abilities', 'status',
-            'created_at', 'last_used_at', 'expires_at', 'revoked_at',
+            'created_at', 'last_used_at', 'expires_at', 'revoked_at', 'rotated_at',
             'presentation_cadence_seconds', 'unsupported',
         ]);
 });

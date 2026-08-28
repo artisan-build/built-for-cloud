@@ -51,6 +51,12 @@ Additive unless marked otherwise:
   working; callers that assumed an empty body must read the new shape.
 - New unified-store verb routes: `GET /bfc/credentials`, `POST /bfc/credentials`,
   `DELETE /bfc/credentials/{id}`.
+- New rotation routes (PRD 1.7): `POST /bfc/credentials/{id}/rotate` and
+  `POST /api/credentials/id/{id}/rotate` — rotate-by-id, the primary verb, on both stores.
+  Unified-store summary rows gained the nullable `rotated_at` field (rotation provenance).
+  Legacy rotation's replacement now inherits the source row's exact abilities, subject binding
+  and remaining expiry (previously it was minted unscoped and non-expiring — the D6 defect), and
+  name-based rotation refuses whenever more than one resolvable row shares the name.
 - `GET /bfc/meta` `capabilities` gained `credentials`.
 - `POST /bfc/onboarding/issue` requires `ttl_seconds` (bounds below) and accepts nullable
   `email`; the claim surfaces speak the claim-contract error enum documented here.
@@ -261,6 +267,33 @@ install's credential) survives.
 - **204** — revoked, or already dead (idempotent — one death, one audit event).
 - **404** — no such id. **403** — the declaration denies `revoke` for the row's subject.
 
+### POST /api/credentials/id/{id}/rotate
+
+Rotate exactly one row — the primary rotation verb on this store. Make-before-break: the
+replacement is minted FIRST, inheriting the source row's **exact abilities, subject binding and
+remaining expiry**; the old row is stamped `rotated_at` and stays resolvable through a one-hour
+grace window (unless its own expiry comes sooner — rotation never extends a lifetime), then dies
+by its own expiry. No reaper is involved.
+
+**Request** — `{"emergency": false}`. `emergency: true` collapses the grace window: the old row
+dies immediately.
+
+- **201** — `{"id": "...", "name": "ci", "plaintext": "tok_...", "expires_at": ...,
+  "abilities": [...], "superseded_id": "..."}` — the single reveal, plus the supersession
+  lineage. Emits `issued` (replacement) and `rotated` (old row, carrying old → new lineage)
+  audit events in the mint's own transaction.
+- **404** — no such id. **403** — the declaration denies `rotate` for the row's subject.
+- **409** — `{"message": "..."}`: the row no longer resolves (revoked or expired) — there is
+  nothing to rotate; mint a replacement instead.
+- **500** — `{"message": "..."}`: the replacement was minted but the old row could not be
+  retired. The message names both ids: the old row is STILL LIVE (listed, `rotated_at` stamped)
+  and `DELETE /api/credentials/id/{id}` can always kill it; no plaintext was delivered, so the
+  unused replacement can simply be revoked by id, and retrying the rotation works.
+
+Name-based rotation survives only as the `token:rotate` CLI convenience, and it now **refuses
+whenever more than one resolvable row shares the name** — it never picks one. Rotate by id here
+instead.
+
 ### DELETE /api/credentials/{name}
 
 Revoke EVERY resolvable row of the name — the CLI-compatibility verb. Fails closed against the
@@ -320,6 +353,7 @@ Summary rows share one shape:
   "last_used_at": null,
   "expires_at": null,
   "revoked_at": null,
+  "rotated_at": null,
   "presentation_cadence_seconds": null,
   "unsupported": []
 }
@@ -330,7 +364,9 @@ Summary rows share one shape:
 discrimination:** a field named there is one the app's declaration says this store structurally
 cannot express — it is serialized null *and* listed, so null-and-listed means "unknowable here"
 while null-and-not-listed means "absent". Consumers must not render or alert on unsupported
-fields.
+fields. `rotated_at` is rotation provenance: non-null names a row superseded by rotation and
+living out its grace window — expected to appear beside its active replacement until the grace
+expiry passes.
 
 ### GET /bfc/credentials
 
@@ -395,3 +431,83 @@ consumes its outstanding enrollment code.
 
 - **204** — revoked, or already dead (idempotent — one death, one `revoked` audit event).
 - **404** — no such id. **403** — `{"message": "..."}` per the declaration's `revoke` verb.
+
+### POST /bfc/credentials/{id}/rotate
+
+Rotate by id — the primary verb (there is no name path over HTTP; `bfc:credential:rotate
+--name` is a CLI convenience that refuses on ambiguity). Make-before-break: the replacement is
+minted FIRST, then the old row is retired into its grace window.
+
+**Default rotation preserves EXACTLY**: the ability set, the subject binding
+(`subject_type` / `subject_ref` / `user_id`), the decorative name, and the remaining expiry of
+the row it replaces — never widening, never lifetime extension, silently. The old row is
+stamped `rotated_at`, stays resolvable through a one-hour grace window (unless its own expiry
+comes sooner — rotation never extends any lifetime), and dies at grace end by its own expiry.
+No reaper is involved.
+
+**Request:**
+
+```json
+{
+  "emergency": false,
+  "override": false,
+  "abilities": null,
+  "expires_at": null,
+  "code_ttl_seconds": null
+}
+```
+
+Everything is optional. `emergency: true` kills the old row immediately instead of granting
+grace. `abilities` / `expires_at` request a CHANGED replacement and are consumed only under
+`override: true` — any change without the flag, **narrowing included** (predictability beats
+cleverness), is refused with a `422`; the flag with nothing to change is refused the same way.
+An override is authorized through the verb matrix as its own consultation — the declaration's
+`authorizeVerb(rotate, …)` hook sees the request attribute `bfc.rotation_override` carrying the
+requested delta — and its audit events record the `override` reason code plus the delta.
+`code_ttl_seconds` is required (60–604800) when rotating an `asymmetric` credential and ignored
+otherwise.
+
+Per kind:
+
+| kind | rotation semantics |
+|---|---|
+| `bearer` / `basic` | a fresh secret is minted and delivered once, in this response's `delivery` (same shapes as the mint route) |
+| `asymmetric` | a fresh **enrollment code** is delivered against a new `pending` row — the client generates the new keypair itself; no key material ever travels. The old credential's public key keeps verifying through the grace window, so both rows are listed side by side. The enrollment-completing exchange ships with the first asymmetric consumer's rebuild |
+| `hmac` | **403, explicitly not implemented**: hmac rotation is the pending→active cutover (rotate creates the new key pending while the old keeps signing; delivery installs it; activation cuts over) and ships with the kind itself. Nothing falls through to bearer semantics |
+
+- **201:**
+
+```json
+{
+  "credential": { "…": "the replacement's summary row" },
+  "superseded_id": "the old row's id",
+  "delivery": { "shape": "bearer", "secret": "tok_..." }
+}
+```
+
+`delivery` is the **single reveal**, exactly as on `POST /bfc/credentials`. Emits `issued`
+(replacement) and `rotated` (old row, with old → new supersession lineage) audit events in the
+mint's own transaction; if any of those follow-up writes fail, EVERYTHING rolls back — no
+orphan credential — and retrying works.
+
+- **404** — no such id. **403** — `{"message": "..."}`: the declaration denies `rotate` (or the
+  override) for the row's subject, or the kind does not rotate (`hmac`).
+- **409** — `{"message": "..."}`: the row is revoked, expired, or a pending enrollment — none
+  of which is a rotatable source.
+- **422** — `{"message": "..."}`: shared input validation (a change without `override`,
+  out-of-bounds `code_ttl_seconds`, malformed abilities/expiry/booleans) — identical refusals
+  on the CLI transport.
+- **500** — `{"message": "..."}`: the replacement was committed but the old row could not be
+  retired. The message names both ids; the old row is STILL LIVE, listed with its `rotated_at`
+  stamp, and `DELETE /bfc/credentials/{id}` can always kill it. **No secret was delivered** —
+  the sealed carrier is discarded — so the unused replacement can simply be revoked by id, and
+  retrying the rotation works.
+
+**The elsewhere-hosted / manual case.** When no automation can install the new secret (the
+credential lives in a system only a human can reach), this verb is still the whole flow: it
+mints, reveals once, and holds the grace window while the human installs the secret at their
+own pace. Nothing is left untracked at any point — the listing shows the old row in grace
+(`rotated_at` set, expiry = grace end) beside the active replacement, the audit stream carries
+the old → new lineage, and if the human misses the window the old row is already dead and the
+new one already works. Use `emergency` only when the old secret is known-compromised, because
+it trades the installation window away.

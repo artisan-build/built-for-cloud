@@ -52,10 +52,12 @@ final class MintCredential
     /**
      * The claim-code primitive's package-enforced TTL bounds (PRD 1.1),
      * applying to the enrollment CODE only — never to the credential.
+     * Public because rotation's asymmetric path delivers the same
+     * enrollment code under the same bounds ({@see RotateCredential}).
      */
-    private const int CODE_TTL_MIN_SECONDS = 60;
+    public const int CODE_TTL_MIN_SECONDS = 60;
 
-    private const int CODE_TTL_MAX_SECONDS = 604800;
+    public const int CODE_TTL_MAX_SECONDS = 604800;
 
     public function __construct(private readonly LifecycleEventRecorder $recorder) {}
 

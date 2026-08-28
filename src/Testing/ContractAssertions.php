@@ -210,6 +210,7 @@ trait ContractAssertions
         if ($minted) {
             $this->assertBuiltForCloudBasicAuthTransportParity();
             $this->assertBuiltForCloudRevokeTransportParity();
+            $this->assertBuiltForCloudRotateTransportParity();
         }
     }
 
@@ -475,6 +476,128 @@ trait ContractAssertions
             [LifecycleEventType::Issued->value, LifecycleEventType::Revoked->value],
             $this->builtForCloudEventsFor($httpTarget->id),
         );
+    }
+
+    /**
+     * The rotate verb (PRD 1.7), compared across transports on IDENTICAL
+     * targets: two rows minted the same way — same subject_ref, same
+     * abilities, the same explicit expiry — one rotated per transport.
+     * Asserts row-state parity on the replacements (exact preservation of
+     * abilities, name, subject and remaining expiry), delivery parity
+     * (each secret hashes to its own replacement's stored digest, revealed
+     * exactly once on the CLI), grace parity on the superseded rows
+     * (`rotated_at` stamped, expiry bounded by the grace window), and
+     * audit parity (old = issued + rotated, new = issued). If the active
+     * declaration denies the rotate verb, the parity asserted is refusal
+     * parity: same error verbatim, and neither target is touched.
+     */
+    public function assertBuiltForCloudRotateTransportParity(): void
+    {
+        $admin = $this->mintBuiltForCloudAdminToken('parity-rotate-admin');
+
+        $ref = 'parity-rotate-'.bin2hex(random_bytes(4));
+        $expiry = now()->addDays(30)->toIso8601String();
+
+        $targets = [];
+
+        foreach (['cli target', 'http target'] as $leg) {
+            Assert::assertSame(0, Artisan::call('bfc:credential:mint', [
+                'subject-type' => 'external_consumer',
+                'subject-ref' => $ref,
+                '--abilities' => 'consume',
+                '--expires' => $expiry,
+                '--local' => true,
+            ]), sprintf('Provisioning the %s for rotate parity failed.', $leg));
+
+            Assert::assertSame(1, preg_match('/shown once: (\S+)/', Artisan::output(), $matches));
+
+            $targets[] = Credential::query()->where('secret_hash', hash('sha256', $matches[1]))->sole();
+        }
+
+        /** @var Credential $cliTarget */
+        /** @var Credential $httpTarget */
+        [$cliTarget, $httpTarget] = $targets;
+
+        $cliExit = Artisan::call('bfc:credential:rotate', ['id' => $cliTarget->id, '--local' => true]);
+        $cliOutput = Artisan::output();
+
+        $httpResponse = $this->postJson(
+            '/bfc/credentials/'.$httpTarget->id.'/rotate',
+            [],
+            $this->builtForCloudBearerHeaders($admin),
+        );
+
+        if ($httpResponse->status() === 403) {
+            Assert::assertNotSame(0, $cliExit, 'HTTP refused the rotation but the CLI performed it: the transports disagree.');
+            Assert::assertSame(
+                (string) $httpResponse->json('message'),
+                trim($cliOutput),
+                'The CLI refused the rotation with a different error than HTTP.',
+            );
+            Assert::assertNull($cliTarget->refresh()->rotated_at, 'A refused rotation stamped the CLI target anyway.');
+            Assert::assertNull($httpTarget->refresh()->rotated_at, 'A refused rotation stamped the HTTP target anyway.');
+
+            return;
+        }
+
+        $httpResponse->assertCreated();
+        Assert::assertSame(0, $cliExit, 'The CLI rotation failed where the HTTP rotation succeeded: the transports disagree.');
+
+        // Delivery parity: each transport reveals its replacement's secret
+        // exactly once, and each hashes to its own stored digest.
+        Assert::assertSame(1, preg_match('/shown once: (\S+)/', $cliOutput, $matches), 'The CLI rotation revealed no secret.');
+        $cliSecret = $matches[1];
+        Assert::assertSame(1, substr_count($cliOutput, $cliSecret), 'The CLI revealed the rotation secret more than once.');
+
+        /** @var Credential $cliReplacement */
+        $cliReplacement = Credential::query()->where('secret_hash', hash('sha256', $cliSecret))->sole();
+
+        Assert::assertSame('bearer', $httpResponse->json('delivery.shape'));
+        Assert::assertSame($httpTarget->id, $httpResponse->json('superseded_id'));
+
+        /** @var Credential $httpReplacement */
+        $httpReplacement = Credential::query()
+            ->where('secret_hash', hash('sha256', (string) $httpResponse->json('delivery.secret')))
+            ->sole();
+
+        // Row-state parity between the two replacements — equal by
+        // construction on the identical question, so a difference can only
+        // be a transport bug.
+        foreach (['kind', 'status', 'abilities', 'name', 'user_id', 'expires_at', 'subject_type', 'subject_ref'] as $attribute) {
+            Assert::assertEquals(
+                $cliReplacement->getAttributes()[$attribute] ?? null,
+                $httpReplacement->getAttributes()[$attribute] ?? null,
+                sprintf('The %s attribute differs between the CLI and HTTP rotation replacements.', $attribute),
+            );
+        }
+
+        // Preservation parity: the replacements carry the targets' exact
+        // abilities and expiry (both legs minted with the same inputs).
+        Assert::assertEquals($cliTarget->abilities, $cliReplacement->abilities);
+        Assert::assertEquals($cliTarget->expires_at, $cliReplacement->expires_at);
+
+        // Grace parity on the superseded rows.
+        foreach ($targets as $target) {
+            $target->refresh();
+
+            Assert::assertNotNull($target->rotated_at, 'Rotation left a superseded row unstamped.');
+            Assert::assertNotNull($target->expires_at);
+            Assert::assertFalse(
+                $target->expires_at->isAfter(now()->addHour()),
+                'A superseded row outlives the grace window.',
+            );
+        }
+
+        Assert::assertSame(
+            [LifecycleEventType::Issued->value, LifecycleEventType::Rotated->value],
+            $this->builtForCloudEventsFor($cliTarget->id),
+        );
+        Assert::assertSame(
+            [LifecycleEventType::Issued->value, LifecycleEventType::Rotated->value],
+            $this->builtForCloudEventsFor($httpTarget->id),
+        );
+        Assert::assertSame([LifecycleEventType::Issued->value], $this->builtForCloudEventsFor($cliReplacement->id));
+        Assert::assertSame([LifecycleEventType::Issued->value], $this->builtForCloudEventsFor($httpReplacement->id));
     }
 
     /**

@@ -7,14 +7,18 @@ namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 use ArtisanBuild\BuiltForCloud\Actions\ListCredentials;
 use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
 use ArtisanBuild\BuiltForCloud\Actions\RevokeCredential;
+use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\DeliveryShape;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
+use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
+use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\MintResult;
 use ArtisanBuild\BuiltForCloud\RevokeOutcome;
+use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use Illuminate\Http\JsonResponse;
@@ -90,6 +94,49 @@ final class ManageCredentials
             // throws on any later call, so a second egress of the same
             // secret is structurally impossible.
             'delivery' => $this->deliveryPayload($result),
+        ], 201);
+    }
+
+    /**
+     * The rotate verb's HTTP transport (PRD 1.7): by id — the primary
+     * verb; there is no name path over HTTP. The response carries the
+     * replacement's summary, the superseded row's id (the lineage the
+     * audit stream records as old → new), and the single reveal.
+     *
+     * Failure path B surfaces here as a 500 whose message names the
+     * still-live old row: the replacement stands but no secret was
+     * delivered, so the caller revokes by id and retries.
+     */
+    public function rotate(Request $request, RotateCredential $rotateCredential, string $id): JsonResponse
+    {
+        try {
+            $result = $rotateCredential(
+                $id,
+                RotateOptions::fromInput($request->only([
+                    'emergency', 'override', 'abilities', 'expires_at', 'code_ttl_seconds',
+                ])),
+                $this->actor($request),
+            );
+        } catch (InvalidCredentialInput $invalid) {
+            return response()->json(['message' => $invalid->getMessage()], 422);
+        } catch (CredentialVerbRefused $refused) {
+            return response()->json(['message' => $refused->getMessage()], 403);
+        } catch (RotationRefused $refused) {
+            return response()->json(['message' => $refused->getMessage()], 409);
+        } catch (RotationCutoverIncomplete $incomplete) {
+            return response()->json(['message' => $incomplete->getMessage()], 500);
+        }
+
+        if ($result === null) {
+            abort(404);
+        }
+
+        return response()->json([
+            'credential' => $result->mint->summary->toArray(),
+            'superseded_id' => $result->supersededId,
+            // The transport boundary: the ONE reveal (D7), same carrier
+            // rule as the mint route.
+            'delivery' => $this->deliveryPayload($result->mint),
         ], 201);
     }
 

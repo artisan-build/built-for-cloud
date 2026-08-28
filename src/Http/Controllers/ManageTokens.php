@@ -10,6 +10,8 @@ use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesCredentialVerbs;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresPresentationCadence;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
+use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
+use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Scope;
@@ -223,6 +225,61 @@ final class ManageTokens
         $this->tokens->revokeById($id, $this->actor($request));
 
         return response()->noContent();
+    }
+
+    /**
+     * Rotate by ID — the primary rotation verb on the legacy store
+     * (PRD 1.7, D6), riding the same two-segment `/id/{id}` path as the
+     * precise revoke so it can never collide with a name route. The
+     * replacement inherits the source row's exact abilities, subject
+     * binding and remaining expiry; the old row stays resolvable through
+     * its one-hour grace window (`emergency: true` collapses it) and then
+     * dies by its own expiry.
+     *
+     * The plaintext is generated server-side and appears exactly once, in
+     * this response — the legacy store's established single reveal (the
+     * mint route's own convention). A 409 names a source that no longer
+     * resolves; a 500 is failure path B, naming the still-live old row
+     * that revoke-by-id can always kill.
+     */
+    public function rotateById(Request $request, string $id): JsonResponse
+    {
+        /** @var ApiToken|null $target */
+        $target = ApiToken::query()->find($id);
+
+        if ($target === null) {
+            abort(404);
+        }
+
+        // The matrix consults the subject the ROW declares — never anything
+        // the request supplies (SEC-V3-07).
+        if (! $this->verbAllowed(CredentialVerb::Rotate, $target->subject(), $request)) {
+            abort(403);
+        }
+
+        $generated = $this->generator->generate();
+
+        try {
+            $replacement = $this->tokens->rotateById(
+                $id,
+                $generated->hash,
+                $request->boolean('emergency'),
+                $this->actor($request),
+            );
+        } catch (RotationRefused $refused) {
+            return response()->json(['message' => $refused->getMessage()], 409);
+        } catch (RotationCutoverIncomplete $incomplete) {
+            return response()->json(['message' => $incomplete->getMessage()], 500);
+        }
+
+        return response()->json([
+            'id' => $replacement->id,
+            'name' => $replacement->name,
+            'plaintext' => $generated->plaintext,
+            'expires_at' => $replacement->expires_at,
+            'abilities' => $replacement->abilities ?? [],
+            'superseded_id' => $id,
+        ], 201);
     }
 
     /**

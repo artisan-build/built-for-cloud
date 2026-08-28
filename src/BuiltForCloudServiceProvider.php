@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Commands\CreateAdminCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialListCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialMintCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialRevokeCommand;
+use ArtisanBuild\BuiltForCloud\Commands\CredentialRotateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\FallbackTokenGenerateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\InstallOperatorCredentialCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand;
@@ -143,6 +144,9 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router->delete('/bfc/credentials/{id}', [ManageCredentials::class, 'destroy'])
                 ->middleware('bfc.credential.admin');
 
+            $router->post('/bfc/credentials/{id}/rotate', [ManageCredentials::class, 'rotate'])
+                ->middleware('bfc.credential.admin');
+
             if ((bool) config('built-for-cloud.credential_api.enabled', false)) {
                 $router->prefix(trim((string) config('built-for-cloud.credential_api.prefix', 'api/credentials'), '/'))
                     ->middleware('bfc.token.admin')
@@ -155,6 +159,9 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                         // below — a token literally named "id" still deletes
                         // by name.
                         $router->delete('/id/{id}', [ManageTokens::class, 'destroyById']);
+                        // Rotation's primary verb on this store too (PRD
+                        // 1.7): by id, on the same collision-proof path.
+                        $router->post('/id/{id}/rotate', [ManageTokens::class, 'rotateById']);
                         $router->delete('/{name}', [ManageTokens::class, 'destroy']);
                     });
             }
@@ -166,6 +173,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 CredentialListCommand::class,
                 CredentialMintCommand::class,
                 CredentialRevokeCommand::class,
+                CredentialRotateCommand::class,
                 FallbackTokenGenerateCommand::class,
                 InstallOperatorCredentialCommand::class,
                 OutboxDrainCommand::class,

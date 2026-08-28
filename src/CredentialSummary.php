@@ -44,6 +44,7 @@ final readonly class CredentialSummary
         public ?CarbonInterface $revokedAt,
         public ?int $presentationCadenceSeconds,
         public array $unsupported = [],
+        public ?CarbonInterface $rotatedAt = null,
     ) {}
 
     /**
@@ -67,6 +68,7 @@ final readonly class CredentialSummary
             revokedAt: $credential->revoked_at,
             presentationCadenceSeconds: $presentationCadenceSeconds,
             unsupported: $unsupported,
+            rotatedAt: $credential->rotated_at,
         );
     }
 
@@ -115,6 +117,10 @@ final readonly class CredentialSummary
             'last_used_at' => $this->lastUsedAt?->toIso8601String(),
             'expires_at' => $this->expiresAt?->toIso8601String(),
             'revoked_at' => $this->revokedAt?->toIso8601String(),
+            // Rotation provenance (PRD 1.7): non-null names a row superseded
+            // by rotation and living out its grace window — visible so the
+            // listing can show old-in-grace beside new-active.
+            'rotated_at' => $this->rotatedAt?->toIso8601String(),
             'presentation_cadence_seconds' => $this->presentationCadenceSeconds,
             'unsupported' => $this->unsupported,
         ];
