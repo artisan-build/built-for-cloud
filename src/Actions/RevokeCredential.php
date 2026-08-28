@@ -14,7 +14,9 @@ use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
+use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
 use ArtisanBuild\BuiltForCloud\RevokeOutcome;
+use ArtisanBuild\BuiltForCloud\Subject;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -29,6 +31,16 @@ use Illuminate\Support\Facades\DB;
  * transaction: killing an enrollment kills the code that would complete
  * it. Idempotent on rows already dead — no second audit event for the
  * same death.
+ *
+ * The optional `$scope` narrows the verb to ONE subject's rows, which is
+ * how {@see PersonalCredentialSurface} answers "revoke MINE" without a
+ * second revoke verb. A row outside the scope reports NOT FOUND, not a
+ * refusal: on a self-service surface "that id exists but is not yours" is
+ * itself a disclosure, so an id belonging to another subject is
+ * indistinguishable from an id that never existed. The check runs inside
+ * this transaction, on the LOCKED row — never in a check-then-act window
+ * in a caller — and the scope is an argument, never anything read off the
+ * request here (SEC-V3-07).
  */
 final class RevokeCredential
 {
@@ -36,14 +48,19 @@ final class RevokeCredential
 
     public function __construct(private readonly LifecycleEventRecorder $recorder) {}
 
-    public function __invoke(string $id, ?AuditActor $actor = null): RevokeOutcome
+    public function __invoke(string $id, ?AuditActor $actor = null, ?Subject $scope = null): RevokeOutcome
     {
         /** @var RevokeOutcome */
-        return DB::transaction(function () use ($id, $actor): RevokeOutcome {
+        return DB::transaction(function () use ($id, $actor, $scope): RevokeOutcome {
             /** @var Credential|null $target */
             $target = Credential::query()->whereKey($id)->lockForUpdate()->first();
 
             if ($target === null) {
+                return RevokeOutcome::NotFound;
+            }
+
+            if ($scope !== null
+                && ($target->subject_type !== $scope->type || $target->subject_ref !== $scope->ref)) {
                 return RevokeOutcome::NotFound;
             }
 

@@ -40,6 +40,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\PersonalCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
@@ -56,6 +57,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
+use Throwable;
 
 final class BuiltForCloudServiceProvider extends ServiceProvider
 {
@@ -218,6 +220,25 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $router->post('/bfc/credentials/{id}/activate', [ManageCredentials::class, 'activate'])
             ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::CredentialRotate->value]);
 
+        // The personal-credentials surface (PRD 1.17): the SAME verbs
+        // above, session-authenticated and scoped to the caller's OWN
+        // credentials. Its gate is the session, not an operator ability
+        // — the app supplies the authenticated human — and the subject
+        // is derived SERVER-SIDE from that session by the app's
+        // declaration (SEC-V3-07), never from anything in the request.
+        // `bfc.auth` runs the offboarding kill too, so an offboarded
+        // user's surviving session cannot reach the screen (PRD 1.15).
+        // Fixed `/bfc/` path, part of the routes family, like every
+        // other package surface.
+        $router->get('/bfc/me/credentials', [PersonalCredentials::class, 'index'])
+            ->middleware(['throttle:bfc-personal', 'bfc.auth']);
+
+        $router->post('/bfc/me/credentials', [PersonalCredentials::class, 'store'])
+            ->middleware(['throttle:bfc-personal', 'bfc.auth']);
+
+        $router->delete('/bfc/me/credentials/{id}', [PersonalCredentials::class, 'destroy'])
+            ->middleware(['throttle:bfc-personal', 'bfc.auth']);
+
         // The machine-callable invite verb (PRD 1.13, SEC-V3-05): the
         // HTTP half of its two transports, behind the same operator
         // gate as the unified verb routes — an integration triggers
@@ -297,6 +318,18 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
 
         RateLimiter::for('bfc-claim', fn (Request $request): Limit => Limit::perMinute(10)->by($request->ip() ?? 'unknown'));
 
+        // The personal surface's limiter (PRD 1.17). Keyed on the
+        // SESSION principal, not a bearer digest: this surface has no
+        // bearer. The user id is read defensively — the limiter runs
+        // before the session gate, and a headless app (no guard at all)
+        // must get a bounded 401, never a 500 out of the AuthManager.
+        RateLimiter::for('bfc-personal', function (Request $request): array {
+            return [
+                Limit::perMinute(30)->by('bfc-personal-user|'.($this->limiterPrincipal($request) ?? 'anonymous')),
+                Limit::perMinute(60)->by('bfc-personal-ip|'.($request->ip() ?? 'unknown')),
+            ];
+        });
+
         // GATE-3.7 (rework Fix 5): write and expensive operator verbs
         // carry THREE independent bounds —
         //   1. per CREDENTIAL (sha256 of the presented bearer — the
@@ -319,5 +352,29 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 Limit::perMinute(600)->by('bfc-operator-write-global'),
             ];
         });
+    }
+
+    /**
+     * The session principal a personal-surface limiter buckets on, or null
+     * when there is none to resolve. Structural absence (no guard
+     * configured at all, the headless case above) and a guard that throws
+     * both mean "no principal": the request still gets its IP bucket and
+     * then meets the session gate, which is what decides the answer.
+     */
+    private function limiterPrincipal(Request $request): ?string
+    {
+        try {
+            $user = $request->user();
+        } catch (Throwable) {
+            return null;
+        }
+
+        if ($user === null) {
+            return null;
+        }
+
+        $id = $user->getAuthIdentifier();
+
+        return is_scalar($id) && (string) $id !== '' ? (string) $id : null;
     }
 }

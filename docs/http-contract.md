@@ -71,6 +71,11 @@ Additive unless marked otherwise:
   `api_tokens` — where the exemption requires the shape rotation actually leaves (the stamp
   plus a grace-bounded expiry), and `rotated_at` is not mass-assignable, so the exemption
   cannot be forged.
+- New personal-credentials routes (PRD 1.17): `GET /bfc/me/credentials`,
+  `POST /bfc/me/credentials` and `DELETE /bfc/me/credentials/{id}` — the session-authenticated
+  self-service front to the same unified-store verbs, whose subject is derived server-side from
+  the authenticated session and never from request input (SEC-V3-07). Additive: no existing
+  route, request or response shape changes.
 - `GET /bfc/meta` `capabilities` gained `credentials`.
 - `POST /bfc/onboarding/issue` requires `ttl_seconds` (bounds below) and accepts nullable
   `email`; the claim surfaces speak the claim-contract error enum documented here.
@@ -192,6 +197,9 @@ server-generated operational text and — per the single-reveal rule above — n
 | `DELETE /bfc/credentials/{id}` | `metadata` | empty `204` body |
 | `POST /bfc/credentials/{id}/rotate` | `content` | the `delivery` single reveal, plus summary rows |
 | `POST /bfc/credentials/{id}/activate` | `content` | no secret ever — but the summary row carries free-text names and subject refs |
+| `GET /bfc/me/credentials` | `content` | the caller's own summary rows carry free-text names and subject refs, plus the declaration's field lists |
+| `POST /bfc/me/credentials` | `content` | the `delivery` single reveal, plus free-text name/subject fields |
+| `DELETE /bfc/me/credentials/{id}` | `metadata` | empty `204` body |
 | `POST /bfc/subjects/offboard` | `metadata` | `{"offboarded": true, "fully_contained": bool}` / `{"accepted": true, "fully_contained": bool}` — bounded booleans only |
 
 Vendor-side reads of `metadata`-classified endpoints will be governed by the reserved
@@ -959,6 +967,122 @@ new one already works. Use `emergency` only when the old secret is known-comprom
 it trades the installation window away.
 
 ---
+
+## The personal-credentials surface (`/bfc/me/credentials`)
+
+PRD 1.17: **an authenticated human manages their OWN machine credentials** — list mine, mint
+(revealed once), revoke mine. The same store, the same action classes and the same summary shape
+as [`/bfc/credentials`](#the-unified-credential-store-bfccredentials) above; what differs is
+exactly one thing, and it is the thing that makes the surface safe to put in front of a logged-in
+person:
+
+> **The subject is derived SERVER-SIDE from the authenticated session** (SEC-V3-07), by the
+> application's own credential declaration. The operator routes take `subject_type` and
+> `subject_ref` as validated input. These routes take **neither**, on any verb. A
+> `subject_type`, `subject_ref` or `user_id` in a request body to these routes is **not read
+> at all** — it is not rejected with a message you could probe, it simply never reaches the
+> store. The mint binds to the session's subject and the session's user whatever the body said.
+
+Consequently, and each of these is a named negative test in the package's suite:
+
+- the listing returns only the caller's own rows — another user's rows are not filtered out of a
+  rendered answer, they are never fetched;
+- a mint binds to the session-derived subject, never to a crafted one;
+- a revoke acts only inside the caller's own subject; an id belonging to someone else answers
+  **404**, the same answer an id that never existed gets. This is deliberate: a `403` would
+  confirm that another user's credential exists, which is a disclosure a `404` does not make.
+
+**Authentication on these routes is the application's session**, not an admin token and not an
+operator ability. The package mounts them behind its `bfc.auth` gate, which the consuming
+application's authenticated human already passes; an unauthenticated request is `401` (or a
+redirect to the app's `login` route when it has one and the request does not expect JSON). That
+gate is also where an offboarded user's surviving session dies (PRD 1.15), so offboarding a
+subject both revokes its credentials and closes this screen to them. Every request rides the
+`bfc-personal` limiter (30/min per session principal, 60/min per IP).
+
+**When the application declares no subject for the session** — its declaration's
+`resolveSubject()` returns `null`, which is what the package's shipped default declaration does —
+every verb answers **403** with a `message`. Fail-closed on purpose: an empty `200` listing would
+assert "you hold no credentials", and that is a claim this surface cannot honestly make when it
+does not know whose credentials to look for.
+
+**What stays per-application is the MEANING, and it lives in the declaration, not in a branch in
+the package.** The screen is identical for every app. A capstan user-bound credential inherits its
+user's authority — the declaration's `authorize()` hook is what says so — and dies with the user,
+because offboarding revokes every credential under the subject *and* every credential bound to the
+user. A crate key carries its own authority, because crate's `authorize()` reads the credential's
+own abilities and never the holder's role. Same routes, same store; different declaration.
+
+### GET /bfc/me/credentials
+
+**200:**
+
+```json
+{
+  "credentials": [ { "…": "a summary row, exactly as on /bfc/credentials" } ],
+  "fields": {
+    "supported": ["name", "abilities", "last_used_at", "expires_at"],
+    "unsupported": []
+  }
+}
+```
+
+Rows are oldest first and carry the identical summary shape (and identical per-row `unsupported`
+list) documented for the unified store above; per-row `list_metadata` filtering applies here too.
+
+`fields` is the **declaration-driven rendering contract** (PRD 1.17 + 1.6). `supported` is what a
+front end draws; `unsupported` names the summary fields this application's store structurally
+cannot express. It is the same discrimination each row already carries, hoisted once so a UI can
+choose its columns and its mint form before it has fetched a single row — **a thinner declaration
+renders less**. Only `name`, `abilities`, `last_used_at` and `expires_at` are declarable;
+structural fields (id, kind, subject, status, timestamps) are always supported. Consumers must not
+render or alert on an unsupported field, and must not read a `null` on one as "absent".
+
+- **403** — `{"message": "..."}`: no subject is resolvable for this session (see above).
+- **401 / redirect** — no session.
+
+### POST /bfc/me/credentials
+
+Mint for the caller.
+
+**Request:**
+
+```json
+{
+  "kind": "bearer",
+  "name": "my laptop",
+  "abilities": ["consume"],
+  "expires_at": null,
+  "code_ttl_seconds": null
+}
+```
+
+Every field is optional and normalized by the same shared input object the operator transport
+uses, so the same junk is rejected the same way with the same message. **There is deliberately no
+`subject_type`, `subject_ref` or `user_id` field**: those are the three that decide whose
+credential this is, and they are the session's.
+
+- **201** — `{"credential": {…}, "delivery": {…}}`: the summary row, and the **single reveal**,
+  shaped by `delivery.shape` exactly as documented for
+  [`POST /bfc/credentials`](#post-bfccredentials). The plaintext appears here and nowhere else —
+  not in a later listing, not in the logs, not in the session, not at rest.
+- **403** — `{"message": "..."}`: no resolvable subject, the declaration denies `issue` for it,
+  the request widens past a declared ceiling, or it sets a declared-unsupported field.
+- **409** — an hmac mint during an APP_KEY rewrap.
+- **422** — validation (unknown `kind`, out-of-bounds `code_ttl_seconds`, malformed `abilities`).
+
+Emits an `issued` audit event in the mint's own transaction, with a `bound_user` actor carrying
+the session user's **id** — never their name or email.
+
+### DELETE /bfc/me/credentials/{id}
+
+Revoke one of the caller's own credentials, by id.
+
+- **204** — revoked, or already dead (idempotent — one death, one `revoked` audit event).
+- **404** — no such id **for this caller**. An id that exists under another subject answers this
+  same 404; existence outside the caller's own scope is never disclosed.
+- **403** — `{"message": "..."}`: no resolvable subject, or the declaration's `revoke` verb denies
+  it for this subject.
 
 ## Subjects — the offboard verb
 

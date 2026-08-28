@@ -55,6 +55,7 @@ final class SurfaceSelectionTest extends TestCase
         $this->postJson('/bfc/ownership/claim', ['token' => 'x'])->assertNotFound();
         $this->postJson('/bfc/claim', ['claim_code' => 'x', 'version' => 1])->assertNotFound();
         $this->getJson('/bfc/credentials')->assertNotFound();
+        $this->getJson('/bfc/me/credentials')->assertNotFound();
 
         // …while the aliases stay registered, so an app with routes off
         // still gates its own routes (the MCP per-tool primitive included).

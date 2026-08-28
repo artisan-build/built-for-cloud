@@ -8,6 +8,8 @@ use ArtisanBuild\BuiltForCloud\Actions\Concerns\ConsultsDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
+use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
+use ArtisanBuild\BuiltForCloud\Subject;
 
 /**
  * The list verb over the unified store (PRD 1.0 + 1.6), consumed by both
@@ -20,6 +22,13 @@ use ArtisanBuild\BuiltForCloud\CredentialVerb;
  * listing, not a refusal, because a partial answer is still an honest one.
  * Declared-unsupported summary fields are nulled AND named per row, so a
  * consumer can tell "absent" from "unknowable" on either transport.
+ *
+ * The optional `$subject` narrows the listing to ONE subject's rows. It is
+ * how {@see PersonalCredentialSurface} answers "list MINE" without a second
+ * list verb: the operator transport passes nothing and sees the instance,
+ * the self-service transport passes the SERVER-DERIVED subject and sees
+ * only that subject's rows (SEC-V3-07). The scope is an argument, never
+ * anything read off the request here.
  */
 final class ListCredentials
 {
@@ -28,12 +37,19 @@ final class ListCredentials
     /**
      * @return list<CredentialSummary>
      */
-    public function __invoke(): array
+    public function __invoke(?Subject $subject = null): array
     {
         $cadence = $this->declaredCadence();
         $unsupported = $this->declaredUnsupportedFields();
 
-        return Credential::query()
+        $query = Credential::query();
+
+        if ($subject !== null) {
+            $query->where('subject_type', $subject->type->value)
+                ->where('subject_ref', $subject->ref);
+        }
+
+        return $query
             ->orderBy('created_at')
             ->orderBy('id')
             ->get()
