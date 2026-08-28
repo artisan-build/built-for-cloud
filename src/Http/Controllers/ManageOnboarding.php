@@ -17,8 +17,11 @@ use ArtisanBuild\BuiltForCloud\Contracts\DeclaresDurableStore;
 use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
 use ArtisanBuild\BuiltForCloud\DurableStore;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintedSecret;
@@ -152,6 +155,23 @@ final class ManageOnboarding
         }
 
         try {
+            // A code that delivers an hmac signing key runs its WHOLE
+            // exchange under the shared rewrap lock (check-through-commit
+            // — see {@see HmacWriterBarrier}): a concurrent exchange can
+            // turn a first delivery into a re-key inside the transaction,
+            // and a re-key's ciphertext commit must never straddle the
+            // rewrap's verified zero-count. While a rewrap run holds the
+            // lock, signing-key deliveries answer the claim contract's
+            // retryable server_error.
+            if ($this->presentedDeliversSigningKey($presented)) {
+                return app(HmacWriterBarrier::class)->locked(
+                    write: fn (): JsonResponse => $this->performExchange($presented),
+                    onBusy: static fn (): JsonResponse => ClaimError::ServerError->respond(
+                        'A signing-key storage cutover is running on this server, so signing-key deliveries are briefly paused. It is safe to retry shortly.',
+                    ),
+                );
+            }
+
             return $this->performExchange($presented);
         } catch (Throwable $exception) {
             // The claim contract's server_error: clients print `message`
@@ -160,6 +180,32 @@ final class ManageOnboarding
             // page carries exception and query detail.
             return $this->serverError($exception);
         }
+    }
+
+    /**
+     * The barrier pre-read: does the presented code redeem against an
+     * hmac credential? Advisory only — every authoritative check happens
+     * again inside the locked transaction; over-acquiring for a code
+     * that then refuses is harmless.
+     */
+    private function presentedDeliversSigningKey(string $presented): bool
+    {
+        /** @var OnboardingToken|null $code */
+        $code = OnboardingToken::query()
+            ->where('token_hash', OnboardingToken::hashToken($presented))
+            ->first(['id', 'durable_token_id', 'durable_store', 'consumed_at']);
+
+        if ($code === null
+            || $code->consumed_at !== null
+            || $code->durable_token_id === null
+            || $code->durableStore() !== DurableStore::Credentials) {
+            return false;
+        }
+
+        return Credential::query()
+            ->whereKey($code->durable_token_id)
+            ->where('kind', CredentialKind::Hmac->value)
+            ->exists();
     }
 
     private function performExchange(string $presented): JsonResponse
@@ -196,6 +242,17 @@ final class ManageOnboarding
                 if ($consumed === 0) {
                     return ClaimError::CodeAlreadyClaimed->respond('This code was already used to set up a working connection. Ask the issuer to revoke it and issue a new one.');
                 }
+            }
+
+            // The hmac delivery leg (PRD 1.21, SEC-V3-01): a code linked to
+            // a PENDING hmac row delivers THAT key and returns here —
+            // nothing below (the durable mint, the D1d sweep) applies to a
+            // signing-key delivery, and NOTHING about signing state
+            // changes: activation is a separate operator-authorized verb.
+            $hmacDelivery = $this->deliverPendingSigningKey($code);
+
+            if ($hmacDelivery !== null) {
+                return $hmacDelivery;
             }
 
             // A re-claim before first use lands here too (make-before-break):
@@ -273,6 +330,137 @@ final class ManageOnboarding
                 'name' => $name,
             ], 201);
         });
+    }
+
+    /**
+     * The hmac claim exchange (PRD 1.21 amendment 3, REVERSED by
+     * SEC-V3-01): deliver the PENDING signing key — decrypted through the
+     * keyring, audited (`exchanged` + `delivered`, ids only) — and change
+     * NOTHING about signing state. An inbox interceptor who redeems the
+     * link learns a key that signs nothing and verifies nothing.
+     *
+     * Where the code burns follows the app's declared burn mode, exactly
+     * as on the bearer exchange: under `at_exchange` the generic burn
+     * above already consumed it, so a second presentation — the
+     * legitimate receiver behind an interceptor — fails loudly as
+     * `code_already_claimed`. Under `first_use` (the default) the code
+     * stays presentable until ACTIVATION consumes it (activation is this
+     * kind's first observable use), and a re-claim before activation —
+     * the dropped-response case — RE-KEYS the same pending row
+     * (make-before-break): the fresh key is delivered, the superseded
+     * plaintext no longer matches the stored ciphertext and is dead, so
+     * at most one live pending delivery per code ever exists. Re-keying
+     * IN PLACE (never a fresh row) keeps the rotation lineage and the
+     * code linkage true.
+     *
+     * Returns null when the code's linked durable is not a pending hmac
+     * row — every other exchange shape falls through to the durable mint.
+     */
+    private function deliverPendingSigningKey(OnboardingToken $code): ?JsonResponse
+    {
+        if ($code->durable_token_id === null || $code->durableStore() !== DurableStore::Credentials) {
+            return null;
+        }
+
+        /** @var Credential|null $credential */
+        $credential = Credential::query()
+            ->whereKey($code->durable_token_id)
+            ->lockForUpdate()
+            ->first();
+
+        if ($credential === null || $credential->kind !== CredentialKind::Hmac) {
+            return null;
+        }
+
+        // A dead or already-cut-over link target delivers nothing. Mostly
+        // unreachable (revocation and activation both consume the linked
+        // code), so this is the defensive fail-closed answer.
+        if ($credential->revoked_at !== null
+            || ($credential->expires_at !== null && ! $credential->expires_at->isAfter(now()))
+            || $credential->status !== CredentialStatus::Pending) {
+            return ClaimError::CodeNotFound->respond('This code no longer redeems a deliverable signing key. Ask the issuer for a new one.');
+        }
+
+        $keyring = app(HmacKeyring::class);
+        $rekeyed = $credential->delivered_at !== null;
+
+        if ($rekeyed) {
+            // The mid-cutover pause (SEC-V3-08): a re-key produces a
+            // fresh ciphertext, and every ciphertext-producing path
+            // refuses while the store carries mixed key-versions. The
+            // check-through-commit exclusion against a RUNNING rewrap is
+            // the writer barrier around the whole exchange (see
+            // exchange()); this in-transaction check covers the rest of
+            // the staged cutover window, when no sweep holds the lock.
+            // The claim contract has no retry-later value, so this
+            // answers as the retryable server_error.
+            if ($keyring->cutoverInProgress()) {
+                return ClaimError::ServerError->respond('A signing-key storage cutover is in progress on this server, so redelivery is paused. It is safe to retry shortly.');
+            }
+
+            $signingKey = bin2hex(random_bytes(32));
+            $encrypted = $keyring->encrypt($signingKey);
+
+            Credential::query()->whereKey($credential->id)->update([
+                'secret_ciphertext' => $encrypted->ciphertext,
+                'secret_key_version' => $encrypted->keyVersion,
+            ]);
+        } else {
+            // First delivery: the exact key the mint (or rotation)
+            // sealed away, read back through the keyring.
+            $signingKey = $keyring->decrypt(
+                (string) $credential->secret_ciphertext,
+                $credential->secret_key_version,
+            );
+        }
+
+        // Stamp the delivery generation + its fingerprint (SEC-V3-01
+        // rework): the receiver quotes the fingerprint back out-of-band,
+        // and activation requires EXACTLY the row's current one — so a
+        // re-key between confirmation and activation makes the stale
+        // confirmation refuse instead of activating a key the confirmer
+        // never saw.
+        $generation = $credential->delivered_generation + 1;
+        $fingerprint = $keyring->deliveryFingerprint($signingKey, $generation);
+
+        Credential::query()->whereKey($credential->id)->update([
+            'delivered_at' => now(),
+            'delivered_generation' => $generation,
+            'delivery_fingerprint' => $fingerprint,
+        ]);
+
+        $actor = AuditActor::credentialHolder($code->id);
+
+        $this->recorder->record(
+            event: LifecycleEventType::Exchanged,
+            credentialId: $credential->id,
+            codeId: $code->id,
+            actor: $actor,
+            recipient: $code->email,
+        );
+
+        $this->recorder->record(
+            event: LifecycleEventType::Delivered,
+            credentialId: $credential->id,
+            codeId: $code->id,
+            actor: $actor,
+            recipient: $code->email,
+            note: $rekeyed
+                ? 'redelivery: generation '.$generation.' ('.$fingerprint.'); the pending key was re-keyed and every prior delivery of this code is dead'
+                : 'delivery generation '.$generation.' ('.$fingerprint.')',
+        );
+
+        // The single reveal of this delivery. The key is PENDING: the
+        // receiver installs it, confirms the DELIVERY FINGERPRINT
+        // out-of-band, and only the activation verb — fed that exact
+        // fingerprint — cuts signing over.
+        return response()->json([
+            'signing_key' => $signingKey,
+            'key_id' => $credential->id,
+            'kind' => CredentialKind::Hmac->value,
+            'status' => CredentialStatus::Pending->value,
+            'delivery_fingerprint' => $fingerprint,
+        ], 201);
     }
 
     public function verify(Request $request): JsonResponse

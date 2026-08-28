@@ -30,5 +30,11 @@ abstract class TestCase extends Orchestra
     protected function getEnvironmentSetUp($app): void
     {
         $app['config']->set('auth.providers.users.model', Fixtures\User::class);
+
+        // The hmac keyring encrypts under the real app key (SEC-V3-08);
+        // testbench ships without one, so give every test the key a real
+        // install always has. Deterministic on purpose: a fixed key makes
+        // key-version fingerprints stable within a run.
+        $app['config']->set('app.key', 'base64:'.base64_encode(str_repeat('bfc-test-key-32b', 2)));
     }
 }

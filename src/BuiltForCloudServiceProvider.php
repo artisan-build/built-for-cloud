@@ -6,11 +6,13 @@ namespace ArtisanBuild\BuiltForCloud;
 
 use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
 use ArtisanBuild\BuiltForCloud\Commands\CreateAdminCommand;
+use ArtisanBuild\BuiltForCloud\Commands\CredentialActivateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialListCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialMintCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialRevokeCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialRotateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\FallbackTokenGenerateCommand;
+use ArtisanBuild\BuiltForCloud\Commands\HmacRewrapCommand;
 use ArtisanBuild\BuiltForCloud\Commands\InstallOperatorCredentialCommand;
 use ArtisanBuild\BuiltForCloud\Commands\InvitationIssueCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand;
@@ -41,6 +43,7 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\VerifyHmacSignature;
 use ArtisanBuild\BuiltForCloud\Listeners\QueueOwnershipWebhook;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -108,6 +111,9 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router->aliasMiddleware('bfc.token.admin', EnsureAdminToken::class);
             $router->aliasMiddleware('bfc.credential.admin', EnsureCredentialAdmin::class);
             $router->aliasMiddleware('bfc.ability', EnsureCredentialAbility::class);
+            // The verify half of the hmac pair (PRD 1.21, SEC-V3-07):
+            // consuming apps put it in front of signed-message routes.
+            $router->aliasMiddleware('bfc.hmac', VerifyHmacSignature::class);
 
             $router->get('/bfc/meta', MetaController::class)
                 ->middleware('throttle:bfc-public');
@@ -149,6 +155,12 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router->post('/bfc/credentials/{id}/rotate', [ManageCredentials::class, 'rotate'])
                 ->middleware('bfc.credential.admin');
 
+            // The hmac signing cutover (PRD 1.21, SEC-V3-01): a separate
+            // operator-authorized verb — the claim exchange delivers and
+            // never activates, so the flip needs its own route.
+            $router->post('/bfc/credentials/{id}/activate', [ManageCredentials::class, 'activate'])
+                ->middleware('bfc.credential.admin');
+
             // The machine-callable invite verb (PRD 1.13, SEC-V3-05): the
             // HTTP half of its two transports, behind the same
             // credential-admin gate as the unified verb routes — an
@@ -179,11 +191,13 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([
                 CreateAdminCommand::class,
+                CredentialActivateCommand::class,
                 CredentialListCommand::class,
                 CredentialMintCommand::class,
                 CredentialRevokeCommand::class,
                 CredentialRotateCommand::class,
                 FallbackTokenGenerateCommand::class,
+                HmacRewrapCommand::class,
                 InstallOperatorCredentialCommand::class,
                 InvitationIssueCommand::class,
                 OutboxDrainCommand::class,

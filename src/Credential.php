@@ -21,9 +21,18 @@ use InvalidArgumentException;
  * two credentials of the same name coexist and authenticate independently.
  * Tenancy lives in `subject_ref`, never in the name.
  *
- * Secrets at rest are sha256 hashes only. An `asymmetric` row carries a
- * public key and NEVER any secret material — persisting a `secret_hash` on
- * one throws. There is no column for private keys anywhere in this store.
+ * Secrets at rest, per kind. `bearer`/`basic` store sha256 hashes only.
+ * An `asymmetric` row carries a public key and NEVER any secret material —
+ * persisting a `secret_hash` on one throws. There is no column for private
+ * keys anywhere in this store. An `hmac` row stores its signing key
+ * ENCRYPTED (`secret_ciphertext` + `secret_key_version`), never hashed —
+ * a hash cannot sign, and both sides need the key (D9.1). Stated honestly:
+ * hmac is the ONE kind whose secret a database-plus-APP_KEY compromise
+ * yields. That is intrinsic to symmetric signing and industry-normal for
+ * webhook secrets; the `asymmetric` kind is the upgrade path for any case
+ * that cannot accept it. An hmac row never carries a `secret_hash` or a
+ * `public_key`, and no other kind ever carries a ciphertext — enforced in
+ * the same saving guard as the asymmetric rules.
  *
  * The model is Authenticatable so an unbound credential can be the request
  * principal on the `bfc` guard; a user-bound credential (`user_id` set)
@@ -38,9 +47,15 @@ use InvalidArgumentException;
  * @property string|null $user_id
  * @property string|null $secret_hash
  * @property string|null $public_key
+ * @property string|null $secret_ciphertext
+ * @property string|null $secret_key_version
  * @property CredentialStatus $status
  * @property CarbonInterface|null $revoked_at
  * @property CarbonInterface|null $rotated_at
+ * @property CarbonInterface|null $delivered_at
+ * @property int $delivered_generation
+ * @property string|null $delivery_fingerprint
+ * @property CarbonInterface|null $activated_at
  * @property CarbonInterface|null $expires_at
  * @property CarbonInterface|null $last_used_at
  * @property CarbonInterface|null $created_at
@@ -78,7 +93,14 @@ final class Credential extends Model implements Authenticatable
         // provenance only the rotate verb may assert (it exempts a row
         // from the exchange sweep), so a consuming app's create()/fill()
         // path must not be able to forge it. The verb stamps it through
-        // an explicit query update.
+        // an explicit query update. The hmac lifecycle columns
+        // (`secret_ciphertext`, `secret_key_version`, `delivered_at`,
+        // `delivered_generation`, `delivery_fingerprint`,
+        // `activated_at`) are NOT fillable for the same reason: delivery
+        // and activation provenance gate the signing cutover (SEC-V3-01),
+        // and the ciphertext is written only by the verbs that hold the
+        // plaintext. The framework's own writes go through forceFill or
+        // explicit query updates.
         'expires_at',
         'last_used_at',
     ];
@@ -88,6 +110,7 @@ final class Credential extends Model implements Authenticatable
      */
     protected $hidden = [
         'secret_hash',
+        'secret_ciphertext',
     ];
 
     /**
@@ -109,6 +132,9 @@ final class Credential extends Model implements Authenticatable
             'abilities' => 'array',
             'revoked_at' => 'datetime',
             'rotated_at' => 'datetime',
+            'delivered_at' => 'datetime',
+            'delivered_generation' => 'integer',
+            'activated_at' => 'datetime',
             'expires_at' => 'datetime',
             'last_used_at' => 'datetime',
         ];
@@ -125,6 +151,36 @@ final class Credential extends Model implements Authenticatable
             if ($credential->kind === CredentialKind::Asymmetric && $credential->secret_hash !== null) {
                 throw new InvalidArgumentException(
                     'An asymmetric credential carries a public key only and never stores secret material.',
+                );
+            }
+
+            // The hmac at-rest shape (D9.1): the signing key is ENCRYPTED
+            // ciphertext, and nothing else. A hash on an hmac row would be
+            // a value that can neither sign nor verify masquerading as the
+            // secret; a public key on one is a category error; and a
+            // ciphertext without its key-version is unreadable the moment
+            // the APP_KEY rotates (SEC-V3-08).
+            if ($credential->kind === CredentialKind::Hmac) {
+                if ($credential->secret_hash !== null) {
+                    throw new InvalidArgumentException(
+                        'An hmac credential stores its signing key encrypted, never hashed: a hash cannot sign.',
+                    );
+                }
+
+                if ($credential->public_key !== null) {
+                    throw new InvalidArgumentException(
+                        'An hmac credential is a symmetric signing secret; it never carries a public key.',
+                    );
+                }
+            } elseif ($credential->secret_ciphertext !== null || $credential->secret_key_version !== null) {
+                throw new InvalidArgumentException(
+                    'Only the hmac kind stores an encrypted secret; no other kind carries a ciphertext.',
+                );
+            }
+
+            if (($credential->secret_ciphertext === null) !== ($credential->secret_key_version === null)) {
+                throw new InvalidArgumentException(
+                    'An hmac ciphertext and its encryption key-version travel together: neither persists alone.',
                 );
             }
 

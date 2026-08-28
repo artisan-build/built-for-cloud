@@ -93,6 +93,51 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | HMAC Signing (the hmac credential kind, PRD 1.21)
+    |--------------------------------------------------------------------------
+    |
+    | The verification bounds of the canonical envelope (SEC-V3-07).
+    |
+    | `timestamp_tolerance_seconds` — how far a signed timestamp may sit
+    | from this server's clock, in either direction (inclusive).
+    |
+    | `verification_rate_ceiling` — GENUINELY NEW accepted verifications
+    | per KEY per replay window. This is the nonce store's CARDINALITY
+    | bound: only signature-valid requests count against it, replayed
+    | nonces are rejected BEFORE the counter and spend nothing (a
+    | captured envelope replayed forever cannot rate-limit the honest
+    | holder), and the check runs before any nonce is stored, so one
+    | credential can never fill the shared cache with unique nonces.
+    | Size it above your busiest key's honest volume per window.
+    |
+    | The replay window (nonce + rate entries alike) is derived as
+    | 2 x tolerance + 60s of margin: it strictly outlives the inclusive
+    | timestamp-acceptance window, so a nonce accepted once cannot be
+    | accepted again anywhere in its valid window — boundary included —
+    | and any replay outliving its entry is already stale by the
+    | timestamp rule. The store is bounded on BOTH axes: TTL and the
+    | per-key cardinality ceiling. Note the nonce cache is only as shared
+    | as the default cache store — instance-local stores (array, file)
+    | bound replays per instance, not per fleet.
+    |
+    | `audience` — the audience string this app signs FOR and verifies AS
+    | (a re-targeted message signed for another audience is rejected).
+    | Null falls back to `app.url`.
+    |
+    | The hmac ENCRYPTION keyring deliberately has no config here: it
+    | rides APP_KEY + APP_PREVIOUS_KEYS (SEC-V3-08) — see bfc:hmac:rewrap
+    | and release-notes/hmac-kind.md for the staged rotation runbook.
+    |
+    */
+
+    'hmac' => [
+        'timestamp_tolerance_seconds' => env('BUILT_FOR_CLOUD_HMAC_TIMESTAMP_TOLERANCE', 300),
+        'verification_rate_ceiling' => env('BUILT_FOR_CLOUD_HMAC_VERIFICATION_CEILING', 1000),
+        'audience' => env('BUILT_FOR_CLOUD_HMAC_AUDIENCE'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Client Identity Observation
     |--------------------------------------------------------------------------
     |

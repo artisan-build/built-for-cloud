@@ -135,4 +135,18 @@ final class InvalidCredentialInput extends InvalidArgumentException
             .'nothing is minted, so override options do not apply here.',
         );
     }
+
+    /**
+     * The activation verb's required confirmation (SEC-V3-01 rework):
+     * activation binds to one exact delivery, so it takes the delivery
+     * fingerprint the receiver quoted back — never just an id.
+     */
+    public static function activationRequiresDeliveryFingerprint(): self
+    {
+        return new self(
+            'Activation requires the delivery fingerprint the receiver confirmed (it rides every signing-key '
+            .'delivery), so the cutover binds to the exact delivery that was installed — an id alone cannot say '
+            .'which delivery was confirmed.',
+        );
+    }
 }

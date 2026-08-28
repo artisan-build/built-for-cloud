@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
+use ArtisanBuild\BuiltForCloud\Actions\ActivateCredential;
 use ArtisanBuild\BuiltForCloud\Actions\ListCredentials;
 use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
 use ArtisanBuild\BuiltForCloud\Actions\RevokeCredential;
@@ -11,8 +12,10 @@ use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\DeliveryShape;
+use ArtisanBuild\BuiltForCloud\Exceptions\ActivationRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
+use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
 use ArtisanBuild\BuiltForCloud\MintOptions;
@@ -86,6 +89,10 @@ final class ManageCredentials
             return response()->json(['message' => $invalid->getMessage()], 422);
         } catch (CredentialVerbRefused $refused) {
             return response()->json(['message' => $refused->getMessage()], 403);
+        } catch (RewrapInProgress $refused) {
+            // The writer barrier (SEC-V3-08): hmac minting pauses
+            // mid-rewrap, retry-later.
+            return response()->json(['message' => $refused->getMessage()], 409);
         }
 
         return response()->json([
@@ -121,7 +128,7 @@ final class ManageCredentials
             return response()->json(['message' => $invalid->getMessage()], 422);
         } catch (CredentialVerbRefused $refused) {
             return response()->json(['message' => $refused->getMessage()], 403);
-        } catch (RotationRefused $refused) {
+        } catch (RotationRefused|RewrapInProgress $refused) {
             return response()->json(['message' => $refused->getMessage()], 409);
         } catch (RotationCutoverIncomplete $incomplete) {
             return response()->json(['message' => $incomplete->getMessage()], 500);
@@ -140,6 +147,44 @@ final class ManageCredentials
             // rule as the mint route.
             'delivery' => $this->deliveryPayload($result->mint),
         ] + ($result->completedCutover ? ['completed_cutover' => true] : []), $result->completedCutover ? 200 : 201);
+    }
+
+    /**
+     * The activate verb's HTTP transport (PRD 1.21, SEC-V3-01): the hmac
+     * pending→active signing cutover, by id. The response carries NO
+     * secret — activation reveals nothing; the key was already delivered
+     * — just the now-active summary and, when the activation completed a
+     * rotation, the superseded row now living out its grace window.
+     */
+    public function activate(Request $request, ActivateCredential $activateCredential, string $id): JsonResponse
+    {
+        $fingerprint = $request->input('delivery_fingerprint');
+
+        try {
+            $result = $activateCredential(
+                $id,
+                is_string($fingerprint) ? $fingerprint : null,
+                $this->actor($request),
+            );
+        } catch (InvalidCredentialInput $invalid) {
+            return response()->json(['message' => $invalid->getMessage()], 422);
+        } catch (CredentialVerbRefused $refused) {
+            return response()->json(['message' => $refused->getMessage()], 403);
+        } catch (ActivationRefused|RewrapInProgress $refused) {
+            return response()->json(['message' => $refused->getMessage()], 409);
+        } catch (RotationCutoverIncomplete $incomplete) {
+            return response()->json(['message' => $incomplete->getMessage()], 500);
+        }
+
+        if ($result === null) {
+            abort(404);
+        }
+
+        return response()->json([
+            'credential' => $result->summary->toArray(),
+            'superseded_id' => $result->supersededId,
+            'grace_ends_at' => $result->graceEndsAt?->toIso8601String(),
+        ]);
     }
 
     public function destroy(Request $request, RevokeCredential $revoke, string $id): Response
@@ -181,6 +226,27 @@ final class ManageCredentials
             case DeliveryShape::EnrollmentCode:
                 if ($result->secret !== null) {
                     $payload['enrollment_code'] = $result->secret->reveal();
+                }
+                break;
+            case DeliveryShape::SigningKey:
+                // The key id rides beside the key (non-secret — the row id
+                // the signature header will carry); the key itself is
+                // PENDING until the activation verb cuts it over, and the
+                // delivery fingerprint (also non-secret) is what the
+                // receiver confirms and activation requires.
+                $payload['key_id'] = $result->summary->id;
+
+                if ($result->deliveryFingerprint !== null) {
+                    $payload['delivery_fingerprint'] = $result->deliveryFingerprint;
+                }
+
+                if ($result->secret !== null) {
+                    $payload['signing_key'] = $result->secret->reveal();
+                }
+                break;
+            case DeliveryShape::SigningKeyCode:
+                if ($result->secret !== null) {
+                    $payload['claim_code'] = $result->secret->reveal();
                 }
                 break;
             case DeliveryShape::None:

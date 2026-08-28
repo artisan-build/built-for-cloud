@@ -23,5 +23,9 @@ final readonly class MintResult
         public DeliveryShape $delivery,
         public ?MintedSecret $secret = null,
         public ?string $basicUsername = null,
+        // The `signing_key` shape only: the NON-secret fingerprint of
+        // this delivery (SEC-V3-01 rework) — the receiver quotes it back
+        // out-of-band and the activation verb requires it.
+        public ?string $deliveryFingerprint = null,
     ) {}
 }

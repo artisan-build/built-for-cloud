@@ -77,6 +77,21 @@ Additive unless marked otherwise:
   supersedes prior pending invitations of the same email; an applying integration event
   supersedes only its own namespace+subject history.
 
+- **The `hmac` kind ships (PRD 1.21 / D9, SEC-V3-01/07/08).** All additive. `POST
+  /bfc/credentials` now mints `kind: "hmac"` — a per-subject symmetric signing key, born
+  `pending`, encrypted at rest with a ciphertext key-version — with two new `delivery` shapes
+  (`signing_key`, `signing_key_code`). `POST /bfc/onboarding/exchange` gains the signing-key
+  response variant: exchanging a code linked to a pending hmac key delivers the key material
+  and **never activates** — activation is the new separate operator verb
+  `POST /bfc/credentials/{id}/activate`, which requires the **delivery fingerprint** the
+  receiver confirmed (every signing-key delivery carries one), binding the cutover to the
+  exact delivery installed. `POST /bfc/credentials/{id}/rotate` implements the hmac branch
+  (previously a documented 403): rotate mints the replacement PENDING while the old key keeps
+  signing; activation cuts over; the old key verifies through a one-hour grace window from
+  activation. Every ciphertext-producing hmac path (mint, rotate, exchange redelivery) pauses
+  while an APP_KEY rewrap is in progress. Summary rows are unchanged. The lifecycle event
+  stream gains `activated`.
+
 **api_version 1** — the 0.3.x baseline: `/bfc/meta`, `/bfc/ownership/*`, the pre-0.4 credential
 API listing shape.
 
@@ -128,6 +143,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/credentials` | `content` | the `delivery` single reveal, plus free-text name/subject fields |
 | `DELETE /bfc/credentials/{id}` | `metadata` | empty `204` body |
 | `POST /bfc/credentials/{id}/rotate` | `content` | the `delivery` single reveal, plus summary rows |
+| `POST /bfc/credentials/{id}/activate` | `content` | no secret ever — but the summary row carries free-text names and subject refs |
 
 Vendor-side reads of `metadata`-classified endpoints will be governed by the reserved
 `metadata:read` ability family (see [the Console reservations](#reserved--console-fast-follow-not-implemented)).
@@ -238,6 +254,36 @@ transaction, revokes the durable a previous exchange of this code minted (and an
 the same name+scope not governed by another pending code and not a rotation-grace row). Where the
 code burns depends on the app's declared burn mode: `at_exchange` consumes the code at redemption;
 `first_use` (the default) consumes it the first time the minted durable authenticates.
+
+**The signing-key variant (PRD 1.21, SEC-V3-01).** A code issued for an hmac credential (the
+`signing_key_code` delivery of the mint and rotate verbs) exchanges into the PENDING signing
+key instead of a durable token:
+
+- **201** — `{"signing_key": "...", "key_id": "...", "kind": "hmac", "status": "pending",
+  "delivery_fingerprint": "..."}` — the single reveal of this delivery. **The exchange delivers
+  and NEVER activates**: the key remains `pending`, signs nothing and verifies nothing, and
+  live signing state is untouched — an inbox interceptor who redeems the link gains dead bytes
+  and flips nothing. Activation is the separate operator verb below, and **it binds to this
+  exact delivery**: `delivery_fingerprint` is a non-recoverable hash naming this delivery of
+  this key (never the key itself); the receiver quotes it back when confirming installation
+  out-of-band, and the activation verb requires it — so a redelivery that re-keys the row after
+  a confirmation makes that confirmation stale rather than activating key material the
+  confirmer never saw. The receiver installs the key (indexed by `key_id`), confirms the
+  fingerprint, and the operator activates with it.
+
+Where the hmac code burns follows the declared burn mode exactly as above: under `at_exchange`
+a second presentation — the legitimate receiver behind an interceptor — fails loudly as
+`code_already_claimed`; under `first_use` (the default) **activation is this kind's first
+observable use** and consumes the code, and a re-claim before activation (the dropped-response
+case) answers with a FRESH key for the same `key_id` — the pending row is re-keyed in place, so
+every previously delivered plaintext is dead, its `delivery_fingerprint` with it, and at most
+one live pending delivery per code ever exists. A redelivery attempted while an APP_KEY rewrap
+is in progress answers the retryable `server_error` (the re-key writes a fresh ciphertext, and
+every ciphertext-producing path pauses mid-cutover); the FIRST delivery of a code still works
+through the staged cutover window — it only reads through the keyring — though while the
+`bfc:hmac:rewrap` sweep itself is RUNNING (minutes, not the whole window), every signing-key
+delivery briefly answers the same retryable `server_error`: deliveries and the sweep's
+completion verification share one lock, so no write can straddle the verified zero-count.
 
 Which store the durable lands in is the app's declaration: `api_tokens` by default; an app
 rebuilt on the unified store receives a `credentials` row instead (same wire shape here either
@@ -596,7 +642,17 @@ because the row does not exist yet.
 
 `subject_type` and `subject_ref` are required; everything else optional. `expires_at` omitted
 means **no expiry** — the package never defaults one. `code_ttl_seconds` is required (60–604800)
-when `kind` is `asymmetric` and ignored otherwise.
+when `kind` is `asymmetric`; for `kind: "hmac"` it is **optional and selects the delivery**
+(present → a claim code for an outside counterparty; absent → the reveal-once `signing_key`
+delivery for a counterparty the operator controls); it is ignored otherwise.
+
+**The `hmac` kind** (PRD 1.21 / D9) is a per-subject symmetric signing key. The row is born
+**`pending`**: a pending key signs nothing and verifies nothing until the separate
+[activation verb](#post-bfccredentialsidactivate) cuts it over (SEC-V3-01). Stated honestly
+(D9.1): the key is stored **encrypted, not hashed** — both sides need it to sign — so hmac is
+the one kind whose secret a database-plus-APP_KEY compromise yields; that is intrinsic to
+symmetric signing and industry-normal for webhook secrets, and the `asymmetric` kind is the
+upgrade path for any case that cannot accept it.
 
 - **201:**
 
@@ -614,12 +670,15 @@ when `kind` is `asymmetric` and ignored otherwise.
 | `bearer` | `secret` | present as `Authorization: Bearer <secret>` |
 | `basic_auth` | `username`, `password` | the Composer `auth.json` pair; the username is presentation-only and grants nothing |
 | `enrollment_code` | `enrollment_code` | a claim-primitive code (ttl = `code_ttl_seconds`); the client redeems it by generating its own keypair. The code never carries key material, and the credential row is `pending` until enrollment completes. The enrollment-completing exchange ships with the first asymmetric consumer's rebuild; until then the code is issued, listable and revocable, but completes no enrollment |
+| `signing_key` | `signing_key`, `key_id`, `delivery_fingerprint` | the reveal-once delivery of a PENDING hmac signing key — the operator-controlled-counterparty path. `key_id` is the (non-secret) row id the signature header will carry; `delivery_fingerprint` (non-secret) names THIS delivery, and the activation verb requires it. The key signs nothing until activated |
+| `signing_key_code` | `claim_code` | a claim-primitive code (ttl = `code_ttl_seconds`) whose [exchange](#post-bfconboardingexchange) delivers the PENDING hmac key — and its `delivery_fingerprint` — to an outside counterparty, and **never activates it** (SEC-V3-01) |
 | `none` | — | the secret was never ours to hand over |
 
 - **403** — `{"message": "..."}`: the declaration denies `issue` for this subject, the request
-  widens abilities or lifetime past a declared ceiling, sets a declared-unsupported field, or
-  names a kind that is not mintable (`hmac`, this release). Identical refusals on the CLI
-  transport.
+  widens abilities or lifetime past a declared ceiling, or sets a declared-unsupported field.
+  Identical refusals on the CLI transport.
+- **409** — `{"message": "..."}`: an hmac mint while an APP_KEY rewrap is in progress — every
+  ciphertext-producing path pauses mid-cutover; retry after `bfc:hmac:rewrap` completes.
 - **422** — validation (unknown `subject_type`/`kind`, out-of-bounds `code_ttl_seconds`, …).
 
 Emits an `issued` audit event (ids only, never values) in the mint's own transaction, on both
@@ -674,7 +733,8 @@ rotation is unaffected. An authorized override must ALSO fit the same ceilings t
 enforces: it is refused (`403`, same messages as mint) if the replacement's effective abilities
 or lifetime — inherited dimensions included — exceed what a mint of that shape could have been
 authorized for. Its audit events record the `override` reason code plus the delta.
-`code_ttl_seconds` is required (60–604800) when rotating an `asymmetric` credential and ignored
+`code_ttl_seconds` (60–604800) is required when rotating an `asymmetric` credential; optional
+for `hmac`, where it selects claim-code delivery over the reveal-once default; ignored
 otherwise.
 
 Per kind:
@@ -683,7 +743,7 @@ Per kind:
 |---|---|
 | `bearer` / `basic` | a fresh secret is minted and delivered once, in this response's `delivery` (same shapes as the mint route) |
 | `asymmetric` | a fresh **enrollment code** is delivered against a new `pending` row — the client generates the new keypair itself; no key material ever travels. The old credential's public key keeps verifying through the grace window, so both rows are listed side by side. The enrollment-completing exchange ships with the first asymmetric consumer's rebuild |
-| `hmac` | **403, explicitly not implemented**: hmac rotation is the pending→active cutover (rotate creates the new key pending while the old keeps signing; delivery installs it; activation cuts over) and ships with the kind itself. Nothing falls through to bearer semantics |
+| `hmac` | the pending→activate dance (D6 point 6 / D9): rotate mints the replacement key **`pending`** — delivered in this response's `delivery` (`signing_key` reveal-once, or `signing_key_code` when `code_ttl_seconds` is provided) — while **the old key keeps signing, unretired**. Delivery installs it receiver-side; [activation](#post-bfccredentialsidactivate) cuts signing over and starts the old key's one-hour verification grace; the old key dies at grace end. `emergency: true` kills the old key **now** instead (a compromised key must not keep signing), at the stated price of a signing outage until the replacement activates. Re-invoking rotate on the stamped row while the replacement is still pending is a `409` pointing at the activate verb; hmac rotation is refused (`409`) while an APP_KEY rewrap is in progress |
 
 - **201:**
 
@@ -721,12 +781,13 @@ orphan credential — and retrying works.
 ```
 
 - **404** — no such id. **403** — `{"message": "..."}`: the declaration denies `rotate` for
-  the row's subject, the override is not authorized (not opted in, denied, or past a mint
-  ceiling), or the kind does not rotate (`hmac`).
-- **409** — `{"message": "..."}`: the row is revoked, expired, or a pending enrollment — none
-  of which is a rotatable source — or it was already superseded by rotation and its successor
-  is **no longer live**: there is no cutover to complete, re-rotating would fork the lineage,
-  and the answer is a fresh mint.
+  the row's subject, or the override is not authorized (not opted in, denied, or past a mint
+  ceiling).
+- **409** — `{"message": "..."}`: the row is revoked, expired, or a pending row — none of
+  which is a rotatable source — or it was already superseded by rotation and its successor is
+  **no longer live** (no cutover to complete, re-rotating would fork the lineage; mint fresh),
+  or the successor is an hmac key **still pending activation** (activate it instead), or an
+  hmac rewrap is in progress (retry after `bfc:hmac:rewrap` completes).
 - **422** — `{"message": "..."}`: shared input validation (a change without `override`,
   out-of-bounds `code_ttl_seconds`, malformed abilities/expiry/booleans, override options on
   a completion) — identical refusals on the CLI transport.
@@ -736,6 +797,57 @@ orphan credential — and retrying works.
   the stamped row again** — the 200 completion above — or `DELETE /bfc/credentials/{id}`
   where revoke is authorized. **No secret was delivered** — the sealed carrier is discarded —
   so rotate the standing replacement for a fresh delivery, or revoke it by id if unneeded.
+
+### POST /bfc/credentials/{id}/activate
+
+Cut a delivered **pending hmac signing key** over to active (PRD 1.21, SEC-V3-01) — the
+operator-authorized transition the claim exchange deliberately is not: exchange DELIVERS key
+material; only this verb flips live signing state, taken after the receiver confirms
+installation out-of-band. Two-transport like every verb (`bfc:credential:activate <id>
+--fingerprint=<fp> --local` runs the identical action); the matrix verb consulted is
+**`activate`** — its own authority, so a declaration can allow rotation while reserving the
+cutover.
+
+**Request** — `{"delivery_fingerprint": "..."}`, **required**: the delivery fingerprint the
+receiver confirmed installed (it rides every signing-key delivery — the mint/rotate
+`delivery` payload and the exchange response). **Activation binds to one exact delivery**:
+it refuses unless the fingerprint matches the row's CURRENT delivery, so a redelivery that
+re-keyed the row between the confirmation and the activation — an interceptor re-claiming
+the link included — makes the stale confirmation refuse instead of cutting signing over to
+key material the confirmer never saw. The fingerprint survives an APP_KEY rewrap (it names
+the delivered key, not its ciphertext).
+
+- **200** — no secret, ever (activation reveals nothing; the key was already delivered):
+
+```json
+{
+  "credential": { "…": "the now-active summary row" },
+  "superseded_id": "the old key's id, when this activation completed a rotation — else null",
+  "grace_ends_at": "2026-08-28T13:00:00+00:00 — the LATEST end of the old key's grace window, else null"
+}
+```
+
+  Activation consumes the credential's outstanding claim code (this kind's `first_use` burn
+  point), so a link left in an inbox cannot re-deliver a live key. When the activated key was
+  minted by a rotation, the superseded old key stops signing NOW, keeps **verifying** through a
+  one-hour grace window from activation (its own earlier expiry still wins — retirement never
+  extends a life), then dies by its own expiry.
+
+- **404** — no such id. **403** — `{"message": "..."}`: the declaration denies `activate` for
+  the row's subject. **422** — `{"message": "..."}`: no `delivery_fingerprint` was provided —
+  an id alone cannot say which delivery was confirmed.
+- **409** — `{"message": "..."}`, refused because of the row's state, identically on the CLI:
+  a non-hmac kind (nothing to activate); a revoked or expired row; a row **already active** —
+  duplicate activation is deliberately NOT idempotent, so a surprised operator investigates
+  instead of assuming; an **undelivered key** (premature activation: neither revealed at mint
+  nor exchanged — the receiver cannot have installed it); a **stale confirmation** (the
+  fingerprint is not the row's current delivery — the key was re-delivered and re-keyed after
+  that confirmation; ask the receiver which fingerprint they actually hold); or an APP_KEY
+  rewrap in progress (retry after `bfc:hmac:rewrap` completes).
+- **500** — `{"message": "..."}`: the activation COMMITTED (the new key signs) but the
+  superseded old key could not be retired into its grace window and still verifies unbounded.
+  The message names both ids; recovery is the rotate route's cutover completion on the stamped
+  old row, or revoke-by-id.
 
 **The elsewhere-hosted / manual case.** When no automation can install the new secret (the
 credential lives in a system only a human can reach), this verb is still the whole flow: it

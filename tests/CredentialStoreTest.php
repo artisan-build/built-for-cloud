@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\Schema;
 uses(RefreshDatabase::class);
 
 it('stores rows of every credential kind without schema alteration', function (): void {
-    foreach ([CredentialKind::Bearer, CredentialKind::Basic, CredentialKind::Hmac] as $kind) {
+    foreach ([CredentialKind::Bearer, CredentialKind::Basic] as $kind) {
         $credential = Credential::query()->create([
             'kind' => $kind,
             'subject_type' => SubjectType::Application,
@@ -24,6 +24,12 @@ it('stores rows of every credential kind without schema alteration', function ()
         expect($credential->exists)->toBeTrue()
             ->and($credential->refresh()->kind)->toBe($kind);
     }
+
+    // hmac's at-rest shape is ciphertext + key-version, never a hash
+    // (PRD 1.21 / D9.1 — this PR defines the kind the stub reserved).
+    $hmac = Credential::factory()->hmac()->create(['subject_ref' => 'app-hmac']);
+
+    expect($hmac->refresh()->kind)->toBe(CredentialKind::Hmac);
 
     $asymmetric = Credential::query()->create([
         'kind' => CredentialKind::Asymmetric,

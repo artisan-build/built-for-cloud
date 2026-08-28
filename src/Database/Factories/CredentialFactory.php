@@ -7,9 +7,11 @@ namespace ArtisanBuild\BuiltForCloud\Database\Factories;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use RuntimeException;
+use SensitiveParameter;
 
 /**
  * @extends Factory<Credential>
@@ -71,6 +73,66 @@ final class CredentialFactory extends Factory
         }
 
         return $details['key'];
+    }
+
+    /**
+     * An hmac signing-key row, encrypted through the real keyring so the
+     * ciphertext and key-version are exactly what the verbs produce. The
+     * kind starts PENDING and undelivered — the lifecycle the verbs walk;
+     * use {@see delivered()} / {@see activated()} to advance it.
+     */
+    public function hmac(#[SensitiveParameter] ?string $signingKey = null): static
+    {
+        return $this->state(function () use ($signingKey): array {
+            $encrypted = app(HmacKeyring::class)->encrypt($signingKey ?? bin2hex(random_bytes(32)));
+
+            return [
+                'kind' => CredentialKind::Hmac,
+                'status' => CredentialStatus::Pending,
+                'secret_hash' => null,
+                'secret_ciphertext' => $encrypted->ciphertext,
+                'secret_key_version' => $encrypted->keyVersion,
+            ];
+        });
+    }
+
+    public function delivered(): static
+    {
+        return $this->state(fn (array $attributes): array => self::deliveryAttributes($attributes));
+    }
+
+    public function activated(): static
+    {
+        return $this->state(fn (array $attributes): array => self::deliveryAttributes($attributes) + [
+            'status' => CredentialStatus::Active,
+            'activated_at' => now(),
+        ]);
+    }
+
+    /**
+     * The shape a real first delivery leaves (generation 1 + the
+     * fingerprint the activation verb requires), computed from the row's
+     * own ciphertext so factory rows match the verbs' rows exactly.
+     *
+     * @param  array<string, mixed>  $attributes
+     * @return array<string, mixed>
+     */
+    private static function deliveryAttributes(array $attributes): array
+    {
+        $keyring = app(HmacKeyring::class);
+
+        $ciphertext = $attributes['secret_ciphertext'] ?? null;
+        $keyVersion = $attributes['secret_key_version'] ?? null;
+
+        $fingerprint = is_string($ciphertext) && is_string($keyVersion)
+            ? $keyring->deliveryFingerprint($keyring->decrypt($ciphertext, $keyVersion), 1)
+            : null;
+
+        return [
+            'delivered_at' => now(),
+            'delivered_generation' => 1,
+            'delivery_fingerprint' => $fingerprint,
+        ];
     }
 
     public function pending(): static

@@ -16,6 +16,8 @@ use ArtisanBuild\BuiltForCloud\DeliveryShape;
 use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintedSecret;
@@ -38,8 +40,7 @@ use Illuminate\Support\Str;
  * - a declaration whose verb matrix denies `issue` for the subject;
  * - ability or lifetime WIDENING past a declared ceiling
  *   ({@see ConstrainsMintedCredentials});
- * - options that set a declared-unsupported summary field;
- * - the `hmac` kind (its crypto ships in a later release).
+ * - options that set a declared-unsupported summary field.
  *
  * The secret is born inside a sealed {@see MintedSecret} and leaves it once,
  * at the transport boundary. The `issued` audit event rides the mint's own
@@ -74,7 +75,7 @@ final class MintCredential
             CredentialKind::Bearer,
             CredentialKind::Basic => $this->mintSecretBearing($subject, $options, $actor),
             CredentialKind::Asymmetric => $this->mintEnrollment($subject, $options, $actor),
-            CredentialKind::Hmac => throw CredentialVerbRefused::kindNotMintable($options->kind->value),
+            CredentialKind::Hmac => $this->mintSigningKey($subject, $options, $actor),
         };
     }
 
@@ -213,6 +214,122 @@ final class MintCredential
                 secret: $code,
             );
         });
+    }
+
+    /**
+     * `hmac` (PRD 1.21, D9): a per-subject symmetric signing key, born
+     * PENDING — a pending key signs nothing and verifies nothing until the
+     * SEPARATE activation verb cuts it over (SEC-V3-01). The key is
+     * encrypted at rest through the keyring, key-version stamped (D9.1,
+     * SEC-V3-08).
+     *
+     * Delivery is chosen by `code_ttl_seconds`, the same discriminator the
+     * claim primitive already is on the asymmetric kind: ABSENT, the key
+     * is revealed once in this result — the operator-controlled
+     * counterparty path (D7) — and the mint IS the delivery
+     * (`delivered_at` now, `delivered` event). PRESENT, the standard path
+     * to an outside counterparty: a claim code (PR3 primitive) whose
+     * exchange delivers the pending key exactly once, audits the
+     * delivery, and changes NOTHING about signing state.
+     */
+    private function mintSigningKey(Subject $subject, MintOptions $options, ?AuditActor $actor): MintResult
+    {
+        $ttlSeconds = $options->codeTtlSeconds;
+
+        if ($ttlSeconds !== null && ($ttlSeconds < self::CODE_TTL_MIN_SECONDS || $ttlSeconds > self::CODE_TTL_MAX_SECONDS)) {
+            throw InvalidCredentialInput::codeTtlOutOfBounds();
+        }
+
+        $keyring = app(HmacKeyring::class);
+
+        // The writer barrier (SEC-V3-08, check-through-commit): the whole
+        // mint transaction runs under the shared rewrap lock — see
+        // {@see HmacWriterBarrier} for the lock discipline — so a mint on
+        // a lagging old-primary instance can neither pass the version
+        // check ahead of the sweep nor COMMIT an old-version row after
+        // the rewrap's verified zero-count.
+        /** @var MintResult */
+        return app(HmacWriterBarrier::class)->exclusive('minting', fn (): MintResult => DB::transaction(function () use ($subject, $options, $actor, $ttlSeconds, $keyring): MintResult {
+            $signingKey = bin2hex(random_bytes(32));
+            $encrypted = $keyring->encrypt($signingKey);
+
+            $credential = new Credential;
+            $credential->forceFill([
+                'kind' => CredentialKind::Hmac,
+                'subject_type' => $subject->type,
+                'subject_ref' => $subject->ref,
+                'name' => $options->name,
+                'abilities' => $options->abilities,
+                'user_id' => $options->userId,
+                'expires_at' => $options->expiresAt,
+                'status' => CredentialStatus::Pending,
+                'secret_ciphertext' => $encrypted->ciphertext,
+                'secret_key_version' => $encrypted->keyVersion,
+            ])->save();
+
+            if ($ttlSeconds === null) {
+                // This result IS the delivery (reveal-once, D7): stamp
+                // generation 1 and its fingerprint — what the activation
+                // verb will require as the confirmed delivery.
+                $fingerprint = $keyring->deliveryFingerprint($signingKey, 1);
+
+                Credential::query()->whereKey($credential->id)->update([
+                    'delivered_at' => now(),
+                    'delivered_generation' => 1,
+                    'delivery_fingerprint' => $fingerprint,
+                ]);
+
+                $this->recorder->record(
+                    event: LifecycleEventType::Issued,
+                    credentialId: $credential->id,
+                    actor: $actor,
+                    credentialExpiresAt: $options->expiresAt,
+                );
+
+                $this->recorder->record(
+                    event: LifecycleEventType::Delivered,
+                    credentialId: $credential->id,
+                    actor: $actor,
+                    note: 'delivery generation 1 ('.$fingerprint.')',
+                );
+
+                return new MintResult(
+                    summary: $this->summarize($credential->refresh()),
+                    delivery: DeliveryShape::SigningKey,
+                    secret: new MintedSecret($signingKey),
+                    deliveryFingerprint: $fingerprint,
+                );
+            }
+
+            do {
+                $code = new MintedSecret(bin2hex(random_bytes(32)));
+            } while (OnboardingToken::query()->where('token_hash', $code->hash())->exists());
+
+            $codeRow = OnboardingToken::query()->create([
+                'id' => (string) Str::uuid(),
+                'email' => null,
+                'scope' => Scope::Onboard->value,
+                'token_hash' => $code->hash(),
+                'durable_token_id' => $credential->id,
+                'durable_store' => DurableStore::Credentials,
+                'expires_at' => now()->addSeconds($ttlSeconds),
+            ]);
+
+            $this->recorder->record(
+                event: LifecycleEventType::Issued,
+                credentialId: $credential->id,
+                codeId: $codeRow->id,
+                actor: $actor,
+                codeTtlSeconds: $ttlSeconds,
+                credentialExpiresAt: $options->expiresAt,
+            );
+
+            return new MintResult(
+                summary: $this->summarize($credential),
+                delivery: DeliveryShape::SigningKeyCode,
+                secret: $code,
+            );
+        }));
     }
 
     private function summarize(Credential $credential): CredentialSummary
