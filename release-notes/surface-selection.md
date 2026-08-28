@@ -28,6 +28,12 @@ The boundaries, stated:
   primitive included).
 - **`migrations` off means the app owns the schema.** The package's runtime still expects its
   tables to exist wherever the app's own migrations created them.
+- **`migrations` is a fresh-install flag, not a retroactive one.** Turning it off AFTER the
+  package migrations have run strands their rollback: the `migrations` table still records
+  the entries, but the migrator can no longer find the files behind them, so
+  `migrate:rollback` fails when it reaches one. Flip it only on a fresh install or for a
+  surface that never served — an app that already migrated keeps it on, or copies the
+  package migration files into its own `database/migrations` before flipping.
 - **`data_migrations` is separate from `migrations`** because wanting the schema without the
   framework seeding state into it is a legitimate shape. The initial ownership-claim mint
   checks this flag itself, so it composes with either migration-loading answer.

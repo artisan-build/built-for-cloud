@@ -270,7 +270,15 @@ return [
     |                     routes off can still gate its own routes.
     | `migrations`      — loadMigrationsFrom for the package's schema
     |                     migrations. Off means the app owns the schema
-    |                     (vendor:publish or its own copies).
+    |                     (vendor:publish or its own copies). CAVEAT:
+    |                     turning this off AFTER the package migrations
+    |                     have already run strands their rollback — the
+    |                     migrator can no longer find the files behind
+    |                     the recorded entries, so migrate:rollback fails
+    |                     at them. The flag is for FRESH installs and
+    |                     never-served surfaces; an app that already
+    |                     migrated keeps it on (or copies the files into
+    |                     its own migrations before flipping it).
     | `commands`        — the bfc:* / token:* artisan commands.
     | `listeners`       — the package's event listeners (the ownership
     |                     webhook queue).
