@@ -142,31 +142,41 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             // versioned public contract (docs/http-contract.md). Their gate
             // accepts a legacy admin token OR the installer-minted operator
             // credential (PRD 1.20 — the credential must work on the
-            // surface it exists to manage).
+            // surface it exists to manage), and each route names its
+            // verb-family ability (GATE-3.7 least privilege): the
+            // admin-equivalent `credential:admin` satisfies every one, a
+            // narrower operator credential only its own family. Write and
+            // expensive verbs additionally carry the per-operator-
+            // credential + per-IP rate limiter (throttle FIRST, so even
+            // failing auth attempts are bounded).
             $router->get('/bfc/credentials', [ManageCredentials::class, 'index'])
-                ->middleware('bfc.credential.admin');
+                ->middleware('bfc.credential.admin:'.OperatorAbility::CredentialRead->value);
 
             $router->post('/bfc/credentials', [ManageCredentials::class, 'store'])
-                ->middleware('bfc.credential.admin');
+                ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::CredentialMint->value]);
 
             $router->delete('/bfc/credentials/{id}', [ManageCredentials::class, 'destroy'])
-                ->middleware('bfc.credential.admin');
+                ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::CredentialRevoke->value]);
 
             $router->post('/bfc/credentials/{id}/rotate', [ManageCredentials::class, 'rotate'])
-                ->middleware('bfc.credential.admin');
+                ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::CredentialRotate->value]);
 
             // The hmac signing cutover (PRD 1.21, SEC-V3-01): a separate
             // operator-authorized verb — the claim exchange delivers and
-            // never activates, so the flip needs its own route.
+            // never activates, so the flip needs its own route. Its
+            // operator ability is the rotate FAMILY (activation completes
+            // rotation's dance); the declaration matrix's own `activate`
+            // verb stays the finer split.
             $router->post('/bfc/credentials/{id}/activate', [ManageCredentials::class, 'activate'])
-                ->middleware('bfc.credential.admin');
+                ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::CredentialRotate->value]);
 
             // The machine-callable invite verb (PRD 1.13, SEC-V3-05): the
-            // HTTP half of its two transports, behind the same
-            // credential-admin gate as the unified verb routes — an
-            // integration triggers the INVITATION, never a key mint.
+            // HTTP half of its two transports, behind the same operator
+            // gate as the unified verb routes — an integration triggers
+            // the INVITATION, never a key mint. Its family is `mint` (an
+            // invitation is a minted claim code).
             $router->post('/bfc/invitations', [ManageInvitations::class, 'store'])
-                ->middleware('bfc.credential.admin');
+                ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::CredentialMint->value]);
 
             if ((bool) config('built-for-cloud.credential_api.enabled', false)) {
                 $router->prefix(trim((string) config('built-for-cloud.credential_api.prefix', 'api/credentials'), '/'))
@@ -231,5 +241,22 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         RateLimiter::for('bfc-public', fn (Request $request): Limit => Limit::perMinute(60)->by($request->ip() ?? 'unknown'));
 
         RateLimiter::for('bfc-claim', fn (Request $request): Limit => Limit::perMinute(10)->by($request->ip() ?? 'unknown'));
+
+        // GATE-3.7: write and expensive operator verbs are limited per
+        // operator credential + IP, under a global ceiling. The
+        // per-credential key is the sha256 of the presented bearer (the
+        // limiter runs before the gate resolves a row id, and the digest
+        // identifies the credential without persisting its plaintext —
+        // the same at-rest form the stores use); missing bearers share
+        // one bucket per IP, so failed-auth hammering is bounded too.
+        RateLimiter::for('bfc-operator-write', function (Request $request): array {
+            $bearer = $request->bearerToken();
+            $credentialKey = $bearer === null || $bearer === '' ? 'anonymous' : hash('sha256', $bearer);
+
+            return [
+                Limit::perMinute(60)->by($credentialKey.'|'.($request->ip() ?? 'unknown')),
+                Limit::perMinute(600)->by('bfc-operator-write-global'),
+            ];
+        });
     }
 }

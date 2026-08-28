@@ -92,6 +92,16 @@ Additive unless marked otherwise:
   while an APP_KEY rewrap is in progress. Summary rows are unchanged. The lifecycle event
   stream gains `activated`.
 
+- **The operator ability vocabulary ships (PRD 1.10 + GATE-3.7).** All additive, and a
+  NARROWING only for credentials that never existed before it: the operator routes now
+  authorize per verb family (`credential:read` / `credential:mint` / `credential:rotate` /
+  `credential:revoke` / `subject:offboard` / `audit:read`), with `credential:admin` as the
+  explicit admin-equivalent break-glass (every previously minted operator credential holds
+  it, so nothing already issued loses access) and `mcp:read` / `mcp:admin` as the per-tool
+  MCP pair. Operator writes are rate-limited (`bfc-operator-write`); operator sensitive
+  reads, denials, and token-auth failures are audited (`sensitive_read` / `denied_action`
+  lifecycle events, ids only).
+
 **api_version 1** — the 0.3.x baseline: `/bfc/meta`, `/bfc/ownership/*`, the pre-0.4 credential
 API listing shape.
 
@@ -103,6 +113,28 @@ API listing shape.
   the credential API. Missing/unknown token → `401`; a valid token without `admin` → `403`.
 - **Public routes** are unauthenticated but rate-limited per IP: `bfc-public` (60/min) and
   `bfc-claim` (10/min), returning `429` beyond the limit.
+- **Operator routes** (the `/bfc/credentials`, `/bfc/invitations` and `/bfc/subjects` verbs)
+  additionally accept a unified-store `operator` credential, authorized **per verb family**
+  (GATE-3.7 least privilege). The ability vocabulary: `credential:read` (the listing — an
+  audited sensitive read), `credential:mint` (mint + invitations), `credential:rotate`
+  (rotate + the hmac activate cutover, same family), `credential:revoke`, `subject:offboard`,
+  and `audit:read` (vocabulary now; the first audit-read surface will enforce it). The MCP
+  pair `mcp:read` / `mcp:admin` is the per-tool vocabulary consuming apps wire in front of
+  each MCP tool (read vs destructive administration — distinct grants, checked exact-match;
+  no operator ability implies either). `metadata:read` remains RESERVED, unissued and
+  unenforced. There is **no wildcard**; a credential with no abilities can do nothing. The
+  one admin-equivalent name is **`credential:admin`** — the explicit break-glass, expanding
+  to exactly the six operator abilities above (never the MCP pair); it is what
+  `bfc:install:operator-credential` mints, and holding that literal name in the abilities
+  list is how a break-glass credential is marked. A legacy admin `api_tokens` row remains
+  admin-equivalent on these routes.
+- **Operator rate limits:** write and expensive operator verbs (mint, rotate, activate,
+  revoke, invite, offboard) are limited per operator credential + IP (`bfc-operator-write`,
+  60/min, keyed on the sha256 of the presented bearer so failed-auth hammering shares the
+  bound) under a global ceiling of 600/min, returning `429` beyond either.
+- **Operator observability:** every operator sensitive read, denied action, and token-auth
+  failure on the operator gate appends a `sensitive_read` / `denied_action` event to the
+  audit stream — ids only, never presented secrets.
 - Validation failures on JSON bodies return Laravel's standard
   `422 {"message": ..., "errors": {field: [...]}}` shape.
 
@@ -419,9 +451,10 @@ and retrying is safe.
   transport.
 
 **Authority note:** the version gate trusts any caller this route's gate admits — any admin
-token or `credential:admin` operator credential can advance any integration namespace.
-Namespace-scoped operator abilities arrive with the MCP/ability-vocabulary work; until then,
-give each integration its own credential for AUDIT attribution, not authority isolation.
+token or `credential:mint`/`credential:admin` operator credential can advance any
+integration namespace. The 1.10 ability vocabulary is per **verb family**, deliberately not
+per namespace; give each integration its own credential for AUDIT attribution, not
+authority isolation.
 
 Emits an `issued` audit event (ids only, never the code) in the issue's own transaction; the
 app's accept surface emits `exchanged` the same way.
@@ -561,15 +594,20 @@ The two-transport verbs (PRD 1.0): each of these routes runs the **same action c
 cannot diverge. Always mounted, at a fixed path. Rotation for this store ships in a later
 release.
 
-**Authentication on these three routes** accepts either credential shape:
+**Authentication on these routes** accepts either credential shape:
 
-- a legacy **admin `api_tokens` token** (exactly what every other admin route accepts), or
-- a **unified-store `operator` credential** holding the `credential:admin` ability — what
-  `bfc:install:operator-credential` mints at install time, so a fresh install can manage its
-  credentials with the one secret it was handed. A valid unified credential without operator
-  authority is `403`; the deprecated `FALLBACK_TOKEN` is explicitly rejected with a
-  distinguishable `403` message. Audit actors reflect the store that authenticated
-  (`admin_token` vs `operator_integration`).
+- a legacy **admin `api_tokens` token** (exactly what every other admin route accepts —
+  admin-equivalent on every verb), or
+- a **unified-store `operator` credential** holding the route's **verb-family ability**
+  (see [Authentication](#authentication)): `credential:read` for the listing,
+  `credential:mint` for mint, `credential:rotate` for rotate AND activate,
+  `credential:revoke` for revoke — or the explicit admin-equivalent `credential:admin`,
+  which is what `bfc:install:operator-credential` mints at install time, so a fresh install
+  can manage its credentials with the one secret it was handed. A valid unified credential
+  without the verb's authority is `403` (and the denial is audited); the deprecated
+  `FALLBACK_TOKEN` is explicitly rejected with a distinguishable `403` message. Audit actors
+  reflect the store that authenticated (`admin_token` vs `operator_integration`). Write
+  verbs ride the `bfc-operator-write` limiter.
 
 **The scope of the transport-parity guarantee:** parity is defined over the verb's own inputs —
 the subject, the options, the abilities, the target row. The declaration's `authorizeVerb` hook
