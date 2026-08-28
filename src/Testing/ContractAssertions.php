@@ -81,16 +81,23 @@ trait ContractAssertions
             $this->builtForCloudBearerHeaders($consumeToken),
         )->assertForbidden();
 
+        // The claim surfaces speak the claim contract's error enum: clients
+        // branch on `error`, the statuses follow the contract's guidance.
         $this->postJson('/bfc/onboarding/exchange', ['token' => 'invalid-contract-onboarding'])
-            ->assertUnauthorized();
+            ->assertBadRequest()
+            ->assertJsonPath('error', 'invalid_code');
         $this->postJson(
             '/bfc/onboarding/exchange',
             ['token' => 'invalid-contract-onboarding'],
             $this->builtForCloudBearerHeaders($consumeToken),
-        )->assertUnauthorized();
-        $this->postJson('/bfc/onboarding/verify')->assertUnauthorized();
+        )->assertBadRequest()
+            ->assertJsonPath('error', 'invalid_code');
+        $this->postJson('/bfc/onboarding/verify')
+            ->assertBadRequest()
+            ->assertJsonPath('error', 'invalid_code');
         $this->postJson('/bfc/onboarding/verify', [], $this->builtForCloudBearerHeaders('invalid-contract-durable'))
-            ->assertUnauthorized();
+            ->assertNotFound()
+            ->assertJsonPath('error', 'code_not_found');
     }
 
     public function assertBuiltForCloudModelContract(): void

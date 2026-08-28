@@ -40,10 +40,13 @@ it('serves the ownership claim route on a headless app with no auth guard', func
 });
 
 it('serves the onboarding routes on a headless app with no auth guard', function (): void {
-    $this->postJson('/bfc/onboarding/exchange', ['token' => 'not-a-real-token'])->assertUnauthorized();
+    $this->postJson('/bfc/onboarding/exchange', ['token' => 'not-a-real-token'])
+        ->assertBadRequest()
+        ->assertJsonPath('error', 'invalid_code');
 
     $this->postJson('/bfc/onboarding/verify', [], ['Authorization' => 'Bearer not-a-real-token'])
-        ->assertUnauthorized();
+        ->assertNotFound()
+        ->assertJsonPath('error', 'code_not_found');
 });
 
 it('claims ownership normally on a headless app with no auth guard', function (): void {

@@ -38,10 +38,7 @@ final class TokenRegistry
             return null;
         }
 
-        ApiToken::query()->whereKey($row->getKey())->update([
-            'request_count' => DB::raw('request_count + 1'),
-            'last_used_at' => now(),
-        ]);
+        $this->recordUsage($row);
 
         return $row->name;
     }
@@ -68,12 +65,61 @@ final class TokenRegistry
             return null;
         }
 
-        ApiToken::query()->whereKey($row->getKey())->update([
-            'request_count' => DB::raw('request_count + 1'),
-            'last_used_at' => now(),
-        ]);
+        $this->recordUsage($row);
 
         return $row->refresh();
+    }
+
+    /**
+     * Record a successful presentation. Subsequent uses take today's cheap
+     * unconditional update; a FIRST use runs the atomic first-use
+     * transition (SEC-2, PRD 1.2): first-use detection and claim-code
+     * consumption are ONE transaction, entered by a conditional update
+     * gated on affected rows. This is the burn point for `first_use`
+     * providers, and it fires for WHATEVER presented the secret and
+     * resolved the row — bearer and Crate's HTTP Basic path alike.
+     */
+    private function recordUsage(ApiToken $row): void
+    {
+        if ($row->last_used_at !== null) {
+            ApiToken::query()->whereKey($row->getKey())->update([
+                'request_count' => DB::raw('request_count + 1'),
+                'last_used_at' => now(),
+            ]);
+
+            return;
+        }
+
+        DB::transaction(function () use ($row): void {
+            $wasFirst = ApiToken::query()
+                ->whereKey($row->getKey())
+                ->whereNull('last_used_at')
+                ->update([
+                    'request_count' => DB::raw('request_count + 1'),
+                    'last_used_at' => now(),
+                ]) === 1;
+
+            if (! $wasFirst) {
+                // Somebody else was first: our read was stale. Count the
+                // request, and do NOT consume the claim code.
+                ApiToken::query()->whereKey($row->getKey())->update([
+                    'request_count' => DB::raw('request_count + 1'),
+                    'last_used_at' => now(),
+                ]);
+
+                return;
+            }
+
+            // We were first: consume the claim code that minted this
+            // credential in the SAME transaction as the usage write, so a
+            // process dying between the two rolls back both. Idempotent by
+            // the whereNull guard — an `at_exchange` provider's code is
+            // already consumed and stays untouched.
+            OnboardingToken::query()
+                ->where('durable_token_id', $row->getKey())
+                ->whereNull('consumed_at')
+                ->update(['consumed_at' => now()]);
+        });
     }
 
     /**
