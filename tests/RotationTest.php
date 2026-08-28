@@ -967,8 +967,8 @@ it('requires the enrollment-code ttl when rotating an asymmetric credential', fu
 });
 
 it('refuses hmac rotation explicitly, naming the pending-then-activate work, identically on both transports', function (): void {
-    $cliSource = Credential::factory()->create(['kind' => CredentialKind::Hmac]);
-    $httpSource = Credential::factory()->create(['kind' => CredentialKind::Hmac]);
+    $cliSource = Credential::factory()->hmac()->activated()->create();
+    $httpSource = Credential::factory()->hmac()->activated()->create();
 
     expect(Artisan::call('bfc:credential:rotate', ['id' => $cliSource->id, '--local' => true]))->toBe(1);
     $cliMessage = trim(Artisan::output());
