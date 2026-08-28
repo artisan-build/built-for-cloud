@@ -54,10 +54,31 @@ Providers with no observable first use declare `at_exchange` via `DeclaresBurnMo
 consumed at redemption, under lock. A provider declaring `at_exchange` does not implement the hitch
 claim contract and must not advertise it.
 
+The first-use gate re-asserts the full resolvability predicate at write time: a durable revoked or
+expired between the resolving read and the usage write — a re-claim racing a first use — **fails
+authentication** rather than completing a request on a dead credential, and the code stays governed
+by whatever durable it links to now.
+
+The concurrency behaviours above are verified by **single-connection interleaved tests**: the test
+substrate (in-memory sqlite) is per-connection and single-writer, so it structurally cannot host a
+true two-connection parallel race. The interleavings exercise the same affected-rows gates the
+parallel case would hit; the open mutation-debt rows track this honestly.
+
 **If an attacker claims first, the behaviour is designed, not accidental:** the code is burnt, the
 legitimate recipient sees `code_already_claimed`, and the issuer revokes the attacker's credential
 and re-issues. Note that a flaky network looks exactly the same from the recipient's side — treat
 every `code_already_claimed` as a revoke-and-re-issue, not automatically as an incident.
+
+## The name+scope sweep, bounded
+
+Exchange's name+scope revocation (the one issue no longer performs) is bounded so an accidental
+name collision cannot kill an unrelated integration: a row inside a rotation grace window (an
+expiry within the 1-hour grace, no `revoked_at`, and a same-name successor minted after it)
+survives the sweep, and so does a durable linked to a different unconsumed claim code. **The
+remaining collision domain is stated honestly:** durable names are free text with no unique index,
+so a resolvable token that shares the exact name AND holds the scope — outside those two
+exclusions — is still revoked by an exchange for that name. The unified store's subject binding
+(PRD 1.19) dissolves this domain; until then, distinct integrations should not share a name.
 
 ## For integrators
 
@@ -65,3 +86,8 @@ Exchange mints durables through the `DurableCredentialMinter` seam (default: `ap
 `ApiTokenMinter`); a later release redirects it to the unified credential store without changing
 the primitive. Every plaintext the primitive produces travels internally in `MintedSecret` and
 egresses exactly once, at the documented response field.
+
+An unexpected server-side failure on the exchange and verify surfaces (database outage, deadlock,
+minter failure) answers the contract's `server_error` shape with fixed generic prose — never a
+framework error page — with the exchange transaction rolled back, so the code stays claimable and
+a retry is safe. The underlying exception is logged server-side by class name only.

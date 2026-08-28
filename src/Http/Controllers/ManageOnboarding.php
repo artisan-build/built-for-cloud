@@ -17,8 +17,10 @@ use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Throwable;
 
 /**
  * The claim-code primitive over `onboarding_tokens` (PRD 1.1 + 1.2): a
@@ -91,6 +93,19 @@ final class ManageOnboarding
             return ClaimError::InvalidCode->respond('That code is not in the expected format. Check it for typos and try again.');
         }
 
+        try {
+            return $this->performExchange($presented);
+        } catch (Throwable $exception) {
+            // The claim contract's server_error: clients print `message`
+            // verbatim and treat the failure as retryable. Laravel's
+            // exception renderer must never answer on this surface — a debug
+            // page carries exception and query detail.
+            return $this->serverError($exception);
+        }
+    }
+
+    private function performExchange(string $presented): JsonResponse
+    {
         return DB::transaction(function () use ($presented): JsonResponse {
             /** @var OnboardingToken|null $code */
             $code = OnboardingToken::query()
@@ -137,7 +152,7 @@ final class ManageOnboarding
 
             $name = $code->email ?? 'claim-'.$code->id;
 
-            $this->revokeActiveDurable($name, $code->scope);
+            $this->revokeActiveDurable($name, $code->scope, $code->id);
 
             $minted = $this->minter->mint($name, $code->scope);
 
@@ -158,10 +173,14 @@ final class ManageOnboarding
             return ClaimError::InvalidCode->respond('The request presented no credential to verify.');
         }
 
-        // Resolution is the burn point for `first_use` providers: the
-        // atomic first-use transition inside resolveModel() consumes the
-        // claim code that minted this credential.
-        $durableToken = $this->tokens->resolveModel($bearer);
+        try {
+            // Resolution is the burn point for `first_use` providers: the
+            // atomic first-use transition inside resolveModel() consumes the
+            // claim code that minted this credential.
+            $durableToken = $this->tokens->resolveModel($bearer);
+        } catch (Throwable $exception) {
+            return $this->serverError($exception);
+        }
 
         if ($durableToken === null) {
             return ClaimError::CodeNotFound->respond('No live credential matches the one presented.');
@@ -175,6 +194,22 @@ final class ManageOnboarding
             'name' => $durableToken->name,
             'scope' => $durableToken->abilities[0] ?? null,
         ]);
+    }
+
+    private function serverError(Throwable $exception): JsonResponse
+    {
+        try {
+            // Only the exception CLASS reaches the log: a driver message can
+            // echo bound values, and the bindings on this surface include
+            // presented codes.
+            Log::warning('Built for Cloud could not serve a claim surface.', [
+                'exception' => $exception::class,
+            ]);
+        } catch (Throwable) {
+            // Failing to log must not replace the contract-shaped response.
+        }
+
+        return ClaimError::ServerError->respond('The server hit an unexpected error. It is safe to retry.');
     }
 
     private function burnMode(): BurnMode
@@ -207,7 +242,25 @@ final class ManageOnboarding
         }
     }
 
-    private function revokeActiveDurable(string $name, string $scope): void
+    /**
+     * The D1d name+scope sweep: revoke the live durable the code replaces.
+     * Names are free text with no unique index (deliberately), so the sweep
+     * is BOUNDED to keep an accidental name collision from killing an
+     * unrelated integration:
+     *
+     * - A row in a rotation grace window survives. `rotate()`'s signal is
+     *   an expiry it set within the 1-hour grace, no `revoked_at`, and a
+     *   same-name successor minted at-or-after the row — revocation paths
+     *   always stamp `revoked_at`, so its absence beside a near expiry and
+     *   a successor is the honest marker available.
+     * - A durable linked to a DIFFERENT unconsumed code survives: it is
+     *   governed by that code's own make-before-break lifecycle.
+     *
+     * The residual collision domain — same free-text name, same scope,
+     * outside these exclusions — remains and is documented in the release
+     * note; the unified store's subject binding (PRD 1.19) dissolves it.
+     */
+    private function revokeActiveDurable(string $name, string $scope, string $exchangingCodeId): void
     {
         /** @var list<ApiToken> $tokens */
         $tokens = ApiToken::query()
@@ -217,11 +270,57 @@ final class ManageOnboarding
             ->get()
             ->all();
 
+        /** @var list<string> $linkedToOtherCodes */
+        $linkedToOtherCodes = OnboardingToken::query()
+            ->whereKeyNot($exchangingCodeId)
+            ->whereNull('consumed_at')
+            ->whereNotNull('durable_token_id')
+            ->pluck('durable_token_id')
+            ->all();
+
         foreach ($tokens as $token) {
-            if ($token->hasAbility($scope)) {
-                $this->revokeLockedDurable($token);
+            if (! $token->hasAbility($scope)) {
+                continue;
+            }
+
+            if (in_array($token->getKey(), $linkedToOtherCodes, true)) {
+                continue;
+            }
+
+            if ($this->inRotationGraceWindow($token, $tokens)) {
+                continue;
+            }
+
+            $this->revokeLockedDurable($token);
+        }
+    }
+
+    /**
+     * @param  list<ApiToken>  $sameNameTokens
+     */
+    private function inRotationGraceWindow(ApiToken $token, array $sameNameTokens): bool
+    {
+        if ($token->expires_at === null || $token->revoked_at !== null) {
+            return false;
+        }
+
+        if ($token->expires_at->greaterThan(now()->addHour())) {
+            return false;
+        }
+
+        foreach ($sameNameTokens as $candidate) {
+            if ($candidate->getKey() === $token->getKey()) {
+                continue;
+            }
+
+            if ($candidate->created_at !== null
+                && $token->created_at !== null
+                && $candidate->created_at->greaterThanOrEqualTo($token->created_at)) {
+                return true;
             }
         }
+
+        return false;
     }
 
     private function revokeDurableById(string $tokenId): void
