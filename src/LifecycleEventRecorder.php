@@ -6,8 +6,10 @@ namespace ArtisanBuild\BuiltForCloud;
 
 use Carbon\CarbonInterface;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use LogicException;
+use Throwable;
 
 /**
  * The single emission point of the lifecycle event stream (D8 adjustments
@@ -72,8 +74,24 @@ final class LifecycleEventRecorder
             'dedup_key' => $dedupKey ?? $auditEvent->id,
         ]);
 
+        // Post-commit bookkeeping must NEVER fail the request the mutation
+        // already earned: by the time this runs the transition is committed,
+        // and an exception here (a dropped connection, a broken mailer)
+        // would surface as a 500 that invites the client to retry a
+        // remint/revoke that already happened. Swallow, log the class only;
+        // the outbox row stays claimable for `bfc:outbox:drain`.
         DB::afterCommit(static function (): void {
-            app(OutboxDrainer::class)->drain();
+            try {
+                app(OutboxDrainer::class)->drain();
+            } catch (Throwable $exception) {
+                try {
+                    Log::warning('Built for Cloud deferred outbox delivery to a later drain.', [
+                        'exception' => $exception::class,
+                    ]);
+                } catch (Throwable) {
+                    // Failing to log must not resurrect the failure.
+                }
+            }
         });
 
         return $auditEvent;

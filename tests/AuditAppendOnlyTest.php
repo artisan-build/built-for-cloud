@@ -37,6 +37,23 @@ it('rejects update and delete at the model layer', function (): void {
     expect($stored->note)->toBeNull();
 });
 
+it('rejects truncate on both the static and the query-builder paths', function (): void {
+    $row = appendAuditRow();
+
+    // TRUNCATE is DDL on mysql, where the row triggers never fire — the
+    // model layer must refuse it before the driver sees it. Raw
+    // `DB::table(...)->truncate()` and raw TRUNCATE SQL bypass the model
+    // and are outside the package's enforcement boundary (a
+    // database-privilege matter, per the model docblock).
+    expect(fn (): mixed => CredentialAuditEvent::truncate())
+        ->toThrow(LogicException::class, 'never truncated');
+
+    expect(fn (): mixed => CredentialAuditEvent::query()->truncate())
+        ->toThrow(LogicException::class, 'never truncated');
+
+    expect(CredentialAuditEvent::query()->whereKey($row->id)->exists())->toBeTrue();
+});
+
 it('rejects raw query-builder update and delete at the database layer on sqlite', function (): void {
     // Model guards do not see raw writes; the sqlite triggers do. (The
     // honest limit, documented in the migration: a connection with schema
@@ -54,18 +71,22 @@ it('rejects raw query-builder update and delete at the database layer on sqlite'
     expect(CredentialAuditEvent::query()->findOrFail($row->id)->note)->toBeNull();
 })->skip(fn (): bool => DB::connection()->getDriverName() !== 'sqlite', 'database-layer enforcement is per-driver; this suite runs sqlite');
 
-it('stores hostile reason notes verbatim and escapes them on render', function (string $hostile): void {
+it('stores hostile reason notes verbatim and neutralizes them through the export helper', function (string $hostile): void {
     $row = appendAuditRow($hostile);
 
     // Stored VERBATIM: neutralization is a render/export concern, and
-    // mangling the stored value would falsify the record.
+    // mangling the stored value would falsify the record. (Escaping-on-
+    // render is each renderer's own default behaviour — Blade escapes
+    // interpolations — and is not re-tested here; what the PACKAGE ships
+    // is the export helper every export path must use.)
     $stored = CredentialAuditEvent::query()->findOrFail($row->id);
     expect($stored->note)->toBe($hostile);
 
-    // Escaped per renderer: Blade's default escaping neutralizes markup.
-    $escaped = e($stored->note);
-    expect($escaped)->not->toContain('<script')
-        ->and(html_entity_decode($escaped, ENT_QUOTES))->toBe($hostile);
+    // The stored value round-trips the export helper: a formula-leading
+    // note comes out defanged, anything else comes out byte-identical.
+    $expected = in_array($hostile[0], ['=', '+', '-', '@', "\t", "\r"], true) ? "'".$hostile : $hostile;
+
+    expect(CsvFieldSanitizer::sanitize((string) $stored->note))->toBe($expected);
 })->with([
     'formula with dde pipe' => ['=cmd|\' /C calc\'!A0'],
     'at-formula' => ['@SUM(1+9)*cmd|\' /C calc\'!A0'],

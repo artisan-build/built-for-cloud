@@ -162,13 +162,17 @@ return [
     |
     | `claim_ttl_seconds` is how long an outbox claim is honoured before a
     | consumer that died mid-delivery is presumed dead and the row becomes
-    | claimable again.
+    | claimable again. Keep it comfortably above your slowest mail send
+    | times the recipients per event: a claim that expires mid-send lets a
+    | second consumer re-deliver to a recipient whose marker has not landed
+    | yet. Sends are tracked per recipient, so an expired claim never
+    | re-sends to recipients already marked.
     |
     */
 
     'audit' => [
         'outbox' => [
-            'claim_ttl_seconds' => env('BUILT_FOR_CLOUD_OUTBOX_CLAIM_TTL', 300),
+            'claim_ttl_seconds' => env('BUILT_FOR_CLOUD_OUTBOX_CLAIM_TTL', 600),
         ],
     ],
 

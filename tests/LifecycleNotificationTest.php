@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Notifications\CredentialLifecycleNotification;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
@@ -120,6 +121,32 @@ it('resolves the holder to the bound user email through the app declaration', fu
             && ($notifiable->routes['mail'] ?? null) === 'bound-user@example.test',
     );
 });
+
+it('rejects a resolved address that is not a plain email and notifies nobody instead', function (string $hostileAddress): void {
+    Notification::fake();
+    config()->set('built-for-cloud.notifications.policy', ['revoked' => ['holder']]);
+    config()->set('built-for-cloud.credentials.declaration', ConfigMapHolderDeclaration::class);
+
+    $registry = app(TokenRegistry::class);
+    $token = $registry->store('bad-address', hash('sha256', 'bad-address-secret'));
+
+    // The app hook resolves something that is not a deliverable address —
+    // header injection, or plain garbage. Rejection IS the nobody path.
+    config()->set('built-for-cloud-tests.holder_map', [$token->id => $hostileAddress]);
+
+    $registry->revoke('bad-address');
+
+    Notification::assertNothingSent();
+
+    // The row completed its delivery pass (nobody to notify), rather than
+    // spinning in the outbox forever.
+    $exchangedEntry = CredentialOutboxEntry::query()->latest('created_at')->latest('id')->firstOrFail();
+    expect($exchangedEntry->delivered_at)->not->toBeNull();
+})->with([
+    'crlf header injection' => ["evil@example.com\r\nBcc: exfil@attacker.test"],
+    'lf header injection' => ["evil@example.com\nBcc: exfil@attacker.test"],
+    'not an email at all' => ['just some prose, no address'],
+]);
 
 it('extends per app: a policy row added in config notifies, a removed row stays silent', function (): void {
     Notification::fake();

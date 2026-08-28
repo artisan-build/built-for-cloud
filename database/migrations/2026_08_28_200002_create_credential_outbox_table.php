@@ -19,6 +19,13 @@ use Illuminate\Support\Facades\Schema;
  * `dedup_key` is UNIQUE and defaults to the audit event id — one delivery
  * per event. It is a free string so later PRs can key on external event
  * ids (the SEC-V3-05 integration machinery) without a schema change.
+ *
+ * `delivered_recipients` tracks delivery PER RECIPIENT (address ->
+ * delivered-at), written immediately after each successful send, so a
+ * partial failure (issuer delivered, holder's send threw) retries only the
+ * recipients not yet marked. The send and its marker are still two writes:
+ * a crash between them re-sends to that ONE recipient — the honest
+ * at-least-once window this design accepts.
  */
 return new class extends Migration
 {
@@ -31,6 +38,7 @@ return new class extends Migration
             $table->unsignedInteger('attempts')->default(0);
             $table->timestamp('claimed_at')->nullable();
             $table->timestamp('delivered_at')->nullable()->index();
+            $table->json('delivered_recipients')->nullable();
             $table->string('last_error')->nullable();
             $table->timestamp('created_at')->nullable();
         });

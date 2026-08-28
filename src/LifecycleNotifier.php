@@ -7,7 +7,9 @@ namespace ArtisanBuild\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresHolderResolution;
 use ArtisanBuild\BuiltForCloud\Notifications\CredentialLifecycleNotification;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Notification;
+use Throwable;
 
 /**
  * The one lifecycle-notification policy (PRD 1.16): event × declared
@@ -23,23 +25,24 @@ use Illuminate\Support\Facades\Notification;
  *    implements one — a bound user's email, or null.
  * 3. Nobody. An unbound subject notifies no one; there is no operator
  *    fallback to spam.
+ *
+ * Every resolved address — the operator's issuer config and the
+ * declaration's holder answer alike — is validated here, at the delivery
+ * boundary: a value that is not a plain email address, or that carries
+ * CR/LF (header injection), is rejected to the NOBODY path with a log line
+ * that never echoes the value.
  */
 final class LifecycleNotifier
 {
     public function __construct(private readonly CredentialDeclaration $declaration) {}
 
-    public function notify(CredentialAuditEvent $event): void
-    {
-        foreach ($this->recipientEmails($event) as $email) {
-            Notification::route('mail', $email)
-                ->notify(CredentialLifecycleNotification::about($event));
-        }
-    }
-
     /**
+     * The validated, deduplicated recipient addresses this event notifies
+     * under the current policy, in policy order.
+     *
      * @return list<string>
      */
-    private function recipientEmails(CredentialAuditEvent $event): array
+    public function recipientEmails(CredentialAuditEvent $event): array
     {
         $policy = config('built-for-cloud.notifications.policy', []);
 
@@ -63,12 +66,28 @@ final class LifecycleNotifier
                 default => null,
             };
 
+            if (! is_string($recipient) || $email === null) {
+                continue;
+            }
+
+            $email = $this->validatedAddress($email, $recipient, $event);
+
             if ($email !== null && ! in_array($email, $emails, true)) {
                 $emails[] = $email;
             }
         }
 
         return $emails;
+    }
+
+    /**
+     * Send this event's notice to ONE recipient. The drainer calls this
+     * per address so it can mark each delivery individually.
+     */
+    public function deliverTo(string $email, CredentialAuditEvent $event): void
+    {
+        Notification::route('mail', $email)
+            ->notify(CredentialLifecycleNotification::about($event));
     }
 
     /**
@@ -91,6 +110,30 @@ final class LifecycleNotifier
 
         if ($event->credential_id !== null && $this->declaration instanceof DeclaresHolderResolution) {
             return $this->declaration->resolveHolderEmail($event->credential_id);
+        }
+
+        return null;
+    }
+
+    /**
+     * A resolved address must be a plain email with no CR/LF before it may
+     * address a delivery. Rejection IS the nobody path — never a fallback
+     * — and the log line names the role, never the value: the value came
+     * from config or an app hook and may be attacker-influenced.
+     */
+    private function validatedAddress(string $email, string $recipient, CredentialAuditEvent $event): ?string
+    {
+        if (strpbrk($email, "\r\n") === false && filter_var($email, FILTER_VALIDATE_EMAIL) !== false) {
+            return $email;
+        }
+
+        try {
+            Log::warning('Built for Cloud rejected a resolved notification address; notifying nobody for that recipient instead.', [
+                'recipient' => $recipient,
+                'event' => $event->event->value,
+            ]);
+        } catch (Throwable) {
+            // Failing to log must not turn a rejected address into a crash.
         }
 
         return null;

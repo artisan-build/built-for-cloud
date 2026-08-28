@@ -16,12 +16,17 @@ use Illuminate\Database\Eloquent\Model;
  * `last_error` only ever carries an exception CLASS name: a driver or
  * mailer message can echo bound values, and this column is operator-visible.
  *
+ * `delivered_recipients` maps each recipient address to when its send
+ * succeeded; a retry sends only to addresses not in the map. The row is
+ * `delivered_at`-stamped once every resolved recipient is marked.
+ *
  * @property string $id
  * @property string $audit_event_id
  * @property string $dedup_key
  * @property int $attempts
  * @property CarbonInterface|null $claimed_at
  * @property CarbonInterface|null $delivered_at
+ * @property array<string, string>|null $delivered_recipients
  * @property string|null $last_error
  * @property CarbonInterface|null $created_at
  */
@@ -47,6 +52,7 @@ final class CredentialOutboxEntry extends Model
         'attempts',
         'claimed_at',
         'delivered_at',
+        'delivered_recipients',
         'last_error',
     ];
 
@@ -59,6 +65,7 @@ final class CredentialOutboxEntry extends Model
             'attempts' => 'integer',
             'claimed_at' => 'datetime',
             'delivered_at' => 'datetime',
+            'delivered_recipients' => 'array',
         ];
     }
 

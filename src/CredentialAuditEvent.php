@@ -7,15 +7,26 @@ namespace ArtisanBuild\BuiltForCloud;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Query\Builder;
 use LogicException;
 
 /**
  * One row in the instance-side, append-only audit stream (PRD 1.9 / D8).
  *
  * Ids only — never secret values, never hashes. The model throws on any
- * update or delete; database triggers (where the driver permits) abort raw
- * query-builder mutations too. History is corrected by appending a new row
- * that supersedes a wrong one, never by editing.
+ * update, delete, or truncate (static and query-builder paths — see
+ * {@see CredentialAuditEventBuilder}); database triggers (where the driver
+ * permits) abort raw row-level UPDATE/DELETE too. History is corrected by
+ * appending a new row that supersedes a wrong one, never by editing.
+ *
+ * THE ENFORCEMENT BOUNDARY, stated like the store's public-key rule: this
+ * model is the package's enforcement point, and every framework code path
+ * mutates nothing through it. Raw `DB::table(...)` writes are caught only
+ * where the driver's triggers exist; raw `TRUNCATE TABLE` SQL and
+ * privileged console/schema access are OUTSIDE the package's reach —
+ * TRUNCATE and DROP enforcement, where an operator wants it, is a
+ * database-privilege matter (revoke DDL from the app's connection), not a
+ * model guard.
  *
  * `note` and `reason_code` are customer-visible (D7): `note` is stored
  * verbatim and bounded; every renderer escapes it, and every export path
@@ -95,5 +106,13 @@ final class CredentialAuditEvent extends Model
         self::deleting(function (): never {
             throw new LogicException('The credential audit stream is append-only: rows are never deleted.');
         });
+    }
+
+    /**
+     * @param  Builder  $query
+     */
+    public function newEloquentBuilder($query): CredentialAuditEventBuilder
+    {
+        return new CredentialAuditEventBuilder($query);
     }
 }

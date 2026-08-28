@@ -49,7 +49,7 @@ final class WarnExpiringCredentialsCommand extends Command
         $warned = 0;
 
         foreach ($expiring as $token) {
-            if ($this->emitWarning($recorder, $token)) {
+            if ($this->emitWarning($recorder, $token, $window)) {
                 $warned++;
             }
         }
@@ -59,7 +59,7 @@ final class WarnExpiringCredentialsCommand extends Command
         return self::SUCCESS;
     }
 
-    private function emitWarning(LifecycleEventRecorder $recorder, ApiToken $token): bool
+    private function emitWarning(LifecycleEventRecorder $recorder, ApiToken $token, int $window): bool
     {
         $expiresAt = $token->expires_at;
 
@@ -82,20 +82,40 @@ final class WarnExpiringCredentialsCommand extends Command
         }
 
         try {
-            DB::transaction(function () use ($recorder, $token, $expiresAt): void {
+            return (bool) DB::transaction(function () use ($recorder, $token, $expiresAt, $window): bool {
+                // Re-assert eligibility under lock, with the SAME predicates
+                // the outer query used: the world can change between the
+                // select and this transaction (a revoke, a rotation, an
+                // extended expiry), and a warning about a dead or moved row
+                // would be a false notice. Stale rows are skipped silently —
+                // the next scheduled run sees the current truth.
+                $stillEligible = ApiToken::query()
+                    ->whereKey($token->getKey())
+                    ->whereNull('revoked_at')
+                    ->whereNull('rotated_at')
+                    ->where('expires_at', $expiresAt)
+                    ->where('expires_at', '>', now())
+                    ->where('expires_at', '<=', now()->addHours($window))
+                    ->lockForUpdate()
+                    ->exists();
+
+                if (! $stillEligible) {
+                    return false;
+                }
+
                 $recorder->record(
                     event: LifecycleEventType::Expiring,
                     credentialId: (string) $token->getKey(),
                     credentialExpiresAt: $expiresAt,
                     dedupKey: 'expiring:'.$token->getKey().':'.$expiresAt->getTimestamp(),
                 );
+
+                return true;
             });
         } catch (UniqueConstraintViolationException) {
             // A concurrent run won the dedup key; its warning stands.
             return false;
         }
-
-        return true;
     }
 
     private function windowHours(): int
