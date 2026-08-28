@@ -345,6 +345,31 @@ it('rides the shared version gate: a replayed or older offboard event is transac
     ])->assertStatus(422);
 });
 
+it('consumes a pending code linked to an already-revoked durable (Fix 7)', function (): void {
+    // A credential someone revoked BEFORE the offboard, whose delivery
+    // code is still outstanding (RevokeCredential's action consumes it,
+    // but a raw revocation — or one from another path — does not).
+    $revoked = $this->mintCredential([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'acme',
+        'revoked_at' => now()->subHour(),
+    ]);
+
+    $code = OnboardingToken::query()->create([
+        'id' => (string) Str::uuid(),
+        'email' => null,
+        'scope' => Scope::Consume->value,
+        'token_hash' => hash('sha256', 'orphaned-code'),
+        'durable_token_id' => $revoked->credential->id,
+        'durable_store' => 'credentials',
+        'expires_at' => now()->addHour(),
+    ]);
+
+    offboardViaHttp(['subject_type' => 'external_consumer', 'subject_ref' => 'acme'])->assertOk();
+
+    expect($code->refresh()->consumed_at)->not->toBeNull();
+});
+
 it('contains the accounts accepted integration invitations created (Fix 1)', function (): void {
     $admin = ['Authorization' => 'Bearer '.auditAdminToken('fix1-admin')];
 

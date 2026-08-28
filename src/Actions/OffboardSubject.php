@@ -261,12 +261,16 @@ final class OffboardSubject
                 $boundUserIds[] = $credential->user_id;
             }
 
+            // Outstanding codes die with the SUBJECT, not with the write
+            // (rework Fix 7): a code linked to a row someone already
+            // revoked is still a live code until it is consumed here.
+            $this->consumeLinkedCodes((string) $credential->getKey(), DurableStore::Credentials);
+
             if ($credential->revoked_at !== null) {
                 continue;
             }
 
             $credential->forceFill(['revoked_at' => now()])->save();
-            $this->consumeLinkedCodes((string) $credential->getKey(), DurableStore::Credentials);
             $this->auditRevocation((string) $credential->getKey(), $actor);
             $revoked++;
         }
@@ -275,14 +279,18 @@ final class OffboardSubject
         $legacyTokens = ApiToken::query()
             ->where('subject_type', $subject->type->value)
             ->where('subject_ref', $subject->ref)
-            ->whereNull('revoked_at')
             ->lockForUpdate()
             ->get()
             ->all();
 
         foreach ($legacyTokens as $token) {
-            $token->forceFill(['expires_at' => now(), 'revoked_at' => now()])->save();
             $this->consumeLinkedCodes((string) $token->getKey(), DurableStore::ApiTokens);
+
+            if ($token->revoked_at !== null) {
+                continue;
+            }
+
+            $token->forceFill(['expires_at' => now(), 'revoked_at' => now()])->save();
             $this->auditRevocation((string) $token->getKey(), $actor);
             $revoked++;
         }
