@@ -45,4 +45,14 @@ final class InvalidCredentialInput extends InvalidArgumentException
     {
         return new self('Abilities must be a list of ability strings (or a comma-separated string of them).');
     }
+
+    public static function tooManyAbilities(int $max): self
+    {
+        return new self(sprintf('A credential carries at most %d abilities.', $max));
+    }
+
+    public static function abilityTooLong(int $max): self
+    {
+        return new self(sprintf('An ability name is at most %d characters.', $max));
+    }
 }

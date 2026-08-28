@@ -167,6 +167,61 @@ it('skips the mint with a notice when a live operator credential exists, unless 
         ->and(Credential::query()->count())->toBe(3);
 });
 
+it('mints despite an existing operator that lacks the promised ability — mere operator existence is not the predicate', function (): void {
+    // An operator credential WITHOUT credential:admin cannot manage the
+    // credential verbs, so it does not satisfy the scaffold's promise.
+    $this->mintCredential([
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => 'powerless',
+        'abilities' => ['consume'],
+    ]);
+
+    expect(Artisan::call('bfc:install:operator-credential'))->toBe(Command::SUCCESS);
+
+    $output = Artisan::output();
+
+    expect($output)->toContain('shown once')
+        ->and(Credential::query()->count())->toBe(2);
+
+    // The freshly minted one carries the promised authority.
+    $usable = Credential::query()
+        ->where('subject_ref', 'installer')
+        ->sole();
+
+    expect($usable->hasAbility(EnsureCredentialAdmin::ABILITY))->toBeTrue();
+
+    // And now that a USABLE operator exists, the re-run skips.
+    expect(Artisan::call('bfc:install:operator-credential'))->toBe(Command::SUCCESS)
+        ->and(Artisan::output())->toContain('skipping the install mint')
+        ->and(Credential::query()->count())->toBe(2);
+});
+
+it('rejects colliding fallback bytes before either granting branch, stamping nothing', function (): void {
+    // A config whose fallback bytes COLLIDE with a real operator
+    // credential's secret: the fallback invariant must win — rejected,
+    // never granted, and the collision never even counts as a use.
+    $operator = $this->mintCredential([
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => 'collided',
+        'abilities' => [EnsureCredentialAdmin::ABILITY],
+    ]);
+
+    config(['built-for-cloud.fallback_token' => $operator->plaintext()]);
+
+    $response = $this->getJson('/bfc/credentials', ['Authorization' => $operator->bearerHeader()]);
+
+    $response->assertForbidden();
+
+    expect((string) $response->json('message'))->toContain('Fallback tokens never operate the credential verbs')
+        ->and($operator->credential->refresh()->last_used_at)->toBeNull()
+        ->and(CredentialAuditEvent::query()->where('credential_id', $operator->credential->id)->count())->toBe(0);
+
+    // Clearing the collision restores the credential's own authority.
+    config(['built-for-cloud.fallback_token' => null]);
+
+    $this->getJson('/bfc/credentials', ['Authorization' => $operator->bearerHeader()])->assertOk();
+});
+
 it('honours a custom operator ref and abilities', function (): void {
     Artisan::call('bfc:install:operator-credential', [
         '--ref' => 'scalpels',

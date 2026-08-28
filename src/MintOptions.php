@@ -31,6 +31,16 @@ use Throwable;
 final readonly class MintOptions
 {
     /**
+     * The abilities input's package-enforced bounds: no credential needs
+     * more distinct abilities than this, and an entry longer than this is
+     * not an ability name — both are rejected, identically on both
+     * transports, before anything reaches storage.
+     */
+    public const int MAX_ABILITIES = 32;
+
+    public const int MAX_ABILITY_LENGTH = 128;
+
+    /**
      * @param  list<string>|null  $abilities
      */
     public function __construct(
@@ -122,9 +132,19 @@ final readonly class MintOptions
 
             $ability = trim($ability);
 
-            if ($ability !== '') {
-                $normalized[] = $ability;
+            if ($ability === '') {
+                continue;
             }
+
+            if (strlen($ability) > self::MAX_ABILITY_LENGTH) {
+                throw InvalidCredentialInput::abilityTooLong(self::MAX_ABILITY_LENGTH);
+            }
+
+            $normalized[] = $ability;
+        }
+
+        if (count($normalized) > self::MAX_ABILITIES) {
+            throw InvalidCredentialInput::tooManyAbilities(self::MAX_ABILITIES);
         }
 
         // The one canonical empty: null. [] and null both grant nothing.
@@ -162,8 +182,11 @@ final readonly class MintOptions
             return $ttl;
         }
 
-        // Digits only: "60junk" is junk, never 60.
-        if (is_string($ttl) && ctype_digit($ttl)) {
+        // A whole number only — "60junk" is junk, never 60. A NEGATIVE
+        // whole number parses here so `--code-ttl=-1` on the CLI converges
+        // on the same bounds error the HTTP leg's integer -1 hits, rather
+        // than a different "not an integer" rejection.
+        if (is_string($ttl) && preg_match('/^-?\d+$/', $ttl) === 1) {
             return (int) $ttl;
         }
 

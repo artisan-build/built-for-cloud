@@ -242,6 +242,77 @@ it('rejects a non-integer code ttl identically on both transports — 60junk is 
         ->and(OnboardingToken::query()->count())->toBe(0);
 });
 
+it('converges a negative code ttl onto the same bounds error on both transports', function (): void {
+    expect(Artisan::call('bfc:credential:mint', [
+        'subject-type' => 'application',
+        'subject-ref' => 'reel-negative',
+        '--kind' => 'asymmetric',
+        '--code-ttl' => '-1',
+        '--local' => true,
+    ]))->toBe(1);
+
+    $cliMessage = trim(Artisan::output());
+
+    $response = $this->postJson('/bfc/credentials', [
+        'subject_type' => 'application',
+        'subject_ref' => 'reel-negative',
+        'kind' => 'asymmetric',
+        'code_ttl_seconds' => -1,
+    ], transportAdminHeaders())->assertUnprocessable();
+
+    // The CLI's "-1" parses as the integer the HTTP leg sends, so BOTH
+    // hit the one bounds error — not a divergent "not an integer".
+    expect($cliMessage)->toBe((string) $response->json('message'))
+        ->and($cliMessage)->toContain('between 60 and 604800')
+        ->and(Credential::query()->count())->toBe(0);
+});
+
+it('bounds the abilities count identically on both transports', function (): void {
+    $abilities = array_map(static fn (int $i): string => 'ability-'.$i, range(1, 33));
+
+    expect(Artisan::call('bfc:credential:mint', [
+        'subject-type' => 'external_consumer',
+        'subject-ref' => 'greedy',
+        '--abilities' => implode(',', $abilities),
+        '--local' => true,
+    ]))->toBe(1);
+
+    $cliMessage = trim(Artisan::output());
+
+    $response = $this->postJson('/bfc/credentials', [
+        'subject_type' => 'external_consumer',
+        'subject_ref' => 'greedy',
+        'abilities' => $abilities,
+    ], transportAdminHeaders())->assertUnprocessable();
+
+    expect($cliMessage)->toBe((string) $response->json('message'))
+        ->and($cliMessage)->toContain('at most 32 abilities')
+        ->and(Credential::query()->count())->toBe(0);
+});
+
+it('bounds the ability entry length identically on both transports', function (): void {
+    $tooLong = str_repeat('a', 129);
+
+    expect(Artisan::call('bfc:credential:mint', [
+        'subject-type' => 'external_consumer',
+        'subject-ref' => 'verbose',
+        '--abilities' => $tooLong,
+        '--local' => true,
+    ]))->toBe(1);
+
+    $cliMessage = trim(Artisan::output());
+
+    $response = $this->postJson('/bfc/credentials', [
+        'subject_type' => 'external_consumer',
+        'subject_ref' => 'verbose',
+        'abilities' => [$tooLong],
+    ], transportAdminHeaders())->assertUnprocessable();
+
+    expect($cliMessage)->toBe((string) $response->json('message'))
+        ->and($cliMessage)->toContain('at most 128 characters')
+        ->and(Credential::query()->count())->toBe(0);
+});
+
 it('normalizes an empty abilities list to null identically on both transports', function (): void {
     // HTTP: an explicit empty array.
     $this->postJson('/bfc/credentials', [

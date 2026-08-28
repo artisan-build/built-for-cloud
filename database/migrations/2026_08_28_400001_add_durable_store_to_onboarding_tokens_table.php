@@ -16,6 +16,14 @@ return new class extends Migration
      * make-before-break revocation reads the RECORDED store, never the
      * current declaration, so a declaration switching stores can never
      * strand a still-live durable.
+     *
+     * DELIBERATELY NO database CHECK constraint on the value: the enum
+     * cast on the model fails closed on any unknown string (a read throws
+     * rather than misroutes), so a crafted-but-invalid value requires
+     * direct database write access — at which point every table is
+     * already forfeit — and a portable CHECK across the drivers consuming
+     * apps run is not worth the migration complexity. Every package write
+     * goes through the model with a DurableStore enum value.
      */
     public function up(): void
     {

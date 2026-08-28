@@ -30,11 +30,23 @@ use Illuminate\Console\Command;
  * authorizes on the `/bfc/credentials` verbs — the surface it exists to
  * manage — from the moment it is printed.
  *
- * IDEMPOTENT by default: when a live operator credential already exists,
- * the command skips with a notice instead of silently minting a sibling —
- * an install scaffold re-run must not mint twice. `--force` mints another
- * deliberately (multiple operator rows per instance are first-class,
- * GATE-3).
+ * IDEMPOTENT by default: when a live operator credential ALREADY HOLDING
+ * {@see EnsureCredentialAdmin::ABILITY} exists, the command skips with a
+ * notice instead of silently minting a sibling — an install scaffold
+ * re-run must not mint twice. The predicate checks the promised
+ * authority, not mere operator existence: an operator credential WITHOUT
+ * that ability cannot manage the credential verbs, so it does not satisfy
+ * the scaffold's promise and the command mints alongside it (multiple
+ * operator rows per instance are first-class, GATE-3; refusing here would
+ * leave a fresh install with no working credential until a human
+ * intervened, which is the exact failure this command exists to prevent).
+ * `--force` mints another deliberately in every case.
+ *
+ * CONCURRENCY, by design not serialized: the skip is a check-then-create,
+ * so concurrent installer executions can each pass the check and mint —
+ * the worst outcome is an EXTRA revocable, audited credential, which
+ * `bfc:credential:revoke` cleans up. Serializing install-time commands
+ * against each other is not worth a lock protocol here.
  *
  * No expiry, deliberately: an operational control-plane credential with a
  * clock on it is a scheduled outage (GATE-3); revocation-on-event is the
@@ -54,10 +66,10 @@ final class InstallOperatorCredentialCommand extends Command
 
     public function handle(MintCredential $mint): int
     {
-        if (! (bool) $this->option('force') && $this->liveOperatorCredentialExists()) {
+        if (! (bool) $this->option('force') && $this->usableOperatorCredentialExists()) {
             $this->line(
-                'A live operator credential already exists; skipping the install mint. '
-                .'Pass --force to deliberately mint another.',
+                'A live operator credential holding '.EnsureCredentialAdmin::ABILITY
+                .' already exists; skipping the install mint. Pass --force to deliberately mint another.',
             );
 
             return self::SUCCESS;
@@ -92,11 +104,19 @@ final class InstallOperatorCredentialCommand extends Command
         return self::SUCCESS;
     }
 
-    private function liveOperatorCredentialExists(): bool
+    /**
+     * The skip predicate checks the PROMISED AUTHORITY, not mere operator
+     * existence: only a live operator credential that can actually operate
+     * the credential verbs satisfies the scaffold. Ability membership is
+     * checked in PHP — operator rows are few, and a JSON-contains query is
+     * not portable across the drivers consuming apps run.
+     */
+    private function usableOperatorCredentialExists(): bool
     {
         return Credential::query()
             ->where('subject_type', SubjectType::Operator->value)
             ->active()
-            ->exists();
+            ->get()
+            ->contains(static fn (Credential $credential): bool => $credential->hasAbility(EnsureCredentialAdmin::ABILITY));
     }
 }

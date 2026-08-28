@@ -111,10 +111,12 @@ record `issued` (ids only) in the same transaction as the store.
 `ContractAssertions` gains `assertBuiltForCloudTransportParityContract()` (additive): for each
 two-transport verb it runs the SAME action through the CLI (`--local`) and HTTP and asserts
 identical outcomes — row state, audit events, delivery-shape content, for the `bearer` AND
-`basic_auth` deliveries — under the app's active declaration. A declaration that refuses must
-refuse on BOTH transports **with the same refusal** (the HTTP 403 message appears in the CLI's
-error output), leaving no row. Run it in CI next to the existing contract assertions; the
-package runs it too.
+`basic_auth` deliveries — under the app's active declaration. Every comparison is **like for
+like**: both legs put the identical question (same subject_ref, same inputs, same pre-state) to
+each transport, so a subject-conditional declaration answers both legs the same way and never
+reads as false divergence. A declaration that refuses must refuse on BOTH transports **with the
+same error, message-equal**, leaving no row. Run it in CI next to the existing contract
+assertions; the package runs it too.
 
 **Scope of the guarantee:** parity is defined over the verb's own inputs (subject, options,
 abilities, target row). `authorizeVerb` receives each transport's real request by design —

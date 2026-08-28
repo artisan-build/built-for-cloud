@@ -300,9 +300,10 @@ its responsibility — it is outside what this contract (and the shipped parity 
 
 Input validation is shared: both transports normalize options through one input object and
 reject the same junk with the same message (HTTP as a `422 {"message": ...}`, the CLI as a
-failure exit). A non-integer `code_ttl_seconds` (e.g. `"60junk"`) is rejected, never truncated.
-**An empty `abilities` list normalizes to `null`** — both grant nothing, and summaries always
-serialize the one canonical shape (`null`).
+failure exit). A non-integer `code_ttl_seconds` (e.g. `"60junk"`) is rejected, never truncated;
+a negative one hits the same bounds error on both transports. `abilities` is bounded: at most
+32 entries, each at most 128 characters. **An empty `abilities` list normalizes to `null`** —
+both grant nothing, and summaries always serialize the one canonical shape (`null`).
 
 Summary rows share one shape:
 
