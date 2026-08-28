@@ -77,6 +77,24 @@ final class RotationRefused extends RuntimeException
         ));
     }
 
+    /**
+     * The hmac dance mid-flight: the stamped source's replacement is
+     * still PENDING activation, so there is no cutover to complete (the
+     * old key still owns signing) and nothing to re-rotate.
+     */
+    public static function successorAwaitingActivation(string $id, string $successorId): self
+    {
+        return new self(sprintf(
+            'Credential %s was already rotated; its replacement %s is still PENDING activation, and the old key '
+            .'keeps signing until the cutover. Activate the replacement (bfc:credential:activate %s) — or revoke '
+            .'it by id to abandon the rotation, or revoke %s by id if the old key is compromised and must die now.',
+            $id,
+            $successorId,
+            $successorId,
+            $id,
+        ));
+    }
+
     public static function sourcePending(string $id): self
     {
         return new self(sprintf(

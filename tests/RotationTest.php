@@ -966,22 +966,8 @@ it('requires the enrollment-code ttl when rotating an asymmetric credential', fu
         ->and($source->refresh()->rotated_at)->toBeNull();
 });
 
-it('refuses hmac rotation explicitly, naming the pending-then-activate work, identically on both transports', function (): void {
-    $cliSource = Credential::factory()->hmac()->activated()->create();
-    $httpSource = Credential::factory()->hmac()->activated()->create();
-
-    expect(Artisan::call('bfc:credential:rotate', ['id' => $cliSource->id, '--local' => true]))->toBe(1);
-    $cliMessage = trim(Artisan::output());
-
-    $httpResponse = $this->postJson('/bfc/credentials/'.$httpSource->id.'/rotate', [], rotationAdminHeaders())
-        ->assertForbidden();
-
-    expect($cliMessage)->toBe((string) $httpResponse->json('message'))
-        ->and($cliMessage)->toContain('"hmac" credential kind does not rotate')
-        ->and($cliMessage)->toContain('pending')
-        ->and($cliSource->refresh()->rotated_at)->toBeNull()
-        ->and(Credential::query()->count())->toBe(2);
-});
+// The pre-PR9 hmac-refuses-rotation parity test lived here; the hmac kind
+// now rotates (the pending→activate dance), covered in HmacRotationTest.
 
 // -------------------------------------------------- unrotatable sources
 

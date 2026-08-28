@@ -716,7 +716,8 @@ rotation is unaffected. An authorized override must ALSO fit the same ceilings t
 enforces: it is refused (`403`, same messages as mint) if the replacement's effective abilities
 or lifetime — inherited dimensions included — exceed what a mint of that shape could have been
 authorized for. Its audit events record the `override` reason code plus the delta.
-`code_ttl_seconds` is required (60–604800) when rotating an `asymmetric` credential and ignored
+`code_ttl_seconds` (60–604800) is required when rotating an `asymmetric` credential; optional
+for `hmac`, where it selects claim-code delivery over the reveal-once default; ignored
 otherwise.
 
 Per kind:
@@ -725,7 +726,7 @@ Per kind:
 |---|---|
 | `bearer` / `basic` | a fresh secret is minted and delivered once, in this response's `delivery` (same shapes as the mint route) |
 | `asymmetric` | a fresh **enrollment code** is delivered against a new `pending` row — the client generates the new keypair itself; no key material ever travels. The old credential's public key keeps verifying through the grace window, so both rows are listed side by side. The enrollment-completing exchange ships with the first asymmetric consumer's rebuild |
-| `hmac` | **403, explicitly not implemented**: hmac rotation is the pending→active cutover (rotate creates the new key pending while the old keeps signing; delivery installs it; activation cuts over) and ships with the kind itself. Nothing falls through to bearer semantics |
+| `hmac` | the pending→activate dance (D6 point 6 / D9): rotate mints the replacement key **`pending`** — delivered in this response's `delivery` (`signing_key` reveal-once, or `signing_key_code` when `code_ttl_seconds` is provided) — while **the old key keeps signing, unretired**. Delivery installs it receiver-side; [activation](#post-bfccredentialsidactivate) cuts signing over and starts the old key's one-hour verification grace; the old key dies at grace end. `emergency: true` kills the old key **now** instead (a compromised key must not keep signing), at the stated price of a signing outage until the replacement activates. Re-invoking rotate on the stamped row while the replacement is still pending is a `409` pointing at the activate verb; hmac rotation is refused (`409`) while an APP_KEY rewrap is in progress |
 
 - **201:**
 
@@ -763,12 +764,13 @@ orphan credential — and retrying works.
 ```
 
 - **404** — no such id. **403** — `{"message": "..."}`: the declaration denies `rotate` for
-  the row's subject, the override is not authorized (not opted in, denied, or past a mint
-  ceiling), or the kind does not rotate (`hmac`).
-- **409** — `{"message": "..."}`: the row is revoked, expired, or a pending enrollment — none
-  of which is a rotatable source — or it was already superseded by rotation and its successor
-  is **no longer live**: there is no cutover to complete, re-rotating would fork the lineage,
-  and the answer is a fresh mint.
+  the row's subject, or the override is not authorized (not opted in, denied, or past a mint
+  ceiling).
+- **409** — `{"message": "..."}`: the row is revoked, expired, or a pending row — none of
+  which is a rotatable source — or it was already superseded by rotation and its successor is
+  **no longer live** (no cutover to complete, re-rotating would fork the lineage; mint fresh),
+  or the successor is an hmac key **still pending activation** (activate it instead), or an
+  hmac rewrap is in progress (retry after `bfc:hmac:rewrap` completes).
 - **422** — `{"message": "..."}`: shared input validation (a change without `override`,
   out-of-bounds `code_ttl_seconds`, malformed abilities/expiry/booleans, override options on
   a completion) — identical refusals on the CLI transport.

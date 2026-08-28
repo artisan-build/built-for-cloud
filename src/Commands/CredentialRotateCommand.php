@@ -10,6 +10,7 @@ use ArtisanBuild\BuiltForCloud\Commands\Concerns\ParsesCredentialVerbInput;
 use ArtisanBuild\BuiltForCloud\DeliveryShape;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
+use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
@@ -39,7 +40,7 @@ final class CredentialRotateCommand extends Command
         {--clear-abilities : Override the replacement to NO abilities (requires --override)}
         {--expires= : Override the replacement\'s expiry (ISO-8601; requires --override)}
         {--clear-expiry : Override the replacement to NO expiry (requires --override)}
-        {--code-ttl= : Enrollment-code ttl in seconds when rotating an asymmetric credential (60–604800)}
+        {--code-ttl= : Claim-code ttl in seconds (60–604800): required for asymmetric; for hmac it selects claim-code delivery over the reveal-once default}
         {--local : Run against the local database, zero Cloud dependency}';
 
     protected $description = 'Rotate a unified-store credential: mint the replacement first, retire the old row at grace end';
@@ -71,7 +72,7 @@ final class CredentialRotateCommand extends Command
             }
 
             $result = $rotate((string) $id, RotateOptions::fromInput($input), AuditActor::cliOperator());
-        } catch (CredentialVerbRefused|InvalidCredentialInput|RotationRefused|RotationCutoverIncomplete $refused) {
+        } catch (CredentialVerbRefused|InvalidCredentialInput|RotationRefused|RotationCutoverIncomplete|RewrapInProgress $refused) {
             $this->error($refused->getMessage());
 
             return self::FAILURE;

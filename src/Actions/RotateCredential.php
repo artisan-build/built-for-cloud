@@ -19,8 +19,10 @@ use ArtisanBuild\BuiltForCloud\DeliveryShape;
 use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
+use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintedSecret;
@@ -72,9 +74,14 @@ use Throwable;
  * once through the sealed carrier; `asymmetric` issues a fresh enrollment
  * code against a new PENDING row — the keypair is the client's to generate,
  * both credentials stay listed and the old key verifies through grace (the
- * Phase-2 reel rebuild completes the client half); `hmac` refuses
- * explicitly — its pending→active cutover ships with the kind (D9), and
- * nothing falls through to bearer semantics.
+ * Phase-2 reel rebuild completes the client half); `hmac` (D9) mints the
+ * replacement key PENDING — delivered reveal-once or by claim code, the
+ * same discriminator as the mint verb — while THE OLD KEY KEEPS SIGNING:
+ * phase 2's retirement is deferred to the ACTIVATION cutover
+ * ({@see ActivateCredential}), except under `emergency`, which kills the
+ * old row now (a compromised key must not keep signing, at the stated
+ * price of a signing outage until activation). hmac rotation pauses while
+ * an APP_KEY rewrap is in progress (SEC-V3-08).
  */
 final class RotateCredential
 {
@@ -82,7 +89,6 @@ final class RotateCredential
     // cutover, which performs the same grace-bounded, never-extending
     // retirement at ITS cutover moment.
     use Concerns\RetiresSupersededCredentials;
-
     use ConsultsDeclaration;
 
     /**
@@ -92,7 +98,10 @@ final class RotateCredential
      */
     public const int GRACE_SECONDS = 3600;
 
-    public function __construct(private readonly LifecycleEventRecorder $recorder) {}
+    public function __construct(
+        private readonly LifecycleEventRecorder $recorder,
+        private readonly HmacKeyring $keyring,
+    ) {}
 
     /**
      * Returns null when no row carries the id (the transports' 404); every
@@ -105,6 +114,19 @@ final class RotateCredential
 
         if ($result === null) {
             return null;
+        }
+
+        // hmac's deferred cutover (D6 point 6): the old key KEEPS SIGNING
+        // until activation, so a routine hmac rotation performs NO phase-2
+        // retirement here — grace starts when {@see ActivateCredential}
+        // cuts over. `emergency` still retires now: a compromised key must
+        // not keep signing, and the outage until activation is exactly
+        // what emergency has always meant. The completion path is exempt:
+        // it exists to retire, whatever the kind.
+        if (! $result->completedCutover
+            && $result->mint->summary->kind === CredentialKind::Hmac
+            && ! $options->emergency) {
+            return $result;
         }
 
         try {
@@ -191,8 +213,13 @@ final class RotateCredential
             return $this->completeCutover($source, $options, $actor);
         }
 
-        if ($source->kind === CredentialKind::Hmac) {
-            throw CredentialVerbRefused::kindNotRotatable($source->kind->value);
+        // The rewrap pause (SEC-V3-08) gates the MINTING branch only: a
+        // rotation writes fresh key material, which must not interleave
+        // with a half-finished re-encryption sweep. Cutover COMPLETION
+        // (above) stays available mid-rewrap — it retires, writes no key
+        // material, and an emergency kill must never wait on a sweep.
+        if ($source->kind === CredentialKind::Hmac && $this->keyring->cutoverInProgress()) {
+            throw RewrapInProgress::refusing('rotation');
         }
 
         $override = $this->authorizeAnyOverride($source, $options);
@@ -218,9 +245,11 @@ final class RotateCredential
         $reason = $override ? AuditReason::Override : ($options->emergency ? AuditReason::Emergency : AuditReason::Rotation);
         $note = $override ? $this->overrideNote($source, $options, $abilities, $expiresAt) : null;
 
-        $result = $source->kind === CredentialKind::Asymmetric
-            ? $this->replaceWithEnrollment($source, $options, $abilities, $expiresAt)
-            : $this->replaceWithSecret($source, $abilities, $expiresAt);
+        $result = match ($source->kind) {
+            CredentialKind::Asymmetric => $this->replaceWithEnrollment($source, $options, $abilities, $expiresAt),
+            CredentialKind::Hmac => $this->replaceWithPendingSigningKey($source, $options, $abilities, $expiresAt),
+            default => $this->replaceWithSecret($source, $abilities, $expiresAt),
+        };
 
         Credential::query()->whereKey($source->id)->update(['rotated_at' => now()]);
 
@@ -232,6 +261,17 @@ final class RotateCredential
             reason: $reason,
             note: $note,
         );
+
+        // The reveal-once hmac delivery: this rotation's result IS the
+        // delivery, and the stream says so (the claim-code path records
+        // `delivered` at its exchange instead).
+        if ($result->delivery === DeliveryShape::SigningKey) {
+            $this->recorder->record(
+                event: LifecycleEventType::Delivered,
+                credentialId: $result->summary->id,
+                actor: $actor,
+            );
+        }
 
         $this->recorder->record(
             event: LifecycleEventType::Rotated,
@@ -269,6 +309,14 @@ final class RotateCredential
             throw RotationRefused::alreadyRotated($source->id, $successorId);
         }
 
+        // The hmac dance is not at the completion stage while its
+        // replacement is still PENDING: the old key still OWNS signing,
+        // and retiring it here would leave the subject with nothing that
+        // signs. Activation is the step that owes the retirement.
+        if ($successor->kind === CredentialKind::Hmac && $successor->status === CredentialStatus::Pending) {
+            throw RotationRefused::successorAwaitingActivation($source->id, $successor->id);
+        }
+
         if ($options->override || $options->requestsChange()) {
             throw InvalidCredentialInput::cutoverCompletionTakesNoOverrides();
         }
@@ -288,6 +336,79 @@ final class RotateCredential
             ),
             supersededId: $source->id,
             completedCutover: true,
+        );
+    }
+
+    /**
+     * The hmac rotation (D6 point 6 / D9): a fresh signing key, born
+     * PENDING and encrypted through the keyring, while the source keeps
+     * signing untouched — the pending→activate dance IS the make-before-
+     * break for a kind where the SENDER decides when to start using a new
+     * key. Delivery mirrors the mint verb's discriminator: a bounded
+     * `code_ttl_seconds` buys a claim code for an outside counterparty;
+     * absent, the key is revealed once in this result (`delivered_at`
+     * stamped — the mint response was the delivery).
+     *
+     * @param  list<string>|null  $abilities
+     */
+    private function replaceWithPendingSigningKey(
+        Credential $source,
+        RotateOptions $options,
+        ?array $abilities,
+        ?CarbonInterface $expiresAt,
+    ): MintResult {
+        $ttlSeconds = $options->codeTtlSeconds;
+
+        if ($ttlSeconds !== null
+            && ($ttlSeconds < MintCredential::CODE_TTL_MIN_SECONDS || $ttlSeconds > MintCredential::CODE_TTL_MAX_SECONDS)) {
+            throw InvalidCredentialInput::codeTtlOutOfBounds();
+        }
+
+        $signingKey = bin2hex(random_bytes(32));
+        $encrypted = $this->keyring->encrypt($signingKey);
+
+        $replacement = new Credential;
+        $replacement->forceFill([
+            'kind' => CredentialKind::Hmac,
+            'subject_type' => $source->subject_type,
+            'subject_ref' => $source->subject_ref,
+            'name' => $source->name,
+            'abilities' => $abilities,
+            'user_id' => $source->user_id,
+            'expires_at' => $expiresAt,
+            'status' => CredentialStatus::Pending,
+            'secret_ciphertext' => $encrypted->ciphertext,
+            'secret_key_version' => $encrypted->keyVersion,
+        ])->save();
+
+        if ($ttlSeconds === null) {
+            Credential::query()->whereKey($replacement->id)->update(['delivered_at' => now()]);
+
+            return new MintResult(
+                summary: $this->summarize($replacement->refresh()),
+                delivery: DeliveryShape::SigningKey,
+                secret: new MintedSecret($signingKey),
+            );
+        }
+
+        do {
+            $code = new MintedSecret(bin2hex(random_bytes(32)));
+        } while (OnboardingToken::query()->where('token_hash', $code->hash())->exists());
+
+        OnboardingToken::query()->create([
+            'id' => (string) Str::uuid(),
+            'email' => null,
+            'scope' => Scope::Onboard->value,
+            'token_hash' => $code->hash(),
+            'durable_token_id' => $replacement->id,
+            'durable_store' => DurableStore::Credentials,
+            'expires_at' => now()->addSeconds($ttlSeconds),
+        ]);
+
+        return new MintResult(
+            summary: $this->summarize($replacement),
+            delivery: DeliveryShape::SigningKeyCode,
+            secret: $code,
         );
     }
 

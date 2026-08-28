@@ -124,7 +124,7 @@ final class ManageCredentials
             return response()->json(['message' => $invalid->getMessage()], 422);
         } catch (CredentialVerbRefused $refused) {
             return response()->json(['message' => $refused->getMessage()], 403);
-        } catch (RotationRefused $refused) {
+        } catch (RotationRefused|RewrapInProgress $refused) {
             return response()->json(['message' => $refused->getMessage()], 409);
         } catch (RotationCutoverIncomplete $incomplete) {
             return response()->json(['message' => $incomplete->getMessage()], 500);
