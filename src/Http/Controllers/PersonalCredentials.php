@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
+use ArtisanBuild\BuiltForCloud\Contracts\DeclaresSelfServiceMintPolicy;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
@@ -81,18 +82,31 @@ final class PersonalCredentials
     }
 
     /**
-     * Mint MINE. The options a caller may choose are the same ones the
-     * operator transport normalizes through the SHARED input object, MINUS
-     * the two that decide whose credential this is: `subject_type` /
-     * `subject_ref` (the session's) and `user_id` (the session user's).
-     * They are absent from the whitelist below, so no validation message
-     * can be probed for their handling either.
+     * Mint MINE. The whitelist below is the whole of what a caller may
+     * choose, and everything absent from it is absent on purpose — never
+     * read, so there is no validation message to probe for its handling
+     * either:
+     *
+     * - `subject_type` / `subject_ref` — whose credential this is; the
+     *   session's, derived server-side (SEC-V3-07);
+     * - `user_id` — which user it binds to; the session user's;
+     * - `abilities` — what it can DO; the app's self-service policy's
+     *   ({@see DeclaresSelfServiceMintPolicy}),
+     *   and NO abilities at all when the app declares none. The operator
+     *   mint takes abilities from an admin who chose them; a logged-in
+     *   human asking for `["mcp:admin"]` here is making a request, not an
+     *   authorization, and the surface does not read it (rework Fix 2).
+     *
+     * `kind` IS read, and then refused unless the policy offers it —
+     * `bearer` alone by default. `name` and `expires_at` are the caller's:
+     * a free-text label and a caller-chosen expiry that is still never
+     * defaulted (PRD 1.3 / D1b).
      */
     public function store(Request $request, PersonalCredentialSurface $surface): JsonResponse
     {
         try {
             $result = $surface->mintMine($request, MintOptions::fromInput($request->only([
-                'kind', 'name', 'abilities', 'expires_at', 'code_ttl_seconds',
+                'kind', 'name', 'expires_at', 'code_ttl_seconds',
             ])));
         } catch (SelfServiceUnavailable $unavailable) {
             return $this->unavailable($unavailable);

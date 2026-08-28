@@ -14,15 +14,19 @@ use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\OffboardOptions;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SelfServiceDeclaration;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SelfServicePolicyDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Route as RoutingRoute;
+use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Route;
 
 /**
@@ -37,11 +41,29 @@ use Illuminate\Support\Facades\Route;
 uses(RefreshDatabase::class, DetectsSecretLeaks::class);
 
 beforeEach(function (): void {
-    // The fixture's thinness is per test; reset it so nothing bleeds.
+    // The fixtures' per-test knobs; reset so nothing bleeds between tests.
     SelfServiceDeclaration::$unsupported = [];
+    SelfServicePolicyDeclaration::$abilities = [];
+    SelfServicePolicyDeclaration::$kinds = [CredentialKind::Bearer];
 
     config(['built-for-cloud.credentials.declaration' => SelfServiceDeclaration::class]);
 });
+
+/**
+ * Two stand-in MCP tool routes behind the per-tool ability primitive
+ * (PRD 1.10) — the concrete thing a self-service credential must not be
+ * able to reach by asking for the ability.
+ */
+function personalMcpRoutes(): void
+{
+    config(['auth.guards.bfc' => ['driver' => 'bfc', 'provider' => 'users']]);
+
+    Route::post('/mcp/purge', fn (): array => ['purged' => true])
+        ->middleware('bfc.ability:'.OperatorAbility::McpAdmin->value);
+
+    Route::post('/mcp/status', fn (): array => ['ok' => true])
+        ->middleware('bfc.ability:'.OperatorAbility::McpRead->value);
+}
 
 function personalUser(string $email): User
 {
@@ -282,9 +304,13 @@ it('distinguishes declared-unsupported from null-but-supported and renders less 
 
     // The round trip: a mint that sets a declared-unsupported field is
     // refused, so the declaration is never made a lie by this surface.
+    // `name` and not `abilities`, because abilities are no longer a
+    // client-supplied field here at all (rework Fix 2) — they come from
+    // the self-service policy, so there is nothing for a caller to set.
+    SelfServiceDeclaration::$unsupported = ['name'];
+
     $this->actingAs($mine)->postJson('/bfc/me/credentials', [
         'name' => 'ci',
-        'abilities' => ['consume'],
     ])->assertForbidden();
 
     expect(Credential::query()->where('name', 'ci')->exists())->toBeFalse();
@@ -429,6 +455,186 @@ it('stops authenticating a revoked personal credential and kills it when the bou
     $this->actingAs($mine, 'web')->getJson('/bfc/me/credentials')->assertForbidden();
 });
 
+// ------------------------- REWORK FIX 2: the self-service mint fails CLOSED
+
+it('mints no abilities at all when the app declares no self-service policy, so a low-privilege user cannot mint mcp:admin', function (): void {
+    personalMcpRoutes();
+
+    $mine = personalUser('mine@example.test');
+
+    // The escalation attempt: a logged-in, otherwise powerless human asks
+    // for the destructive MCP ability and the operator admin ability.
+    $secret = (string) $this->actingAs($mine, 'web')
+        ->postJson('/bfc/me/credentials', [
+            'name' => 'ci',
+            'abilities' => [OperatorAbility::McpAdmin->value, OperatorAbility::ADMIN],
+        ])
+        ->assertCreated()
+        ->json('delivery.secret');
+
+    // Not narrowed, not filtered — never read. The row holds NOTHING.
+    $credential = Credential::query()->where('name', 'ci')->sole();
+
+    expect($credential->abilities)->toBeNull()
+        ->and($credential->hasAbility(OperatorAbility::McpAdmin->value))->toBeFalse()
+        ->and($credential->hasAbility(OperatorAbility::ADMIN))->toBeFalse();
+
+    // And the ability is not merely absent from a column: the credential
+    // cannot invoke the destructive tool, or the read tool, or the
+    // operator surface the admin ability would have opened.
+    $header = ['Authorization' => 'Bearer '.$secret];
+
+    $this->postJson('/mcp/purge', [], $header)->assertForbidden();
+    $this->postJson('/mcp/status', [], $header)->assertForbidden();
+    $this->getJson('/bfc/credentials', $header)->assertForbidden();
+});
+
+it('grants exactly the self-service policy abilities and never the clients', function (): void {
+    personalMcpRoutes();
+
+    config(['built-for-cloud.credentials.declaration' => SelfServicePolicyDeclaration::class]);
+
+    // The app says: my users may mint themselves an MCP READ token.
+    SelfServicePolicyDeclaration::$abilities = [OperatorAbility::McpRead->value];
+
+    $mine = personalUser('mine@example.test');
+
+    $secret = (string) $this->actingAs($mine, 'web')
+        ->postJson('/bfc/me/credentials', [
+            'name' => 'ci',
+            // The client asks for more. It changes nothing.
+            'abilities' => [OperatorAbility::McpAdmin->value],
+        ])
+        ->assertCreated()
+        ->json('delivery.secret');
+
+    expect(Credential::query()->where('name', 'ci')->sole()->abilities)
+        ->toBe([OperatorAbility::McpRead->value]);
+
+    $header = ['Authorization' => 'Bearer '.$secret];
+
+    // Exactly the policy's grant: the read tool opens, the destructive
+    // one does not.
+    $this->postJson('/mcp/status', [], $header)->assertOk();
+    $this->postJson('/mcp/purge', [], $header)->assertForbidden();
+});
+
+it('drops client abilities even when the surface is called directly, not over HTTP', function (): void {
+    $mine = personalUser('mine@example.test');
+
+    $this->actingAs($mine, 'web');
+
+    $request = Request::create('/bfc/me/credentials', 'POST');
+    $request->setUserResolver(fn (): User => $mine);
+
+    // A front end handing the surface a MintOptions carrying abilities:
+    // the grant is rebuilt from the policy regardless, so the guarantee
+    // is structural and not a request-whitelist rule.
+    app(PersonalCredentialSurface::class)->mintMine($request, new MintOptions(
+        name: 'direct',
+        abilities: [OperatorAbility::McpAdmin->value],
+    ));
+
+    expect(Credential::query()->where('name', 'direct')->sole()->abilities)->toBeNull();
+});
+
+it('refuses a self-service credential kind the app has not opted in', function (): void {
+    $mine = personalUser('mine@example.test');
+
+    $this->actingAs($mine, 'web');
+
+    // `hmac` delivers signing key material and `asymmetric` an enrollment
+    // code; neither is reachable by naming it. No policy means bearer only.
+    foreach ([CredentialKind::Hmac, CredentialKind::Asymmetric, CredentialKind::Basic] as $kind) {
+        $this->postJson('/bfc/me/credentials', ['name' => 'probe', 'kind' => $kind->value])
+            ->assertForbidden()
+            ->assertJsonPath('message', fn (string $message): bool => str_contains($message, 'does not offer'));
+    }
+
+    expect(Credential::query()->count())->toBe(0);
+
+    // The default kind still works, and it is what an omitted kind means.
+    $this->postJson('/bfc/me/credentials', ['name' => 'default-kind'])->assertCreated();
+
+    expect(Credential::query()->where('name', 'default-kind')->sole()->kind)->toBe(CredentialKind::Bearer);
+});
+
+it('offers a kind once the self-service policy opts it in', function (): void {
+    config(['built-for-cloud.credentials.declaration' => SelfServicePolicyDeclaration::class]);
+
+    SelfServicePolicyDeclaration::$kinds = [CredentialKind::Bearer, CredentialKind::Hmac];
+
+    $mine = personalUser('mine@example.test');
+
+    $this->actingAs($mine, 'web')
+        ->postJson('/bfc/me/credentials', ['name' => 'signing', 'kind' => CredentialKind::Hmac->value])
+        ->assertCreated()
+        ->assertJsonPath('delivery.shape', 'signing_key');
+
+    expect(Credential::query()->where('name', 'signing')->sole()->kind)->toBe(CredentialKind::Hmac);
+});
+
+it('leaves the durable expiry caller-chosen and never defaults one on the self-service mint', function (): void {
+    $mine = personalUser('mine@example.test');
+
+    $this->actingAs($mine, 'web');
+
+    // Abilities fail closed; LIFETIME does not — a durable's expiry stays
+    // the caller's choice with no default (PRD 1.3 / D1b: TTL defaults on
+    // durables are a DO-NOT-BUILD). Omitted means no expiry.
+    $this->postJson('/bfc/me/credentials', ['name' => 'no-expiry'])->assertCreated();
+
+    expect(Credential::query()->where('name', 'no-expiry')->sole()->expires_at)->toBeNull();
+
+    $chosen = now()->addDays(30)->startOfSecond();
+
+    $this->postJson('/bfc/me/credentials', [
+        'name' => 'chosen-expiry',
+        'expires_at' => $chosen->toIso8601String(),
+    ])->assertCreated();
+
+    expect(Credential::query()->where('name', 'chosen-expiry')->sole()->expires_at->toIso8601String())
+        ->toBe($chosen->toIso8601String());
+});
+
+// ------------- REWORK FIX 1: browser session routes, CSRF on the mutations
+
+it('rejects a mutating personal request that carries no valid CSRF token', function (): void {
+    $mine = personalUser('mine@example.test');
+    $credential = personalCredentialFor($mine);
+
+    $this->actingAs($mine, 'web');
+
+    // PreventRequestForgery short-circuits while the app reports itself as
+    // running unit tests, which is exactly why every other test here can
+    // post without a token. Flip that off to exercise the real gate.
+    app()->instance('env', 'local');
+
+    $this->post('/bfc/me/credentials', ['name' => 'forged'])->assertStatus(419);
+    $this->delete('/bfc/me/credentials/'.$credential->id)->assertStatus(419);
+
+    expect(Credential::query()->where('name', 'forged')->exists())->toBeFalse()
+        ->and($credential->refresh()->revoked_at)->toBeNull();
+
+    // The read verb is not CSRF-checked (PreventRequestForgery exempts
+    // read verbs itself) — it is how a front end picks up its token.
+    $this->get('/bfc/me/credentials')->assertOk();
+
+    // And with a matching token the same mutations go through.
+    $token = 'personal-csrf-'.bin2hex(random_bytes(8));
+
+    $this->withSession(['_token' => $token])
+        ->post('/bfc/me/credentials', ['name' => 'legitimate', '_token' => $token])
+        ->assertCreated();
+
+    $this->withSession(['_token' => $token])
+        ->delete('/bfc/me/credentials/'.$credential->id, ['_token' => $token])
+        ->assertNoContent();
+
+    expect(Credential::query()->where('name', 'legitimate')->exists())->toBeTrue()
+        ->and($credential->refresh()->revoked_at)->not->toBeNull();
+});
+
 // --------------------------------------------------------- AC10: wiring parity
 
 it('mounts the personal routes on the routes surface family, at fixed paths, behind the session gate', function (): void {
@@ -444,12 +650,23 @@ it('mounts the personal routes on the routes surface family, at fixed paths, beh
         ]);
 
     foreach ($personal as $route) {
-        $middleware = $route->gatherMiddleware();
+        $declared = $route->gatherMiddleware();
 
-        expect($middleware)->toContain('bfc.auth')
-            ->and($middleware)->toContain('throttle:bfc-personal')
+        // The RESOLVED stack: middleware groups expanded to real classes,
+        // so the assertion holds whether the surface rode the host's `web`
+        // group or the package's own fallback stack.
+        $resolved = app('router')->gatherRouteMiddleware($route);
+
+        expect($declared)->toContain('bfc.auth')
+            ->and($declared)->toContain('throttle:bfc-personal')
             // No operator gate, ever: this surface is the session's.
-            ->and(collect($middleware)->filter(fn (mixed $one): bool => is_string($one) && str_starts_with($one, 'bfc.credential.admin'))->all())
-            ->toBe([]);
+            ->and(collect($declared)->filter(fn (mixed $one): bool => is_string($one) && str_starts_with($one, 'bfc.credential.admin'))->all())
+            ->toBe([])
+            // Rework Fix 1: these are BROWSER routes. Without StartSession
+            // a cookie session never starts (every request 401s), and
+            // without the CSRF middleware a session-riding forgery could
+            // mint or revoke on a logged-in user's behalf.
+            ->and($resolved)->toContain(StartSession::class)
+            ->and($resolved)->toContain(PreventRequestForgery::class);
     }
 });

@@ -51,8 +51,12 @@ use ArtisanBuild\BuiltForCloud\Listeners\QueueOwnershipWebhook;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
+use Illuminate\Cookie\Middleware\EncryptCookies;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Router;
+use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
@@ -230,14 +234,24 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // user's surviving session cannot reach the screen (PRD 1.15).
         // Fixed `/bfc/` path, part of the routes family, like every
         // other package surface.
+        //
+        // These are BROWSER routes, and the only ones the package mounts
+        // (rework Fix 1). Every other /bfc/* surface is a token API that
+        // wants no session; these three ride the full session stack —
+        // see personalSessionMiddleware() — so cookie sessions actually
+        // start, and so the MUTATING verbs are CSRF-protected. Without
+        // it a session-riding forgery on a logged-in user's browser
+        // could mint or revoke their credentials.
+        $personal = $this->personalSessionMiddleware($router);
+
         $router->get('/bfc/me/credentials', [PersonalCredentials::class, 'index'])
-            ->middleware(['throttle:bfc-personal', 'bfc.auth']);
+            ->middleware(['throttle:bfc-personal', ...$personal, 'bfc.auth']);
 
         $router->post('/bfc/me/credentials', [PersonalCredentials::class, 'store'])
-            ->middleware(['throttle:bfc-personal', 'bfc.auth']);
+            ->middleware(['throttle:bfc-personal', ...$personal, 'bfc.auth']);
 
         $router->delete('/bfc/me/credentials/{id}', [PersonalCredentials::class, 'destroy'])
-            ->middleware(['throttle:bfc-personal', 'bfc.auth']);
+            ->middleware(['throttle:bfc-personal', ...$personal, 'bfc.auth']);
 
         // The machine-callable invite verb (PRD 1.13, SEC-V3-05): the
         // HTTP half of its two transports, behind the same operator
@@ -272,6 +286,41 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                     $router->delete('/{name}', [ManageTokens::class, 'destroy']);
                 });
         }
+    }
+
+    /**
+     * The browser-session stack the personal surface rides (PRD 1.17,
+     * rework Fix 1) — the CSRF protection on its mutating verbs included.
+     *
+     * PREFERRED: the host's own `web` group. It is the right answer in a
+     * standard Laravel app for two reasons — it is the stack that app's
+     * OWN settings screens run on (its cookie encryption, its session
+     * driver, and whatever it added: locale, tenancy, impersonation), and
+     * an app that customized CSRF handling gets its customization here
+     * rather than a second, divergent copy.
+     *
+     * FALLBACK, when no such group is registered (a package test harness,
+     * an API-only skeleton that never defined one): the concrete stack,
+     * so these routes are never mounted WITHOUT session start and CSRF
+     * validation. `PreventRequestForgery` exempts read verbs itself, so
+     * the listing is not CSRF-checked while POST and DELETE are — and the
+     * listing is where a front end picks up the XSRF-TOKEN cookie it will
+     * send back.
+     *
+     * @return list<string>
+     */
+    private function personalSessionMiddleware(Router $router): array
+    {
+        if ($router->hasMiddlewareGroup('web')) {
+            return ['web'];
+        }
+
+        return [
+            EncryptCookies::class,
+            AddQueuedCookiesToResponse::class,
+            StartSession::class,
+            PreventRequestForgery::class,
+        ];
     }
 
     /**

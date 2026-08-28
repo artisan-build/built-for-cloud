@@ -7,7 +7,9 @@ namespace ArtisanBuild\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Actions\ListCredentials;
 use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
 use ArtisanBuild\BuiltForCloud\Actions\RevokeCredential;
+use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
+use ArtisanBuild\BuiltForCloud\Contracts\DeclaresSelfServiceMintPolicy;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresUnsupportedSummaryFields;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
@@ -63,6 +65,17 @@ use Illuminate\Support\Facades\Auth;
  */
 final readonly class PersonalCredentialSurface
 {
+    /**
+     * The kinds a self-service mint may produce when the app declares no
+     * policy: `bearer` alone. `hmac` and `asymmetric` deliver signing key
+     * material and enrollment codes, and `basic` is an operator-shaped
+     * delivery — none of them is something a logged-in human should be
+     * able to reach by naming it.
+     *
+     * @var list<CredentialKind>
+     */
+    private const array DEFAULT_SELF_SERVICE_KINDS = [CredentialKind::Bearer];
+
     public function __construct(
         private ListCredentials $list,
         private MintCredential $mint,
@@ -93,10 +106,21 @@ final readonly class PersonalCredentialSurface
     }
 
     /**
-     * Mint for the caller. The subject is the derived one and the
-     * `user_id` binding is the SESSION user's identifier — both stamped
-     * here, so a `subject_type`, `subject_ref` or `user_id` a caller
-     * supplied cannot reach the row whatever a front end passed in.
+     * Mint for the caller — FAIL-CLOSED on authority (rework Fix 2).
+     *
+     * Four of the six mint options are decided here, not by the caller:
+     * the subject and the `user_id` binding come from the session, and
+     * the ABILITIES and the KIND come from the app's self-service policy
+     * ({@see DeclaresSelfServiceMintPolicy}). Only the free-text `name`,
+     * the caller-chosen `expires_at` and the enrollment `code_ttl_seconds`
+     * are the caller's, because none of them is an authority.
+     *
+     * The distinction that makes this safe: the OPERATOR mint derives
+     * authority from an admin who chose it; the self-service mint derives
+     * it from a declaration. A logged-in human asking for `mcp:admin` is
+     * making a request, not an authorization, and this surface never reads
+     * it — so a low-privilege user cannot mint themselves a powerful
+     * credential, whatever they send and whatever a front end passes.
      *
      * @throws SelfServiceUnavailable
      * @throws CredentialVerbRefused
@@ -107,7 +131,7 @@ final readonly class PersonalCredentialSurface
     {
         $subject = $this->requireSubject($request);
 
-        return ($this->mint)($subject, $this->selfBound($options), $this->actor());
+        return ($this->mint)($subject, $this->selfServiceOptions($options, $subject), $this->actor());
     }
 
     /**
@@ -173,17 +197,49 @@ final readonly class PersonalCredentialSurface
     }
 
     /**
-     * The user binding, stamped server-side. Rebuilt rather than mutated
-     * because {@see MintOptions} is readonly and because rebuilding is
-     * what makes the guarantee structural: whatever `userId` a caller put
-     * in, the value that reaches the store is this one.
+     * The self-service mint's options, REBUILT rather than filtered —
+     * rebuilding is what makes the guarantee structural rather than a
+     * validation rule someone can find a hole in. Whatever `userId` or
+     * `abilities` a caller put in, the values that reach the store are
+     * the ones assembled here.
+     *
+     * - `abilities`: the policy's whole grant, never an intersection with
+     *   what was asked for. No policy means NO abilities — the credential
+     *   authenticates as its holder and holds no operator, MCP or signing
+     *   power.
+     * - `kind`: refused unless the policy offers it; `bearer` only by
+     *   default, so `hmac` and `asymmetric` (which deliver signing key
+     *   material and enrollment codes) cannot be reached by naming them.
+     * - `expiresAt`: the CALLER's, still optional and still never
+     *   defaulted (PRD 1.3 / D1b). Lifetime is not the escalation vector;
+     *   an app that wants a ceiling declares one through
+     *   {@see ConstrainsMintedCredentials},
+     *   which the mint verb applies to both mint paths alike.
+     *
+     * @throws CredentialVerbRefused
      */
-    private function selfBound(MintOptions $options): MintOptions
+    private function selfServiceOptions(MintOptions $options, Subject $subject): MintOptions
     {
+        $policy = $this->declaration();
+        $policy = $policy instanceof DeclaresSelfServiceMintPolicy ? $policy : null;
+
+        $kinds = $policy?->selfServiceKinds($subject) ?? self::DEFAULT_SELF_SERVICE_KINDS;
+
+        if (! in_array($options->kind, $kinds, true)) {
+            throw CredentialVerbRefused::selfServiceKind($options->kind);
+        }
+
+        $abilities = array_values(array_filter(
+            $policy?->selfServiceAbilities($subject) ?? [],
+            static fn (string $ability): bool => trim($ability) !== '',
+        ));
+
         return new MintOptions(
             kind: $options->kind,
             name: $options->name,
-            abilities: $options->abilities,
+            // The one canonical empty, matching MintOptions::fromInput():
+            // null and [] both grant nothing, and summaries serialize null.
+            abilities: $abilities === [] ? null : $abilities,
             expiresAt: $options->expiresAt,
             userId: $this->sessionUserId(),
             codeTtlSeconds: $options->codeTtlSeconds,

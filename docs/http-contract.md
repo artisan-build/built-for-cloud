@@ -74,8 +74,10 @@ Additive unless marked otherwise:
 - New personal-credentials routes (PRD 1.17): `GET /bfc/me/credentials`,
   `POST /bfc/me/credentials` and `DELETE /bfc/me/credentials/{id}` — the session-authenticated
   self-service front to the same unified-store verbs, whose subject is derived server-side from
-  the authenticated session and never from request input (SEC-V3-07). Additive: no existing
-  route, request or response shape changes.
+  the authenticated session and never from request input (SEC-V3-07), whose ABILITIES come from
+  an application-declared self-service policy and never from the requesting user, and whose
+  mutations are CSRF-protected browser routes. Additive: no existing route, request or response
+  shape changes.
 - `GET /bfc/meta` `capabilities` gained `credentials`.
 - `POST /bfc/onboarding/issue` requires `ttl_seconds` (bounds below) and accepts nullable
   `email`; the claim surfaces speak the claim-contract error enum documented here.
@@ -1000,6 +1002,23 @@ gate is also where an offboarded user's surviving session dies (PRD 1.15), so of
 subject both revokes its credentials and closes this screen to them. Every request rides the
 `bfc-personal` limiter (30/min per session principal, 60/min per IP).
 
+**These are BROWSER routes — the only ones in this contract.** Every other surface documented
+here is a token API that wants no session; these three ride the full browser session stack
+(cookie encryption, `StartSession`, CSRF validation). Concretely: the package mounts them in the
+host application's own **`web` middleware group** when one is registered — so the app's session
+driver, cookie handling and any CSRF customization apply to its own settings screen — and falls
+back to the equivalent concrete stack when the application registers no such group.
+
+Two consequences for a client:
+
+- **`POST` and `DELETE` require a valid CSRF token.** Send it as a `_token` field or an
+  `X-CSRF-TOKEN` / `X-XSRF-TOKEN` header, exactly as for any other form post in the host
+  application. A mutation without one is rejected (`419`). `GET` is not CSRF-checked — it is
+  where a browser client picks up the `XSRF-TOKEN` cookie it sends back.
+- **A session cookie is required**, so this surface is for a browser (or anything that keeps the
+  app's session cookie). A machine integration wants the operator routes and a credential, not
+  this screen.
+
 **When the application declares no subject for the session** — its declaration's
 `resolveSubject()` returns `null`, which is what the package's shipped default declaration does —
 every verb answers **403** with a `message`. Fail-closed on purpose: an empty `200` listing would
@@ -1051,23 +1070,48 @@ Mint for the caller.
 {
   "kind": "bearer",
   "name": "my laptop",
-  "abilities": ["consume"],
   "expires_at": null,
   "code_ttl_seconds": null
 }
 ```
 
 Every field is optional and normalized by the same shared input object the operator transport
-uses, so the same junk is rejected the same way with the same message. **There is deliberately no
-`subject_type`, `subject_ref` or `user_id` field**: those are the three that decide whose
-credential this is, and they are the session's.
+uses, so the same junk is rejected the same way with the same message. Send a CSRF token with it
+(see above).
+
+**Four fields the operator route accepts are deliberately absent here, and none of them is
+merely rejected — none is read at all**, so there is no validation behaviour to probe:
+
+| absent field | why | what decides it instead |
+|---|---|---|
+| `subject_type`, `subject_ref` | whose credential this is | the session, derived server-side (SEC-V3-07) |
+| `user_id` | which user it binds to | the session user |
+| `abilities` | **what it can DO** | the application's self-service mint policy |
+
+**The self-service mint fails closed on authority.** The operator route takes abilities from an
+authenticated admin who chose them. A logged-in human asking this route for `["mcp:admin"]` is
+making a *request*, not an authorization — so the surface does not read it. A self-service
+credential's abilities come only from an explicit self-service policy the application's
+declaration provides, and **absent that policy it is minted with no abilities at all**: it
+authenticates as its holder and holds no operator, MCP or signing power.
+
+`kind` **is** read, and then refused unless the policy offers it. The default offer is `bearer`
+alone, so `hmac` (which delivers signing key material) and `asymmetric` (an enrollment code) are
+not reachable by naming them — a refusal is a `403` naming the kind.
+
+`expires_at` is the caller's and stays optional: a durable's expiry is never defaulted (PRD 1.3 /
+D1b). Lifetime is not the escalation vector; abilities are, and abilities are what fails closed.
+An application that does want a lifetime ceiling declares one the normal way, and the mint verb
+applies it to both routes alike.
 
 - **201** — `{"credential": {…}, "delivery": {…}}`: the summary row, and the **single reveal**,
   shaped by `delivery.shape` exactly as documented for
   [`POST /bfc/credentials`](#post-bfccredentials). The plaintext appears here and nowhere else —
   not in a later listing, not in the logs, not in the session, not at rest.
-- **403** — `{"message": "..."}`: no resolvable subject, the declaration denies `issue` for it,
-  the request widens past a declared ceiling, or it sets a declared-unsupported field.
+- **403** — `{"message": "..."}`: no resolvable subject, a `kind` the self-service policy does
+  not offer, the declaration denies `issue` for the subject, a widening past a declared ceiling,
+  or a declared-unsupported field.
+- **419** — the mutation carried no valid CSRF token.
 - **409** — an hmac mint during an APP_KEY rewrap.
 - **422** — validation (unknown `kind`, out-of-bounds `code_ttl_seconds`, malformed `abilities`).
 
@@ -1083,6 +1127,7 @@ Revoke one of the caller's own credentials, by id.
   same 404; existence outside the caller's own scope is never disclosed.
 - **403** — `{"message": "..."}`: no resolvable subject, or the declaration's `revoke` verb denies
   it for this subject.
+- **419** — no valid CSRF token.
 
 ## Subjects — the offboard verb
 

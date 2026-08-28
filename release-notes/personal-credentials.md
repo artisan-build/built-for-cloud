@@ -8,8 +8,10 @@ No new store, no new verbs, no new credential kind.
 | | operator surface | personal surface |
 |---|---|---|
 | routes | `/bfc/credentials` | `/bfc/me/credentials` |
-| gate | admin token or an operator credential holding the verb-family ability | the app's **session** (`bfc.auth`) |
+| gate | admin token or an operator credential holding the verb-family ability | the app's **session** (`bfc.auth`) + the browser stack, CSRF on mutations |
 | subject | `subject_type` + `subject_ref`, validated request **input** | derived **server-side** from the authenticated session |
+| abilities | chosen by an authenticated **admin** | the app's **self-service mint policy** — never the requesting user |
+| kind | any | `bearer` only, until the policy opts one in |
 | scope | the whole instance | the caller's own rows, only |
 
 ## The one property everything else follows from
@@ -31,6 +33,63 @@ From that:
   the revoke verb's own locked transaction, not in a check-then-act window in the caller.
 
 Both are named negative tests (`it denies every cross-user path by any crafted input`).
+
+## Authority fails closed — the self-service mint is not the operator mint
+
+The two mint paths derive authority from different places, and conflating them would be a
+privilege-escalation hole: the operator mint takes abilities from an authenticated **admin** who
+chose them, and the declaration's optional ceilings only *narrow* that choice. A logged-in human
+asking the personal route for `["mcp:admin"]` is making a **request, not an authorization**.
+
+So the self-service mint reads none of it. `abilities` is not a field on this route — not
+validated and refused, **not read** — and a self-service credential's abilities come only from
+an explicit policy the app's declaration provides:
+
+```php
+final class Declaration implements CredentialDeclaration, DeclaresSelfServiceMintPolicy
+{
+    /** @return list<string> */
+    public function selfServiceAbilities(Subject $subject): array
+    {
+        return ['mcp:read'];   // the WHOLE grant, not a ceiling to filter input against
+    }
+
+    /** @return list<CredentialKind> */
+    public function selfServiceKinds(Subject $subject): array
+    {
+        return [CredentialKind::Bearer];
+    }
+}
+```
+
+**Absent that contract, a self-service credential is minted with no abilities at all** and in the
+`bearer` kind only: it authenticates as its holder and holds no operator, MCP or signing power.
+A `kind` the policy does not offer is a `403` naming it — `hmac` delivers signing key material
+and `asymmetric` an enrollment code, and neither is reachable by asking.
+
+The grant is *rebuilt*, not filtered, so the guarantee is structural rather than a
+request-whitelist rule: a front end calling `PersonalCredentialSurface::mintMine()` directly with
+a `MintOptions` full of abilities gets the policy's grant just the same.
+
+**Lifetime deliberately does not fail closed.** A durable's expiry stays caller-chosen with no
+default (PRD 1.3 / D1b — TTL defaults on durables are a DO-NOT-BUILD). Abilities are the
+escalation vector; abilities are what closes. An app that wants a lifetime ceiling declares one
+through `ConstrainsMintedCredentials`, which the mint verb applies to both paths alike.
+
+## Browser routes, and the only ones the package mounts
+
+Every other `/bfc/*` surface is a token API that wants no session. These three are a screen, so
+they ride the full browser session stack — cookie encryption, `StartSession`, CSRF validation —
+mounted in the **host app's own `web` middleware group** when one is registered, and on the
+equivalent concrete stack when it is not. Riding the host's group is the point: the app's session
+driver, cookie handling, CSRF customization and anything else it added (locale, tenancy,
+impersonation) apply to its own settings screen rather than to a second, divergent copy.
+
+Two consequences: cookie sessions actually start (without `StartSession` every request would
+401), and `POST`/`DELETE` require a valid CSRF token — without which a session-riding forgery on
+a logged-in user's browser could mint or revoke their credentials. `GET` is not CSRF-checked; it
+is where a client picks up the `XSRF-TOKEN` cookie it sends back. No other package route gains
+the session stack, which is its own assertion.
 
 ## Declaration-driven rendering
 
