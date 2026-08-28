@@ -56,7 +56,9 @@ function mintedActiveHmacKey(string $subjectRef = 'webhook-client', array $optio
         MintOptions::fromInput(['kind' => 'hmac', ...$options]),
     );
 
-    test()->postJson('/bfc/credentials/'.$result->summary->id.'/activate', [], hmacRotationAdminHeaders())->assertOk();
+    test()->postJson('/bfc/credentials/'.$result->summary->id.'/activate', [
+        'delivery_fingerprint' => (string) $result->deliveryFingerprint,
+    ], hmacRotationAdminHeaders())->assertOk();
 
     /** @var Credential */
     return Credential::query()->findOrFail($result->summary->id);
@@ -115,15 +117,19 @@ it('walks the whole rotation dance: pending → deliver → activate → grace �
     expect(fn () => app(HmacVerifier::class)->verify(hmacRotationSubject(), signedHeaderFor($pendingNew, $body), $body))
         ->toThrow(HmacVerificationFailed::class);
 
-    // Delivery installs it receiver-side.
+    // Delivery installs it receiver-side; the fingerprint is what the
+    // receiver confirms out-of-band.
     $exchange = $this->postJson('/bfc/onboarding/exchange', ['token' => $claimCode])->assertCreated();
 
     expect($exchange->json('key_id'))->toBe($newId)
-        ->and((string) $exchange->json('signing_key'))->toMatch('/^[0-9a-f]{64}$/');
+        ->and((string) $exchange->json('signing_key'))->toMatch('/^[0-9a-f]{64}$/')
+        ->and((string) $exchange->json('delivery_fingerprint'))->toMatch('/^[0-9a-f]{16}$/');
 
-    // Activation cuts over: the response names the superseded key and its
-    // grace horizon.
-    $activate = $this->postJson('/bfc/credentials/'.$newId.'/activate', [], hmacRotationAdminHeaders())->assertOk();
+    // Activation cuts over — fed the CONFIRMED delivery fingerprint: the
+    // response names the superseded key and its grace horizon.
+    $activate = $this->postJson('/bfc/credentials/'.$newId.'/activate', [
+        'delivery_fingerprint' => (string) $exchange->json('delivery_fingerprint'),
+    ], hmacRotationAdminHeaders())->assertOk();
 
     expect($activate->json('superseded_id'))->toBe($old->id)
         ->and($activate->json('grace_ends_at'))->not->toBeNull();
@@ -173,7 +179,8 @@ it('rotates with the reveal-once delivery when no code ttl is chosen: this respo
 
     expect($rotate->json('delivery.shape'))->toBe('signing_key')
         ->and($rotate->json('delivery.key_id'))->toBe($newId)
-        ->and((string) $rotate->json('delivery.signing_key'))->toMatch('/^[0-9a-f]{64}$/');
+        ->and((string) $rotate->json('delivery.signing_key'))->toMatch('/^[0-9a-f]{64}$/')
+        ->and((string) $rotate->json('delivery.delivery_fingerprint'))->toMatch('/^[0-9a-f]{16}$/');
 
     /** @var Credential $new */
     $new = Credential::query()->findOrFail($newId);
@@ -184,7 +191,9 @@ it('rotates with the reveal-once delivery when no code ttl is chosen: this respo
         ->toBe(['delivered', 'issued']);
 
     // Delivered means activatable: the dance can complete.
-    $this->postJson('/bfc/credentials/'.$newId.'/activate', [], hmacRotationAdminHeaders())->assertOk();
+    $this->postJson('/bfc/credentials/'.$newId.'/activate', [
+        'delivery_fingerprint' => (string) $rotate->json('delivery.delivery_fingerprint'),
+    ], hmacRotationAdminHeaders())->assertOk();
 });
 
 it('preserves the exact ability set, subject binding, name and expiry on the pending replacement', function (): void {
@@ -199,7 +208,9 @@ it('preserves the exact ability set, subject binding, name and expiry on the pen
         ]),
     );
 
-    $this->postJson('/bfc/credentials/'.$result->summary->id.'/activate', [], hmacRotationAdminHeaders())->assertOk();
+    $this->postJson('/bfc/credentials/'.$result->summary->id.'/activate', [
+        'delivery_fingerprint' => (string) $result->deliveryFingerprint,
+    ], hmacRotationAdminHeaders())->assertOk();
 
     /** @var TestResponse<Response> $rotate */
     $rotate = $this->postJson('/bfc/credentials/'.$result->summary->id.'/rotate', [], hmacRotationAdminHeaders())->assertCreated();
@@ -281,7 +292,9 @@ it('completes a failed hmac cutover through the rotate verb: retirement only, no
     $rotate = $this->postJson('/bfc/credentials/'.$old->id.'/rotate', [], hmacRotationAdminHeaders())->assertCreated();
     $newId = (string) $rotate->json('credential.id');
 
-    $this->postJson('/bfc/credentials/'.$newId.'/activate', [], hmacRotationAdminHeaders())->assertOk();
+    $this->postJson('/bfc/credentials/'.$newId.'/activate', [
+        'delivery_fingerprint' => (string) $rotate->json('delivery.delivery_fingerprint'),
+    ], hmacRotationAdminHeaders())->assertOk();
 
     // Failure path B's shape: the activation committed but the old row's
     // grace-bounding write was lost — stamped, successor active, nothing

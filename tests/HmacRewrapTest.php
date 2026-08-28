@@ -2,11 +2,13 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier;
+use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
@@ -168,18 +170,103 @@ it('succeeds as a no-op when nothing needs rewrapping', function (): void {
         ->and($output)->toContain('Verified zero old-version rows');
 });
 
-it('lets the whole dance resume after a completed rewrap: activation unpauses', function (): void {
+it('lets the whole dance resume after a completed rewrap: activation unpauses, and the delivery fingerprint SURVIVES re-encryption', function (): void {
     $pending = Credential::factory()->hmac()->delivered()->create();
+
+    // The confirmation the receiver made BEFORE the APP_KEY rotation: it
+    // names the delivered KEY, not the ciphertext, so a rewrap must not
+    // invalidate it.
+    $confirmedBeforeRewrap = (string) $pending->delivery_fingerprint;
 
     stageAppKeyRotation();
 
     $headers = ['Authorization' => 'Bearer '.auditAdminToken('rewrap-admin-'.bin2hex(random_bytes(4)))];
 
-    $this->postJson('/bfc/credentials/'.$pending->id.'/activate', [], $headers)->assertStatus(409);
+    $this->postJson('/bfc/credentials/'.$pending->id.'/activate', [
+        'delivery_fingerprint' => $confirmedBeforeRewrap,
+    ], $headers)->assertStatus(409);
 
     expect(Artisan::call('bfc:hmac:rewrap'))->toBe(0);
 
-    $this->postJson('/bfc/credentials/'.$pending->id.'/activate', [], $headers)
+    $this->postJson('/bfc/credentials/'.$pending->id.'/activate', [
+        'delivery_fingerprint' => $confirmedBeforeRewrap,
+    ], $headers)
         ->assertOk()
         ->assertJsonPath('credential.status', 'active');
+});
+
+// ------------------------------------- the writer barrier (rework Fix 4)
+
+it('pauses hmac MINTING mid-rewrap on both transports: no ciphertext-producing path may race the completion gate', function (): void {
+    Credential::factory()->hmac()->create();
+    stageAppKeyRotation();
+
+    $headers = ['Authorization' => 'Bearer '.auditAdminToken('rewrap-admin-'.bin2hex(random_bytes(4)))];
+
+    $http = $this->postJson('/bfc/credentials', [
+        'subject_type' => 'application',
+        'subject_ref' => 'raced-mint',
+        'kind' => 'hmac',
+    ], $headers)->assertStatus(409);
+
+    expect(Artisan::call('bfc:credential:mint', [
+        'subject-type' => 'application',
+        'subject-ref' => 'raced-mint-cli',
+        '--kind' => 'hmac',
+        '--local' => true,
+    ]))->toBe(1);
+
+    $cliMessage = trim(Artisan::output());
+
+    expect($cliMessage)->toBe((string) $http->json('message'))
+        ->and($cliMessage)->toContain('bfc:hmac:rewrap')
+        ->and(Credential::query()->whereIn('subject_ref', ['raced-mint', 'raced-mint-cli'])->count())->toBe(0);
+
+    // Non-hmac minting is untouched by the barrier.
+    $this->postJson('/bfc/credentials', [
+        'subject_type' => 'application',
+        'subject_ref' => 'bearer-still-fine',
+    ], $headers)->assertCreated();
+
+    // With the cutover complete, hmac minting resumes.
+    expect(Artisan::call('bfc:hmac:rewrap'))->toBe(0);
+
+    $this->postJson('/bfc/credentials', [
+        'subject_type' => 'application',
+        'subject_ref' => 'raced-mint',
+        'kind' => 'hmac',
+    ], $headers)->assertCreated();
+});
+
+it('pauses the exchange RE-KEY mid-rewrap as a retryable claim error, leaving the row untouched; first delivery still works', function (): void {
+    $result = app(MintCredential::class)(
+        new Subject(SubjectType::ExternalConsumer, 'rekey-raced'),
+        MintOptions::fromInput(['kind' => 'hmac', 'code_ttl_seconds' => 3600]),
+    );
+
+    assert($result->secret !== null);
+    $claimCode = $result->secret->reveal();
+
+    stageAppKeyRotation();
+
+    // FIRST delivery mid-cutover is a read (keyring) plus non-ciphertext
+    // stamps: allowed.
+    $this->postJson('/bfc/onboarding/exchange', ['token' => $claimCode])->assertCreated();
+
+    /** @var Credential $row */
+    $row = Credential::query()->findOrFail($result->summary->id);
+    $ciphertextBefore = (string) $row->secret_ciphertext;
+
+    // The RE-KEY writes a fresh ciphertext: paused mid-cutover, answered
+    // as the claim contract's retryable server_error.
+    $this->postJson('/bfc/onboarding/exchange', ['token' => $claimCode])
+        ->assertStatus(500)
+        ->assertJsonPath('error', 'server_error');
+
+    expect((string) $row->refresh()->secret_ciphertext)->toBe($ciphertextBefore);
+
+    // Barrier lifted: the re-key works again.
+    expect(Artisan::call('bfc:hmac:rewrap'))->toBe(0);
+
+    $this->postJson('/bfc/onboarding/exchange', ['token' => $claimCode])->assertCreated();
 });

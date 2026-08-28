@@ -53,6 +53,8 @@ use InvalidArgumentException;
  * @property CarbonInterface|null $revoked_at
  * @property CarbonInterface|null $rotated_at
  * @property CarbonInterface|null $delivered_at
+ * @property int $delivered_generation
+ * @property string|null $delivery_fingerprint
  * @property CarbonInterface|null $activated_at
  * @property CarbonInterface|null $expires_at
  * @property CarbonInterface|null $last_used_at
@@ -93,6 +95,7 @@ final class Credential extends Model implements Authenticatable
         // path must not be able to forge it. The verb stamps it through
         // an explicit query update. The hmac lifecycle columns
         // (`secret_ciphertext`, `secret_key_version`, `delivered_at`,
+        // `delivered_generation`, `delivery_fingerprint`,
         // `activated_at`) are NOT fillable for the same reason: delivery
         // and activation provenance gate the signing cutover (SEC-V3-01),
         // and the ciphertext is written only by the verbs that hold the
@@ -130,6 +133,7 @@ final class Credential extends Model implements Authenticatable
             'revoked_at' => 'datetime',
             'rotated_at' => 'datetime',
             'delivered_at' => 'datetime',
+            'delivered_generation' => 'integer',
             'activated_at' => 'datetime',
             'expires_at' => 'datetime',
             'last_used_at' => 'datetime',

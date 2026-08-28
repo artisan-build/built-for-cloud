@@ -98,16 +98,41 @@ final class CredentialFactory extends Factory
 
     public function delivered(): static
     {
-        return $this->state(['delivered_at' => now()]);
+        return $this->state(fn (array $attributes): array => self::deliveryAttributes($attributes));
     }
 
     public function activated(): static
     {
-        return $this->state([
+        return $this->state(fn (array $attributes): array => self::deliveryAttributes($attributes) + [
             'status' => CredentialStatus::Active,
-            'delivered_at' => now(),
             'activated_at' => now(),
         ]);
+    }
+
+    /**
+     * The shape a real first delivery leaves (generation 1 + the
+     * fingerprint the activation verb requires), computed from the row's
+     * own ciphertext so factory rows match the verbs' rows exactly.
+     *
+     * @param  array<string, mixed>  $attributes
+     * @return array<string, mixed>
+     */
+    private static function deliveryAttributes(array $attributes): array
+    {
+        $keyring = app(HmacKeyring::class);
+
+        $ciphertext = $attributes['secret_ciphertext'] ?? null;
+        $keyVersion = $attributes['secret_key_version'] ?? null;
+
+        $fingerprint = is_string($ciphertext) && is_string($keyVersion)
+            ? $keyring->deliveryFingerprint($keyring->decrypt($ciphertext, $keyVersion), 1)
+            : null;
+
+        return [
+            'delivered_at' => now(),
+            'delivered_generation' => 1,
+            'delivery_fingerprint' => $fingerprint,
+        ];
     }
 
     public function pending(): static

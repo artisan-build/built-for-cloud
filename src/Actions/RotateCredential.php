@@ -270,6 +270,7 @@ final class RotateCredential
                 event: LifecycleEventType::Delivered,
                 credentialId: $result->summary->id,
                 actor: $actor,
+                note: 'delivery generation 1 ('.$result->deliveryFingerprint.')',
             );
         }
 
@@ -382,12 +383,21 @@ final class RotateCredential
         ])->save();
 
         if ($ttlSeconds === null) {
-            Credential::query()->whereKey($replacement->id)->update(['delivered_at' => now()]);
+            // Reveal-once: this result is delivery generation 1, and its
+            // fingerprint is what activation will require confirmed.
+            $fingerprint = $this->keyring->deliveryFingerprint($signingKey, 1);
+
+            Credential::query()->whereKey($replacement->id)->update([
+                'delivered_at' => now(),
+                'delivered_generation' => 1,
+                'delivery_fingerprint' => $fingerprint,
+            ]);
 
             return new MintResult(
                 summary: $this->summarize($replacement->refresh()),
                 delivery: DeliveryShape::SigningKey,
                 secret: new MintedSecret($signingKey),
+                deliveryFingerprint: $fingerprint,
             );
         }
 

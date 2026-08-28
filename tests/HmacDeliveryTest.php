@@ -160,10 +160,14 @@ it('exchanges the claim link into the pending key and changes NOTHING about sign
 
     $credential->refresh();
 
-    // Delivered — and STILL PENDING: the exchange never activates.
+    // Delivered — and STILL PENDING: the exchange never activates. The
+    // response carries the generation-1 delivery fingerprint the
+    // receiver confirms out-of-band (SEC-V3-01 rework).
     expect($credential->status)->toBe(CredentialStatus::Pending)
         ->and($credential->activated_at)->toBeNull()
         ->and($credential->delivered_at)->not->toBeNull()
+        ->and($credential->delivered_generation)->toBe(1)
+        ->and((string) $response->json('delivery_fingerprint'))->toBe((string) $credential->delivery_fingerprint)
         ->and(app(HmacKeyring::class)->decrypt((string) $credential->secret_ciphertext, $credential->secret_key_version))
         ->toBe($delivered);
 
@@ -206,16 +210,25 @@ it('re-keys the pending row on a re-claim before activation, killing every prior
     // observable use, so the code stays presentable until then.
     [$credential, $claimCode] = hmacClaimMint('dropped-response-client');
 
-    $first = (string) $this->postJson('/bfc/onboarding/exchange', ['token' => $claimCode])->assertCreated()->json('signing_key');
+    $firstResponse = $this->postJson('/bfc/onboarding/exchange', ['token' => $claimCode])->assertCreated();
+    $first = (string) $firstResponse->json('signing_key');
 
     // The response was dropped; the receiver claims again: a USABLE fresh
-    // delivery (make-before-break), same row, same code.
-    $second = (string) $this->postJson('/bfc/onboarding/exchange', ['token' => $claimCode])->assertCreated()->json('signing_key');
+    // delivery (make-before-break), same row, same code — and a NEW
+    // delivery fingerprint, so a confirmation of the first delivery can
+    // no longer activate anything.
+    $secondResponse = $this->postJson('/bfc/onboarding/exchange', ['token' => $claimCode])->assertCreated();
+    $second = (string) $secondResponse->json('signing_key');
 
     expect($second)->toMatch('/^[0-9a-f]{64}$/')
-        ->and($second)->not->toBe($first);
+        ->and($second)->not->toBe($first)
+        ->and((string) $secondResponse->json('delivery_fingerprint'))
+        ->not->toBe((string) $firstResponse->json('delivery_fingerprint'));
 
     $credential->refresh();
+
+    expect($credential->delivered_generation)->toBe(2)
+        ->and((string) $credential->delivery_fingerprint)->toBe((string) $secondResponse->json('delivery_fingerprint'));
 
     // At most one live pending delivery per code: the stored ciphertext
     // now matches ONLY the second key — the first is dead bytes.

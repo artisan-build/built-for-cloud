@@ -116,6 +116,22 @@ final class HmacKeyring
         return substr(hash('sha256', $rawKeyBytes), 0, self::KEY_VERSION_LENGTH);
     }
 
+    /**
+     * The DELIVERY fingerprint (SEC-V3-01 rework): a non-recoverable
+     * identifier of one specific delivery of one specific signing key —
+     * a domain-separated hash over the key material and the delivery
+     * generation, never the key itself. The receiver quotes it back
+     * out-of-band, and the activation verb requires it, so a stale
+     * confirmation cannot activate key material the confirmer never saw.
+     * Deliberately independent of the CIPHERTEXT: an APP_KEY rewrap
+     * re-encrypts the same key and must not invalidate a standing
+     * confirmation.
+     */
+    public function deliveryFingerprint(#[SensitiveParameter] string $signingKey, int $generation): string
+    {
+        return substr(hash('sha256', 'bfc-hmac-delivery|'.$generation.'|'.hash('sha256', $signingKey)), 0, 16);
+    }
+
     private function encrypterFor(#[SensitiveParameter] string $key): Encrypter
     {
         return new Encrypter($key, $this->cipher());

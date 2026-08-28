@@ -337,11 +337,23 @@ final class ManageOnboarding
             return ClaimError::CodeNotFound->respond('This code no longer redeems a deliverable signing key. Ask the issuer for a new one.');
         }
 
+        $keyring = app(HmacKeyring::class);
         $rekeyed = $credential->delivered_at !== null;
 
         if ($rekeyed) {
+            // The writer barrier (SEC-V3-08): a re-key produces a fresh
+            // ciphertext, and every ciphertext-producing path pauses
+            // mid-rewrap — otherwise a redelivery on a lagging
+            // old-primary instance could land an old-version row right
+            // after the rewrap's verified zero-count. The claim contract
+            // has no retry-later value, so this answers as the retryable
+            // server_error (clients treat it as safe to retry).
+            if ($keyring->cutoverInProgress()) {
+                return ClaimError::ServerError->respond('A signing-key storage cutover is in progress on this server, so redelivery is paused. It is safe to retry shortly.');
+            }
+
             $signingKey = bin2hex(random_bytes(32));
-            $encrypted = app(HmacKeyring::class)->encrypt($signingKey);
+            $encrypted = $keyring->encrypt($signingKey);
 
             Credential::query()->whereKey($credential->id)->update([
                 'secret_ciphertext' => $encrypted->ciphertext,
@@ -350,13 +362,26 @@ final class ManageOnboarding
         } else {
             // First delivery: the exact key the mint (or rotation)
             // sealed away, read back through the keyring.
-            $signingKey = app(HmacKeyring::class)->decrypt(
+            $signingKey = $keyring->decrypt(
                 (string) $credential->secret_ciphertext,
                 $credential->secret_key_version,
             );
         }
 
-        Credential::query()->whereKey($credential->id)->update(['delivered_at' => now()]);
+        // Stamp the delivery generation + its fingerprint (SEC-V3-01
+        // rework): the receiver quotes the fingerprint back out-of-band,
+        // and activation requires EXACTLY the row's current one — so a
+        // re-key between confirmation and activation makes the stale
+        // confirmation refuse instead of activating a key the confirmer
+        // never saw.
+        $generation = $credential->delivered_generation + 1;
+        $fingerprint = $keyring->deliveryFingerprint($signingKey, $generation);
+
+        Credential::query()->whereKey($credential->id)->update([
+            'delivered_at' => now(),
+            'delivered_generation' => $generation,
+            'delivery_fingerprint' => $fingerprint,
+        ]);
 
         $actor = AuditActor::credentialHolder($code->id);
 
@@ -374,17 +399,21 @@ final class ManageOnboarding
             codeId: $code->id,
             actor: $actor,
             recipient: $code->email,
-            note: $rekeyed ? 'redelivery: the pending key was re-keyed; every prior delivery of this code is dead' : null,
+            note: $rekeyed
+                ? 'redelivery: generation '.$generation.' ('.$fingerprint.'); the pending key was re-keyed and every prior delivery of this code is dead'
+                : 'delivery generation '.$generation.' ('.$fingerprint.')',
         );
 
         // The single reveal of this delivery. The key is PENDING: the
-        // receiver installs it, confirms out-of-band, and only the
-        // activation verb cuts signing over.
+        // receiver installs it, confirms the DELIVERY FINGERPRINT
+        // out-of-band, and only the activation verb — fed that exact
+        // fingerprint — cuts signing over.
         return response()->json([
             'signing_key' => $signingKey,
             'key_id' => $credential->id,
             'kind' => CredentialKind::Hmac->value,
             'status' => CredentialStatus::Pending->value,
+            'delivery_fingerprint' => $fingerprint,
         ], 201);
     }
 

@@ -89,6 +89,10 @@ final class ManageCredentials
             return response()->json(['message' => $invalid->getMessage()], 422);
         } catch (CredentialVerbRefused $refused) {
             return response()->json(['message' => $refused->getMessage()], 403);
+        } catch (RewrapInProgress $refused) {
+            // The writer barrier (SEC-V3-08): hmac minting pauses
+            // mid-rewrap, retry-later.
+            return response()->json(['message' => $refused->getMessage()], 409);
         }
 
         return response()->json([
@@ -154,8 +158,16 @@ final class ManageCredentials
      */
     public function activate(Request $request, ActivateCredential $activateCredential, string $id): JsonResponse
     {
+        $fingerprint = $request->input('delivery_fingerprint');
+
         try {
-            $result = $activateCredential($id, $this->actor($request));
+            $result = $activateCredential(
+                $id,
+                is_string($fingerprint) ? $fingerprint : null,
+                $this->actor($request),
+            );
+        } catch (InvalidCredentialInput $invalid) {
+            return response()->json(['message' => $invalid->getMessage()], 422);
         } catch (CredentialVerbRefused $refused) {
             return response()->json(['message' => $refused->getMessage()], 403);
         } catch (ActivationRefused|RewrapInProgress $refused) {
@@ -219,8 +231,14 @@ final class ManageCredentials
             case DeliveryShape::SigningKey:
                 // The key id rides beside the key (non-secret — the row id
                 // the signature header will carry); the key itself is
-                // PENDING until the activation verb cuts it over.
+                // PENDING until the activation verb cuts it over, and the
+                // delivery fingerprint (also non-secret) is what the
+                // receiver confirms and activation requires.
                 $payload['key_id'] = $result->summary->id;
+
+                if ($result->deliveryFingerprint !== null) {
+                    $payload['delivery_fingerprint'] = $result->deliveryFingerprint;
+                }
 
                 if ($result->secret !== null) {
                     $payload['signing_key'] = $result->secret->reveal();

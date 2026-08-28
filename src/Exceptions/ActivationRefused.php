@@ -59,6 +59,23 @@ final class ActivationRefused extends RuntimeException
         ));
     }
 
+    /**
+     * The stale-confirmation refusal (SEC-V3-01 rework, finding 1): the
+     * fingerprint the operator confirmed is not the row's CURRENT
+     * delivery — a redelivery re-keyed the row after that confirmation
+     * was made, so activating on its strength would cut signing over to
+     * key material the confirmer never saw.
+     */
+    public static function staleDeliveryConfirmation(string $id): self
+    {
+        return new self(sprintf(
+            'The confirmed delivery is not credential %s\'s current delivery: the key was re-delivered (and '
+            .'re-keyed) after that confirmation was made. Ask the receiver which delivery fingerprint they '
+            .'actually hold installed, and activate with THAT — a confirmation always names one exact delivery.',
+            $id,
+        ));
+    }
+
     public static function dead(string $id, string $status): self
     {
         return new self(sprintf(

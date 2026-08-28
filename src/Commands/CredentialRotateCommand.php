@@ -233,6 +233,10 @@ final class CredentialRotateCommand extends Command
                     $this->line('Save this signing key - shown once: '.$mint->secret->reveal());
                 }
 
+                if ($mint->deliveryFingerprint !== null) {
+                    $this->line('Delivery fingerprint: '.$mint->deliveryFingerprint.' - the receiver quotes this back when confirming installation; activation requires it.');
+                }
+
                 $this->line('The key is PENDING: the old key keeps signing until bfc:credential:activate cuts over.');
                 break;
             case DeliveryShape::SigningKeyCode:

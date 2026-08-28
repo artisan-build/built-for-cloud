@@ -10,6 +10,7 @@ use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Commands\Concerns\ParsesCredentialVerbInput;
 use ArtisanBuild\BuiltForCloud\Exceptions\ActivationRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
 use Illuminate\Console\Command;
@@ -30,6 +31,7 @@ final class CredentialActivateCommand extends Command
 
     protected $signature = 'bfc:credential:activate
         {id : The pending hmac credential to cut signing over to}
+        {--fingerprint= : The delivery fingerprint the receiver confirmed installed (rides every signing-key delivery); activation binds to that exact delivery}
         {--local : Run against the local database, zero Cloud dependency}';
 
     protected $description = 'Cut a delivered pending hmac signing key over to active; a superseded key retires into its grace window';
@@ -43,8 +45,8 @@ final class CredentialActivateCommand extends Command
         $id = (string) $this->argument('id');
 
         try {
-            $result = $activate($id, AuditActor::cliOperator());
-        } catch (CredentialVerbRefused|ActivationRefused|RewrapInProgress|RotationCutoverIncomplete $refused) {
+            $result = $activate($id, $this->stringOption('fingerprint'), AuditActor::cliOperator());
+        } catch (CredentialVerbRefused|ActivationRefused|InvalidCredentialInput|RewrapInProgress|RotationCutoverIncomplete $refused) {
             $this->error($refused->getMessage());
 
             return self::FAILURE;

@@ -10,6 +10,7 @@ use ArtisanBuild\BuiltForCloud\Commands\Concerns\ParsesCredentialVerbInput;
 use ArtisanBuild\BuiltForCloud\DeliveryShape;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
+use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\MintResult;
 use ArtisanBuild\BuiltForCloud\Subject;
@@ -72,7 +73,7 @@ final class CredentialMintCommand extends Command
                 ]),
                 AuditActor::cliOperator(),
             );
-        } catch (CredentialVerbRefused|InvalidCredentialInput $refused) {
+        } catch (CredentialVerbRefused|InvalidCredentialInput|RewrapInProgress $refused) {
             $this->error($refused->getMessage());
 
             return self::FAILURE;
@@ -128,6 +129,10 @@ final class CredentialMintCommand extends Command
 
                 if ($result->secret !== null) {
                     $this->line('Save this signing key - shown once: '.$result->secret->reveal());
+                }
+
+                if ($result->deliveryFingerprint !== null) {
+                    $this->line('Delivery fingerprint: '.$result->deliveryFingerprint.' - the receiver quotes this back when confirming installation; activation requires it.');
                 }
 
                 $this->line('The key is PENDING: it signs and verifies nothing until bfc:credential:activate cuts it over.');

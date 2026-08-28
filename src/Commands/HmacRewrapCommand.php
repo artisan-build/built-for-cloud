@@ -8,7 +8,11 @@ use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacKeyUnreadable;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
+use Illuminate\Cache\ArrayStore;
+use Illuminate\Cache\FileStore;
+use Illuminate\Cache\Lock;
 use Illuminate\Console\Command;
+use Illuminate\Contracts\Cache\Lock as LockContract;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Cache;
 
@@ -47,9 +51,30 @@ final class HmacRewrapCommand extends Command
 
     protected $description = 'Re-encrypt every hmac signing key under the current APP_KEY (locked, restartable); succeeds only at zero old-version rows';
 
+    /**
+     * The lock lease is {@see LOCK_SECONDS} and is REFRESHED every batch,
+     * so a long sweep never outlives it while a killed run still frees
+     * the lock by expiry.
+     */
+    private const int LOCK_SECONDS = 600;
+
     public function handle(HmacKeyring $keyring): int
     {
-        $lock = Cache::lock('bfc:hmac:rewrap', 600);
+        // The lock is only as exclusive as the cache store is SHARED: an
+        // instance-local store (array, file) cannot exclude a concurrent
+        // run on another instance — warn loudly rather than pretend.
+        $store = Cache::getStore();
+
+        if ($store instanceof ArrayStore || $store instanceof FileStore) {
+            $this->warn(sprintf(
+                'The default cache store (%s) is instance-local: this lock cannot exclude concurrent rewrap runs '
+                .'on OTHER instances. In a multi-instance deployment, point the default cache at a shared store '
+                .'(redis, memcached, database) before rewrapping.',
+                $store::class,
+            ));
+        }
+
+        $lock = Cache::lock('bfc:hmac:rewrap', self::LOCK_SECONDS);
 
         if (! $lock->get()) {
             $this->error('Another rewrap run holds the lock; only one runs at a time. Retry when it finishes (or after its lock expires).');
@@ -58,13 +83,13 @@ final class HmacRewrapCommand extends Command
         }
 
         try {
-            return $this->rewrap($keyring);
+            return $this->rewrap($keyring, $lock);
         } finally {
             $lock->release();
         }
     }
 
-    private function rewrap(HmacKeyring $keyring): int
+    private function rewrap(HmacKeyring $keyring, LockContract $lock): int
     {
         $writeVersion = $keyring->writeVersion();
         $chunk = max(1, (int) $this->option('chunk'));
@@ -74,6 +99,13 @@ final class HmacRewrapCommand extends Command
         $unreadable = [];
 
         while (true) {
+            // A long sweep must not outlive its lease: renew per batch.
+            // (Every framework store's lock is a cache Lock; the guard
+            // only spares an exotic third-party implementation.)
+            if ($lock instanceof Lock) {
+                $lock->refresh(self::LOCK_SECONDS);
+            }
+
             /** @var list<Credential> $rows */
             $rows = $this->oldVersionRows($writeVersion)
                 ->when($unreadable !== [], fn ($query) => $query->whereKeyNot(array_keys($unreadable)))

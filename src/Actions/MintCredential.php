@@ -16,6 +16,7 @@ use ArtisanBuild\BuiltForCloud\DeliveryShape;
 use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
+use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
@@ -239,10 +240,21 @@ final class MintCredential
             throw InvalidCredentialInput::codeTtlOutOfBounds();
         }
 
+        $keyring = app(HmacKeyring::class);
+
+        // The writer barrier (SEC-V3-08): EVERY ciphertext-producing path
+        // pauses mid-rewrap. Without it, a mint on an instance still
+        // running the old APP_KEY could land an old-version row right
+        // after the rewrap's zero-count, and the verified completion
+        // would authorize dropping a key a live row still needs.
+        if ($keyring->cutoverInProgress()) {
+            throw RewrapInProgress::refusing('minting');
+        }
+
         /** @var MintResult */
-        return DB::transaction(function () use ($subject, $options, $actor, $ttlSeconds): MintResult {
+        return DB::transaction(function () use ($subject, $options, $actor, $ttlSeconds, $keyring): MintResult {
             $signingKey = bin2hex(random_bytes(32));
-            $encrypted = app(HmacKeyring::class)->encrypt($signingKey);
+            $encrypted = $keyring->encrypt($signingKey);
 
             $credential = new Credential;
             $credential->forceFill([
@@ -259,8 +271,16 @@ final class MintCredential
             ])->save();
 
             if ($ttlSeconds === null) {
-                // This result IS the delivery (reveal-once, D7).
-                Credential::query()->whereKey($credential->id)->update(['delivered_at' => now()]);
+                // This result IS the delivery (reveal-once, D7): stamp
+                // generation 1 and its fingerprint — what the activation
+                // verb will require as the confirmed delivery.
+                $fingerprint = $keyring->deliveryFingerprint($signingKey, 1);
+
+                Credential::query()->whereKey($credential->id)->update([
+                    'delivered_at' => now(),
+                    'delivered_generation' => 1,
+                    'delivery_fingerprint' => $fingerprint,
+                ]);
 
                 $this->recorder->record(
                     event: LifecycleEventType::Issued,
@@ -273,12 +293,14 @@ final class MintCredential
                     event: LifecycleEventType::Delivered,
                     credentialId: $credential->id,
                     actor: $actor,
+                    note: 'delivery generation 1 ('.$fingerprint.')',
                 );
 
                 return new MintResult(
                     summary: $this->summarize($credential->refresh()),
                     delivery: DeliveryShape::SigningKey,
                     secret: new MintedSecret($signingKey),
+                    deliveryFingerprint: $fingerprint,
                 );
             }
 
