@@ -6,6 +6,8 @@ use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesCredentialVerbs;
+use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesRotationOverrides;
+use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
@@ -16,6 +18,7 @@ use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
+use ArtisanBuild\BuiltForCloud\RotationOverride;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
@@ -74,6 +77,77 @@ function rotatableSource(array $overrides = []): Credential
         'user_id' => '42',
         'expires_at' => now()->addDays(30),
     ], $overrides));
+}
+
+/**
+ * A declaration OPTED INTO rotation overrides (the dedicated
+ * AuthorizesRotationOverrides hook): $allow is its answer, $captured
+ * collects every RotationOverride it is consulted with, and $constrained
+ * additionally declares the mint ceilings (only `consume` grantable, one
+ * hour max lifetime — the ConstrainedMintDeclaration shape).
+ */
+function bindOverridableDeclaration(?ArrayObject $captured = null, bool $allow = true, bool $constrained = false): void
+{
+    $captured ??= new ArrayObject;
+
+    $declaration = $constrained
+        ? new class($captured) implements AuthorizesRotationOverrides, ConstrainsMintedCredentials, CredentialDeclaration
+        {
+            public function __construct(private readonly ArrayObject $captured) {}
+
+            public function grantableAbilities(Subject $subject): ?array
+            {
+                return ['consume'];
+            }
+
+            public function maxCredentialLifetimeSeconds(Subject $subject): ?int
+            {
+                return 3600;
+            }
+
+            public function resolveSubject(Request $request): ?Subject
+            {
+                return null;
+            }
+
+            public function authorize(Credential $credential, ?string $ability, Request $request): bool
+            {
+                return true;
+            }
+
+            public function authorizeRotationOverride(?Subject $subject, RotationOverride $override, Request $request): bool
+            {
+                $this->captured->append($override);
+
+                return true;
+            }
+        }
+    : new class($captured, $allow) implements AuthorizesRotationOverrides, CredentialDeclaration
+    {
+        public function __construct(
+            private readonly ArrayObject $captured,
+            private readonly bool $allow,
+        ) {}
+
+        public function resolveSubject(Request $request): ?Subject
+        {
+            return null;
+        }
+
+        public function authorize(Credential $credential, ?string $ability, Request $request): bool
+        {
+            return true;
+        }
+
+        public function authorizeRotationOverride(?Subject $subject, RotationOverride $override, Request $request): bool
+        {
+            $this->captured->append($override);
+
+            return $this->allow;
+        }
+    };
+
+    app()->bind(CredentialDeclaration::class, fn (): CredentialDeclaration => $declaration);
 }
 
 // -------------------------------------------------- default preservation (AC 3)
@@ -137,6 +211,11 @@ it('resolves both credentials through the grace window and only the replacement 
     $resolvable = fn (): array => Credential::query()->active()->pluck('id')->all();
 
     expect($resolvable())->toContain($source->id, $replacementId);
+
+    // The judge's surviving mutation: a defaulted expiry on the
+    // replacement would be invisible to the audit/grace assertions —
+    // preservation of "no expiry" must be asserted as EXACTLY null.
+    expect(Credential::query()->findOrFail($replacementId)->expires_at)->toBeNull();
 
     // At grace end the old row dies by its own expiry — no reaper ran.
     $this->travel(61)->minutes();
@@ -302,35 +381,39 @@ it('refuses the override flag with nothing to override', function (): void {
     expect((string) $response->json('message'))->toContain('nothing to override');
 });
 
-it('performs a flagged override as its own matrix consultation with the delta visible, and audits reason plus delta', function (): void {
+it('denies every override under a declaration that has not opted in — fail closed by default', function (): void {
+    // The DEFAULT declaration: no AuthorizesRotationOverrides, and its
+    // verb matrix (none) allows routine rotation. The override must still
+    // be denied — "separately authorized" means a separate opt-in, not a
+    // second yes from the routine gate.
+    $source = rotatableSource();
+
+    $refusal = $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [
+        'override' => true,
+        'abilities' => ['consume', 'admin'],
+    ], rotationAdminHeaders())->assertForbidden();
+
+    expect((string) $refusal->json('message'))->toContain('does not authorize this rotation override')
+        ->and($source->refresh()->rotated_at)->toBeNull()
+        ->and(Credential::query()->count())->toBe(1);
+
+    // The CLI refuses the identical question with the identical message.
+    expect(Artisan::call('bfc:credential:rotate', [
+        'id' => $source->id,
+        '--override' => true,
+        '--abilities' => 'consume,admin',
+        '--local' => true,
+    ]))->toBe(1)
+        ->and(trim(Artisan::output()))->toBe((string) $refusal->json('message'));
+
+    // Routine rotation of the very same row remains authorized.
+    $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [], rotationAdminHeaders())->assertCreated();
+});
+
+it('authorizes a flagged override through the dedicated opt-in hook, hands it the delta, and audits reason plus delta', function (): void {
     $consultations = new ArrayObject;
 
-    app()->bind(CredentialDeclaration::class, function () use ($consultations): CredentialDeclaration {
-        return new class($consultations) implements AuthorizesCredentialVerbs, CredentialDeclaration
-        {
-            public function __construct(private readonly ArrayObject $consultations) {}
-
-            public function resolveSubject(Request $request): ?Subject
-            {
-                return null;
-            }
-
-            public function authorize(Credential $credential, ?string $ability, Request $request): bool
-            {
-                return true;
-            }
-
-            public function authorizeVerb(CredentialVerb $verb, ?Subject $subject, Request $request): bool
-            {
-                $this->consultations->append([
-                    'verb' => $verb->value,
-                    'override' => $request->attributes->get(RotateCredential::OVERRIDE_CONTEXT_ATTRIBUTE),
-                ]);
-
-                return true;
-            }
-        };
-    });
+    bindOverridableDeclaration($consultations);
 
     $source = rotatableSource();
 
@@ -343,22 +426,16 @@ it('performs a flagged override as its own matrix consultation with the delta vi
 
     expect($replacement->abilities)->toBe(['consume', 'admin']);
 
-    // Two rotate consultations: the routine one (no override context) and
-    // the override's OWN, with the delta visible in the request context.
-    $rotateConsultations = array_values(array_filter(
-        $consultations->getArrayCopy(),
-        fn (array $c): bool => $c['verb'] === 'rotate',
-    ));
+    // Exactly one override consultation, carrying the requested delta
+    // with its presence flags.
+    expect($consultations)->toHaveCount(1);
 
-    expect($rotateConsultations)->toHaveCount(2)
-        ->and($rotateConsultations[0]['override'])->toBeNull()
-        ->and($rotateConsultations[1]['override'])->toBe([
-            'abilities' => ['consume', 'admin'],
-            'expires_at' => null,
-        ]);
+    /** @var RotationOverride $override */
+    $override = $consultations[0];
 
-    // And the context attribute does not linger past the consultation.
-    expect(app('request')->attributes->has(RotateCredential::OVERRIDE_CONTEXT_ATTRIBUTE))->toBeFalse();
+    expect($override->changesAbilities)->toBeTrue()
+        ->and($override->abilities)->toBe(['consume', 'admin'])
+        ->and($override->changesExpiry)->toBeFalse();
 
     $rotated = CredentialAuditEvent::query()
         ->where('credential_id', $source->id)
@@ -370,24 +447,8 @@ it('performs a flagged override as its own matrix consultation with the delta vi
         ->and((string) $rotated->note)->toContain('admin');
 });
 
-it('lets a declaration deny exactly the override while allowing routine rotation', function (): void {
-    app()->bind(CredentialDeclaration::class, fn (): CredentialDeclaration => new class implements AuthorizesCredentialVerbs, CredentialDeclaration
-    {
-        public function resolveSubject(Request $request): ?Subject
-        {
-            return null;
-        }
-
-        public function authorize(Credential $credential, ?string $ability, Request $request): bool
-        {
-            return true;
-        }
-
-        public function authorizeVerb(CredentialVerb $verb, ?Subject $subject, Request $request): bool
-        {
-            return ! $request->attributes->has(RotateCredential::OVERRIDE_CONTEXT_ATTRIBUTE);
-        }
-    });
+it('lets an opted-in declaration deny the override while routine rotation stays authorized', function (): void {
+    bindOverridableDeclaration(allow: false);
 
     $source = rotatableSource();
 
@@ -396,12 +457,215 @@ it('lets a declaration deny exactly the override while allowing routine rotation
         'abilities' => ['consume', 'admin'],
     ], rotationAdminHeaders())->assertForbidden();
 
-    expect((string) $refusal->json('message'))->toContain('denies this rotation override')
+    expect((string) $refusal->json('message'))->toContain('does not authorize this rotation override')
         ->and($source->refresh()->rotated_at)->toBeNull()
         ->and(Credential::query()->count())->toBe(1);
 
     // The routine path is untouched by the denial.
     $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [], rotationAdminHeaders())->assertCreated();
+});
+
+it('refuses an authorized override that exceeds the mint ceilings — an override is never wider than a mint could be', function (): void {
+    // Opted into overrides AND declaring mint ceilings: only `consume`
+    // grantable, nothing lives longer than an hour.
+    bindOverridableDeclaration(constrained: true);
+
+    $source = rotatableSource(['abilities' => ['consume'], 'expires_at' => now()->addMinutes(30)]);
+
+    // Ability past the ceiling: refused with the mint verb's own error.
+    $widened = $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [
+        'override' => true,
+        'abilities' => ['consume', 'admin'],
+    ], rotationAdminHeaders())->assertForbidden();
+
+    expect((string) $widened->json('message'))->toContain('does not authorize granting the "admin" ability');
+
+    // Lifetime past the ceiling — including "no expiry", which outlives
+    // any ceiling: refused.
+    $lengthened = $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [
+        'override' => true,
+        'expires_at' => now()->addDays(2)->toIso8601String(),
+    ], rotationAdminHeaders())->assertForbidden();
+
+    expect((string) $lengthened->json('message'))->toContain('widens past what the declaration authorizes');
+
+    $cleared = $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [
+        'override' => true,
+        'expires_at' => null,
+    ], rotationAdminHeaders())->assertForbidden();
+
+    expect((string) $cleared->json('message'))->toContain('widens past what the declaration authorizes')
+        ->and($source->refresh()->rotated_at)->toBeNull()
+        ->and(Credential::query()->count())->toBe(1);
+
+    // Within the ceilings the same override applies.
+    $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [
+        'override' => true,
+        'expires_at' => now()->addMinutes(45)->toIso8601String(),
+    ], rotationAdminHeaders())->assertCreated();
+});
+
+it('overrides a finite expiry to NO expiry with an explicit null, on both transports, audited', function (): void {
+    bindOverridableDeclaration();
+
+    $httpSource = rotatableSource(['expires_at' => now()->addDays(30)]);
+
+    $response = $this->postJson('/bfc/credentials/'.$httpSource->id.'/rotate', [
+        'override' => true,
+        'expires_at' => null,
+    ], rotationAdminHeaders())->assertCreated();
+
+    $httpReplacement = Credential::query()->findOrFail((string) $response->json('credential.id'));
+
+    expect($httpReplacement->expires_at)->toBeNull()
+        ->and($httpReplacement->abilities)->toBe(['consume']);
+
+    $note = (string) CredentialAuditEvent::query()
+        ->where('credential_id', $httpSource->id)
+        ->where('event', LifecycleEventType::Rotated->value)
+        ->sole()
+        ->note;
+
+    expect($note)->toContain('expires_at')
+        ->and($note)->toContain('-> null');
+
+    // The CLI spelling of the same override: --clear-expiry.
+    $cliSource = rotatableSource(['expires_at' => now()->addDays(30)]);
+
+    expect(Artisan::call('bfc:credential:rotate', [
+        'id' => $cliSource->id,
+        '--override' => true,
+        '--clear-expiry' => true,
+        '--local' => true,
+    ]))->toBe(0);
+
+    preg_match('/shown once: (\S+)/', Artisan::output(), $matches);
+
+    expect(Credential::query()->where('secret_hash', hash('sha256', $matches[1]))->sole()->expires_at)->toBeNull();
+});
+
+it('narrows to NO abilities with an explicit empty list, on both transports, audited', function (): void {
+    bindOverridableDeclaration();
+
+    $httpSource = rotatableSource(['abilities' => ['consume', 'read']]);
+
+    $response = $this->postJson('/bfc/credentials/'.$httpSource->id.'/rotate', [
+        'override' => true,
+        'abilities' => [],
+    ], rotationAdminHeaders())->assertCreated();
+
+    $httpReplacement = Credential::query()->findOrFail((string) $response->json('credential.id'));
+
+    // The store's one canonical empty: null. It grants nothing.
+    expect($httpReplacement->getAttributes()['abilities'])->toBeNull()
+        ->and($httpReplacement->hasAbility('consume'))->toBeFalse()
+        ->and($httpReplacement->expires_at?->timestamp)->toBe($httpSource->expires_at?->timestamp);
+
+    $note = (string) CredentialAuditEvent::query()
+        ->where('credential_id', $httpSource->id)
+        ->where('event', LifecycleEventType::Rotated->value)
+        ->sole()
+        ->note;
+
+    expect($note)->toContain('abilities ["consume","read"] -> []');
+
+    // The CLI spelling of the same override: --clear-abilities.
+    $cliSource = rotatableSource(['abilities' => ['consume', 'read']]);
+
+    expect(Artisan::call('bfc:credential:rotate', [
+        'id' => $cliSource->id,
+        '--override' => true,
+        '--clear-abilities' => true,
+        '--local' => true,
+    ]))->toBe(0);
+
+    preg_match('/shown once: (\S+)/', Artisan::output(), $matches);
+
+    expect(Credential::query()->where('secret_hash', hash('sha256', $matches[1]))->sole()->getAttributes()['abilities'])->toBeNull();
+});
+
+it('still treats absent override fields as preserve — presence, not value, is the signal', function (): void {
+    bindOverridableDeclaration();
+
+    $source = rotatableSource(['abilities' => ['consume'], 'expires_at' => now()->addDays(3)]);
+    $sourceExpiry = $source->expires_at;
+
+    // Only abilities provided: expiry is preserved, not cleared.
+    $response = $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [
+        'override' => true,
+        'abilities' => ['consume', 'read'],
+    ], rotationAdminHeaders())->assertCreated();
+
+    $replacement = Credential::query()->findOrFail((string) $response->json('credential.id'));
+
+    expect($replacement->abilities)->toBe(['consume', 'read'])
+        ->and($replacement->expires_at?->timestamp)->toBe($sourceExpiry?->timestamp);
+});
+
+// ---------------------------------------------- linear lineage (Fold A)
+
+it('refuses to re-rotate a row already in grace, pointing at its successor, while the successor rotates on', function (): void {
+    $source = rotatableSource(['expires_at' => null]);
+
+    $first = $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [], rotationAdminHeaders())
+        ->assertCreated();
+
+    $successorId = (string) $first->json('credential.id');
+
+    // Re-rotating the graced row would fork the lineage: refused, naming
+    // the successor — identically on both transports.
+    $refusal = $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [], rotationAdminHeaders())
+        ->assertStatus(409);
+
+    $message = (string) $refusal->json('message');
+
+    expect($message)->toContain('already superseded by rotation')
+        ->and($message)->toContain($successorId)
+        ->and($message)->toContain('Rotate its replacement instead');
+
+    expect(Artisan::call('bfc:credential:rotate', ['id' => $source->id, '--local' => true]))->toBe(1)
+        ->and(trim(Artisan::output()))->toBe($message);
+
+    // Exactly one rotated event for the source: the lineage never forked.
+    expect(rotationEventsFor($source->id))->toBe([LifecycleEventType::Rotated->value]);
+
+    // The successor is the rotatable row: the chain stays linear
+    // (A → B → C).
+    $second = $this->postJson('/bfc/credentials/'.$successorId.'/rotate', [], rotationAdminHeaders())
+        ->assertCreated();
+
+    $rotated = CredentialAuditEvent::query()
+        ->where('credential_id', $successorId)
+        ->where('event', LifecycleEventType::Rotated->value)
+        ->sole();
+
+    expect($rotated->superseded_by_credential_id)->toBe((string) $second->json('credential.id'));
+});
+
+// ------------------------------------------ grace-boundary precision (Fold B)
+
+it('resolves the graced row until the exact grace end and not after it', function (): void {
+    $frozen = now()->startOfSecond();
+    $this->travelTo($frozen);
+
+    $source = rotatableSource(['expires_at' => null]);
+
+    $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [], rotationAdminHeaders())->assertCreated();
+
+    $graceEnd = $frozen->copy()->addHour();
+
+    expect($source->refresh()->expires_at?->timestamp)->toBe($graceEnd->timestamp);
+
+    $resolves = fn (): bool => Credential::query()->active()->whereKey($source->id)->exists();
+
+    // One second before grace end: still resolvable.
+    $this->travelTo($graceEnd->copy()->subSecond());
+    expect($resolves())->toBeTrue();
+
+    // At the boundary itself the row is dead: resolvability requires
+    // expires_at strictly in the future.
+    $this->travelTo($graceEnd);
+    expect($resolves())->toBeFalse();
 });
 
 // ------------------------------------------------------- per-kind (AC 6)

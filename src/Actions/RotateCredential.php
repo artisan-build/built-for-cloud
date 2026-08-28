@@ -7,7 +7,10 @@ namespace ArtisanBuild\BuiltForCloud\Actions;
 use ArtisanBuild\BuiltForCloud\Actions\Concerns\ConsultsDeclaration;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditReason;
+use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesRotationOverrides;
+use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
@@ -41,12 +44,15 @@ use Throwable;
  * The default preserves EXACTLY: the ability set, the subject binding
  * (subject_type / subject_ref / user_id), the decorative name, and the
  * remaining expiry of the row it replaces. Never widening, never lifetime
- * extension, silently — ANY requested change (narrowing included:
- * predictability beats cleverness) requires the explicit override flag,
- * which is authorized through the verb matrix as its own consultation with
- * the override visible in the request context
- * ({@see OVERRIDE_CONTEXT_ATTRIBUTE}) and audited with its own reason code
- * plus the delta.
+ * extension, silently — ANY provided change (narrowing included:
+ * predictability beats cleverness; and "provided as none" counts — expiry
+ * to null, abilities to empty) requires the explicit override flag. The
+ * override is a SEPARATELY authorized operation: the declaration's
+ * dedicated {@see AuthorizesRotationOverrides} hook must approve it —
+ * fail closed, a declaration that has not opted in denies every override
+ * — the result must fit the same mint ceilings
+ * ({@see ConstrainsMintedCredentials} via the shared check), and the
+ * audit rows carry the override reason code plus the delta.
  *
  * Make-before-break, in two phases whose failure modes are the contract
  * (D6 point 5):
@@ -73,17 +79,6 @@ use Throwable;
 final class RotateCredential
 {
     use ConsultsDeclaration;
-
-    /**
-     * The request attribute carrying the override delta during the
-     * override's OWN matrix consultation (D6 point 4): the declaration's
-     * `authorizeVerb(Rotate, …)` hook sees this attribute set — an
-     * `array{abilities: list<string>|null, expires_at: string|null}` of
-     * what the override requests — exactly when it is being asked about an
-     * override rather than a routine rotation. The attribute exists only
-     * for the duration of that consultation.
-     */
-    public const string OVERRIDE_CONTEXT_ATTRIBUTE = 'bfc.rotation_override';
 
     /**
      * The grace window (PRD 1.7): how long the superseded row stays
@@ -173,18 +168,42 @@ final class RotateCredential
             throw RotationRefused::sourceDead($id, ReportedStatus::Expired->value);
         }
 
+        // A row already superseded by rotation never rotates again: a
+        // second rotation of the SAME source would fork the lineage
+        // (A→B and A→C), leaving supersession unable to say which
+        // replacement is current. The successor is the rotatable row.
+        // Failure path B is unaffected — its recovery is the old-row KILL
+        // (revoke-by-id), never a re-rotation of the stamped row.
+        if ($source->rotated_at !== null) {
+            throw RotationRefused::alreadyRotated($id, $this->successorOf($id));
+        }
+
         if ($source->kind === CredentialKind::Hmac) {
             throw CredentialVerbRefused::kindNotRotatable($source->kind->value);
         }
 
         $override = $this->authorizeAnyOverride($source, $options);
 
-        // An override changes exactly the dimensions it names; a dimension
-        // it leaves out is preserved like the default path preserves it.
-        $abilities = ($override && $options->abilities !== null) ? $options->abilities : $source->abilities;
-        $expiresAt = ($override && $options->expiresAt !== null) ? $options->expiresAt : $source->expires_at;
+        // An override changes exactly the dimensions it PROVIDED — where
+        // "provided as none" is a real override (expiry to null, abilities
+        // to empty); a dimension it left out is preserved like the default
+        // path preserves it.
+        $abilities = ($override && $options->abilitiesProvided) ? $options->abilities : $source->abilities;
+        $expiresAt = ($override && $options->expiryProvided) ? $options->expiresAt : $source->expires_at;
+
+        // An authorized override must still fit the mint ceilings: it can
+        // never produce a credential a mint of that shape could not have
+        // been authorized for. Checked on the replacement's EFFECTIVE
+        // shape — inherited dimensions included — because the ceiling
+        // bounds what gets created, not what got typed. Routine rotation
+        // (exact preservation) deliberately skips this: preserving what
+        // already exists is not a grant.
+        if ($override) {
+            $this->refuseWideningPastCeilings($source->subject(), $abilities, $expiresAt);
+        }
+
         $reason = $override ? AuditReason::Override : ($options->emergency ? AuditReason::Emergency : AuditReason::Rotation);
-        $note = $override ? $this->overrideDelta($source, $abilities, $expiresAt) : null;
+        $note = $override ? $this->overrideNote($source, $options, $abilities, $expiresAt) : null;
 
         $result = $source->kind === CredentialKind::Asymmetric
             ? $this->replaceWithEnrollment($source, $options, $abilities, $expiresAt)
@@ -215,9 +234,13 @@ final class RotateCredential
 
     /**
      * The override discipline (D6 point 4). Returns whether an authorized
-     * override applies. A change without the flag is refused; the flag
-     * without a change is refused; a flagged change is put to the matrix as
-     * its OWN consultation, with the delta visible in the request context.
+     * override applies. A provided change without the flag is refused; the
+     * flag with nothing provided is refused; a flagged change is put to
+     * the declaration's DEDICATED override hook
+     * ({@see AuthorizesRotationOverrides}), which FAILS CLOSED: a
+     * declaration that has not explicitly opted in denies every override.
+     * Routine rotation authorization (the verb matrix's `rotate` answer,
+     * already consulted) is unchanged by any of this.
      */
     private function authorizeAnyOverride(Credential $source, RotateOptions $options): bool
     {
@@ -233,19 +256,11 @@ final class RotateCredential
             throw InvalidCredentialInput::rotationOverrideWithoutChanges();
         }
 
-        $request = $this->currentRequest();
+        $declaration = $this->declaration();
 
-        $request->attributes->set(self::OVERRIDE_CONTEXT_ATTRIBUTE, [
-            'abilities' => $options->abilities,
-            'expires_at' => $options->expiresAt?->toIso8601String(),
-        ]);
-
-        try {
-            if (! $this->verbAllowed(CredentialVerb::Rotate, $source->subject())) {
-                throw CredentialVerbRefused::overrideByMatrix();
-            }
-        } finally {
-            $request->attributes->remove(self::OVERRIDE_CONTEXT_ATTRIBUTE);
+        if (! $declaration instanceof AuthorizesRotationOverrides
+            || ! $declaration->authorizeRotationOverride($source->subject(), $options->overrideDelta(), $this->currentRequest())) {
+            throw CredentialVerbRefused::overrideNotAuthorized();
         }
 
         return true;
@@ -356,15 +371,17 @@ final class RotateCredential
 
     /**
      * The bounded, secret-free delta the override's audit rows carry:
-     * which dimensions changed, from what, to what.
+     * every dimension the override PROVIDED, from what, to what — a
+     * provided dimension is named even when its value matches, because
+     * the audit answers "what was authorized", not "what differed".
      *
      * @param  list<string>|null  $abilities
      */
-    private function overrideDelta(Credential $source, ?array $abilities, ?CarbonInterface $expiresAt): string
+    private function overrideNote(Credential $source, RotateOptions $options, ?array $abilities, ?CarbonInterface $expiresAt): string
     {
         $parts = [];
 
-        if ($abilities !== $source->abilities) {
+        if ($options->abilitiesProvided) {
             $parts[] = sprintf(
                 'abilities %s -> %s',
                 json_encode($source->abilities ?? []),
@@ -372,7 +389,7 @@ final class RotateCredential
             );
         }
 
-        if (($expiresAt?->toIso8601String()) !== ($source->expires_at?->toIso8601String())) {
+        if ($options->expiryProvided) {
             $parts[] = sprintf(
                 'expires_at %s -> %s',
                 $source->expires_at?->toIso8601String() ?? 'null',
@@ -380,7 +397,24 @@ final class RotateCredential
             );
         }
 
-        return 'override: '.($parts === [] ? 'restated current values' : implode('; ', $parts));
+        return 'override: '.implode('; ', $parts);
+    }
+
+    /**
+     * The most recent successor the audit lineage records for a rotated
+     * row, so a refused re-rotation can point at the row to rotate
+     * instead. Null only when the stamp exists without a lineage event
+     * (a manual import) — the refusal still stands.
+     */
+    private function successorOf(string $id): ?string
+    {
+        $successor = CredentialAuditEvent::query()
+            ->where('credential_id', $id)
+            ->where('event', LifecycleEventType::Rotated->value)
+            ->orderByDesc('occurred_at')
+            ->value('superseded_by_credential_id');
+
+        return is_string($successor) && $successor !== '' ? $successor : null;
     }
 
     private function summarize(Credential $credential): CredentialSummary

@@ -91,3 +91,33 @@ it('asserts refusal parity when the declaration denies the issue verb', function
 
     expect(Credential::query()->count())->toBe(0);
 });
+
+it('asserts rotate refusal parity when the declaration denies rotate but allows issue', function (): void {
+    // Denying only `rotate` drives the suite down the ROTATE leg's own
+    // refusal branch: mint/list/basic/revoke run for real, and the rotate
+    // comparison must observe both transports refusing identically with
+    // neither target stamped.
+    app()->bind(CredentialDeclaration::class, static fn (): CredentialDeclaration => new class implements AuthorizesCredentialVerbs, CredentialDeclaration
+    {
+        public function resolveSubject(Request $request): ?Subject
+        {
+            return null;
+        }
+
+        public function authorize(Credential $credential, ?string $ability, Request $request): bool
+        {
+            return true;
+        }
+
+        public function authorizeVerb(CredentialVerb $verb, ?Subject $subject, Request $request): bool
+        {
+            return $verb !== CredentialVerb::Rotate;
+        }
+    });
+
+    $this->assertBuiltForCloudTransportParityContract();
+
+    // Rows were minted (issue is allowed) and none was ever rotated.
+    expect(Credential::query()->count())->toBeGreaterThan(0)
+        ->and(Credential::query()->whereNotNull('rotated_at')->count())->toBe(0);
+});

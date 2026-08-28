@@ -15,18 +15,26 @@ use Carbon\CarbonInterface;
  *
  * - `emergency` collapses the grace window: the old row dies immediately
  *   instead of staying resolvable for the hour.
- * - `override` is the explicit authorization for a changed replacement
- *   (D6 point 4): `abilities` / `expiresAt` are consumed ONLY under it, the
- *   verb matrix is consulted again with the override visible in context,
- *   and the audit row records the reason and the delta. Any of the three
- *   present without the flag — widening or narrowing alike — is refused.
+ * - `override` is the explicit authorization request for a changed
+ *   replacement (D6 point 4). The changed dimensions are tracked by
+ *   PRESENCE (`abilitiesProvided` / `expiryProvided`), separately from
+ *   their values, because "explicitly none" is a real override: an
+ *   expiry provided as null overrides a finite expiry to NO expiry, and
+ *   abilities provided empty narrow to NO abilities. An ABSENT dimension
+ *   always means "preserve the source's". Any provided dimension without
+ *   the flag — widening or narrowing alike — is refused, and the flag
+ *   with nothing provided is refused too.
  * - `codeTtlSeconds` applies only when rotating an `asymmetric` credential,
  *   whose replacement is delivered as a fresh enrollment code (the claim
  *   primitive's required 60s–7d lifetime, PRD 1.1).
  *
- * Both transports construct this through {@see fromInput()}; the value
- * normalization is literally {@see MintOptions::fromInput()}, so rotate
- * rejects exactly the junk mint rejects, with the same messages.
+ * Both transports construct this through {@see fromInput()}, where
+ * presence means key-presence in the input array: the HTTP transport's
+ * `$request->only()` keeps an explicit JSON null and drops an absent
+ * field, and the CLI includes a key exactly when its option (or its
+ * `--clear-*` form) was passed. The value normalization is literally
+ * {@see MintOptions::fromInput()}, so rotate rejects exactly the junk mint
+ * rejects, with the same messages.
  */
 final readonly class RotateOptions
 {
@@ -36,7 +44,9 @@ final readonly class RotateOptions
     public function __construct(
         public bool $emergency = false,
         public bool $override = false,
+        public bool $abilitiesProvided = false,
         public ?array $abilities = null,
+        public bool $expiryProvided = false,
         public ?CarbonInterface $expiresAt = null,
         public ?int $codeTtlSeconds = null,
     ) {}
@@ -55,7 +65,9 @@ final readonly class RotateOptions
         return new self(
             emergency: self::boolFrom($input['emergency'] ?? null, 'emergency'),
             override: self::boolFrom($input['override'] ?? null, 'override'),
+            abilitiesProvided: array_key_exists('abilities', $input),
             abilities: $normalized->abilities,
+            expiryProvided: array_key_exists('expires_at', $input),
             expiresAt: $normalized->expiresAt,
             codeTtlSeconds: $normalized->codeTtlSeconds,
         );
@@ -63,14 +75,28 @@ final readonly class RotateOptions
 
     /**
      * Whether the caller asked for a replacement DIFFERENT from the source
-     * — the thing that requires (and, with nothing present, forbids) the
-     * override flag. Presence, not value comparison: passing the current
+     * — the thing that requires (and, with nothing provided, forbids) the
+     * override flag. Presence, not value comparison: providing the current
      * abilities back without the flag is still refused, deliberately —
      * "this input changes nothing today" is a race, not a contract.
      */
     public function requestsChange(): bool
     {
-        return $this->abilities !== null || $this->expiresAt !== null;
+        return $this->abilitiesProvided || $this->expiryProvided;
+    }
+
+    /**
+     * The requested delta, for the override's own authorization and its
+     * audit note.
+     */
+    public function overrideDelta(): RotationOverride
+    {
+        return new RotationOverride(
+            changesAbilities: $this->abilitiesProvided,
+            abilities: $this->abilities,
+            changesExpiry: $this->expiryProvided,
+            expiresAt: $this->expiresAt,
+        );
     }
 
     private static function boolFrom(mixed $value, string $flag): bool

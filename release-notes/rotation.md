@@ -37,13 +37,46 @@ identical refusals, and the transport-parity suite extended with like-for-like r
 The legacy store gains its own by-id entry points: `TokenRegistry::rotateById()` and
 `POST /api/credentials/id/{id}/rotate`.
 
-## Override semantics
+## Override semantics — opt-in, fail closed
 
-Default rotation preserves everything exactly. **Any** requested change to abilities or expiry
+Default rotation preserves everything exactly. **Any** provided change to abilities or expiry
 — widening or narrowing alike; predictability beats cleverness — requires the explicit
-`--override` flag (HTTP `override: true`), is authorized through the verb matrix as its own
-consultation (the declaration sees the `bfc.rotation_override` request attribute carrying the
-delta), and is audited with the `override` reason code plus the delta in the note.
+`--override` flag (HTTP `override: true`) and is a **separately authorized operation that
+fails closed**: the declaration must opt in by implementing `AuthorizesRotationOverrides`
+(which receives the requested delta), and a declaration that has not opted in denies every
+override. Routine, preserving rotation is unaffected. An authorized override must also fit the
+same ceilings the mint verb enforces (`ConstrainsMintedCredentials`), checked on the
+replacement's effective shape — an override can never produce a credential a mint could not
+have been authorized for. Every override is audited with the `override` reason code plus the
+delta in the note.
+
+**Presence is the override signal, so "explicitly none" is expressible on both transports:**
+`{"override": true, "expires_at": null}` (CLI `--override --clear-expiry`) turns a finite
+expiry into NO expiry, and `{"override": true, "abilities": []}` (CLI `--override
+--clear-abilities`) narrows to NO abilities. Absent fields always mean "preserve the
+source's".
+
+## The lineage never forks
+
+A row already superseded by rotation (`rotated_at` set) refuses to rotate again on both
+stores: a second rotation of one source would fork the lineage (A→B and A→C) and supersession
+that forks answers nothing. The refusal names the successor — the rotatable row. The
+failure-path-B recovery is unaffected: it is the old-row *kill* (revoke-by-id), never a
+re-rotation.
+
+## The exchange sweep respects rotation grace on the unified store
+
+The onboarding exchange's name+scope sweep now spares unified-store rows carrying the
+`rotated_at` marker, exactly as it always has on `api_tokens` — a sweep that killed a grace
+row would break the make-before-break window rotation exists to provide. An unmarked
+same-name+scope collision still dies in the sweep.
+
+## Names are byte-exact
+
+Name-based rotation (and the name verbs generally) match the exact stored bytes: no trimming,
+no case normalization — `CI` and `ci` are different names. A case-insensitive database
+collation can only *widen* a name's match set, which trips refuse-on-ambiguity rather than
+touching an unintended row.
 
 ## Per-kind semantics (D6 point 6)
 

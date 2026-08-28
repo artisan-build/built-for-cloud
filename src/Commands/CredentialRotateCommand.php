@@ -34,9 +34,11 @@ final class CredentialRotateCommand extends Command
         {id? : The credential row id to rotate (the primary verb)}
         {--name= : Rotate the ONE active credential of this name; refuses when the name is ambiguous}
         {--emergency : Kill the old credential immediately instead of granting the one-hour grace window}
-        {--override : Explicitly authorize a changed replacement (required for --abilities / --expires)}
+        {--override : Explicitly request a changed replacement (required for the override options below)}
         {--abilities= : Override the replacement\'s abilities (comma-separated; requires --override)}
+        {--clear-abilities : Override the replacement to NO abilities (requires --override)}
         {--expires= : Override the replacement\'s expiry (ISO-8601; requires --override)}
+        {--clear-expiry : Override the replacement to NO expiry (requires --override)}
         {--code-ttl= : Enrollment-code ttl in seconds when rotating an asymmetric credential (60–604800)}
         {--local : Run against the local database, zero Cloud dependency}';
 
@@ -57,22 +59,18 @@ final class CredentialRotateCommand extends Command
             return self::FAILURE;
         }
 
+        $input = $this->overrideAwareInput();
+
+        if ($input === null) {
+            return self::FAILURE;
+        }
+
         try {
             if ($id === null) {
                 $id = $rotate->idForName((string) $name);
             }
 
-            $result = $rotate(
-                (string) $id,
-                RotateOptions::fromInput([
-                    'emergency' => (bool) $this->option('emergency'),
-                    'override' => (bool) $this->option('override'),
-                    'abilities' => $this->stringOption('abilities'),
-                    'expires_at' => $this->stringOption('expires'),
-                    'code_ttl_seconds' => $this->stringOption('code-ttl'),
-                ]),
-                AuditActor::cliOperator(),
-            );
+            $result = $rotate((string) $id, RotateOptions::fromInput($input), AuditActor::cliOperator());
         } catch (CredentialVerbRefused|InvalidCredentialInput|RotationRefused|RotationCutoverIncomplete $refused) {
             $this->error($refused->getMessage());
 
@@ -89,6 +87,56 @@ final class CredentialRotateCommand extends Command
         $this->revealOnce($result);
 
         return self::SUCCESS;
+    }
+
+    /**
+     * The shared-input array, with PRESENCE meaning what it means on the
+     * HTTP transport (Fix 3): a key appears exactly when the caller chose
+     * that dimension. `--abilities=`/`--expires=` provide a value; the
+     * `--clear-*` forms provide the dimension as EXPLICITLY NONE (the JSON
+     * transport's explicit null / empty list); passing neither leaves the
+     * key absent, which always means "preserve the source's". Null on
+     * conflicting spellings of one dimension.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function overrideAwareInput(): ?array
+    {
+        $input = [
+            'emergency' => (bool) $this->option('emergency'),
+            'override' => (bool) $this->option('override'),
+            'code_ttl_seconds' => $this->stringOption('code-ttl'),
+        ];
+
+        $abilities = $this->stringOption('abilities');
+
+        if ((bool) $this->option('clear-abilities')) {
+            if ($abilities !== null) {
+                $this->error('Pass --abilities or --clear-abilities, not both.');
+
+                return null;
+            }
+
+            $input['abilities'] = [];
+        } elseif ($abilities !== null) {
+            $input['abilities'] = $abilities;
+        }
+
+        $expires = $this->stringOption('expires');
+
+        if ((bool) $this->option('clear-expiry')) {
+            if ($expires !== null) {
+                $this->error('Pass --expires or --clear-expiry, not both.');
+
+                return null;
+            }
+
+            $input['expires_at'] = null;
+        } elseif ($expires !== null) {
+            $input['expires_at'] = $expires;
+        }
+
+        return $input;
     }
 
     private function describe(RotationResult $result): void

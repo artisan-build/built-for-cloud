@@ -57,6 +57,22 @@ final class RotationRefused extends RuntimeException
         ));
     }
 
+    /**
+     * Fold A: a row already superseded by rotation never rotates again —
+     * a second rotation of the same source would fork the lineage (A→B
+     * and A→C), and supersession that forks answers nothing. The
+     * successor is the row to rotate.
+     */
+    public static function alreadyRotated(string $id, ?string $successorId): self
+    {
+        return new self(sprintf(
+            'Credential %s was already superseded by rotation%s and is living out its grace window; '
+            .'rotating it again would fork the lineage. Rotate its replacement instead.',
+            $id,
+            $successorId !== null ? sprintf(' (by credential %s)', $successorId) : '',
+        ));
+    }
+
     public static function sourcePending(string $id): self
     {
         return new self(sprintf(

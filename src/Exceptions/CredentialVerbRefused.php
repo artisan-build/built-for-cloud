@@ -67,8 +67,17 @@ final class CredentialVerbRefused extends RuntimeException
         ));
     }
 
-    public static function overrideByMatrix(): self
+    /**
+     * The fail-closed override answer (PRD 1.7, D6 point 4): overrides are
+     * opt-in via AuthorizesRotationOverrides, so "not opted in" and
+     * "opted in and denied" refuse identically — a caller learns only
+     * that THIS override is not authorized, never which gate said no.
+     */
+    public static function overrideNotAuthorized(): self
     {
-        return new self('The declaration denies this rotation override for this subject.');
+        return new self(
+            'The declaration does not authorize this rotation override for this subject. '
+            .'Overrides are opt-in: a declaration that has not opted in denies every one.',
+        );
     }
 }

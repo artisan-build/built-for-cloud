@@ -79,39 +79,12 @@ final class MintCredential
     }
 
     /**
-     * The widening refusal (locked AC 2). Refusal, never substitution: the
-     * package does not quietly narrow abilities or stamp a shorter expiry —
-     * TTL defaults on durables are a DO-NOT-BUILD.
+     * The widening refusal (locked AC 2), shared with the rotation
+     * override's ceiling check ({@see ConsultsDeclaration}).
      */
     private function refuseWidening(Subject $subject, MintOptions $options): void
     {
-        $declaration = $this->declaration();
-
-        if (! $declaration instanceof ConstrainsMintedCredentials) {
-            return;
-        }
-
-        $grantable = $declaration->grantableAbilities($subject);
-
-        if ($grantable !== null) {
-            foreach ($options->abilities ?? [] as $ability) {
-                if (! in_array($ability, $grantable, true)) {
-                    throw CredentialVerbRefused::abilityWidening($ability);
-                }
-            }
-        }
-
-        $maxLifetimeSeconds = $declaration->maxCredentialLifetimeSeconds($subject);
-
-        if ($maxLifetimeSeconds === null) {
-            return;
-        }
-
-        // No expiry at all outlives any ceiling; a later expiry widens past
-        // it. Both are the caller's to fix by choosing.
-        if ($options->expiresAt === null || $options->expiresAt->isAfter(now()->addSeconds($maxLifetimeSeconds))) {
-            throw CredentialVerbRefused::lifetimeWidening();
-        }
+        $this->refuseWideningPastCeilings($subject, $options->abilities, $options->expiresAt);
     }
 
     private function refuseUnsupportedOptions(MintOptions $options): void

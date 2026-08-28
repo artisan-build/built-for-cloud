@@ -480,7 +480,10 @@ final class TokenRegistry
      *    under emergency), never extending an earlier one. If it fails,
      *    the replacement stands and {@see RotationCutoverIncomplete} names
      *    the still-live old row, which revoke-by-id can always kill
-     *    (failure path B).
+     *    (failure path B). That kill IS the recovery — never a
+     *    re-rotation: a row already stamped `rotated_at` refuses to rotate
+     *    again (a second rotation of one source would fork the lineage);
+     *    the standing replacement is the rotatable row.
      */
     public function rotateById(string $id, string $newHash, bool $emergency = false, ?AuditActor $actor = null): ApiToken
     {
@@ -495,6 +498,10 @@ final class TokenRegistry
 
             if ($source === null) {
                 throw RotationRefused::sourceNotResolvable($id);
+            }
+
+            if ($source->rotated_at !== null) {
+                throw RotationRefused::alreadyRotated($id, $this->rotationSuccessorOf($id));
             }
 
             $newToken = $this->store(
@@ -555,6 +562,22 @@ final class TokenRegistry
      * guarded predicate is the never-extend rule: a row already expiring
      * earlier keeps its earlier death.
      */
+    /**
+     * The most recent successor the audit lineage records for a rotated
+     * row, so a refused re-rotation can point at the row to rotate
+     * instead.
+     */
+    private function rotationSuccessorOf(string $id): ?string
+    {
+        $successor = CredentialAuditEvent::query()
+            ->where('credential_id', $id)
+            ->where('event', LifecycleEventType::Rotated->value)
+            ->orderByDesc('occurred_at')
+            ->value('superseded_by_credential_id');
+
+        return is_string($successor) && $successor !== '' ? $successor : null;
+    }
+
     private function retireRotatedRow(string $id, bool $emergency): void
     {
         $graceEnd = $emergency ? now() : now()->addHour();

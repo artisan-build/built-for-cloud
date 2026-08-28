@@ -56,7 +56,10 @@ Additive unless marked otherwise:
   Unified-store summary rows gained the nullable `rotated_at` field (rotation provenance).
   Legacy rotation's replacement now inherits the source row's exact abilities, subject binding
   and remaining expiry (previously it was minted unscoped and non-expiring — the D6 defect), and
-  name-based rotation refuses whenever more than one resolvable row shares the name.
+  name-based rotation refuses whenever more than one resolvable row shares the name. A row
+  already superseded by rotation refuses re-rotation (the lineage never forks), and the
+  onboarding exchange sweep spares unified-store rows in rotation grace, as it always has on
+  `api_tokens`.
 - `GET /bfc/meta` `capabilities` gained `credentials`.
 - `POST /bfc/onboarding/issue` requires `ttl_seconds` (bounds below) and accepts nullable
   `email`; the claim surfaces speak the claim-contract error enum documented here.
@@ -284,15 +287,26 @@ dies immediately.
   audit events in the mint's own transaction.
 - **404** — no such id. **403** — the declaration denies `rotate` for the row's subject.
 - **409** — `{"message": "..."}`: the row no longer resolves (revoked or expired) — there is
-  nothing to rotate; mint a replacement instead.
+  nothing to rotate; mint a replacement instead — or it was **already superseded by rotation**:
+  a row in its grace window never rotates again (the lineage never forks); the error names the
+  successor, which is the row to rotate.
 - **500** — `{"message": "..."}`: the replacement was minted but the old row could not be
   retired. The message names both ids: the old row is STILL LIVE (listed, `rotated_at` stamped)
-  and `DELETE /api/credentials/id/{id}` can always kill it; no plaintext was delivered, so the
-  unused replacement can simply be revoked by id, and retrying the rotation works.
+  and `DELETE /api/credentials/id/{id}` can always kill it — that kill IS the recovery (the
+  stamped row refuses re-rotation); no plaintext was delivered, so rotate the standing
+  replacement for a fresh delivery, or revoke it by id if unneeded.
 
 Name-based rotation survives only as the `token:rotate` CLI convenience, and it now **refuses
 whenever more than one resolvable row shares the name** — it never picks one. Rotate by id here
 instead.
+
+**Names are byte-exact identifiers.** Everywhere a name selects rows — this store's name-based
+revoke and the CLI's name-based rotation alike — the match is on the exact bytes stored:
+nothing is trimmed, and no case normalization is applied, so `CI` and `ci` are two different
+names to the package. One caveat rides on the consuming app's database: a case-insensitive
+column collation (MySQL's `utf8mb4_0900_ai_ci` default among them) makes the DATABASE compare
+names the package treats as distinct as equal, which can only widen a name's match set — and a
+widened set trips the refuse-on-ambiguity rule rather than touching an unintended row.
 
 ### DELETE /api/credentials/{name}
 
@@ -457,13 +471,22 @@ No reaper is involved.
 }
 ```
 
-Everything is optional. `emergency: true` kills the old row immediately instead of granting
-grace. `abilities` / `expires_at` request a CHANGED replacement and are consumed only under
-`override: true` — any change without the flag, **narrowing included** (predictability beats
-cleverness), is refused with a `422`; the flag with nothing to change is refused the same way.
-An override is authorized through the verb matrix as its own consultation — the declaration's
-`authorizeVerb(rotate, …)` hook sees the request attribute `bfc.rotation_override` carrying the
-requested delta — and its audit events record the `override` reason code plus the delta.
+Everything is optional, and **presence is the signal**: an ABSENT `abilities` / `expires_at`
+always means "preserve the source's", while a PRESENT one requests a changed replacement —
+including "explicitly none": `"expires_at": null` overrides a finite expiry to NO expiry, and
+`"abilities": []` narrows to NO abilities (which grant nothing). `emergency: true` kills the
+old row immediately instead of granting grace.
+
+A provided change is consumed only under `override: true` — any change without the flag,
+**narrowing included** (predictability beats cleverness), is refused with a `422`; the flag
+with nothing provided is refused the same way. The override is a SEPARATELY authorized
+operation, and it **fails closed**: the app's declaration must explicitly opt in by
+implementing the dedicated `AuthorizesRotationOverrides` hook (which receives the requested
+delta), and a declaration that has not opted in denies every override — routine (preserving)
+rotation is unaffected. An authorized override must ALSO fit the same ceilings the mint verb
+enforces: it is refused (`403`, same messages as mint) if the replacement's effective abilities
+or lifetime — inherited dimensions included — exceed what a mint of that shape could have been
+authorized for. Its audit events record the `override` reason code plus the delta.
 `code_ttl_seconds` is required (60–604800) when rotating an `asymmetric` credential and ignored
 otherwise.
 
@@ -490,18 +513,22 @@ Per kind:
 mint's own transaction; if any of those follow-up writes fail, EVERYTHING rolls back — no
 orphan credential — and retrying works.
 
-- **404** — no such id. **403** — `{"message": "..."}`: the declaration denies `rotate` (or the
-  override) for the row's subject, or the kind does not rotate (`hmac`).
+- **404** — no such id. **403** — `{"message": "..."}`: the declaration denies `rotate` for
+  the row's subject, the override is not authorized (not opted in, denied, or past a mint
+  ceiling), or the kind does not rotate (`hmac`).
 - **409** — `{"message": "..."}`: the row is revoked, expired, or a pending enrollment — none
-  of which is a rotatable source.
+  of which is a rotatable source — or it was **already superseded by rotation**: a row in its
+  grace window never rotates again (the lineage never forks); the error names the successor,
+  which is the row to rotate.
 - **422** — `{"message": "..."}`: shared input validation (a change without `override`,
   out-of-bounds `code_ttl_seconds`, malformed abilities/expiry/booleans) — identical refusals
   on the CLI transport.
 - **500** — `{"message": "..."}`: the replacement was committed but the old row could not be
   retired. The message names both ids; the old row is STILL LIVE, listed with its `rotated_at`
-  stamp, and `DELETE /bfc/credentials/{id}` can always kill it. **No secret was delivered** —
-  the sealed carrier is discarded — so the unused replacement can simply be revoked by id, and
-  retrying the rotation works.
+  stamp, and `DELETE /bfc/credentials/{id}` can always kill it — that kill IS the recovery
+  (the stamped row refuses re-rotation). **No secret was delivered** — the sealed carrier is
+  discarded — so rotate the standing replacement for a fresh delivery, or revoke it by id if
+  unneeded.
 
 **The elsewhere-hosted / manual case.** When no automation can install the new secret (the
 credential lives in a system only a human can reach), this verb is still the whole flow: it

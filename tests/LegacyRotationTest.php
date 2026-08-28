@@ -279,6 +279,75 @@ final class LegacyRotationTest extends TestCase
     }
 
     /**
+     * Fold A on the legacy store: a row already stamped `rotated_at`
+     * refuses a second rotation — the lineage never forks (no A→B plus
+     * A→C) — and the refusal names the successor, which rotates on
+     * normally (a linear A→B→C chain).
+     */
+    public function test_a_row_already_in_grace_refuses_re_rotation_while_its_successor_rotates_on(): void
+    {
+        $registry = new TokenRegistry;
+
+        $source = $registry->store('chain', hash('sha256', 'chain-a'));
+        $successor = $registry->rotateById($source->id, hash('sha256', 'chain-b'));
+
+        try {
+            $registry->rotateById($source->id, hash('sha256', 'chain-fork'));
+            $this->fail('Re-rotating a graced row was performed.');
+        } catch (RotationRefused $refused) {
+            $this->assertStringContainsString('already superseded by rotation', $refused->getMessage());
+            $this->assertStringContainsString((string) $successor->getKey(), $refused->getMessage());
+        }
+
+        // No fork was minted, and the source still carries exactly one
+        // rotated lineage event.
+        $this->assertFalse(ApiToken::query()->where('token_hash', hash('sha256', 'chain-fork'))->exists());
+        $this->assertSame(1, CredentialAuditEvent::query()
+            ->where('credential_id', $source->id)
+            ->where('event', LifecycleEventType::Rotated->value)
+            ->count());
+
+        // The successor is the rotatable row: A → B → C.
+        $third = $registry->rotateById((string) $successor->getKey(), hash('sha256', 'chain-c'));
+
+        $lineage = CredentialAuditEvent::query()
+            ->where('credential_id', $successor->getKey())
+            ->where('event', LifecycleEventType::Rotated->value)
+            ->sole();
+
+        $this->assertSame((string) $third->getKey(), $lineage->superseded_by_credential_id);
+    }
+
+    /**
+     * Fold B's grace-boundary precision on the legacy store: the graced
+     * row resolves one second before grace end and is dead at the
+     * boundary itself (resolvability requires an expiry strictly in the
+     * future).
+     */
+    public function test_the_graced_row_resolves_until_the_exact_grace_end_and_not_after(): void
+    {
+        $frozen = now()->startOfSecond();
+        $this->travelTo($frozen);
+
+        $registry = new TokenRegistry;
+
+        $source = $registry->store('boundary', hash('sha256', 'boundary-old'));
+        $registry->rotateById($source->id, hash('sha256', 'boundary-new'));
+
+        $graceEnd = $frozen->copy()->addHour();
+
+        $this->assertNotNull($source->refresh()->expires_at);
+        $this->assertSame($graceEnd->timestamp, $source->expires_at->timestamp);
+
+        $this->travelTo($graceEnd->copy()->subSecond());
+        $this->assertSame('boundary', $registry->resolve('boundary-old'));
+
+        $this->travelTo($graceEnd);
+        $this->assertNull($registry->resolve('boundary-old'));
+        $this->assertSame('boundary', $registry->resolve('boundary-new'));
+    }
+
+    /**
      * The never-extend rule at cutover: an old row already dying sooner
      * than grace end keeps its earlier death.
      */

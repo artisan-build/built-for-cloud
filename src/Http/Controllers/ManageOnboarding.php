@@ -482,9 +482,11 @@ final class ManageOnboarding
      * The unified-store half of the D1d sweep: same exclusions, expressed
      * on `credentials` columns. The tenancy key here is `subject_ref` (the
      * unified minter sets it from the claim's name), the scope is an
-     * ability, and there is no rotation-grace exclusion yet because the
-     * unified rotate verb — the only writer of grace rows — ships in a
-     * later release.
+     * ability, and — exactly as on `api_tokens` — a row superseded by
+     * rotation survives: `rotated_at` is provenance only the rotate verb
+     * asserts, and the grace expiry that verb set already bounds the row,
+     * so the sweep killing it would break the make-before-break window
+     * rotation exists to provide.
      *
      * @return list<string> the ids of the durables actually revoked
      */
@@ -515,6 +517,10 @@ final class ManageOnboarding
             }
 
             if (in_array($credential->getKey(), $linkedToOtherCodes, true)) {
+                continue;
+            }
+
+            if ($credential->rotated_at !== null) {
                 continue;
             }
 
