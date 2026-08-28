@@ -5,7 +5,11 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\AuditActorType;
+use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\ClientIdentity;
+use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -110,6 +114,20 @@ final class CredentialApiTest extends TestCase
             ->assertNoContent();
 
         $this->assertNull((new TokenRegistry)->resolve($plaintext));
+
+        // The revocation is audited to the admin token that presented (D8's
+        // actor model on the HTTP path).
+        $target = ApiToken::query()->where('name', 'ci')->firstOrFail();
+        $admin = ApiToken::query()->where('name', 'admin')->firstOrFail();
+
+        $event = CredentialAuditEvent::query()
+            ->where('event', LifecycleEventType::Revoked->value)
+            ->where('credential_id', $target->id)
+            ->firstOrFail();
+
+        $this->assertSame(AuditReason::OperatorRequest, $event->reason_code);
+        $this->assertSame(AuditActorType::AdminToken, $event->actor_type);
+        $this->assertSame($admin->id, $event->actor_ref);
     }
 
     public function test_it_lists_credential_api_tokens_without_exposing_secrets(): void

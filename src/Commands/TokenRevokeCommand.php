@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Commands;
 
+use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\CloudCommandRunner;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Console\Command;
@@ -19,7 +20,7 @@ final class TokenRevokeCommand extends Command
         $name = (string) $this->argument('name');
 
         if ((bool) $this->option('execute')) {
-            $count = $registry->revoke($name);
+            $count = $registry->revoke($name, AuditActor::cliOperator());
             $this->line("Revoked {$count} active row(s) for {$name}");
 
             return self::SUCCESS;

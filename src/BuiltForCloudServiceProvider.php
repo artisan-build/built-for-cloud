@@ -7,13 +7,16 @@ namespace ArtisanBuild\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
 use ArtisanBuild\BuiltForCloud\Commands\CreateAdminCommand;
 use ArtisanBuild\BuiltForCloud\Commands\FallbackTokenGenerateCommand;
+use ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenCreateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenListCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenRevokeCommand;
+use ArtisanBuild\BuiltForCloud\Commands\TokenRevokeSelfCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenRotateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenUsageCommand;
+use ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
 use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
@@ -120,13 +123,16 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $this->commands([
                 CreateAdminCommand::class,
                 FallbackTokenGenerateCommand::class,
+                OutboxDrainCommand::class,
                 OwnershipMintClaimCommand::class,
                 OwnershipRemintOwnerTokenCommand::class,
                 TokenCreateCommand::class,
                 TokenListCommand::class,
                 TokenRevokeCommand::class,
+                TokenRevokeSelfCommand::class,
                 TokenRotateCommand::class,
                 TokenUsageCommand::class,
+                WarnExpiringCredentialsCommand::class,
             ]);
 
             $this->publishes([

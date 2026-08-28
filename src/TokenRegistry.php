@@ -123,12 +123,15 @@ final class TokenRegistry
             // two transactions deadlock against each other. Holding the lock
             // also freezes the linkage: no re-claim can relink the code
             // while this burn is in flight.
-            $codeIds = OnboardingToken::query()
+            /** @var list<OnboardingToken> $pendingCodes */
+            $pendingCodes = OnboardingToken::query()
                 ->where('durable_token_id', $row->getKey())
                 ->whereNull('consumed_at')
                 ->lockForUpdate()
-                ->pluck('id')
+                ->get(['id', 'email'])
                 ->all();
+
+            $codeIds = array_map(static fn (OnboardingToken $code): string => $code->id, $pendingCodes);
 
             // The gate re-asserts the FULL resolvability predicate, not just
             // last_used_at: between the resolving read and this write a
@@ -166,16 +169,45 @@ final class TokenRegistry
             // Nothing is logged: there is no actionable detail that is also
             // secret-free. Under `at_exchange` the code is already consumed
             // and $codeIds is empty. Empty either way is not a failure.
+            $burned = 0;
+
             if ($codeIds !== []) {
-                OnboardingToken::query()
+                $burned = OnboardingToken::query()
                     ->whereIn('id', $codeIds)
                     ->where('durable_token_id', $row->getKey())
                     ->whereNull('consumed_at')
                     ->update(['consumed_at' => now()]);
             }
 
+            // The audit `first_used` event, in the SAME transaction as the
+            // burn (SEC-V3-09). The code linkage names the code this
+            // credential came from: the one burned here, or — under
+            // `at_exchange`, where redemption already consumed it — the
+            // consumed code still pointing at this durable. The intended
+            // recipient rides along where the code was addressed, so the
+            // first-use notice (SEC-6) can reach them.
+            $linkedCode = $burned > 0 ? $pendingCodes[0] : $this->consumedCodeFor($row);
+
+            $this->recorder()->record(
+                event: LifecycleEventType::FirstUsed,
+                credentialId: (string) $row->getKey(),
+                codeId: $linkedCode?->id,
+                actor: AuditActor::credentialHolder((string) $row->getKey()),
+                recipient: $linkedCode?->email,
+            );
+
             return true;
         });
+    }
+
+    private function consumedCodeFor(ApiToken $row): ?OnboardingToken
+    {
+        /** @var OnboardingToken|null */
+        return OnboardingToken::query()
+            ->where('durable_token_id', $row->getKey())
+            ->whereNotNull('consumed_at')
+            ->orderByDesc('consumed_at')
+            ->first(['id', 'email']);
     }
 
     /**
@@ -386,37 +418,103 @@ final class TokenRegistry
         ]);
     }
 
-    public function rotate(string $name, string $newHash, bool $emergency = false): ApiToken
+    public function rotate(string $name, string $newHash, bool $emergency = false, ?AuditActor $actor = null): ApiToken
     {
-        $newToken = $this->store($name, $newHash);
-        $expiresAt = $emergency ? now() : now()->addHour();
+        return DB::transaction(function () use ($name, $newHash, $emergency, $actor): ApiToken {
+            $newToken = $this->store($name, $newHash);
+            $expiresAt = $emergency ? now() : now()->addHour();
 
-        // `rotated_at` is the provenance marker — "superseded by rotation" —
-        // that only this verb may assert, emergency included. The claim-code
-        // exchange sweep spares marked rows; their expiry already bounds
-        // them.
-        ApiToken::query()
-            ->where('name', $name)
-            ->whereKeyNot($newToken->getKey())
-            ->resolvable()
-            ->update([
-                'expires_at' => $expiresAt,
-                'rotated_at' => now(),
-            ]);
+            /** @var list<string> $supersededIds */
+            $supersededIds = ApiToken::query()
+                ->where('name', $name)
+                ->whereKeyNot($newToken->getKey())
+                ->resolvable()
+                ->lockForUpdate()
+                ->pluck('id')
+                ->all();
 
-        return $newToken;
+            // `rotated_at` is the provenance marker — "superseded by rotation" —
+            // that only this verb may assert, emergency included. The claim-code
+            // exchange sweep spares marked rows; their expiry already bounds
+            // them.
+            if ($supersededIds !== []) {
+                ApiToken::query()
+                    ->whereIn('id', $supersededIds)
+                    ->update([
+                        'expires_at' => $expiresAt,
+                        'rotated_at' => now(),
+                    ]);
+            }
+
+            // The stream, same transaction: the replacement was issued, and
+            // each superseded row was rotated with its lineage (old -> new —
+            // what makes rotation auditable, D8).
+            $reason = $emergency ? AuditReason::Emergency : AuditReason::Rotation;
+
+            $this->recorder()->record(
+                event: LifecycleEventType::Issued,
+                credentialId: (string) $newToken->getKey(),
+                actor: $actor,
+                reason: $reason,
+            );
+
+            foreach ($supersededIds as $supersededId) {
+                $this->recorder()->record(
+                    event: LifecycleEventType::Rotated,
+                    credentialId: $supersededId,
+                    actor: $actor,
+                    reason: $reason,
+                    supersededByCredentialId: (string) $newToken->getKey(),
+                );
+            }
+
+            return $newToken;
+        });
     }
 
-    public function revoke(string $name): int
+    public function revoke(string $name, ?AuditActor $actor = null, AuditReason $reason = AuditReason::OperatorRequest): int
     {
-        $now = now();
+        return DB::transaction(function () use ($name, $actor, $reason): int {
+            /** @var list<string> $revokedIds */
+            $revokedIds = ApiToken::query()
+                ->where('name', $name)
+                ->resolvable()
+                ->lockForUpdate()
+                ->pluck('id')
+                ->all();
 
-        return ApiToken::query()
-            ->where('name', $name)
-            ->resolvable()
-            ->update([
-                'expires_at' => $now,
-                'revoked_at' => $now,
-            ]);
+            if ($revokedIds === []) {
+                return 0;
+            }
+
+            $now = now();
+
+            $count = ApiToken::query()
+                ->whereIn('id', $revokedIds)
+                ->update([
+                    'expires_at' => $now,
+                    'revoked_at' => $now,
+                ]);
+
+            foreach ($revokedIds as $revokedId) {
+                $this->recorder()->record(
+                    event: LifecycleEventType::Revoked,
+                    credentialId: $revokedId,
+                    actor: $actor,
+                    reason: $reason,
+                );
+            }
+
+            return $count;
+        });
+    }
+
+    /**
+     * Resolved lazily rather than via the constructor so `new TokenRegistry`
+     * keeps working everywhere it already does.
+     */
+    private function recorder(): LifecycleEventRecorder
+    {
+        return app(LifecycleEventRecorder::class);
     }
 }

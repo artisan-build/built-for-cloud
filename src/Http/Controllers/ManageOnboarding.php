@@ -5,11 +5,15 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\AuditActor;
+use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\BurnMode;
 use ArtisanBuild\BuiltForCloud\ClaimError;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresBurnMode;
 use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
+use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
+use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintedSecret;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\Scope;
@@ -43,6 +47,7 @@ final class ManageOnboarding
         private readonly TokenRegistry $tokens,
         private readonly DurableCredentialMinter $minter,
         private readonly CredentialDeclaration $declaration,
+        private readonly LifecycleEventRecorder $recorder,
     ) {}
 
     public function issue(Request $request): JsonResponse
@@ -54,25 +59,56 @@ final class ManageOnboarding
             'ttl_seconds' => ['required', 'integer', 'between:'.self::TTL_MIN_SECONDS.','.self::TTL_MAX_SECONDS],
         ]);
 
-        return DB::transaction(function () use ($validated): JsonResponse {
+        $actor = $this->requestActor($request);
+
+        return DB::transaction(function () use ($validated, $actor): JsonResponse {
             $email = $validated['email'] ?? null;
             $scope = $validated['scope'] ?? Scope::Consume->value;
+            $ttlSeconds = (int) $validated['ttl_seconds'];
 
             // Issuing supersedes any pending code for the same address+scope,
             // but deliberately does NOT touch the live durable credential
             // (D1d): a code sitting in an inbox must not break a working
             // integration on send day. Exchange revokes instead.
             if ($email !== null) {
-                $this->supersedePendingOnboarding($email, $scope);
+                foreach ($this->supersedePendingOnboarding($email, $scope) as [$durableId, $supersededCodeId]) {
+                    $this->recorder->record(
+                        event: LifecycleEventType::Revoked,
+                        credentialId: $durableId,
+                        codeId: $supersededCodeId,
+                        actor: $actor,
+                        reason: AuditReason::Superseded,
+                    );
+                }
             }
 
-            $claimCode = $this->mintClaimCode($email, $scope, (int) $validated['ttl_seconds']);
+            [$claimCode, $codeRow] = $this->mintClaimCode($email, $scope, $ttlSeconds);
+
+            $this->recorder->record(
+                event: LifecycleEventType::Issued,
+                codeId: $codeRow->id,
+                actor: $actor,
+                recipient: $email,
+                codeTtlSeconds: $ttlSeconds,
+            );
 
             return response()->json([
                 'claim_code' => $claimCode->reveal(),
                 'email' => $email,
             ], 201);
         });
+    }
+
+    /**
+     * The actor an admin surface can honestly attribute: the admin token
+     * that authenticated this request, stashed by the middleware. Null when
+     * nothing was stashed — never guessed.
+     */
+    private function requestActor(Request $request): ?AuditActor
+    {
+        $tokenId = $request->attributes->get('bfc.actor_token_id');
+
+        return is_string($tokenId) && $tokenId !== '' ? AuditActor::adminToken($tokenId) : null;
     }
 
     public function exchange(Request $request): JsonResponse
@@ -146,17 +182,48 @@ final class ManageOnboarding
             // code ever exists. Exchange performs BOTH revocations (D1d): by
             // the code's own durable link, and by name+scope for the live
             // durable that issue no longer revokes.
+            $revokedIds = [];
+
             if ($code->durable_token_id !== null) {
-                $this->revokeDurableById($code->durable_token_id);
+                $revokedIds[] = $this->revokeDurableById($code->durable_token_id);
             }
 
             $name = $code->email ?? 'claim-'.$code->id;
 
-            $this->revokeActiveDurable($name, $code->scope, $code->id);
+            $revokedIds = array_values(array_filter([
+                ...$revokedIds,
+                ...$this->revokeActiveDurable($name, $code->scope, $code->id),
+            ]));
 
             $minted = $this->minter->mint($name, $code->scope);
 
             $code->forceFill(['durable_token_id' => $minted->token->getKey()])->save();
+
+            // The stream, same transaction (SEC-V3-09): the exchange itself,
+            // then each revocation it performed with its supersession
+            // lineage (old -> new). The only actor an unauthenticated claim
+            // surface can honestly attribute is the bearer of the code.
+            $actor = AuditActor::credentialHolder($code->id);
+            $newId = (string) $minted->token->getKey();
+
+            $this->recorder->record(
+                event: LifecycleEventType::Exchanged,
+                credentialId: $newId,
+                codeId: $code->id,
+                actor: $actor,
+                recipient: $code->email,
+            );
+
+            foreach (array_unique($revokedIds) as $revokedId) {
+                $this->recorder->record(
+                    event: LifecycleEventType::Revoked,
+                    credentialId: $revokedId,
+                    codeId: $code->id,
+                    actor: $actor,
+                    reason: AuditReason::Superseded,
+                    supersededByCredentialId: $newId,
+                );
+            }
 
             return response()->json([
                 'durable_token' => $minted->secret->reveal(),
@@ -219,7 +286,10 @@ final class ManageOnboarding
             : BurnMode::FirstUse;
     }
 
-    private function supersedePendingOnboarding(string $email, string $scope): void
+    /**
+     * @return list<array{string, string}> [revoked durable id, superseded code id] pairs
+     */
+    private function supersedePendingOnboarding(string $email, string $scope): array
     {
         /** @var list<OnboardingToken> $tokens */
         $tokens = OnboardingToken::query()
@@ -230,16 +300,20 @@ final class ManageOnboarding
             ->get()
             ->all();
 
+        $revoked = [];
+
         foreach ($tokens as $token) {
             // A pending code's durable link is a never-used make-before-break
             // token; superseding the code invalidates it. A durable that has
             // been USED belongs to a consumed code and is never touched here.
-            if ($token->durable_token_id !== null) {
-                $this->revokeDurableById($token->durable_token_id);
+            if ($token->durable_token_id !== null && $this->revokeDurableById($token->durable_token_id) !== null) {
+                $revoked[] = [$token->durable_token_id, $token->id];
             }
 
             $token->forceFill(['consumed_at' => now()])->save();
         }
+
+        return $revoked;
     }
 
     /**
@@ -260,7 +334,10 @@ final class ManageOnboarding
      * outside these exclusions — remains and is documented in the release
      * note; the unified store's subject binding (PRD 1.19) dissolves it.
      */
-    private function revokeActiveDurable(string $name, string $scope, string $exchangingCodeId): void
+    /**
+     * @return list<string> the ids of the durables actually revoked
+     */
+    private function revokeActiveDurable(string $name, string $scope, string $exchangingCodeId): array
     {
         /** @var list<ApiToken> $tokens */
         $tokens = ApiToken::query()
@@ -278,6 +355,8 @@ final class ManageOnboarding
             ->pluck('durable_token_id')
             ->all();
 
+        $revoked = [];
+
         foreach ($tokens as $token) {
             if (! $token->hasAbility($scope)) {
                 continue;
@@ -292,10 +371,17 @@ final class ManageOnboarding
             }
 
             $this->revokeLockedDurable($token);
+
+            $revoked[] = (string) $token->getKey();
         }
+
+        return $revoked;
     }
 
-    private function revokeDurableById(string $tokenId): void
+    /**
+     * @return string|null the revoked durable's id, or null when no row matched
+     */
+    private function revokeDurableById(string $tokenId): ?string
     {
         /** @var ApiToken|null $token */
         $token = ApiToken::query()
@@ -303,9 +389,13 @@ final class ManageOnboarding
             ->lockForUpdate()
             ->first();
 
-        if ($token !== null) {
-            $this->revokeLockedDurable($token);
+        if ($token === null) {
+            return null;
         }
+
+        $this->revokeLockedDurable($token);
+
+        return (string) $token->getKey();
     }
 
     private function revokeLockedDurable(ApiToken $token): void
@@ -322,14 +412,16 @@ final class ManageOnboarding
      * Mint a claim code: the plaintext never exists outside its sealed
      * carrier, and only the hash reaches storage. Expiry is exactly issue
      * time + ttl_seconds — no hidden defaults.
+     *
+     * @return array{MintedSecret, OnboardingToken}
      */
-    private function mintClaimCode(?string $email, string $scope, int $ttlSeconds): MintedSecret
+    private function mintClaimCode(?string $email, string $scope, int $ttlSeconds): array
     {
         do {
             $claimCode = new MintedSecret(bin2hex(random_bytes(32)));
         } while (OnboardingToken::query()->where('token_hash', $claimCode->hash())->exists());
 
-        OnboardingToken::query()->create([
+        $codeRow = OnboardingToken::query()->create([
             'id' => (string) Str::uuid(),
             'email' => $email,
             'scope' => $scope,
@@ -337,6 +429,6 @@ final class ManageOnboarding
             'expires_at' => now()->addSeconds($ttlSeconds),
         ]);
 
-        return $claimCode;
+        return [$claimCode, $codeRow];
     }
 }

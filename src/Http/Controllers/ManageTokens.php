@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\TokenGenerator;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
@@ -77,9 +78,14 @@ final class ManageTokens
         ], 201);
     }
 
-    public function destroy(string $name): Response
+    public function destroy(Request $request, string $name): Response
     {
-        $this->tokens->revoke($name);
+        $actorId = $request->attributes->get('bfc.actor_token_id');
+
+        $this->tokens->revoke(
+            $name,
+            is_string($actorId) && $actorId !== '' ? AuditActor::adminToken($actorId) : null,
+        );
 
         return response()->noContent();
     }
