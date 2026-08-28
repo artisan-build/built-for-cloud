@@ -8,11 +8,20 @@ use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\ClientIdentity;
+use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
+use ArtisanBuild\BuiltForCloud\Contracts\DeclaresPresentationCadence;
+use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\Subject;
+use ArtisanBuild\BuiltForCloud\SubjectType;
+use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
+use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Orchestra\Testbench\Attributes\WithConfig;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -20,6 +29,8 @@ use PHPUnit\Framework\Attributes\DataProvider;
 #[WithConfig('built-for-cloud.credential_api.enabled', true, false)]
 final class CredentialApiTest extends TestCase
 {
+    use ContractAssertions;
+    use DetectsSecretLeaks;
     use RefreshDatabase;
 
     public function test_it_issues_a_plain_access_token_through_the_credential_api(): void
@@ -199,8 +210,10 @@ final class CredentialApiTest extends TestCase
             ->assertJsonPath($index.'.client_identity_last_seen_at', null);
     }
 
-    // AC3 + AC5 — the exact key set of a row. An accidental extra field (token_hash, id) fails
-    // here, and so does a dropped pre-existing one.
+    // The exact-key-set invariant, EXTENDED to the PR5 additive set. An accidental extra field
+    // (token_hash, secret_hash, any secret-adjacent column) still fails here, and so does a
+    // dropped pre-existing one. The pre-PR5 keys keep their exact positions (additive-only
+    // proof); the new keys append after them.
     public function test_a_listing_row_exposes_exactly_the_expected_keys(): void
     {
         $plaintext = 'list-secret';
@@ -226,12 +239,19 @@ final class CredentialApiTest extends TestCase
                 'abilities',
                 'client_identity',
                 'client_identity_last_seen_at',
+                'id',
+                'request_count',
+                'subject_type',
+                'subject_ref',
+                'status',
+                'presentation_cadence_seconds',
             ], array_keys($row));
         }
 
         $content = (string) $response->getContent();
 
         $this->assertStringNotContainsString('token_hash', $content);
+        $this->assertStringNotContainsString('secret_hash', $content);
         $this->assertStringNotContainsString(hash('sha256', $plaintext), $content);
         $this->assertStringNotContainsString($plaintext, $content);
     }
@@ -294,6 +314,190 @@ final class CredentialApiTest extends TestCase
         $row = $this->listingRowFor('no-abilities', $this->credentialAdminHeaders());
 
         $this->assertSame([], $row['abilities']);
+    }
+
+    // PR5 — the additive fields carry their stored values: the row id, the usage counter, and
+    // the declared subject. Values, not just keys, so a column dropped from the SELECT cannot
+    // silently list as null. Runs under the leak harness: the new surface egresses no secret.
+    public function test_the_listing_carries_id_request_count_and_the_declared_subject(): void
+    {
+        $plaintext = 'subject-secret';
+        $headers = $this->credentialAdminHeaders();
+
+        $token = ApiToken::factory()->create([
+            'name' => 'installed',
+            'token_hash' => hash('sha256', $plaintext),
+            'request_count' => 7,
+            'subject_type' => SubjectType::Installation->value,
+            'subject_ref' => 'install-42',
+        ]);
+
+        $row = $this->assertNoSecretLeakage(
+            $plaintext,
+            fn (): array => $this->listingRowFor('installed', $headers),
+        );
+
+        $this->assertSame($token->id, $row['id']);
+        $this->assertSame(7, $row['request_count']);
+        $this->assertSame('installation', $row['subject_type']);
+        $this->assertSame('install-42', $row['subject_ref']);
+    }
+
+    // PR5 — declare-don't-guess: a row minted before subjects existed lists BOTH subject keys
+    // present and null, never a guessed classification.
+    public function test_a_legacy_row_lists_null_subject_type_and_subject_ref(): void
+    {
+        ApiToken::factory()->create(['name' => 'pre-subjects']);
+
+        $row = $this->listingRowFor('pre-subjects', $this->credentialAdminHeaders());
+
+        $this->assertArrayHasKey('subject_type', $row);
+        $this->assertArrayHasKey('subject_ref', $row);
+        $this->assertNull($row['subject_type']);
+        $this->assertNull($row['subject_ref']);
+    }
+
+    // Locked AC2 — status computes `revoked` for a revoked row (revocation wins over the expiry
+    // it also sets), `expired` for an expired row, `active` otherwise. `unknown` is RESERVED:
+    // every api_tokens row structurally carries the usage signal, so this store never emits it
+    // (see ReportedStatus — the case exists for stores whose rows cannot carry the signal).
+    public function test_status_computes_revoked_expired_and_active(): void
+    {
+        $headers = $this->credentialAdminHeaders();
+
+        ApiToken::factory()->create([
+            'name' => 'dead',
+            'revoked_at' => now()->subHour(),
+            'expires_at' => now()->subHour(),
+        ]);
+        ApiToken::factory()->create([
+            'name' => 'lapsed',
+            'expires_at' => now()->subMinute(),
+        ]);
+        ApiToken::factory()->create([
+            'name' => 'live',
+            'expires_at' => now()->addDay(),
+        ]);
+
+        $this->assertSame('revoked', $this->listingRowFor('dead', $headers)['status']);
+        $this->assertSame('expired', $this->listingRowFor('lapsed', $headers)['status']);
+        $this->assertSame('active', $this->listingRowFor('live', $headers)['status']);
+        $this->assertSame('active', $this->listingRowFor('admin', $headers)['status']);
+    }
+
+    // PR5 — the default declaration declares NO cadence: every row lists null and the top-level
+    // header is absent, leaving the consuming control plane's own default in charge.
+    public function test_the_default_declaration_declares_no_presentation_cadence(): void
+    {
+        $response = $this->getJson('/api/credentials', $this->credentialAdminHeaders())->assertOk();
+
+        $response->assertHeaderMissing(ManageTokens::CADENCE_HEADER);
+
+        $this->assertSame([null], array_values(array_unique(
+            array_column($response->json(), 'presentation_cadence_seconds'),
+        )));
+    }
+
+    // PR5 — a declaration that declares a cadence sees it on every row AND once at the listing
+    // top level (the response header — the body has always been a bare array, and wrapping it
+    // in an envelope would break every existing consumer).
+    public function test_a_declared_presentation_cadence_lists_per_row_and_as_the_top_level_header(): void
+    {
+        $this->app->bind(CredentialDeclaration::class, static fn (): CredentialDeclaration => new class implements CredentialDeclaration, DeclaresPresentationCadence
+        {
+            public function resolveSubject(Request $request): ?Subject
+            {
+                return null;
+            }
+
+            public function authorize(Credential $credential, ?string $ability, Request $request): bool
+            {
+                return true;
+            }
+
+            public function presentationCadenceSeconds(): ?int
+            {
+                return 604800;
+            }
+        });
+
+        $response = $this->getJson('/api/credentials', $this->credentialAdminHeaders())->assertOk();
+
+        $response->assertHeader(ManageTokens::CADENCE_HEADER, '604800');
+
+        $this->assertSame([604800], array_values(array_unique(
+            array_column($response->json(), 'presentation_cadence_seconds'),
+        )));
+    }
+
+    // Locked AC3 — revoke-by-id revokes exactly that row: the same-named sibling survives and
+    // still authenticates, and the revocation is audited with actor + operator_request. Runs
+    // under the leak harness.
+    public function test_revoke_by_id_revokes_exactly_that_row_and_a_same_named_sibling_survives(): void
+    {
+        $headers = $this->credentialAdminHeaders();
+
+        $doomed = ApiToken::factory()->create([
+            'name' => 'ci',
+            'token_hash' => hash('sha256', 'doomed-secret'),
+        ]);
+        ApiToken::factory()->create([
+            'name' => 'ci',
+            'token_hash' => hash('sha256', 'sibling-secret'),
+        ]);
+
+        $this->assertNoSecretLeakage('doomed-secret', function () use ($doomed, $headers): void {
+            $this->deleteJson('/api/credentials/id/'.$doomed->id, [], $headers)->assertNoContent();
+        });
+
+        $this->assertNull((new TokenRegistry)->resolve('doomed-secret'));
+        $this->assertSame('ci', (new TokenRegistry)->resolve('sibling-secret'));
+
+        $admin = ApiToken::query()->where('name', 'admin')->firstOrFail();
+
+        $event = CredentialAuditEvent::query()
+            ->where('event', LifecycleEventType::Revoked->value)
+            ->where('credential_id', $doomed->id)
+            ->firstOrFail();
+
+        $this->assertSame(AuditReason::OperatorRequest, $event->reason_code);
+        $this->assertSame(AuditActorType::AdminToken, $event->actor_type);
+        $this->assertSame($admin->id, $event->actor_ref);
+    }
+
+    public function test_revoke_by_id_returns_404_for_an_unknown_id(): void
+    {
+        $this->deleteJson('/api/credentials/id/does-not-exist', [], $this->credentialAdminHeaders())
+            ->assertNotFound();
+    }
+
+    // Idempotent: a second by-id delete of an already-dead row is 204 and emits NO second
+    // revoked event — one death, one audit row.
+    public function test_revoke_by_id_is_idempotent_and_never_audits_a_second_death(): void
+    {
+        $headers = $this->credentialAdminHeaders();
+
+        $token = ApiToken::factory()->create(['name' => 'once']);
+
+        $this->deleteJson('/api/credentials/id/'.$token->id, [], $headers)->assertNoContent();
+        $this->deleteJson('/api/credentials/id/'.$token->id, [], $headers)->assertNoContent();
+
+        $this->assertSame(1, CredentialAuditEvent::query()
+            ->where('event', LifecycleEventType::Revoked->value)
+            ->where('credential_id', $token->id)
+            ->count());
+    }
+
+    // Locked AC7 — the consuming-app contract suite covers the additive listing shape.
+    public function test_the_contract_assertions_cover_the_additive_listing_shape(): void
+    {
+        ApiToken::factory()->create([
+            'name' => 'contract-row',
+            'subject_type' => SubjectType::Operator->value,
+            'subject_ref' => 'scalpels',
+        ]);
+
+        $this->assertBuiltForCloudCredentialListingContract();
     }
 
     // AC4 — regression: PR1 touched this middleware. The listing stays admin-token-guarded.

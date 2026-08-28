@@ -288,6 +288,16 @@ final class ClientIdentityTest extends TestCase
 
         $expected = $this->getJson('/api/credentials', $headers)->assertOk()->json();
 
+        // The listing now reports request_count, and presenting the admin token for the second
+        // request below is itself a counted use — align the snapshot to that one bump.
+        $expected = array_map(static function (array $row): array {
+            if ($row['name'] === 'admin') {
+                $row['request_count']++;
+            }
+
+            return $row;
+        }, $expected);
+
         Schema::table('api_tokens', function (Blueprint $table): void {
             $table->dropColumn('client_identity');
         });

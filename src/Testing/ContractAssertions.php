@@ -112,6 +112,60 @@ trait ContractAssertions
         Assert::assertSame(['consume', 'admin', 'onboard'], Scope::values());
     }
 
+    /**
+     * The credential-API listing shape (PRD 1.5). NOT part of
+     * assertBuiltForCloudContract(): the credential API is disabled by
+     * default, so this is called only from a test that enables it
+     * (`built-for-cloud.credential_api.enabled` true before boot).
+     *
+     * Asserts every listing row carries the full additive field set — the
+     * pre-PR5 fields AND `id` / `request_count` / `subject_type` /
+     * `subject_ref` / `status` / `presentation_cadence_seconds` — and that
+     * no hash column ever appears.
+     */
+    public function assertBuiltForCloudCredentialListingContract(): void
+    {
+        $admin = $this->mintBuiltForCloudAdminToken('contract-listing-admin');
+
+        $response = $this->getJson('/api/credentials', $this->builtForCloudBearerHeaders($admin));
+
+        $response->assertOk()
+            ->assertJsonStructure([
+                '*' => [
+                    'name',
+                    'last_used_at',
+                    'expires_at',
+                    'revoked_at',
+                    'abilities',
+                    'client_identity',
+                    'client_identity_last_seen_at',
+                    'id',
+                    'request_count',
+                    'status',
+                ],
+            ]);
+
+        $rows = $response->json();
+
+        Assert::assertIsArray($rows);
+        Assert::assertNotSame([], $rows, 'The credential listing returned no rows to assert against.');
+
+        foreach ($rows as $row) {
+            Assert::assertIsArray($row);
+
+            // Nullable fields assert as PRESENT keys, not truthy values.
+            foreach (['subject_type', 'subject_ref', 'presentation_cadence_seconds'] as $key) {
+                Assert::assertArrayHasKey($key, $row, sprintf('A credential listing row is missing the %s key.', $key));
+            }
+
+            Assert::assertArrayNotHasKey('token_hash', $row);
+            Assert::assertArrayNotHasKey('secret_hash', $row);
+        }
+
+        Assert::assertStringNotContainsString('token_hash', (string) $response->getContent());
+        Assert::assertStringNotContainsString('secret_hash', (string) $response->getContent());
+    }
+
     public function mintBuiltForCloudAdminToken(string $name = 'contract-admin'): string
     {
         return $this->mintBuiltForCloudToken($name, [Scope::Admin->value]);
@@ -160,6 +214,8 @@ trait ContractAssertions
             'expires_at',
             'revoked_at',
             'abilities',
+            'subject_type',
+            'subject_ref',
             'created_at',
             'updated_at',
         ];

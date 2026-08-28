@@ -21,6 +21,8 @@ use Illuminate\Database\Eloquent\Model;
  * @property CarbonInterface|null $revoked_at
  * @property CarbonInterface|null $rotated_at
  * @property array<int, string>|null $abilities
+ * @property SubjectType|null $subject_type
+ * @property string|null $subject_ref
  * @property string|null $client_identity
  * @property CarbonInterface|null $client_identity_last_seen_at
  * @property CarbonInterface|null $created_at
@@ -52,6 +54,8 @@ final class ApiToken extends Model
         'revoked_at',
         'rotated_at',
         'abilities',
+        'subject_type',
+        'subject_ref',
         'client_identity',
         'client_identity_last_seen_at',
     ];
@@ -68,6 +72,7 @@ final class ApiToken extends Model
             'rotated_at' => 'datetime',
             'request_count' => 'integer',
             'abilities' => 'array',
+            'subject_type' => SubjectType::class,
             'client_identity_last_seen_at' => 'datetime',
         ];
     }
@@ -84,6 +89,42 @@ final class ApiToken extends Model
     public function hasScope(Scope $scope): bool
     {
         return $this->hasAbility($scope->value);
+    }
+
+    /**
+     * The row's declared subject, or null when the row predates subjects
+     * (declare-don't-guess: a legacy row is never retro-classified). A
+     * subject identifies what a revocation costs; it never authenticates
+     * or authorizes anything.
+     */
+    public function subject(): ?Subject
+    {
+        if ($this->subject_type === null || $this->subject_ref === null) {
+            return null;
+        }
+
+        return new Subject($this->subject_type, $this->subject_ref);
+    }
+
+    /**
+     * The instance-reported status (PRD 1.5): `revoked` wins over expiry
+     * because revocation is the deliberate act; the expiry boundary matches
+     * `scopeResolvable` (a row expiring exactly now no longer resolves).
+     * Every `api_tokens` row structurally carries the usage signal, so
+     * {@see ReportedStatus::Unknown} is never produced here — see that
+     * enum for why the case exists anyway.
+     */
+    public function reportedStatus(): ReportedStatus
+    {
+        if ($this->revoked_at !== null) {
+            return ReportedStatus::Revoked;
+        }
+
+        if ($this->expires_at !== null && ! $this->expires_at->isAfter(now())) {
+            return ReportedStatus::Expired;
+        }
+
+        return ReportedStatus::Active;
     }
 
     /**

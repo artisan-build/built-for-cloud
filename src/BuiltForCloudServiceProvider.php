@@ -114,6 +114,11 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                         $router->get('/', [ManageTokens::class, 'index']);
                         $router->get('/client-observations', ClientObservations::class);
                         $router->post('/', [ManageTokens::class, 'store']);
+                        // The precise verb rides its own two-segment path, so
+                        // it can never collide with the one-segment name route
+                        // below — a token literally named "id" still deletes
+                        // by name.
+                        $router->delete('/id/{id}', [ManageTokens::class, 'destroyById']);
                         $router->delete('/{name}', [ManageTokens::class, 'destroy']);
                     });
             }

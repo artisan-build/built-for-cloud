@@ -472,6 +472,51 @@ final class TokenRegistry
         });
     }
 
+    /**
+     * The PRECISE revoke verb (D2 consequence 1, D6): kill exactly one row
+     * by id — a same-named sibling (a rotation grace row, another install's
+     * credential) survives untouched. `revoke()` below stays the CLI-compat
+     * name verb and keeps its existing semantics: it expires EVERY
+     * resolvable row of the name.
+     *
+     * Idempotent: a row already revoked, already expired, or unknown is a
+     * no-op returning false — no second `revoked` audit event is ever
+     * emitted for the same death.
+     */
+    public function revokeById(string $id, ?AuditActor $actor = null, AuditReason $reason = AuditReason::OperatorRequest): bool
+    {
+        return (bool) DB::transaction(function () use ($id, $actor, $reason): bool {
+            $live = ApiToken::query()
+                ->whereKey($id)
+                ->whereNull('revoked_at')
+                ->resolvable()
+                ->lockForUpdate()
+                ->first(['id']);
+
+            if ($live === null) {
+                return false;
+            }
+
+            $now = now();
+
+            ApiToken::query()
+                ->whereKey($id)
+                ->update([
+                    'expires_at' => $now,
+                    'revoked_at' => $now,
+                ]);
+
+            $this->recorder()->record(
+                event: LifecycleEventType::Revoked,
+                credentialId: $id,
+                actor: $actor,
+                reason: $reason,
+            );
+
+            return true;
+        });
+    }
+
     public function revoke(string $name, ?AuditActor $actor = null, AuditReason $reason = AuditReason::OperatorRequest): int
     {
         return DB::transaction(function () use ($name, $actor, $reason): int {
