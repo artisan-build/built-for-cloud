@@ -5,6 +5,7 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
+use ArtisanBuild\BuiltForCloud\Database\Factories\CredentialFactory;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Schema;
@@ -28,7 +29,7 @@ it('stores rows of every credential kind without schema alteration', function ()
         'kind' => CredentialKind::Asymmetric,
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'install-1',
-        'public_key' => 'PUBLIC-KEY-PEM',
+        'public_key' => CredentialFactory::generatePublicKey(),
     ]);
 
     expect($asymmetric->refresh()->kind)->toBe(CredentialKind::Asymmetric);
@@ -52,7 +53,7 @@ it('refuses to persist secret material on an asymmetric credential', function ()
         'kind' => CredentialKind::Asymmetric,
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'install-1',
-        'public_key' => 'PUBLIC-KEY-PEM',
+        'public_key' => CredentialFactory::generatePublicKey(),
         'secret_hash' => hash('sha256', 'a-private-secret'),
     ]))->toThrow(InvalidArgumentException::class);
 
@@ -70,18 +71,48 @@ it('refuses to add secret material to an existing asymmetric credential', functi
     expect($credential->refresh()->secret_hash)->toBeNull();
 });
 
-it('persists an asymmetric credential with a public key and a null secret hash', function (): void {
+it('persists an asymmetric credential with a real public key and a null secret hash', function (): void {
+    $publicKey = CredentialFactory::generatePublicKey();
+
     $credential = Credential::query()->create([
         'kind' => CredentialKind::Asymmetric,
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'install-1',
-        'public_key' => 'PUBLIC-KEY-PEM',
+        'public_key' => $publicKey,
     ]);
 
     $credential->refresh();
 
-    expect($credential->public_key)->toBe('PUBLIC-KEY-PEM')
+    expect($credential->public_key)->toBe($publicKey)
         ->and($credential->secret_hash)->toBeNull();
+});
+
+it('refuses private-key material in public_key on any kind', function (): void {
+    $privatePem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----";
+
+    expect(fn (): Credential => Credential::factory()->create(['public_key' => $privatePem]))
+        ->toThrow(InvalidArgumentException::class);
+
+    expect(fn (): Credential => Credential::factory()->asymmetric($privatePem)->create())
+        ->toThrow(InvalidArgumentException::class);
+
+    // Marker detection is case-insensitive and covers encrypted keys.
+    expect(fn (): Credential => Credential::factory()->create([
+        'public_key' => '-----begin encrypted private key-----',
+    ]))->toThrow(InvalidArgumentException::class);
+
+    expect(Credential::query()->whereNotNull('public_key')->count())->toBe(0);
+});
+
+it('refuses a public_key that does not parse on an asymmetric row', function (): void {
+    expect(fn (): Credential => Credential::factory()->asymmetric('not-a-key')->create())
+        ->toThrow(InvalidArgumentException::class);
+
+    expect(fn (): Credential => Credential::factory()->asymmetric(
+        "-----BEGIN PUBLIC KEY-----\n".base64_encode(random_bytes(32))."\n-----END PUBLIC KEY-----",
+    )->create())->toThrow(InvalidArgumentException::class);
+
+    expect(Credential::query()->count())->toBe(0);
 });
 
 it('has no column for private key material', function (): void {
@@ -148,27 +179,27 @@ it('fails closed on abilities', function (): void {
 });
 
 it('fetches the active public keys for a subject', function (): void {
-    Credential::factory()->asymmetric('KEY-ONE')->create([
+    $active = Credential::factory()->asymmetric()->create([
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'install-1',
     ]);
-    Credential::factory()->asymmetric('KEY-TWO')->create([
+    $activeToo = Credential::factory()->asymmetric()->create([
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'install-1',
     ]);
-    Credential::factory()->asymmetric('KEY-REVOKED')->revoked()->create([
+    Credential::factory()->asymmetric()->revoked()->create([
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'install-1',
     ]);
-    Credential::factory()->asymmetric('KEY-PENDING')->pending()->create([
+    Credential::factory()->asymmetric()->pending()->create([
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'install-1',
     ]);
-    Credential::factory()->asymmetric('KEY-EXPIRED')->expired()->create([
+    Credential::factory()->asymmetric()->expired()->create([
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'install-1',
     ]);
-    Credential::factory()->asymmetric('KEY-OTHER-SUBJECT')->create([
+    Credential::factory()->asymmetric()->create([
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'install-2',
     ]);
@@ -179,7 +210,8 @@ it('fetches the active public keys for a subject', function (): void {
 
     $keys = Credential::activePublicKeysFor(SubjectType::Installation, 'install-1');
 
-    expect($keys)->toEqualCanonicalizing(['KEY-ONE', 'KEY-TWO']);
+    expect($keys)->toEqualCanonicalizing([$active->public_key, $activeToo->public_key])
+        ->and($active->public_key)->not->toBe($activeToo->public_key);
 });
 
 it('hides the secret hash from serialization', function (): void {

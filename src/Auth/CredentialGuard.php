@@ -92,7 +92,15 @@ final class CredentialGuard implements Guard
             return null;
         }
 
-        $sessionUser = $this->sessionUser();
+        try {
+            $sessionUser = $this->sessionUser();
+        } catch (Throwable) {
+            // Session-user resolution FAILED (as opposed to no session guard
+            // being configured). Proceeding would silently skip the
+            // mismatched-principals rejection, so fail closed: the request
+            // does not authenticate.
+            return null;
+        }
 
         if ($credential->user_id !== null
             && $sessionUser !== null
@@ -195,8 +203,12 @@ final class CredentialGuard implements Guard
 
     /**
      * The user the app's session guard would see for this request, used only
-     * to detect mismatched simultaneous principals. Absent, unresolvable or
-     * self-referential session guards mean "no session user".
+     * to detect mismatched simultaneous principals. The STRUCTURAL cases —
+     * no session guard named, a self-referential name, a name with no guard
+     * configured — mean "no session user" and return null. A configured
+     * guard that THROWS during resolution is a different state: the caller
+     * must treat it as a failed lookup and reject, never as an absent
+     * session, so the exception propagates.
      */
     private function sessionUser(): ?Authenticatable
     {
@@ -210,11 +222,7 @@ final class CredentialGuard implements Guard
             return null;
         }
 
-        try {
-            return $this->auth()->guard($guard)->user();
-        } catch (Throwable) {
-            return null;
-        }
+        return $this->auth()->guard($guard)->user();
     }
 
     private function resolveBoundUser(Credential $credential): ?Authenticatable

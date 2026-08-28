@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use Illuminate\Database\Eloquent\Factories\Factory;
+use RuntimeException;
 
 /**
  * @extends Factory<Credential>
@@ -40,11 +41,36 @@ final class CredentialFactory extends Factory
 
     public function asymmetric(?string $publicKey = null): static
     {
-        return $this->state([
+        return $this->state(fn (): array => [
             'kind' => CredentialKind::Asymmetric,
             'secret_hash' => null,
-            'public_key' => $publicKey ?? '-----BEGIN PUBLIC KEY-----'.PHP_EOL.base64_encode(random_bytes(32)).PHP_EOL.'-----END PUBLIC KEY-----',
+            'public_key' => $publicKey ?? self::generatePublicKey(),
         ]);
+    }
+
+    /**
+     * A real, parseable public key — the model rejects anything else on an
+     * asymmetric row. The private half is discarded immediately: the store
+     * never holds one, so neither does the factory.
+     */
+    public static function generatePublicKey(): string
+    {
+        $pair = openssl_pkey_new([
+            'private_key_type' => OPENSSL_KEYTYPE_EC,
+            'curve_name' => 'prime256v1',
+        ]);
+
+        if ($pair === false) {
+            throw new RuntimeException('Could not generate a test keypair.');
+        }
+
+        $details = openssl_pkey_get_details($pair);
+
+        if ($details === false || ! is_string($details['key'] ?? null)) {
+            throw new RuntimeException('Could not extract the test public key.');
+        }
+
+        return $details['key'];
     }
 
     public function pending(): static

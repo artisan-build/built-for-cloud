@@ -34,9 +34,22 @@ Every credential row carries:
   `expires_at` (nullable; the package never applies a default TTL),
   `last_used_at`.
 
+Bearer and basic secrets are **framework-generated high-entropy values**
+hashed sha256 at rest — the package's existing `token_hash` idiom. The
+store is not a password store: human-chosen passwords are out of contract,
+which is why a fast digest (not bcrypt/argon) is the right hash for these
+secrets.
+
 For asymmetric custody, `Credential::activePublicKeysFor($subjectType, $subjectRef)`
 returns every active public key enrolled for a subject — the verification
-side of a keypair the client generated and keeps.
+side of a keypair the client generated and keeps. The model enforces
+"public keys only": private-key material (PEM private / encrypted-private
+markers) is rejected in the `public_key` column on every kind, and an
+asymmetric row's public key must actually parse as one
+(`openssl_pkey_get_public`). **Known limitation:** these checks live on the
+model's `saving` hook — raw query-builder writes bypass them. The model is
+the package's enforcement point; every framework code path persists
+credentials through it, and consuming apps should too.
 
 ## The guard
 
@@ -106,7 +119,10 @@ package works out of the box.
 ## Test ergonomics
 
 The `ArtisanBuild\BuiltForCloud\Testing\WithCredentials` trait mints
-credential rows whose plaintext lives only in test memory:
+credential rows whose plaintext lives only in test memory. The returned
+carrier is sealed: it refuses PHP serialization and JSON encoding (both
+throw) and has no string conversion, so queued payloads, cache writes and
+object loggers cannot carry the secret out of the test:
 
 ```php
 $minted = $this->mintCredential(['abilities' => ['credential:read']]);

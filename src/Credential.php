@@ -107,12 +107,38 @@ final class Credential extends Model implements Authenticatable
         ];
     }
 
+    /**
+     * The model is the package's enforcement point for "public keys only":
+     * raw query-builder writes bypass these checks, so every framework code
+     * path persists credentials through the model.
+     */
     protected static function booted(): void
     {
         self::saving(function (Credential $credential): void {
             if ($credential->kind === CredentialKind::Asymmetric && $credential->secret_hash !== null) {
                 throw new InvalidArgumentException(
                     'An asymmetric credential carries a public key only and never stores secret material.',
+                );
+            }
+
+            $publicKey = $credential->public_key;
+
+            if ($publicKey === null) {
+                return;
+            }
+
+            // On ANY kind: the public_key column never stores private-key
+            // material (PEM private / encrypted-private markers).
+            if (preg_match('/-----BEGIN[A-Z0-9 ]*PRIVATE KEY-----/i', $publicKey) === 1) {
+                throw new InvalidArgumentException(
+                    'The public_key column never stores private-key material.',
+                );
+            }
+
+            // An asymmetric row's public key must actually BE one.
+            if ($credential->kind === CredentialKind::Asymmetric && openssl_pkey_get_public($publicKey) === false) {
+                throw new InvalidArgumentException(
+                    'An asymmetric credential requires a parseable public key.',
                 );
             }
         });

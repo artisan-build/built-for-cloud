@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Log\Events\MessageLogged;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 
@@ -199,6 +200,64 @@ it('supports actingAsCredential for route tests', function (): void {
 
     $this->actingAsCredential($minted)
         ->getJson('/bfc-guarded')
+        ->assertOk()
+        ->assertJsonPath('principal', $minted->credential->id);
+});
+
+it('refuses to serialize a minted test credential', function (): void {
+    $minted = $this->mintCredential();
+
+    expect(fn (): string => serialize($minted))->toThrow(LogicException::class);
+
+    try {
+        serialize($minted);
+    } catch (Throwable $e) {
+        expect($e->getMessage())->not->toContain($minted->plaintext);
+    }
+});
+
+it('refuses to json-encode a minted test credential', function (): void {
+    $minted = $this->mintCredential();
+
+    expect(fn (): string|false => json_encode($minted))->toThrow(LogicException::class);
+
+    try {
+        json_encode($minted);
+    } catch (Throwable $e) {
+        expect($e->getMessage())->not->toContain($minted->plaintext);
+    }
+
+    // The headers a test actually needs keep working.
+    expect($minted->bearerHeader())->toBe('Bearer '.$minted->plaintext)
+        ->and($minted->basicHeader('u'))->toBe('Basic '.base64_encode('u:'.$minted->plaintext));
+});
+
+it('fails closed when session-user resolution throws', function (): void {
+    Auth::provider('throwing', function (): never {
+        throw new RuntimeException('session provider exploded');
+    });
+
+    config([
+        'auth.providers.throwing_users' => ['driver' => 'throwing'],
+        'auth.guards.broken_session' => ['driver' => 'session', 'provider' => 'throwing_users'],
+        'built-for-cloud.credentials.session_guard' => 'broken_session',
+    ]);
+
+    $minted = $this->mintCredential();
+
+    $this->getJson('/bfc-guarded', ['Authorization' => $minted->bearerHeader()])
+        ->assertUnauthorized();
+
+    expect($minted->credential->refresh()->last_used_at)->toBeNull();
+});
+
+it('still authenticates when no session guard is configured at all', function (): void {
+    // The STRUCTURAL absence cases stay "no session user", not a failure.
+    config(['built-for-cloud.credentials.session_guard' => 'no-such-guard']);
+
+    $minted = $this->mintCredential();
+
+    $this->getJson('/bfc-guarded', ['Authorization' => $minted->bearerHeader()])
         ->assertOk()
         ->assertJsonPath('principal', $minted->credential->id);
 });
