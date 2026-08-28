@@ -135,8 +135,23 @@ final class Credential extends Model implements Authenticatable
                 );
             }
 
-            // An asymmetric row's public key must actually BE one.
-            if ($credential->kind === CredentialKind::Asymmetric && openssl_pkey_get_public($publicKey) === false) {
+            if ($credential->kind !== CredentialKind::Asymmetric) {
+                return;
+            }
+
+            // Inline PEM only. openssl_pkey_get_public() also accepts
+            // file:// URLs and bare filesystem paths, which would let a row
+            // persist a mutable locator instead of key material.
+            $trimmed = trim($publicKey);
+
+            if (! str_starts_with($trimmed, '-----BEGIN') || ! str_contains($trimmed, 'PUBLIC KEY-----')) {
+                throw new InvalidArgumentException(
+                    'An asymmetric credential requires inline PEM public-key material, never a file reference.',
+                );
+            }
+
+            // And it must actually BE a public key.
+            if (openssl_pkey_get_public($publicKey) === false) {
                 throw new InvalidArgumentException(
                     'An asymmetric credential requires a parseable public key.',
                 );

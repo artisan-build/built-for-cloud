@@ -104,6 +104,32 @@ it('refuses private-key material in public_key on any kind', function (): void {
     expect(Credential::query()->whereNotNull('public_key')->count())->toBe(0);
 });
 
+it('refuses a file:// url as an asymmetric public_key', function (): void {
+    // openssl_pkey_get_public() would happily resolve this locator to a key;
+    // the store must hold key MATERIAL, never a mutable filesystem reference.
+    expect(fn (): Credential => Credential::factory()->asymmetric('file:///etc/ssl/cert.pem')->create())
+        ->toThrow(InvalidArgumentException::class);
+
+    expect(Credential::query()->count())->toBe(0);
+});
+
+it('refuses a bare filesystem path to a real pem as an asymmetric public_key', function (): void {
+    $path = sys_get_temp_dir().'/bfc-test-public-'.bin2hex(random_bytes(8)).'.pem';
+    file_put_contents($path, CredentialFactory::generatePublicKey());
+
+    try {
+        expect(fn (): Credential => Credential::factory()->asymmetric($path)->create())
+            ->toThrow(InvalidArgumentException::class);
+
+        expect(fn (): Credential => Credential::factory()->asymmetric('file://'.$path)->create())
+            ->toThrow(InvalidArgumentException::class);
+
+        expect(Credential::query()->count())->toBe(0);
+    } finally {
+        @unlink($path);
+    }
+});
+
 it('refuses a public_key that does not parse on an asymmetric row', function (): void {
     expect(fn (): Credential => Credential::factory()->asymmetric('not-a-key')->create())
         ->toThrow(InvalidArgumentException::class);
