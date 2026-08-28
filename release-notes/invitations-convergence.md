@@ -44,9 +44,11 @@ key.
 
 Bind `ArtisanBuild\BuiltForCloud\Contracts\ComposesInvitedUserAttributes` in the container to
 compose the created user's attributes (capstan projects the stored `role`; crate projects
-key-management-only). **An app that binds nothing sees today's behaviour exactly.** The hook
-cannot escalate: `is_admin` is stripped from its return, and an addressed invitation's email
-still overrides.
+key-management-only). **An app that binds nothing sees today's behaviour exactly.** The hook is
+TRUSTED APPLICATION CODE — binding one is a privileged act. The package strips `is_admin` from
+its return and keeps an addressed invitation's email authoritative, but these are guard-rails
+against accidental pass-through of registrant input, **not a privilege boundary against the
+hook itself** (a hook can reach the same user model directly).
 
 ## Table generalized in place (no rename)
 
@@ -54,9 +56,13 @@ Additive migration: `used_by` (nullable string 64), `role` (nullable string, sto
 interpreted), `email` nullable, `invited_by` widened uuid → nullable string(64) (the decided D4
 shape: bigint and uuid inviter ids alike stringify; no FK — the package cannot know the host's
 user key type). One upgrade path for fresh and existing databases; an app-owned table (flag off
-or no `token` column) is never touched. The create migration's `down()` gains the `hasTable`
-guard (FLT-F) alongside the config guard, so a rollback on an environment where the package
-created nothing drops nothing.
+or no `token` column) is never touched.
+
+**Rollback never drops the invitations table (FLT-F).** The create migration records as run
+whether it created the table, was flag-skipped, or found the app's own table already there — so
+at rollback time flag-on + table-present cannot prove whose table it is, and the package
+refuses to guess: `down()` is a deliberate no-op. An operator who truly wants the package's
+table gone drops it manually (`DROP TABLE invitations`).
 
 ## The machine-callable invite verb + version gate (SEC-V3-05)
 
@@ -66,18 +72,46 @@ credential-admin gate (verb matrix `issue` consulted). Optional integration-even
 drive the ordering gate: the latest accepted version per (namespace, external subject) is stored
 in `integration_entitlements`, events not newer are transactionally acknowledged-and-ignored,
 and every decided event id is recorded in `integration_events` so replays answer idempotently
-(no second invitation; replay-after-accept resurrects nothing). Both tables are event-kind
+(no second invitation; replay-after-accept resurrects nothing). `entitlement_version` is bounded
+to **[1, 2^53]** — oversize values (including digit strings that would saturate integer
+parsing) are rejected, never accepted, so a poisoned maximum can never freeze a subject.
+Concurrent deliveries racing the gate's FIRST row for a (namespace, subject) — or the same
+event id — are re-decided in a fresh transaction against the winner's committed row and receive
+the documented acknowledgement, never a unique-violation 500. Both tables are event-kind
 generic — the offboarding verb (1.15) plugs into the same gate.
 
-**Non-enumeration:** the verb answers **201 with the same three keys whatever the prior state**
-(`invitation_id`, `invitation_code`, `email`); the gate's ignore/replay answer is the same shape
-with nulls. There is no invited/active/not-found distinction to probe.
+**Supersession** (mirroring the onboarding primitive): an APPLYING integration event consumes
+every prior pending (unaccepted, unexpired) invitation of its (namespace, subject); issuing an
+ADDRESSED invitation consumes every prior pending invitation of the same email. Superseded
+codes refuse acceptance as `code_already_claimed` (`used_by` null distinguishes supersession
+from a real acceptance). Open, non-integration codes supersede nothing. The package
+`Invitation::invite()` model helper (sink's path) is unchanged — supersession is the verb's
+semantic.
 
-**Notifications:** the `issued` event carries the addressed recipient; apps opt into recipient
-notices by adding `'issued' => ['holder']` to `built-for-cloud.notifications.policy`
-(unaddressed invitations notify nobody either way). The notification carries ids only — the
-code's ONE egress is the verb's response/TTY reveal, and the caller owns delivering the accept
-link.
+**Non-enumeration and the two response shapes:** the HUMAN path always issues and answers
+`201` with the single reveal, shape-identical whatever the prior state. The INTEGRATION path
+answers one uniform **`202 {"accepted": true}`** with NO invitation data — applied, ignored,
+and replayed events are indistinguishable in the body, so even an authorized caller cannot
+probe gate state. Response timing stays a best-effort side channel (an applying event does
+more work); documented, with a debt row to revisit.
+
+**Delivery:** on the integration path the INSTANCE delivers (D1e): an addressed applying event
+mails the invitee the invitation code (`InvitationDeliveryNotification`, deliberately unqueued,
+sent after commit) — that mail is the code's one egress on that path. An unaddressed
+integration event is acknowledged and its invitation has no delivery channel; deliver by
+issuing an addressed invitation from the admin/human surfaces, which supersedes it. The
+lifecycle `issued` notice stays ids-only and policy-gated (`'issued' => ['holder']`);
+unaddressed invitations notify nobody either way. On the human path the code's ONE egress
+remains the verb's response/TTY reveal, and the caller owns delivering the accept link.
+
+**Authority note:** the version gate trusts any caller the credential-admin gate admits — any
+admin token or `credential:admin` operator can advance any namespace. Namespace-scoped
+operator abilities arrive with the MCP/ability-vocabulary work; until then, per-integration
+credentials give audit attribution, not authority isolation.
+
+**Input bounds at the shared boundary:** `invited_by` max 64 characters;
+`role`/`integration_namespace`/`event_id`/`external_subject` max 255 — the same `422` on both
+transports.
 
 `ContractAssertions` gains `assertBuiltForCloudInvitationTransportParity()`, wired into
 `assertBuiltForCloudTransportParityContract()`.

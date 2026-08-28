@@ -26,19 +26,18 @@ return new class extends Migration
     }
 
     /**
-     * Guarded like up() (FLT-F): on an environment where the flag is off,
-     * the package created nothing — this migration records as run having
-     * skipped — and a `migrate:rollback` must not drop the APP's own
-     * invitations table. The hasTable guard rides along per PRD 1.13; the
-     * flag (Phase 0.5) is the data guard for a table the app created
-     * before the flag was set.
+     * A deliberate NO-OP (FLT-F, PRD 1.13): the package refuses to drop a
+     * table it cannot prove it created. up() records this migration as
+     * run whether it created the table, was skipped by the flag, or was
+     * skipped because the APP's own table pre-existed — so at rollback
+     * time, flag-on + table-present does NOT distinguish the package's
+     * table from the app's, and no flag or hasTable check can. Dropping
+     * wrongly is unrecoverable data loss; not dropping costs an operator
+     * one manual `DROP TABLE invitations` when they truly want the
+     * package's table gone (release-notes/invitations-convergence.md).
      */
     public function down(): void
     {
-        if (config('built-for-cloud.auth_foundation.invitations') === false || ! Schema::hasTable('invitations')) {
-            return;
-        }
-
-        Schema::dropIfExists('invitations');
+        // Intentionally empty: rollback never drops the invitations table.
     }
 };

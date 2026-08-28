@@ -39,6 +39,17 @@ final readonly class InvitationOptions
     ) {}
 
     /**
+     * The free-text fields' package-enforced maxima, matching the columns
+     * they land in: `invited_by` is the decided string(64); everything
+     * else is an ordinary string(255). Enforced HERE, at the shared
+     * boundary, so both transports reject the same oversize input with
+     * the same message before anything reaches storage.
+     */
+    public const int MAX_INVITED_BY_LENGTH = 64;
+
+    public const int MAX_FIELD_LENGTH = 255;
+
+    /**
      * @param  array<string, mixed>  $input
      */
     public static function fromInput(array $input): self
@@ -46,12 +57,12 @@ final readonly class InvitationOptions
         return new self(
             email: self::emailFrom($input['email'] ?? null),
             ttlSeconds: self::wholeNumberFrom($input['ttl_seconds'] ?? null, InvalidCredentialInput::nonIntegerInvitationTtl()),
-            invitedBy: self::optionalString($input['invited_by'] ?? null),
-            role: self::optionalString($input['role'] ?? null),
-            integrationNamespace: self::optionalString($input['integration_namespace'] ?? null),
-            eventId: self::optionalString($input['event_id'] ?? null),
+            invitedBy: self::boundedString($input['invited_by'] ?? null, 'invited_by', self::MAX_INVITED_BY_LENGTH),
+            role: self::boundedString($input['role'] ?? null, 'role', self::MAX_FIELD_LENGTH),
+            integrationNamespace: self::boundedString($input['integration_namespace'] ?? null, 'integration_namespace', self::MAX_FIELD_LENGTH),
+            eventId: self::boundedString($input['event_id'] ?? null, 'event_id', self::MAX_FIELD_LENGTH),
             entitlementVersion: self::wholeNumberFrom($input['entitlement_version'] ?? null, InvalidCredentialInput::nonIntegerEntitlementVersion()),
-            externalSubject: self::optionalString($input['external_subject'] ?? null),
+            externalSubject: self::boundedString($input['external_subject'] ?? null, 'external_subject', self::MAX_FIELD_LENGTH),
         );
     }
 
@@ -75,9 +86,17 @@ final readonly class InvitationOptions
             && $this->externalSubject !== null;
     }
 
-    private static function optionalString(mixed $value): ?string
+    private static function boundedString(mixed $value, string $field, int $max): ?string
     {
-        return is_string($value) && $value !== '' ? $value : null;
+        if (! is_string($value) || $value === '') {
+            return null;
+        }
+
+        if (strlen($value) > $max) {
+            throw InvalidCredentialInput::invitationFieldTooLong($field, $max);
+        }
+
+        return $value;
     }
 
     private static function emailFrom(mixed $email): ?string

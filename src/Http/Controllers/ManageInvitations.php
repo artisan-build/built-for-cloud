@@ -18,27 +18,40 @@ use Illuminate\Http\Request;
  * credential-admin gate. This controller only translates HTTP in and out;
  * every authority and gate answer lives inside the action.
  *
- * The response is ONE non-enumerating shape whatever the prior state:
- * always 201, always the same three keys, with nulls when the version
- * gate acknowledged-and-ignored the event or replayed a known event id —
- * never an invited/active/not-found distinction to probe.
+ * Two documented responses, each keyed on the REQUEST, never on state:
+ *
+ * - the HUMAN path (no integration event) always issues and always
+ *   answers `201` with the single reveal — shape-identical for a fresh
+ *   subject, a re-invite, and a subject who already accepted;
+ * - the INTEGRATION path always answers the uniform `202 {"accepted":
+ *   true}` acknowledgement, whatever the gate decided
+ *   (applied/ignored/replayed) — no invitation data, so even an
+ *   authorized caller cannot probe gate state from the body. Delivery to
+ *   an addressed invitee is the post-commit mail; response TIMING remains
+ *   a best-effort side channel (an applying event does more work) and is
+ *   documented as such.
  */
 final class ManageInvitations
 {
     public function store(Request $request, IssueInvitation $issue): JsonResponse
     {
         try {
-            $result = $issue(
-                InvitationOptions::fromInput($request->only([
-                    'email', 'ttl_seconds', 'invited_by', 'role',
-                    'integration_namespace', 'event_id', 'entitlement_version', 'external_subject',
-                ])),
-                $this->actor($request),
-            );
+            $options = InvitationOptions::fromInput($request->only([
+                'email', 'ttl_seconds', 'invited_by', 'role',
+                'integration_namespace', 'event_id', 'entitlement_version', 'external_subject',
+            ]));
+
+            $result = $issue($options, $this->actor($request));
         } catch (InvalidCredentialInput $invalid) {
             return response()->json(['message' => $invalid->getMessage()], 422);
         } catch (CredentialVerbRefused $refused) {
             return response()->json(['message' => $refused->getMessage()], 403);
+        }
+
+        // A partial group already threw, so a complete group here IS the
+        // integration path: one uniform acknowledgement, nothing revealed.
+        if ($options->integrationEventComplete()) {
+            return response()->json(['accepted' => true], 202);
         }
 
         return response()->json([

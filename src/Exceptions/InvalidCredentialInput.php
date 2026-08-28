@@ -61,7 +61,15 @@ final class InvalidCredentialInput extends InvalidArgumentException
 
     public static function entitlementVersionOutOfBounds(): self
     {
-        return new self('The entitlement version must be zero or greater.');
+        return new self(
+            'The entitlement version must be a whole number between 1 and 9007199254740992 (2^53). '
+            .'Larger values are rejected, never truncated or saturated.',
+        );
+    }
+
+    public static function invitationFieldTooLong(string $field, int $max): self
+    {
+        return new self(sprintf('The %s value is at most %d characters.', $field, $max));
     }
 
     public static function partialIntegrationEvent(): self

@@ -20,6 +20,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use RuntimeException;
 
 uses(RefreshDatabase::class, DetectsSecretLeaks::class);
 
@@ -255,6 +256,38 @@ it('survives rollback when the invitations table is already gone', function (): 
     expect(Schema::hasTable('invitations'))->toBeFalse();
 });
 
+it('does not drop an app-owned invitations table on rollback even with the flag ON', function (): void {
+    // The un-provable-ownership case (FLT-F): the flag is on, but up()
+    // skipped because the APP's table pre-existed — flag-on +
+    // table-present cannot prove whose table it is, so down() must not
+    // drop it.
+    Schema::dropIfExists('invitations');
+    Schema::create('invitations', function (Blueprint $table): void {
+        $table->id();
+        $table->string('code')->unique();
+    });
+
+    $createMigration = require __DIR__.'/../database/migrations/2026_06_22_000010_create_invitations_table.php';
+    $createMigration->up();
+    $createMigration->down();
+
+    expect(Schema::hasTable('invitations'))->toBeTrue()
+        ->and(Schema::hasColumn('invitations', 'code'))->toBeTrue();
+});
+
+it('never drops even the table the package itself created — rollback is a documented no-op', function (): void {
+    // The chosen Fix-4 semantics: because rollback cannot distinguish the
+    // package's table from an app's, it drops NOTHING, ever; an operator
+    // drops manually when they truly mean it (release note).
+    expect(Schema::hasColumn('invitations', 'token'))->toBeTrue();
+
+    $createMigration = require __DIR__.'/../database/migrations/2026_06_22_000010_create_invitations_table.php';
+    $createMigration->down();
+
+    expect(Schema::hasTable('invitations'))->toBeTrue()
+        ->and(Schema::hasColumn('invitations', 'token'))->toBeTrue();
+});
+
 it('never generalizes an app-shaped invitations table', function (): void {
     // The additive migration is guarded on the PACKAGE's shape: an
     // invitations table without the hashed token column belongs to the
@@ -288,6 +321,47 @@ it('records the exchanged audit event with its outbox row when an invitation is 
     expect($exchanged->recipient)->toBe('audited@user.test')
         ->and($exchanged->actor_ref)->toBe($invitation->getKey())
         ->and(CredentialOutboxEntry::query()->where('audit_event_id', $exchanged->id)->exists())->toBeTrue();
+});
+
+// Judge fold (AC 8): the exchanged audit row, its outbox row, the burn
+// and the created user are ONE transaction — a failure after the
+// recorder call rolls everything back together (the PR4 sabotage
+// pattern). A recorder call moved outside the transaction would leave
+// the mutation standing while the audit write failed; this catches it.
+
+it('rolls the user, burn, audit row and outbox row back together when the accept transaction dies late', function (): void {
+    $invitation = Invitation::invite('doomed-accept@user.test', 3600);
+    $code = $invitation->token;
+
+    $armed = true;
+
+    DB::listen(function (QueryExecuted $query) use (&$armed): void {
+        if ($armed
+            && preg_match('/^\s*insert\b/i', $query->sql) === 1
+            && str_contains($query->sql, 'credential_outbox')) {
+            $armed = false;
+
+            throw new RuntimeException('simulated process death after the outbox write');
+        }
+    });
+
+    expect(fn (): mixed => Invitation::accept($code, ['name' => 'Doomed', 'password' => 'pw']))
+        ->toThrow(RuntimeException::class);
+
+    $invitation->refresh();
+
+    // EVERYTHING rolled back: the burn, the user, the audit row and the
+    // outbox row — and a retry then succeeds normally.
+    expect($invitation->accepted_at)->toBeNull()
+        ->and($invitation->used_by)->toBeNull()
+        ->and(User::query()->count())->toBe(0)
+        ->and(CredentialAuditEvent::query()->count())->toBe(0)
+        ->and(CredentialOutboxEntry::query()->count())->toBe(0);
+
+    $user = Invitation::accept($code, ['name' => 'Retry', 'password' => 'pw']);
+
+    expect($user)->toBeInstanceOf(User::class)
+        ->and(CredentialAuditEvent::query()->where('event', LifecycleEventType::Exchanged->value)->count())->toBe(1);
 });
 
 // PR8 locked AC 9 (model side): the code egresses only through the

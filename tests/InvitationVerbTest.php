@@ -4,27 +4,36 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
+use ArtisanBuild\BuiltForCloud\Actions\IssueInvitation;
 use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\ClaimError;
 use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesCredentialVerbs;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
+use ArtisanBuild\BuiltForCloud\Exceptions\InvalidInvitation;
 use ArtisanBuild\BuiltForCloud\IntegrationEntitlement;
 use ArtisanBuild\BuiltForCloud\IntegrationEvent;
 use ArtisanBuild\BuiltForCloud\Invitation;
+use ArtisanBuild\BuiltForCloud\InvitationOptions;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Notifications\CredentialLifecycleNotification;
+use ArtisanBuild\BuiltForCloud\Notifications\InvitationDeliveryNotification;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use Illuminate\Console\Command;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Notifications\AnonymousNotifiable;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
+use RuntimeException;
 use Symfony\Component\HttpFoundation\Response;
 
 uses(RefreshDatabase::class, DetectsSecretLeaks::class);
@@ -51,9 +60,29 @@ function inviteIntegrationEvent(string $eventId, int $version, array $eventOptio
         'ttl_seconds' => 3600,
         'integration_namespace' => $eventOptions['namespace'] ?? 'github-sponsors',
         'event_id' => $eventId,
-        'entitlement_version' => $version,
+        'entitlement_version' => $eventOptions['version_override'] ?? $version,
         'external_subject' => $eventOptions['subject'] ?? 'sponsor-login',
     ]);
+}
+
+/**
+ * The invitee's code, captured from the faked delivery notification — on
+ * the integration path the response deliberately carries nothing.
+ */
+function capturedDeliveryCode(): string
+{
+    $code = null;
+
+    Notification::assertSentOnDemand(
+        InvitationDeliveryNotification::class,
+        function (InvitationDeliveryNotification $notification) use (&$code): bool {
+            $code = $notification->invitationCode;
+
+            return true;
+        },
+    );
+
+    return (string) $code;
 }
 
 // PR8 locked AC 1 (verb path): ttl required and bounded, identically on
@@ -182,77 +211,217 @@ it('refuses the verb identically on both transports when the matrix denies issue
         ->and(Invitation::query()->count())->toBe(0);
 });
 
-// PR8 locked AC 6: every pairwise ordering through the version gate.
+// PR8 locked AC 6: every pairwise ordering through the version gate. The
+// integration path answers one uniform 202 acknowledgement, so every
+// outcome is asserted through the database, and the invitee's code is
+// captured from the delivery notification.
 
 it('applies in-order versions and transactionally ignores an older one', function (): void {
-    $first = inviteIntegrationEvent('evt-1', 1);
-    $second = inviteIntegrationEvent('evt-2', 2);
+    Notification::fake();
 
-    expect($first->json('invitation_id'))->not->toBeNull()
-        ->and($second->json('invitation_id'))->not->toBeNull()
-        ->and(Invitation::query()->count())->toBe(2);
+    inviteIntegrationEvent('evt-1', 1)->assertStatus(202);
+    inviteIntegrationEvent('evt-2', 2)->assertStatus(202);
+
+    expect(Invitation::query()->count())->toBe(2)
+        ->and(IntegrationEvent::query()->where('applied', true)->count())->toBe(2);
 
     // The delayed older event: acknowledged, ignored, nothing issued.
-    $late = inviteIntegrationEvent('evt-0', 1);
+    inviteIntegrationEvent('evt-0', 1)->assertStatus(202);
 
-    $late->assertCreated();
-
-    expect($late->json('invitation_id'))->toBeNull()
-        ->and($late->json('invitation_code'))->toBeNull()
-        ->and(Invitation::query()->count())->toBe(2)
+    expect(Invitation::query()->count())->toBe(2)
         ->and(IntegrationEntitlement::query()->sole()->entitlement_version)->toBe(2)
         ->and(IntegrationEvent::query()->where('event_id', 'evt-0')->sole()->applied)->toBeFalse();
 });
 
-it('ignores an out-of-order older version arriving first-reversed', function (): void {
-    $newer = inviteIntegrationEvent('evt-new', 5);
-    $older = inviteIntegrationEvent('evt-old', 3);
+it('supersedes the prior pending code when a newer event applies — a stolen older code dies', function (): void {
+    Notification::fake();
 
-    expect($newer->json('invitation_id'))->not->toBeNull()
-        ->and($older->json('invitation_id'))->toBeNull()
-        ->and(Invitation::query()->count())->toBe(1)
+    inviteIntegrationEvent('evt-v1', 1)->assertStatus(202);
+
+    $stolenCode = capturedDeliveryCode();
+
+    inviteIntegrationEvent('evt-v2', 2)->assertStatus(202);
+
+    // The v1 code was superseded by the applying v2 event: it refuses
+    // with the already-claimed class, and its used_by stays null —
+    // supersession, not an acceptance.
+    try {
+        Invitation::accept($stolenCode, ['name' => 'Thief', 'password' => 'pw']);
+        $this->fail('The superseded v1 code was accepted.');
+    } catch (InvalidInvitation $refusal) {
+        expect($refusal->error)->toBe(ClaimError::CodeAlreadyClaimed);
+    }
+
+    /** @var Invitation $superseded */
+    $superseded = Invitation::query()->where('token', hash('sha256', $stolenCode))->sole();
+
+    expect($superseded->used_by)->toBeNull()
+        ->and(Invitation::query()->whereNull('accepted_at')->count())->toBe(1);
+});
+
+it('ignores an out-of-order older version arriving first-reversed', function (): void {
+    Notification::fake();
+
+    inviteIntegrationEvent('evt-new', 5)->assertStatus(202);
+    inviteIntegrationEvent('evt-old', 3)->assertStatus(202);
+
+    expect(Invitation::query()->count())->toBe(1)
+        ->and(IntegrationEvent::query()->where('event_id', 'evt-old')->sole()->applied)->toBeFalse()
         ->and(IntegrationEntitlement::query()->sole()->entitlement_version)->toBe(5);
 });
 
 it('ignores an equal version under a fresh event id — not newer is not applied', function (): void {
-    inviteIntegrationEvent('evt-a', 4)->assertCreated();
+    Notification::fake();
 
-    $equal = inviteIntegrationEvent('evt-b', 4);
+    inviteIntegrationEvent('evt-a', 4)->assertStatus(202);
+    inviteIntegrationEvent('evt-b', 4)->assertStatus(202);
 
-    expect($equal->json('invitation_id'))->toBeNull()
-        ->and(Invitation::query()->count())->toBe(1);
+    expect(Invitation::query()->count())->toBe(1)
+        ->and(IntegrationEvent::query()->where('event_id', 'evt-b')->sole()->applied)->toBeFalse();
 });
 
-it('replays a duplicate event id idempotently — same shape, no second invitation', function (): void {
+it('replays a duplicate event id idempotently — byte-identical response, no second invitation', function (): void {
+    Notification::fake();
+
     $original = inviteIntegrationEvent('evt-dup', 1);
-
-    expect($original->json('invitation_id'))->not->toBeNull();
-
     $replay = inviteIntegrationEvent('evt-dup', 1);
 
-    $replay->assertCreated();
+    $original->assertStatus(202);
+    $replay->assertStatus(202);
 
-    expect(array_keys((array) $replay->json()))->toBe(array_keys((array) $original->json()))
-        ->and($replay->json('invitation_id'))->toBeNull()
-        ->and($replay->json('invitation_code'))->toBeNull()
+    expect((string) $replay->getContent())->toBe((string) $original->getContent())
         ->and(Invitation::query()->count())->toBe(1)
         ->and(IntegrationEvent::query()->where('event_id', 'evt-dup')->count())->toBe(1);
 });
 
 it('does not resurrect an accepted invitation when its event replays', function (): void {
-    $applied = inviteIntegrationEvent('evt-accept', 1);
+    Notification::fake();
 
-    $code = (string) $applied->json('invitation_code');
+    inviteIntegrationEvent('evt-accept', 1)->assertStatus(202);
 
-    Invitation::accept($code, ['name' => 'Sponsor', 'password' => 'pw']);
+    Invitation::accept(capturedDeliveryCode(), ['name' => 'Sponsor', 'password' => 'pw']);
 
-    $replay = inviteIntegrationEvent('evt-accept', 1);
+    inviteIntegrationEvent('evt-accept', 1)->assertStatus(202);
 
-    $replay->assertCreated();
+    expect(Invitation::query()->count())->toBe(1)
+        ->and(Invitation::query()->sole()->accepted_at)->not->toBeNull()
+        ->and(Invitation::query()->sole()->used_by)->not->toBeNull();
+});
 
-    expect($replay->json('invitation_id'))->toBeNull()
-        ->and(Invitation::query()->count())->toBe(1)
-        ->and(Invitation::query()->sole()->accepted_at)->not->toBeNull();
+// PR8 rework Fix 1: the gate is race-safe on first contact — a concurrent
+// winner's committed row turns the loser's unique violation into the
+// ordinary re-decided acknowledgement, never a naked 500. The competitor
+// is injected between the check and the create via DB::listen; its write
+// shares this test's single connection, so the first attempt's rollback
+// takes it too and the retry decides against a clean slate — the rescue
+// path itself is what these tests force to execute (without the catch,
+// the request 500s).
+
+it('rescues a racing first entitlement create into the documented acknowledgement', function (): void {
+    Notification::fake();
+
+    $competitorFired = false;
+
+    DB::listen(function (QueryExecuted $query) use (&$competitorFired): void {
+        if (! $competitorFired
+            && preg_match('/^\s*select\b/i', $query->sql) === 1
+            && str_contains($query->sql, 'integration_entitlements')) {
+            $competitorFired = true;
+
+            DB::table('integration_entitlements')->insert([
+                'id' => (string) Str::uuid(),
+                'integration_namespace' => 'github-sponsors',
+                'external_subject' => 'sponsor-login',
+                'entitlement_version' => 5,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+    });
+
+    inviteIntegrationEvent('evt-race-first', 3)->assertStatus(202);
+
+    expect($competitorFired)->toBeTrue()
+        ->and(IntegrationEntitlement::query()->count())->toBe(1)
+        ->and(IntegrationEvent::query()->where('event_id', 'evt-race-first')->count())->toBe(1)
+        ->and(Invitation::query()->count())->toBeLessThanOrEqual(1);
+});
+
+it('rescues a racing duplicate event id into the documented acknowledgement', function (): void {
+    Notification::fake();
+
+    // The subject already has an entitlement so the collision lands on
+    // the EVENT table's unique (namespace, event_id) index.
+    IntegrationEntitlement::query()->create([
+        'integration_namespace' => 'github-sponsors',
+        'external_subject' => 'sponsor-login',
+        'entitlement_version' => 1,
+    ]);
+
+    $competitorFired = false;
+
+    DB::listen(function (QueryExecuted $query) use (&$competitorFired): void {
+        if (! $competitorFired
+            && preg_match('/^\s*select\b/i', $query->sql) === 1
+            && str_contains($query->sql, 'integration_events')) {
+            $competitorFired = true;
+
+            DB::table('integration_events')->insert([
+                'id' => (string) Str::uuid(),
+                'integration_namespace' => 'github-sponsors',
+                'event_id' => 'evt-race-dup',
+                'external_subject' => 'sponsor-login',
+                'event_kind' => 'invite',
+                'entitlement_version' => 2,
+                'applied' => true,
+                'invitation_id' => null,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+    });
+
+    inviteIntegrationEvent('evt-race-dup', 2)->assertStatus(202);
+
+    expect($competitorFired)->toBeTrue()
+        ->and(IntegrationEvent::query()->where('event_id', 'evt-race-dup')->count())->toBe(1)
+        ->and(Invitation::query()->count())->toBeLessThanOrEqual(1);
+});
+
+// PR8 rework Fix 2: entitlement versions are bounded to [1, 2^53] — an
+// oversize digit string that would saturate integer parsing is rejected,
+// never accepted, so a poisoned maximum can never freeze a subject.
+
+it('rejects an oversize entitlement version identically on both transports', function (): void {
+    $http = inviteIntegrationEvent('evt-huge', 1, ['version_override' => '99999999999999999999']);
+
+    $http->assertStatus(422);
+
+    $cliExit = Artisan::call('bfc:invitation:issue', [
+        '--email' => 'sponsor@example.test',
+        '--ttl' => '3600',
+        '--integration-namespace' => 'github-sponsors',
+        '--event-id' => 'evt-huge',
+        '--entitlement-version' => '99999999999999999999',
+        '--external-subject' => 'sponsor-login',
+        '--local' => true,
+    ]);
+
+    expect($cliExit)->toBe(Command::FAILURE)
+        ->and(trim(Artisan::output()))->toBe((string) $http->json('message'))
+        ->and(IntegrationEntitlement::query()->count())->toBe(0)
+        ->and(Invitation::query()->count())->toBe(0);
+});
+
+it('accepts the 2^53 boundary and rejects everything past or below the range', function (): void {
+    Notification::fake();
+
+    inviteIntegrationEvent('evt-max', 9007199254740992)->assertStatus(202);
+
+    expect(IntegrationEntitlement::query()->sole()->entitlement_version)->toBe(9007199254740992);
+
+    inviteIntegrationEvent('evt-past-max', 9007199254740993)->assertStatus(422);
+    inviteIntegrationEvent('evt-zero', 0)->assertStatus(422);
 });
 
 it('rejects a partial integration-event group identically on both transports', function (): void {
@@ -287,6 +456,43 @@ it('rejects a negative entitlement version and a malformed email as shared input
     expect(Invitation::query()->count())->toBe(0);
 });
 
+// Fold: length validation at the shared boundary — each free-text field
+// is bounded to its column, with the same 422 on both transports.
+
+it('rejects oversize free-text fields at the shared boundary', function (): void {
+    $base = ['email' => 'long@example.test', 'ttl_seconds' => 3600];
+
+    $oversize = [
+        'invited_by' => str_repeat('a', 65),
+        'role' => str_repeat('r', 256),
+        'integration_namespace' => str_repeat('n', 256),
+        'event_id' => str_repeat('e', 256),
+        'external_subject' => str_repeat('s', 256),
+    ];
+
+    foreach ($oversize as $field => $value) {
+        $response = inviteOverHttp($base + [$field => $value]);
+
+        $response->assertStatus(422);
+
+        expect((string) $response->json('message'))->toContain($field);
+    }
+
+    // CLI parity on one representative field: same message verbatim.
+    $http = inviteOverHttp($base + ['invited_by' => str_repeat('a', 65)]);
+
+    $cliExit = Artisan::call('bfc:invitation:issue', [
+        '--email' => 'long@example.test',
+        '--ttl' => '3600',
+        '--invited-by' => str_repeat('a', 65),
+        '--local' => true,
+    ]);
+
+    expect($cliExit)->toBe(Command::FAILURE)
+        ->and(trim(Artisan::output()))->toBe((string) $http->json('message'))
+        ->and(Invitation::query()->count())->toBe(0);
+});
+
 // PR8 locked AC 7: the non-enumerating shape — exact same keys and status
 // for a fresh subject, an already-invited one, and an already-accepted one.
 
@@ -294,7 +500,9 @@ it('answers with one shape whatever the prior state of the invited human', funct
     $fresh = inviteOverHttp(['email' => 'probe@example.test', 'ttl_seconds' => 3600]);
     $reinvited = inviteOverHttp(['email' => 'probe@example.test', 'ttl_seconds' => 3600]);
 
-    Invitation::accept((string) $fresh->json('invitation_code'), ['name' => 'Probe', 'password' => 'pw']);
+    // The re-invite superseded the fresh code, so the LIVE code is the
+    // re-invited one.
+    Invitation::accept((string) $reinvited->json('invitation_code'), ['name' => 'Probe', 'password' => 'pw']);
 
     $afterAccept = inviteOverHttp(['email' => 'probe@example.test', 'ttl_seconds' => 3600]);
 
@@ -305,14 +513,136 @@ it('answers with one shape whatever the prior state of the invited human', funct
     }
 });
 
-it('answers with the same shape and status for applied and ignored integration events', function (): void {
+it('answers byte-identically for fresh, ignored and replayed integration events', function (): void {
+    Notification::fake();
+
     $applied = inviteIntegrationEvent('evt-shape-1', 2);
     $ignored = inviteIntegrationEvent('evt-shape-0', 1);
+    $replayed = inviteIntegrationEvent('evt-shape-1', 2);
 
-    $applied->assertCreated();
-    $ignored->assertCreated();
+    foreach ([$applied, $ignored, $replayed] as $response) {
+        $response->assertStatus(202);
 
-    expect(array_keys((array) $applied->json()))->toBe(array_keys((array) $ignored->json()));
+        expect((string) $response->getContent())->toBe((string) $applied->getContent());
+    }
+});
+
+// PR8 rework Fix 3: supersession on the human path — an issuer replaces a
+// code by issuing again; the old link is dead, the new one works.
+
+it('supersedes the prior pending invitation when the same email is re-invited', function (): void {
+    $first = inviteOverHttp(['email' => 'replace@example.test', 'ttl_seconds' => 3600]);
+    $second = inviteOverHttp(['email' => 'replace@example.test', 'ttl_seconds' => 3600]);
+
+    try {
+        Invitation::accept((string) $first->json('invitation_code'), ['name' => 'Old Link', 'password' => 'pw']);
+        $this->fail('The superseded first code was accepted.');
+    } catch (InvalidInvitation $refusal) {
+        expect($refusal->error)->toBe(ClaimError::CodeAlreadyClaimed);
+    }
+
+    $user = Invitation::accept((string) $second->json('invitation_code'), ['name' => 'New Link', 'password' => 'pw']);
+
+    expect($user->getAttribute('email'))->toBe('replace@example.test')
+        ->and(Invitation::query()->whereNotNull('used_by')->count())->toBe(1);
+});
+
+it('leaves a completed acceptance intact when a supersede races it — the conditional update matches nothing', function (): void {
+    $first = inviteOverHttp(['email' => 'settled@example.test', 'ttl_seconds' => 3600]);
+
+    $user = Invitation::accept((string) $first->json('invitation_code'), ['name' => 'Settled', 'password' => 'pw']);
+
+    // The accept won before the re-invite's supersede ran: the conditional
+    // whereNull(accepted_at) matches zero rows, the acceptance (used_by
+    // included) is untouched, and the new invitation still issues.
+    $second = inviteOverHttp(['email' => 'settled@example.test', 'ttl_seconds' => 3600]);
+
+    $second->assertCreated();
+
+    /** @var Invitation $acceptedRow */
+    $acceptedRow = Invitation::query()->whereNotNull('used_by')->sole();
+
+    expect($acceptedRow->used_by)->toBe((string) $user->getKey())
+        ->and(Invitation::query()->whereNull('accepted_at')->count())->toBe(1);
+});
+
+// PR8 rework Fix 5 (delivery): the instance delivers on the integration
+// path — an addressed applying event mails the invitee a working code;
+// ignored events and unaddressed events mail nobody.
+
+it('delivers the invitation code to the addressed invitee when an integration event applies', function (): void {
+    Notification::fake();
+
+    $response = inviteIntegrationEvent('evt-deliver', 1, ['email' => 'invitee@example.test']);
+
+    $response->assertStatus(202);
+
+    $code = capturedDeliveryCode();
+
+    Notification::assertSentOnDemand(
+        InvitationDeliveryNotification::class,
+        fn (InvitationDeliveryNotification $notification, array $channels, AnonymousNotifiable $notifiable): bool => ($notifiable->routes['mail'] ?? null) === 'invitee@example.test',
+    );
+
+    // The response carries no code; the store carries only the hash; the
+    // delivered code actually works.
+    expect((string) $response->getContent())->not->toContain($code)
+        ->and(Invitation::query()->where('token', hash('sha256', $code))->exists())->toBeTrue();
+
+    $user = Invitation::accept($code, ['name' => 'Invitee', 'password' => 'pw']);
+
+    expect($user->getAttribute('email'))->toBe('invitee@example.test');
+});
+
+it('delivers nothing for an ignored event or an unaddressed applying event', function (): void {
+    Notification::fake();
+
+    inviteIntegrationEvent('evt-noship-1', 5)->assertStatus(202);
+
+    Notification::assertSentOnDemandTimes(InvitationDeliveryNotification::class, 1);
+
+    // Ignored (older) event: acknowledged, nothing delivered.
+    inviteIntegrationEvent('evt-noship-0', 4)->assertStatus(202);
+
+    Notification::assertSentOnDemandTimes(InvitationDeliveryNotification::class, 1);
+
+    // Unaddressed applying event: acknowledged, the invitation exists,
+    // and nobody is mailed — deliver via an addressed human invite, which
+    // supersedes it.
+    inviteIntegrationEvent('evt-open', 6, ['email' => '', 'subject' => 'open-subject'])->assertStatus(202);
+
+    Notification::assertSentOnDemandTimes(InvitationDeliveryNotification::class, 1);
+
+    expect(Invitation::query()->whereNull('email')->count())->toBe(1);
+});
+
+// Judge fold (AC 8): the issued audit row, its outbox row and the
+// invitation are ONE transaction — a failure after the recorder call
+// rolls all three back together (the PR4 sabotage pattern).
+
+it('rolls the invitation, audit row and outbox row back together when the issue transaction dies late', function (): void {
+    $armed = true;
+
+    DB::listen(function (QueryExecuted $query) use (&$armed): void {
+        if ($armed
+            && preg_match('/^\s*insert\b/i', $query->sql) === 1
+            && str_contains($query->sql, 'credential_outbox')) {
+            $armed = false;
+
+            throw new RuntimeException('simulated process death after the outbox write');
+        }
+    });
+
+    $issue = app(IssueInvitation::class);
+
+    expect(fn (): mixed => $issue(InvitationOptions::fromInput([
+        'email' => 'doomed@example.test',
+        'ttl_seconds' => 3600,
+    ])))->toThrow(RuntimeException::class);
+
+    expect(Invitation::query()->count())->toBe(0)
+        ->and(CredentialAuditEvent::query()->count())->toBe(0)
+        ->and(CredentialOutboxEntry::query()->count())->toBe(0);
 });
 
 // PR8 locked AC 4 (notification side): addressed invitations notify the

@@ -5,11 +5,12 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud;
 
 /**
- * What the invite verb hands its transports — ONE shape whatever the prior
- * state (SEC-V3-05 non-enumeration): every field nullable, and the
- * acknowledged-and-ignored outcome is the same three fields carrying null.
- * The code is a sealed {@see MintedSecret}; the transport reveals it once
- * or not at all.
+ * What the invite verb hands its transports. The HUMAN path always
+ * carries the issued invitation and its sealed {@see MintedSecret} for
+ * the transport's single reveal. The INTEGRATION path always hands back
+ * {@see acknowledged()} — whatever the gate decided — so no transport
+ * can leak gate state (SEC-V3-05 non-enumeration); on that path delivery
+ * to an addressed invitee happens inside the action, after commit.
  */
 final readonly class InvitationIssueResult
 {
@@ -20,9 +21,9 @@ final readonly class InvitationIssueResult
     ) {}
 
     /**
-     * The version gate's answer for an event it will not apply — an older
-     * version, or a replayed event id: acknowledged, nothing issued,
-     * nothing revealed, indistinguishable in shape from any other answer.
+     * The integration path's ONE answer — applied, ignored-older, or
+     * replayed alike: acknowledged, nothing revealed, indistinguishable
+     * in shape from every other integration answer.
      */
     public static function acknowledged(): self
     {

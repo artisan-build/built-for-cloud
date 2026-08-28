@@ -162,6 +162,9 @@ final class Invitation extends Model
             // the user's attributes at creation — capstan projects `role`,
             // crate projects key-management-only. No binding = the
             // attributes pass through untouched, exactly today's behaviour.
+            // The hook is trusted app code; the is_admin strip below is a
+            // guard-rail against accidental pass-through, not a privilege
+            // boundary against the hook itself.
             if (app()->bound(ComposesInvitedUserAttributes::class)) {
                 $attributes = app(ComposesInvitedUserAttributes::class)
                     ->composeInvitedUserAttributes($invitation, $attributes);
