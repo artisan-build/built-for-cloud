@@ -179,11 +179,18 @@ trait ContractAssertions
      * that behaves differently per transport is a bug by definition (a
      * verb one transport lacks even more so).
      *
+     * LIKE FOR LIKE: each comparison puts the IDENTICAL question to both
+     * transports — the same subject_ref, the same inputs, the same
+     * pre-state (the first leg's row is cleared, or the targets are
+     * provisioned identically) — so a declaration whose answer is
+     * conditional on the SUBJECT gives the same answer to both legs and
+     * never reads as false transport divergence.
+     *
      * The suite runs under the app's ACTIVE declaration. If that
-     * declaration denies the issue verb, the parity it asserts is refusal
-     * parity — both transports must refuse with the same refusal (the
-     * HTTP 403 message appears in the CLI's error output), and neither
-     * may leave a row.
+     * declaration denies a verb, the parity it asserts is refusal parity —
+     * both transports refuse with the SAME error (message equality: both
+     * carry the one action's exception message verbatim), and neither
+     * leaves a row behind.
      *
      * SCOPE OF THE GUARANTEE: parity is defined over the verb's own
      * inputs — subject, options, abilities, the target row. The
@@ -196,155 +203,190 @@ trait ContractAssertions
      */
     public function assertBuiltForCloudTransportParityContract(): void
     {
-        $rows = $this->assertBuiltForCloudMintTransportParity();
+        $minted = $this->assertBuiltForCloudMintTransportParity();
 
         $this->assertBuiltForCloudListTransportParity();
 
-        if ($rows !== null) {
+        if ($minted) {
             $this->assertBuiltForCloudBasicAuthTransportParity();
-            $this->assertBuiltForCloudRevokeTransportParity($rows['cli'], $rows['http']);
+            $this->assertBuiltForCloudRevokeTransportParity();
         }
     }
 
     /**
-     * @return array{cli: Credential, http: Credential}|null the minted rows, or null when the declaration refused (refusal parity asserted instead)
+     * LIKE FOR LIKE: both legs mint the SAME subject_ref with identical
+     * inputs — a subject-conditional declaration must see the identical
+     * question on each transport, or an app-owned per-subject answer would
+     * read as false transport divergence. The CLI leg's row is deleted
+     * (its audit events kept) before the HTTP leg runs, so the second
+     * mint sees the identical pre-state the first one did.
+     *
+     * @return bool whether the declaration allowed the mint (false = refusal parity was asserted instead)
      */
-    public function assertBuiltForCloudMintTransportParity(): ?array
+    public function assertBuiltForCloudMintTransportParity(): bool
     {
         $admin = $this->mintBuiltForCloudAdminToken('parity-admin');
 
-        $cliRef = 'parity-cli-'.bin2hex(random_bytes(4));
-        $httpRef = 'parity-http-'.bin2hex(random_bytes(4));
+        $ref = 'parity-mint-'.bin2hex(random_bytes(4));
 
         $cliExit = Artisan::call('bfc:credential:mint', [
             'subject-type' => 'external_consumer',
-            'subject-ref' => $cliRef,
+            'subject-ref' => $ref,
             '--abilities' => 'consume',
             '--local' => true,
         ]);
         $cliOutput = Artisan::output();
 
+        // Snapshot the CLI leg's outcome, then clear its row so the HTTP
+        // leg mints against the identical pre-state.
+        $cliSecret = null;
+        $cliSnapshot = null;
+        $cliRowId = null;
+
+        if (preg_match('/shown once: (\S+)/', $cliOutput, $matches) === 1) {
+            $cliSecret = $matches[1];
+
+            /** @var Credential $cliRow */
+            $cliRow = Credential::query()->where('secret_hash', hash('sha256', $cliSecret))->sole();
+            $cliSnapshot = $cliRow->getAttributes();
+            $cliRowId = $cliRow->id;
+
+            $cliRow->delete();
+        }
+
         $httpResponse = $this->postJson('/bfc/credentials', [
             'subject_type' => 'external_consumer',
-            'subject_ref' => $httpRef,
+            'subject_ref' => $ref,
             'abilities' => ['consume'],
         ], $this->builtForCloudBearerHeaders($admin));
 
         if ($httpResponse->status() === 403) {
-            // Refusal parity: what one transport refuses, the other must
-            // refuse identically — same refusal (the HTTP message appears
-            // verbatim in the CLI's error output, because both come from
-            // the one action's exception) — and neither leaves a row.
+            // Refusal parity: the identical question got refused over HTTP,
+            // so the CLI must have refused it too — with the SAME error
+            // (message equality: both carry the one action's exception
+            // message verbatim) — and neither leg leaves a row.
             Assert::assertNotSame(0, $cliExit, 'HTTP refused the mint but the CLI performed it: the transports disagree.');
 
             $httpMessage = (string) $httpResponse->json('message');
 
             Assert::assertNotSame('', $httpMessage, 'The HTTP refusal carried no message.');
-            Assert::assertStringContainsString(
+            Assert::assertSame(
                 $httpMessage,
-                $cliOutput,
-                'The CLI refused with a different message than HTTP: the transports disagree on the refusal.',
+                trim($cliOutput),
+                'The CLI refused with a different error than HTTP: the transports disagree on the refusal.',
             );
             Assert::assertSame(
                 0,
-                Credential::query()->whereIn('subject_ref', [$cliRef, $httpRef])->count(),
+                Credential::query()->where('subject_ref', $ref)->count(),
                 'A refused mint left a credential row behind.',
             );
 
-            return null;
+            return false;
         }
 
         $httpResponse->assertCreated();
         Assert::assertSame(0, $cliExit, 'The CLI mint failed where the HTTP mint succeeded: the transports disagree.');
-
-        // Delivery-shape parity: both transports delivered a bearer secret,
-        // revealed exactly once at their own boundary, and each secret
-        // hashes to its row's stored digest.
-        Assert::assertSame(1, preg_match('/shown once: (\S+)/', $cliOutput, $matches), 'The CLI mint revealed no secret.');
-        $cliSecret = $matches[1];
-        Assert::assertSame(1, substr_count($cliOutput, $cliSecret), 'The CLI revealed the secret more than once.');
+        Assert::assertNotNull($cliSecret, 'The CLI mint revealed no secret.');
+        Assert::assertSame(1, substr_count($cliOutput, (string) $cliSecret), 'The CLI revealed the secret more than once.');
 
         Assert::assertSame('bearer', $httpResponse->json('delivery.shape'));
         $httpSecret = (string) $httpResponse->json('delivery.secret');
         Assert::assertNotSame('', $httpSecret);
 
-        /** @var Credential $cliRow */
-        $cliRow = Credential::query()->where('subject_ref', $cliRef)->sole();
         /** @var Credential $httpRow */
-        $httpRow = Credential::query()->where('subject_ref', $httpRef)->sole();
+        $httpRow = Credential::query()->where('secret_hash', hash('sha256', $httpSecret))->sole();
 
-        Assert::assertSame($cliRow->secret_hash, hash('sha256', $cliSecret));
-        Assert::assertSame($httpRow->secret_hash, hash('sha256', $httpSecret));
+        Assert::assertIsArray($cliSnapshot);
+        Assert::assertSame($cliSnapshot['secret_hash'], hash('sha256', (string) $cliSecret));
 
-        // Row-state parity, modulo the identity fields that differ by
-        // construction (id, subject_ref, hash, timestamps).
-        foreach (['kind', 'status', 'abilities', 'name', 'user_id', 'expires_at'] as $attribute) {
+        // Row-state parity on the identical question — subject fields now
+        // INCLUDED, equal by construction, so a difference can only be a
+        // transport bug. Only id, hash, and timestamps legitimately vary.
+        foreach (['kind', 'status', 'abilities', 'name', 'user_id', 'expires_at', 'subject_type', 'subject_ref'] as $attribute) {
             Assert::assertEquals(
-                $cliRow->getAttribute($attribute),
-                $httpRow->getAttribute($attribute),
+                $cliSnapshot[$attribute] ?? null,
+                $httpRow->getAttributes()[$attribute] ?? null,
                 sprintf('The %s attribute differs between the CLI-minted and HTTP-minted rows.', $attribute),
             );
         }
 
-        // Audit parity: one `issued` event each, attributed to the
-        // transport's own honest actor.
-        Assert::assertSame([LifecycleEventType::Issued->value], $this->builtForCloudEventsFor($cliRow->id));
+        // Audit parity: one `issued` event each (the deleted CLI row's
+        // events survive it), attributed to each transport's honest actor.
+        Assert::assertSame([LifecycleEventType::Issued->value], $this->builtForCloudEventsFor((string) $cliRowId));
         Assert::assertSame([LifecycleEventType::Issued->value], $this->builtForCloudEventsFor($httpRow->id));
 
-        return ['cli' => $cliRow, 'http' => $httpRow];
+        return true;
     }
 
     /**
-     * The basic_auth delivery, compared across transports: same shape,
-     * the row id as the presentation-only username, and each password
-     * hashing to its own row's stored digest.
+     * The basic_auth delivery, compared across transports on the SAME
+     * subject_ref with identical inputs (the CLI leg's row cleared before
+     * the HTTP leg, its events kept): same shape, the row id as the
+     * presentation-only username, and each password hashing to its own
+     * row's stored digest.
      */
     public function assertBuiltForCloudBasicAuthTransportParity(): void
     {
         $admin = $this->mintBuiltForCloudAdminToken('parity-basic-admin');
 
-        $cliRef = 'parity-basic-cli-'.bin2hex(random_bytes(4));
-        $httpRef = 'parity-basic-http-'.bin2hex(random_bytes(4));
+        $ref = 'parity-basic-'.bin2hex(random_bytes(4));
 
         $cliExit = Artisan::call('bfc:credential:mint', [
             'subject-type' => 'external_consumer',
-            'subject-ref' => $cliRef,
+            'subject-ref' => $ref,
             '--kind' => 'basic',
             '--local' => true,
         ]);
         $cliOutput = Artisan::output();
 
+        $cliSnapshot = null;
+        $cliRowId = null;
+
+        if (preg_match('/shown once: (\S+)/', $cliOutput, $matches) === 1) {
+            /** @var Credential $cliRow */
+            $cliRow = Credential::query()->where('secret_hash', hash('sha256', $matches[1]))->sole();
+            $cliSnapshot = $cliRow->getAttributes();
+            $cliRowId = $cliRow->id;
+
+            $cliRow->delete();
+        }
+
         $httpResponse = $this->postJson('/bfc/credentials', [
             'subject_type' => 'external_consumer',
-            'subject_ref' => $httpRef,
+            'subject_ref' => $ref,
             'kind' => 'basic',
         ], $this->builtForCloudBearerHeaders($admin));
 
         if ($httpResponse->status() === 403) {
             Assert::assertNotSame(0, $cliExit, 'HTTP refused the basic mint but the CLI performed it: the transports disagree.');
+            Assert::assertSame(
+                (string) $httpResponse->json('message'),
+                trim($cliOutput),
+                'The CLI refused the basic mint with a different error than HTTP.',
+            );
+            Assert::assertSame(0, Credential::query()->where('subject_ref', $ref)->count(), 'A refused basic mint left a row behind.');
 
             return;
         }
 
         $httpResponse->assertCreated();
         Assert::assertSame(0, $cliExit, 'The CLI basic mint failed where the HTTP mint succeeded: the transports disagree.');
+        Assert::assertIsArray($cliSnapshot, 'The CLI basic mint revealed no password.');
 
-        /** @var Credential $cliRow */
-        $cliRow = Credential::query()->where('subject_ref', $cliRef)->sole();
         /** @var Credential $httpRow */
-        $httpRow = Credential::query()->where('subject_ref', $httpRef)->sole();
+        $httpRow = Credential::query()->where('subject_ref', $ref)->sole();
 
         // The pair, on each transport: username = the row id (presentation
         // only), password = the secret, revealed once.
-        Assert::assertStringContainsString('auth.json username: '.$cliRow->id, $cliOutput);
+        Assert::assertStringContainsString('auth.json username: '.$cliRowId, $cliOutput);
         Assert::assertSame(1, preg_match('/shown once: (\S+)/', $cliOutput, $matches), 'The CLI basic mint revealed no password.');
-        Assert::assertSame($cliRow->secret_hash, hash('sha256', $matches[1]));
+        Assert::assertSame($cliSnapshot['secret_hash'], hash('sha256', $matches[1]));
 
         Assert::assertSame('basic_auth', $httpResponse->json('delivery.shape'));
         Assert::assertSame($httpRow->id, $httpResponse->json('delivery.username'));
         Assert::assertSame($httpRow->secret_hash, hash('sha256', (string) $httpResponse->json('delivery.password')));
 
-        Assert::assertEquals($cliRow->kind, $httpRow->kind, 'The basic-minted rows disagree on kind across transports.');
+        Assert::assertSame($cliSnapshot['kind'], $httpRow->getAttributes()['kind'], 'The basic-minted rows disagree on kind across transports.');
     }
 
     public function assertBuiltForCloudListTransportParity(): void
@@ -366,9 +408,36 @@ trait ContractAssertions
         Assert::assertSame($httpRows, $cliRows, 'The CLI and HTTP listings disagree.');
     }
 
-    public function assertBuiltForCloudRevokeTransportParity(Credential $cliTarget, Credential $httpTarget): void
+    /**
+     * The revoke verb, compared across transports on IDENTICAL targets:
+     * two rows minted the same way for the SAME subject_ref, one revoked
+     * per transport — so a subject-conditional revoke answer is the same
+     * question on both legs.
+     */
+    public function assertBuiltForCloudRevokeTransportParity(): void
     {
         $admin = $this->mintBuiltForCloudAdminToken('parity-revoke-admin');
+
+        $ref = 'parity-revoke-'.bin2hex(random_bytes(4));
+
+        $targets = [];
+
+        foreach (['cli target', 'http target'] as $leg) {
+            Assert::assertSame(0, Artisan::call('bfc:credential:mint', [
+                'subject-type' => 'external_consumer',
+                'subject-ref' => $ref,
+                '--abilities' => 'consume',
+                '--local' => true,
+            ]), sprintf('Provisioning the %s for revoke parity failed.', $leg));
+
+            Assert::assertSame(1, preg_match('/shown once: (\S+)/', Artisan::output(), $matches));
+
+            $targets[] = Credential::query()->where('secret_hash', hash('sha256', $matches[1]))->sole();
+        }
+
+        /** @var Credential $cliTarget */
+        /** @var Credential $httpTarget */
+        [$cliTarget, $httpTarget] = $targets;
 
         $cliExit = Artisan::call('bfc:credential:revoke', ['id' => $cliTarget->id, '--local' => true]);
         $cliOutput = Artisan::output();
@@ -377,7 +446,13 @@ trait ContractAssertions
 
         if ($httpResponse->status() === 403) {
             Assert::assertNotSame(0, $cliExit, 'HTTP refused the revoke but the CLI performed it: the transports disagree.');
+            Assert::assertSame(
+                (string) $httpResponse->json('message'),
+                trim($cliOutput),
+                'The CLI refused the revoke with a different error than HTTP.',
+            );
             Assert::assertNull($cliTarget->refresh()->revoked_at, 'A refused revoke killed the CLI row anyway.');
+            Assert::assertNull($httpTarget->refresh()->revoked_at, 'A refused revoke killed the HTTP row anyway.');
 
             return;
         }

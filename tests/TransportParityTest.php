@@ -33,6 +33,41 @@ it('passes the transport-parity suite under a declaration with unsupported field
     $this->assertBuiltForCloudTransportParityContract();
 });
 
+it('does not read a subject-conditional declaration as transport divergence — both legs ask the identical question', function (): void {
+    // This declaration keys its issue answer on the SUBJECT REF: it denies
+    // any ref naming a transport. Under the old per-leg refs
+    // (parity-cli-* / parity-http-*) it would deny exactly one leg and the
+    // suite would report a false divergence; with like-for-like refs both
+    // legs carry the same ref and get the same answer.
+    app()->bind(CredentialDeclaration::class, static fn (): CredentialDeclaration => new class implements AuthorizesCredentialVerbs, CredentialDeclaration
+    {
+        public function resolveSubject(Request $request): ?Subject
+        {
+            return null;
+        }
+
+        public function authorize(Credential $credential, ?string $ability, Request $request): bool
+        {
+            return true;
+        }
+
+        public function authorizeVerb(CredentialVerb $verb, ?Subject $subject, Request $request): bool
+        {
+            if ($verb !== CredentialVerb::Issue || $subject === null) {
+                return true;
+            }
+
+            return ! str_contains($subject->ref, 'cli') && ! str_contains($subject->ref, 'http');
+        }
+    });
+
+    $this->assertBuiltForCloudTransportParityContract();
+
+    // The suite's own refs name no transport, so the conditional matrix
+    // allowed both legs and real rows were minted and revoked.
+    expect(Credential::query()->count())->toBeGreaterThan(0);
+});
+
 it('asserts refusal parity when the declaration denies the issue verb', function (): void {
     app()->bind(CredentialDeclaration::class, static fn (): CredentialDeclaration => new class implements AuthorizesCredentialVerbs, CredentialDeclaration
     {
