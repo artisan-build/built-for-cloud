@@ -36,6 +36,42 @@ final class InvalidCredentialInput extends InvalidArgumentException
         );
     }
 
+    public static function invitationTtlOutOfBounds(): self
+    {
+        return new self(
+            'An invitation is a claim code and its ttl is required: pass ttl_seconds between 60 and '
+            .'604800 seconds. The package never defaults an invitation lifetime.',
+        );
+    }
+
+    public static function nonIntegerInvitationTtl(): self
+    {
+        return new self('The invitation ttl must be a whole number of seconds — no units, no trailing text.');
+    }
+
+    public static function malformedEmail(): self
+    {
+        return new self('The invitation email is not a valid address.');
+    }
+
+    public static function nonIntegerEntitlementVersion(): self
+    {
+        return new self('The entitlement version must be a whole number — no units, no trailing text.');
+    }
+
+    public static function entitlementVersionOutOfBounds(): self
+    {
+        return new self('The entitlement version must be zero or greater.');
+    }
+
+    public static function partialIntegrationEvent(): self
+    {
+        return new self(
+            'Integration events carry integration_namespace, event_id, entitlement_version and '
+            .'external_subject TOGETHER — provide all four, or none for a plain human-issued invitation.',
+        );
+    }
+
     public static function unparseableExpiry(): self
     {
         return new self('The credential expiry is not a parseable timestamp.');

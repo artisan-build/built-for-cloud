@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud\Testing;
 use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Scope;
 use Illuminate\Foundation\Testing\TestCase;
@@ -206,6 +207,7 @@ trait ContractAssertions
         $minted = $this->assertBuiltForCloudMintTransportParity();
 
         $this->assertBuiltForCloudListTransportParity();
+        $this->assertBuiltForCloudInvitationTransportParity();
 
         if ($minted) {
             $this->assertBuiltForCloudBasicAuthTransportParity();
@@ -598,6 +600,133 @@ trait ContractAssertions
         );
         Assert::assertSame([LifecycleEventType::Issued->value], $this->builtForCloudEventsFor($cliReplacement->id));
         Assert::assertSame([LifecycleEventType::Issued->value], $this->builtForCloudEventsFor($httpReplacement->id));
+    }
+
+    /**
+     * The invite verb (PRD 1.13, SEC-V3-05), compared across transports on
+     * the SAME addressed invitation inputs: `bfc:invitation:issue --local`
+     * and `POST /bfc/invitations` run the one action, so row state (email,
+     * role, inviter, unconsumed markers), the single reveal, and the
+     * `issued` audit event must agree. Refusal parity when the active
+     * declaration denies `issue` for the invited subject: same error
+     * verbatim, and neither transport leaves an invitation row.
+     *
+     * Skipped silently when the app owns its own invitations (the
+     * auth-foundation flag off, or no package-shaped table) — there is no
+     * package surface to compare.
+     */
+    public function assertBuiltForCloudInvitationTransportParity(): void
+    {
+        if (config('built-for-cloud.auth_foundation.invitations') === false
+            || ! Schema::hasTable('invitations')
+            || ! Schema::hasColumn('invitations', 'token')) {
+            return;
+        }
+
+        $admin = $this->mintBuiltForCloudAdminToken('parity-invite-admin');
+
+        $email = 'parity-invite-'.bin2hex(random_bytes(4)).'@example.test';
+
+        $cliExit = Artisan::call('bfc:invitation:issue', [
+            '--email' => $email,
+            '--ttl' => '3600',
+            '--role' => 'member',
+            '--local' => true,
+        ]);
+        $cliOutput = Artisan::output();
+
+        // Snapshot the CLI leg's outcome, then clear its row (its audit
+        // events kept) so the HTTP leg issues against the identical
+        // pre-state.
+        $cliSnapshot = null;
+        $cliRowId = null;
+
+        if (preg_match('/shown once: (\S+)/', $cliOutput, $matches) === 1) {
+            $cliSecret = $matches[1];
+
+            Assert::assertSame(1, substr_count($cliOutput, $cliSecret), 'The CLI revealed the invitation code more than once.');
+
+            /** @var Invitation $cliRow */
+            $cliRow = Invitation::query()->where('token', hash('sha256', $cliSecret))->sole();
+            $cliSnapshot = $cliRow->getAttributes();
+            $cliRowId = $cliRow->id;
+
+            $cliRow->delete();
+        }
+
+        $httpResponse = $this->postJson('/bfc/invitations', [
+            'email' => $email,
+            'ttl_seconds' => 3600,
+            'role' => 'member',
+        ], $this->builtForCloudBearerHeaders($admin));
+
+        if ($httpResponse->status() === 403) {
+            Assert::assertNotSame(0, $cliExit, 'HTTP refused the invitation but the CLI issued it: the transports disagree.');
+
+            $httpMessage = (string) $httpResponse->json('message');
+
+            Assert::assertNotSame('', $httpMessage, 'The HTTP invitation refusal carried no message.');
+            Assert::assertSame(
+                $httpMessage,
+                trim($cliOutput),
+                'The CLI refused the invitation with a different error than HTTP: the transports disagree.',
+            );
+            Assert::assertSame(
+                0,
+                Invitation::query()->where('email', $email)->count(),
+                'A refused invitation left a row behind.',
+            );
+
+            return;
+        }
+
+        $httpResponse->assertCreated();
+        Assert::assertSame(0, $cliExit, 'The CLI invitation failed where the HTTP invitation succeeded: the transports disagree.');
+        Assert::assertIsArray($cliSnapshot, 'The CLI invitation revealed no code.');
+
+        $httpCode = (string) $httpResponse->json('invitation_code');
+        Assert::assertNotSame('', $httpCode, 'The HTTP invitation revealed no code.');
+        Assert::assertSame($email, $httpResponse->json('email'));
+
+        /** @var Invitation $httpRow */
+        $httpRow = Invitation::query()->where('token', hash('sha256', $httpCode))->sole();
+
+        Assert::assertSame($httpRow->id, $httpResponse->json('invitation_id'));
+
+        // Row-state parity on the identical question — only id, hash and
+        // timestamps legitimately vary.
+        foreach (['email', 'role', 'invited_by', 'used_by', 'accepted_at'] as $attribute) {
+            Assert::assertEquals(
+                $cliSnapshot[$attribute] ?? null,
+                $httpRow->getAttributes()[$attribute] ?? null,
+                sprintf('The %s attribute differs between the CLI-issued and HTTP-issued invitations.', $attribute),
+            );
+        }
+
+        // Audit parity: one `issued` event each, keyed on the invitation
+        // as the claim code (the deleted CLI row's events survive it).
+        Assert::assertSame([LifecycleEventType::Issued->value], $this->builtForCloudCodeEventsFor((string) $cliRowId));
+        Assert::assertSame([LifecycleEventType::Issued->value], $this->builtForCloudCodeEventsFor($httpRow->id));
+    }
+
+    /**
+     * A claim code's audit events as a SORTED list — the invitation IS the
+     * claim code, so its events key on `code_id`.
+     *
+     * @return list<string>
+     */
+    private function builtForCloudCodeEventsFor(string $codeId): array
+    {
+        $events = CredentialAuditEvent::query()
+            ->where('code_id', $codeId)
+            ->pluck('event')
+            ->map(static fn (mixed $event): string => $event instanceof LifecycleEventType ? $event->value : (string) $event) /** @phpstan-ignore cast.string (pluck's value shape depends on the cast) */
+            ->values()
+            ->all();
+
+        sort($events);
+
+        return $events;
     }
 
     /**

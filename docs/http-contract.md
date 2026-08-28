@@ -67,6 +67,11 @@ Additive unless marked otherwise:
 - `GET /bfc/meta` `capabilities` gained `credentials`.
 - `POST /bfc/onboarding/issue` requires `ttl_seconds` (bounds below) and accepts nullable
   `email`; the claim surfaces speak the claim-contract error enum documented here.
+- New route `POST /bfc/invitations` — the machine-callable invite verb (PRD 1.13, SEC-V3-05):
+  invitations ARE claim codes (hashed at rest, required bounded `ttl_seconds`, single-use
+  `at_exchange` burn on accept), optionally addressed, optionally carrying an ordered
+  integration event (namespace + stable event id + monotonic entitlement version + external
+  subject). One non-enumerating response shape whatever the prior state.
 
 **api_version 1** — the 0.3.x baseline: `/bfc/meta`, `/bfc/ownership/*`, the pre-0.4 credential
 API listing shape.
@@ -108,6 +113,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/onboarding/issue` | `content` | single reveal of the claim code, plus a free-text email address |
 | `POST /bfc/onboarding/exchange` | `content` | single reveal of the durable secret, plus the free-text credential name |
 | `POST /bfc/onboarding/verify` | `content` | carries the free-text credential name |
+| `POST /bfc/invitations` | `content` | single reveal of the invitation code, plus a free-text email address |
 | `GET /api/credentials` | `content` | rows carry free-text names, subject refs and client identities |
 | `GET /api/credentials/client-observations` | `content` | client-claimed free-text identities |
 | `POST /api/credentials` | `content` | single reveal of the minted plaintext, plus the free-text name |
@@ -267,6 +273,79 @@ fields and no routes in this release:
   rule 1.
 
 Neither reservation changes any request or response shape in this release.
+
+---
+
+## Invitations — the invite verb
+
+Invitations are claim codes for HUMANS (PRD 1.13, D4 + D1e): hashed at rest, single-use with an
+`at_exchange` burn, optionally addressed, and what one buys is not a secret but an
+account-creation ceremony inside the consuming app (`Invitation::accept()` creates the app's
+user; acceptance is an app surface, not an HTTP route here). The verb is machine-callable by
+design (D1e): an operator's integration triggers the INVITATION — it never mints a key, because
+minting would hand the integration a plaintext credential to deliver.
+
+### POST /bfc/invitations
+
+*Admin token or operator credential* — the same gate as the `/bfc/credentials` verb routes; the
+same two-transport rule (`bfc:invitation:issue --local` runs the identical action).
+
+**Request:**
+
+```json
+{
+  "email": "person@example.com",
+  "ttl_seconds": 86400,
+  "invited_by": "42",
+  "role": "member",
+  "integration_namespace": "github-sponsors",
+  "event_id": "evt_0001",
+  "entitlement_version": 7,
+  "external_subject": "sponsor-login"
+}
+```
+
+`ttl_seconds` is **required**, bounded 60–604800 (7 days) — the invitation is a claim code and
+never defaults its lifetime. `email` is optional: omitted issues an OPEN code whose registrant
+supplies their own address at accept; provided, the address is forced onto the created user and
+the recipient is notified through the app's lifecycle-notification policy (an unaddressed
+invitation notifies nobody). `invited_by` is a nullable free-text inviter reference (≤64
+characters); `role` is stored and never interpreted — the app's accept hook projects it.
+
+The four integration-event fields are **all-or-none** (SEC-V3-05): a plain human-issued invite
+carries none; a machine-issued event carries every one. The version gate stores the latest
+accepted `entitlement_version` per (`integration_namespace`, `external_subject`) and
+**transactionally ignores any event whose version is not newer**; a replayed `event_id` answers
+idempotently — same response shape, no second invitation, no state change — and a replay after
+the invitation was accepted does not resurrect it.
+
+- **201 — always, whatever the prior state** (the non-enumerating shape: same status, same
+  keys for a fresh subject, an already-invited one, an already-accepted one, an applied event,
+  and an acknowledged-and-ignored one):
+
+```json
+{
+  "invitation_id": "9d3f..." ,
+  "invitation_code": "…the single reveal…",
+  "email": "person@example.com"
+}
+```
+
+  When an invitation was issued, `invitation_code` is the **single reveal** — the code exists
+  nowhere else and is never retrievable again; the caller (a human issuer, or the integration
+  that owns the recipient relationship) delivers it as an accept link. When the version gate
+  acknowledged-and-ignored the event — an older version, or a replayed event id — all three
+  fields are `null`: the event is acknowledged, nothing was issued, and there is no
+  invited/active/not-found distinction to probe.
+
+- **403** — `{"message": "..."}`: the declaration's verb matrix denies `issue` for the invited
+  subject. Identical refusal on the CLI transport.
+- **422** — `{"message": "..."}`: shared input validation — missing/out-of-bounds
+  `ttl_seconds`, a malformed email, a non-integer or negative `entitlement_version`, or a
+  PARTIAL integration-event group. Identical refusals on the CLI transport.
+
+Emits an `issued` audit event (ids only, never the code) in the issue's own transaction; the
+app's accept surface emits `exchanged` the same way.
 
 ---
 

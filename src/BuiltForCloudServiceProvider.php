@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\Commands\CredentialRevokeCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialRotateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\FallbackTokenGenerateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\InstallOperatorCredentialCommand;
+use ArtisanBuild\BuiltForCloud\Commands\InvitationIssueCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand;
@@ -30,6 +31,7 @@ use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageInvitations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
@@ -147,6 +149,13 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router->post('/bfc/credentials/{id}/rotate', [ManageCredentials::class, 'rotate'])
                 ->middleware('bfc.credential.admin');
 
+            // The machine-callable invite verb (PRD 1.13, SEC-V3-05): the
+            // HTTP half of its two transports, behind the same
+            // credential-admin gate as the unified verb routes — an
+            // integration triggers the INVITATION, never a key mint.
+            $router->post('/bfc/invitations', [ManageInvitations::class, 'store'])
+                ->middleware('bfc.credential.admin');
+
             if ((bool) config('built-for-cloud.credential_api.enabled', false)) {
                 $router->prefix(trim((string) config('built-for-cloud.credential_api.prefix', 'api/credentials'), '/'))
                     ->middleware('bfc.token.admin')
@@ -176,6 +185,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 CredentialRotateCommand::class,
                 FallbackTokenGenerateCommand::class,
                 InstallOperatorCredentialCommand::class,
+                InvitationIssueCommand::class,
                 OutboxDrainCommand::class,
                 OwnershipMintClaimCommand::class,
                 OwnershipRemintOwnerTokenCommand::class,

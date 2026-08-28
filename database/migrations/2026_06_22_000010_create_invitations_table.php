@@ -25,9 +25,17 @@ return new class extends Migration
         });
     }
 
+    /**
+     * Guarded like up() (FLT-F): on an environment where the flag is off,
+     * the package created nothing — this migration records as run having
+     * skipped — and a `migrate:rollback` must not drop the APP's own
+     * invitations table. The hasTable guard rides along per PRD 1.13; the
+     * flag (Phase 0.5) is the data guard for a table the app created
+     * before the flag was set.
+     */
     public function down(): void
     {
-        if (config('built-for-cloud.auth_foundation.invitations') === false) {
+        if (config('built-for-cloud.auth_foundation.invitations') === false || ! Schema::hasTable('invitations')) {
             return;
         }
 
