@@ -33,6 +33,14 @@ final class InvalidCredentialInput extends InvalidArgumentException
         return new self('A subject ref is required.');
     }
 
+    public static function integrationSubjectMismatch(): self
+    {
+        return new self(
+            'An integration-driven offboard targets the subject its gated external_subject binds to; '
+            .'a different subject_type/subject_ref cannot be supplied. Omit the pair, or use the direct path without an integration event.',
+        );
+    }
+
     public static function nonIntegerCodeTtl(): self
     {
         return new self('The enrollment-code ttl must be a whole number of seconds — no units, no trailing text.');

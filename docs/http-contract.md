@@ -1004,6 +1004,14 @@ tables), so one monotonic entitlement version per (`integration_namespace`,
 than the latest accepted version is transactionally acknowledged-and-ignored, and a
 replayed `event_id` answers idempotently with no state change.
 
+**The gate is bound to the target.** On the integration path the offboard TARGET is derived
+server-side from the gated identity — `subject_type: external_consumer`,
+`subject_ref: <external_subject>`, the same binding the invite verb applies — so the identity
+whose version the gate checks is exactly the identity that gets contained. `subject_type` /
+`subject_ref` may be omitted on this path; if supplied they must equal the derivation, and a
+mismatch is refused (`422`) — an event can never pass a decoy identity's gate while naming a
+different victim. On the direct path (no event fields) the pair is required.
+
 **The two response shapes, keyed on the REQUEST (never on state):**
 
 - **Direct path (no integration event): `200 {"offboarded": true}`** — identical for a

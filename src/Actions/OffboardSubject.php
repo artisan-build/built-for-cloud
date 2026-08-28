@@ -96,7 +96,7 @@ final class OffboardSubject
             throw InvalidCredentialInput::entitlementVersionOutOfBounds();
         }
 
-        $subject = $options->subject();
+        $subject = $this->targetSubject($options);
 
         if (! $this->verbAllowed(CredentialVerb::Offboard, $subject)) {
             throw CredentialVerbRefused::byMatrix(CredentialVerb::Offboard);
@@ -120,6 +120,40 @@ final class OffboardSubject
         }
 
         throw IntegrationEventContention::afterAttempts(IssueInvitation::GATE_ATTEMPTS);
+    }
+
+    /**
+     * The offboard TARGET (rework Fix 4). Direct path: the caller-named
+     * subject (required by the options). Integration path: DERIVED
+     * server-side from the gated (namespace, external_subject) identity —
+     * `Subject(external_consumer, external_subject)`, the exact binding
+     * {@see IssueInvitation::subjectFor} uses — so the identity the
+     * version gate checks IS the identity that gets contained; a decoy
+     * external_subject can never pass its own (empty) gate while a
+     * different victim named in subject_ref is offboarded. A supplied
+     * subject pair on the integration path must MATCH the derivation or
+     * the whole request is refused.
+     */
+    private function targetSubject(OffboardOptions $options): Subject
+    {
+        if (! $options->integrationEventComplete()) {
+            if ($options->subjectType === null || $options->subjectRef === null) {
+                // Unreachable through fromInput(); the fail-closed answer
+                // for a hand-constructed options object.
+                throw InvalidCredentialInput::missingSubjectRef();
+            }
+
+            return new Subject($options->subjectType, $options->subjectRef);
+        }
+
+        $externalSubject = (string) $options->externalSubject;
+
+        if (($options->subjectType !== null && $options->subjectType !== SubjectType::ExternalConsumer)
+            || ($options->subjectRef !== null && $options->subjectRef !== $externalSubject)) {
+            throw InvalidCredentialInput::integrationSubjectMismatch();
+        }
+
+        return new Subject(SubjectType::ExternalConsumer, $externalSubject);
     }
 
     /**

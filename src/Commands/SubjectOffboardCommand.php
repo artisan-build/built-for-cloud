@@ -24,8 +24,8 @@ final class SubjectOffboardCommand extends Command
     use ParsesCredentialVerbInput;
 
     protected $signature = 'bfc:subject:offboard
-        {subject_type : The subject type (application, installation, user_principal, external_consumer, operator)}
-        {subject_ref : The subject ref — the tenant partition key a revocation costs}
+        {subject_type? : The subject type (required on the direct path; derived from --external-subject on the integration path)}
+        {subject_ref? : The subject ref — the tenant partition key a revocation costs (required on the direct path)}
         {--integration-namespace= : SEC-V3-05 integration event: the namespace (all four event options together, or none)}
         {--event-id= : SEC-V3-05 integration event: the stable event id}
         {--entitlement-version= : SEC-V3-05 integration event: the monotonic entitlement version}
@@ -43,8 +43,8 @@ final class SubjectOffboardCommand extends Command
         try {
             $result = $offboard(
                 OffboardOptions::fromInput([
-                    'subject_type' => (string) $this->argument('subject_type'),
-                    'subject_ref' => (string) $this->argument('subject_ref'),
+                    'subject_type' => $this->argument('subject_type'),
+                    'subject_ref' => $this->argument('subject_ref'),
                     'integration_namespace' => $this->stringOption('integration-namespace'),
                     'event_id' => $this->stringOption('event-id'),
                     'entitlement_version' => $this->stringOption('entitlement-version'),

@@ -8,12 +8,20 @@ use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 
 /**
  * What a caller chooses when offboarding a subject through the
- * two-transport verb (PRD 1.15, SEC-V3-04). The subject pair is
- * required; the four integration-event fields are all-or-none exactly as
- * on the invite verb (SEC-V3-05) — a direct operator offboard carries
- * none, an integration-driven offboard carries every one and rides the
- * SAME version gate tables (PRD 1.13's), so a replayed or older offboard
- * event is transactionally ignored.
+ * two-transport verb (PRD 1.15, SEC-V3-04). The four integration-event
+ * fields are all-or-none exactly as on the invite verb (SEC-V3-05) — a
+ * direct operator offboard carries none, an integration-driven offboard
+ * carries every one and rides the SAME version gate tables (PRD 1.13's),
+ * so a replayed or older offboard event is transactionally ignored.
+ *
+ * The subject pair is REQUIRED on the direct path and OPTIONAL on the
+ * integration path (rework Fix 4): an integration-driven offboard's
+ * target is DERIVED server-side from the gated (namespace,
+ * external_subject) identity — the exact binding the invite verb uses —
+ * never taken from an independent caller-supplied ref, so the version
+ * gate can never be checked against one identity while a different
+ * victim is contained. A supplied subject that does not match the
+ * derived one is refused ({@see OffboardSubject}).
  *
  * Both transports construct this through {@see fromInput()}, the ONE
  * normalization: junk is rejected with the same
@@ -22,8 +30,8 @@ use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 final readonly class OffboardOptions
 {
     public function __construct(
-        public SubjectType $subjectType,
-        public string $subjectRef,
+        public ?SubjectType $subjectType,
+        public ?string $subjectRef,
         public ?string $integrationNamespace = null,
         public ?string $eventId = null,
         public ?int $entitlementVersion = null,
@@ -35,36 +43,60 @@ final readonly class OffboardOptions
      */
     public static function fromInput(array $input): self
     {
-        $subjectType = $input['subject_type'] ?? null;
-        $parsedType = is_string($subjectType) ? SubjectType::tryFrom($subjectType) : null;
+        $integrationNamespace = self::boundedString($input['integration_namespace'] ?? null, 'integration_namespace');
+        $eventId = self::boundedString($input['event_id'] ?? null, 'event_id');
+        $entitlementVersion = self::wholeNumberFrom($input['entitlement_version'] ?? null);
+        $externalSubject = self::boundedString($input['external_subject'] ?? null, 'external_subject');
 
-        if ($parsedType === null) {
-            throw InvalidCredentialInput::unknownSubjectType(is_string($subjectType) ? $subjectType : '');
+        $eventComplete = $integrationNamespace !== null
+            && $eventId !== null
+            && $entitlementVersion !== null
+            && $externalSubject !== null;
+
+        $subjectType = $input['subject_type'] ?? null;
+        $parsedType = null;
+
+        if (is_string($subjectType) && $subjectType !== '') {
+            $parsedType = SubjectType::tryFrom($subjectType);
+
+            if ($parsedType === null) {
+                throw InvalidCredentialInput::unknownSubjectType($subjectType);
+            }
         }
 
         $subjectRef = $input['subject_ref'] ?? null;
+        $parsedRef = null;
 
-        if (! is_string($subjectRef) || $subjectRef === '') {
-            throw InvalidCredentialInput::missingSubjectRef();
+        if (is_string($subjectRef) && $subjectRef !== '') {
+            if (strlen($subjectRef) > InvitationOptions::MAX_FIELD_LENGTH) {
+                throw InvalidCredentialInput::invitationFieldTooLong('subject_ref', InvitationOptions::MAX_FIELD_LENGTH);
+            }
+
+            $parsedRef = $subjectRef;
         }
 
-        if (strlen($subjectRef) > InvitationOptions::MAX_FIELD_LENGTH) {
-            throw InvalidCredentialInput::invitationFieldTooLong('subject_ref', InvitationOptions::MAX_FIELD_LENGTH);
+        // The direct path names its target explicitly; the integration
+        // path derives it from the gated identity, so the pair may be
+        // omitted there (and is verified against the derivation when
+        // supplied — see the action).
+        if (! $eventComplete) {
+            if ($parsedType === null) {
+                throw InvalidCredentialInput::unknownSubjectType(is_string($subjectType) ? $subjectType : '');
+            }
+
+            if ($parsedRef === null) {
+                throw InvalidCredentialInput::missingSubjectRef();
+            }
         }
 
         return new self(
             subjectType: $parsedType,
-            subjectRef: $subjectRef,
-            integrationNamespace: self::boundedString($input['integration_namespace'] ?? null, 'integration_namespace'),
-            eventId: self::boundedString($input['event_id'] ?? null, 'event_id'),
-            entitlementVersion: self::wholeNumberFrom($input['entitlement_version'] ?? null),
-            externalSubject: self::boundedString($input['external_subject'] ?? null, 'external_subject'),
+            subjectRef: $parsedRef,
+            integrationNamespace: $integrationNamespace,
+            eventId: $eventId,
+            entitlementVersion: $entitlementVersion,
+            externalSubject: $externalSubject,
         );
-    }
-
-    public function subject(): Subject
-    {
-        return new Subject($this->subjectType, $this->subjectRef);
     }
 
     public function carriesIntegrationEvent(): bool

@@ -15,6 +15,8 @@ use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier;
+use ArtisanBuild\BuiltForCloud\IntegrationEntitlement;
+use ArtisanBuild\BuiltForCloud\IntegrationEvent;
 use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintOptions;
@@ -341,6 +343,91 @@ it('rides the shared version gate: a replayed or older offboard event is transac
         'subject_ref' => 'sponsor-login',
         'integration_namespace' => 'github-sponsors',
     ])->assertStatus(422);
+});
+
+it('binds the version gate to the offboard target: a decoy external subject cannot offboard a victim (Fix 4)', function (): void {
+    // The victim's REAL gate stands at version 7 (advanced by an invite —
+    // the shared monotonic history).
+    $admin = ['Authorization' => 'Bearer '.auditAdminToken('gate-bind-admin')];
+
+    $this->postJson('/bfc/invitations', [
+        'ttl_seconds' => 3600,
+        'integration_namespace' => 'ns',
+        'event_id' => 'evt-invite-7',
+        'entitlement_version' => 7,
+        'external_subject' => 'victim',
+    ], $admin)->assertStatus(202);
+
+    $victim = $this->mintCredential([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'victim',
+    ]);
+
+    // The attack the review named: an OLD event under a DECOY
+    // external_subject (whose gate is empty, so version 1 would pass)
+    // naming the victim in subject_ref. REFUSED as a mismatch — the
+    // target is derived from the gated identity, never caller-supplied —
+    // and nothing was contained, recorded, or advanced.
+    offboardViaHttp([
+        'subject_type' => 'external_consumer',
+        'subject_ref' => 'victim',
+        'integration_namespace' => 'ns',
+        'event_id' => 'evt-decoy-1',
+        'entitlement_version' => 1,
+        'external_subject' => 'decoy',
+    ])->assertStatus(422);
+
+    expect($victim->credential->refresh()->revoked_at)->toBeNull()
+        ->and(OffboardedSubject::query()->count())->toBe(0)
+        ->and(IntegrationEvent::query()->where('event_id', 'evt-decoy-1')->exists())->toBeFalse()
+        ->and(IntegrationEntitlement::query()->where('external_subject', 'decoy')->exists())->toBeFalse();
+
+    // A mismatched subject TYPE refuses identically.
+    offboardViaHttp([
+        'subject_type' => 'operator',
+        'subject_ref' => 'victim',
+        'integration_namespace' => 'ns',
+        'event_id' => 'evt-decoy-1b',
+        'entitlement_version' => 9,
+        'external_subject' => 'victim',
+    ])->assertStatus(422);
+
+    // With the subject omitted, the decoy event targets the DECOY
+    // identity itself — its own gate, its own containment, never the
+    // victim's.
+    offboardViaHttp([
+        'integration_namespace' => 'ns',
+        'event_id' => 'evt-decoy-2',
+        'entitlement_version' => 1,
+        'external_subject' => 'decoy',
+    ])->assertStatus(202)->assertExactJson(['accepted' => true]);
+
+    expect($victim->credential->refresh()->revoked_at)->toBeNull()
+        ->and(OffboardedSubject::subjectIsOffboarded(new Subject(SubjectType::ExternalConsumer, 'decoy')))->toBeTrue()
+        ->and(OffboardedSubject::subjectIsOffboarded(new Subject(SubjectType::ExternalConsumer, 'victim')))->toBeFalse();
+
+    // Against the victim's real identity, an old version is still gated…
+    offboardViaHttp([
+        'integration_namespace' => 'ns',
+        'event_id' => 'evt-old-victim',
+        'entitlement_version' => 6,
+        'external_subject' => 'victim',
+    ])->assertStatus(202);
+
+    expect($victim->credential->refresh()->revoked_at)->toBeNull();
+
+    // …and only a genuinely newer event contains the victim — the gate
+    // advances for the real bound identity alone.
+    offboardViaHttp([
+        'integration_namespace' => 'ns',
+        'event_id' => 'evt-new-victim',
+        'entitlement_version' => 8,
+        'external_subject' => 'victim',
+    ])->assertStatus(202);
+
+    expect($victim->credential->refresh()->revoked_at)->not->toBeNull()
+        ->and(OffboardedSubject::subjectIsOffboarded(new Subject(SubjectType::ExternalConsumer, 'victim')))->toBeTrue()
+        ->and((int) IntegrationEntitlement::query()->where('external_subject', 'victim')->value('entitlement_version'))->toBe(8);
 });
 
 it('runs the identical action on the CLI transport, --local required', function (): void {
