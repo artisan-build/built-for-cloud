@@ -78,6 +78,11 @@ use Throwable;
  */
 final class RotateCredential
 {
+    // Phase 2's cutover retirement — shared with the hmac activation
+    // cutover, which performs the same grace-bounded, never-extending
+    // retirement at ITS cutover moment.
+    use Concerns\RetiresSupersededCredentials;
+
     use ConsultsDeclaration;
 
     /**
@@ -402,25 +407,6 @@ final class RotateCredential
             delivery: DeliveryShape::EnrollmentCode,
             secret: $code,
         );
-    }
-
-    /**
-     * Phase 2 — the cutover: the old row's expiry becomes the grace end
-     * (NOW under emergency), and at grace end the row dies by its own
-     * expiry, no reaper needed. The guarded predicate is the never-extend
-     * rule: a row already expiring EARLIER keeps its earlier death —
-     * rotation never silently lengthens any credential's life.
-     */
-    private function retire(string $id, bool $emergency): void
-    {
-        $graceEnd = $emergency ? now() : now()->addSeconds(self::GRACE_SECONDS);
-
-        Credential::query()
-            ->whereKey($id)
-            ->where(function ($query) use ($graceEnd): void {
-                $query->whereNull('expires_at')->orWhere('expires_at', '>', $graceEnd);
-            })
-            ->update(['expires_at' => $graceEnd]);
     }
 
     /**

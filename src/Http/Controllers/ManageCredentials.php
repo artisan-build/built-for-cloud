@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
+use ArtisanBuild\BuiltForCloud\Actions\ActivateCredential;
 use ArtisanBuild\BuiltForCloud\Actions\ListCredentials;
 use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
 use ArtisanBuild\BuiltForCloud\Actions\RevokeCredential;
@@ -11,8 +12,10 @@ use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\DeliveryShape;
+use ArtisanBuild\BuiltForCloud\Exceptions\ActivationRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
+use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
 use ArtisanBuild\BuiltForCloud\MintOptions;
@@ -140,6 +143,36 @@ final class ManageCredentials
             // rule as the mint route.
             'delivery' => $this->deliveryPayload($result->mint),
         ] + ($result->completedCutover ? ['completed_cutover' => true] : []), $result->completedCutover ? 200 : 201);
+    }
+
+    /**
+     * The activate verb's HTTP transport (PRD 1.21, SEC-V3-01): the hmac
+     * pending→active signing cutover, by id. The response carries NO
+     * secret — activation reveals nothing; the key was already delivered
+     * — just the now-active summary and, when the activation completed a
+     * rotation, the superseded row now living out its grace window.
+     */
+    public function activate(Request $request, ActivateCredential $activateCredential, string $id): JsonResponse
+    {
+        try {
+            $result = $activateCredential($id, $this->actor($request));
+        } catch (CredentialVerbRefused $refused) {
+            return response()->json(['message' => $refused->getMessage()], 403);
+        } catch (ActivationRefused|RewrapInProgress $refused) {
+            return response()->json(['message' => $refused->getMessage()], 409);
+        } catch (RotationCutoverIncomplete $incomplete) {
+            return response()->json(['message' => $incomplete->getMessage()], 500);
+        }
+
+        if ($result === null) {
+            abort(404);
+        }
+
+        return response()->json([
+            'credential' => $result->summary->toArray(),
+            'superseded_id' => $result->supersededId,
+            'grace_ends_at' => $result->graceEndsAt?->toIso8601String(),
+        ]);
     }
 
     public function destroy(Request $request, RevokeCredential $revoke, string $id): Response

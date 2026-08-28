@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud;
 
 use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
 use ArtisanBuild\BuiltForCloud\Commands\CreateAdminCommand;
+use ArtisanBuild\BuiltForCloud\Commands\CredentialActivateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialListCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialMintCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialRevokeCommand;
@@ -149,6 +150,12 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router->post('/bfc/credentials/{id}/rotate', [ManageCredentials::class, 'rotate'])
                 ->middleware('bfc.credential.admin');
 
+            // The hmac signing cutover (PRD 1.21, SEC-V3-01): a separate
+            // operator-authorized verb — the claim exchange delivers and
+            // never activates, so the flip needs its own route.
+            $router->post('/bfc/credentials/{id}/activate', [ManageCredentials::class, 'activate'])
+                ->middleware('bfc.credential.admin');
+
             // The machine-callable invite verb (PRD 1.13, SEC-V3-05): the
             // HTTP half of its two transports, behind the same
             // credential-admin gate as the unified verb routes — an
@@ -179,6 +186,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([
                 CreateAdminCommand::class,
+                CredentialActivateCommand::class,
                 CredentialListCommand::class,
                 CredentialMintCommand::class,
                 CredentialRevokeCommand::class,

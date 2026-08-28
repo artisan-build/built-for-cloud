@@ -36,6 +36,31 @@ final class RotationCutoverIncomplete extends RuntimeException
         parent::__construct($message, 0, $previous);
     }
 
+    /**
+     * The hmac activation's flavour of failure path B (PRD 1.21): the
+     * pending→active cutover COMMITTED — the new key signs — but the
+     * superseded old key could not be retired into its grace window, so
+     * it verifies unbounded. Same recovery: re-invoking rotate on the
+     * stamped row performs the cutover completion.
+     */
+    public static function activationRetirementFailed(string $supersededId, string $activatedId, ?Throwable $previous = null): self
+    {
+        return new self(
+            sprintf(
+                'Activation cut signing over to credential %s, but could not retire superseded credential %s, '
+                .'which still VERIFIES with no grace bound (listed with its rotated_at stamp). The activation '
+                .'stands — the new key signs. Rotate %s again to complete the cutover (retirement only, nothing '
+                .'minted), or revoke it by id.',
+                $activatedId,
+                $supersededId,
+                $supersededId,
+            ),
+            $supersededId,
+            $activatedId,
+            $previous,
+        );
+    }
+
     public static function retirementFailed(string $supersededId, string $replacementId, ?Throwable $previous = null): self
     {
         return new self(
