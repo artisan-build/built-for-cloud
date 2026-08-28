@@ -93,6 +93,18 @@ final class OffboardSubject
 
     public const string EVENT_KIND = 'offboard';
 
+    /**
+     * The principal-traversal hard ceiling (rework 3 Fix 3): discovery
+     * iterates to a FIXED POINT (a round that adds no new principal ends
+     * the walk — cycles terminate naturally because a known user is never
+     * "new"), and this ceiling only exists so pathological data cannot
+     * loop unbounded. Each round discovers at least one new account or
+     * stops, so the ceiling equals the longest accepted-invitation chain
+     * the walk will follow; hitting it is SURFACED as an incomplete step,
+     * never silently truncated.
+     */
+    public const int PRINCIPAL_TRAVERSAL_CEILING = 100;
+
     public function __construct(private readonly LifecycleEventRecorder $recorder) {}
 
     public function __invoke(OffboardOptions $options, ?AuditActor $actor = null): OffboardResult
@@ -333,7 +345,7 @@ final class OffboardSubject
         // 2 — the principal's users: every user a credential binds, every
         // account an accepted invitation of this principal CREATED, plus
         // (for a human principal) the account whose email IS the ref.
-        [$userIds, $emails] = $this->resolvePrincipals($subject, array_values(array_unique($boundUserIds)), $integrationNamespace);
+        [$userIds, $emails, $traversalComplete] = $this->resolvePrincipals($subject, array_values(array_unique($boundUserIds)), $integrationNamespace);
 
         // 3 — outstanding claim codes addressed to the principal, with
         // their never-used make-before-break durables.
@@ -354,7 +366,19 @@ final class OffboardSubject
         // fully contained one.
         [$deletedSessions, $incompleteStep] = $this->invalidateSessions($userIds);
 
-        $incompleteSteps = $incompleteStep === null ? [] : [$incompleteStep];
+        $incompleteSteps = [];
+
+        if (! $traversalComplete) {
+            // The traversal ceiling was hit (rework 3 Fix 3): principals
+            // beyond it exist and were NOT contained. Surfaced like every
+            // other incomplete step; re-running the idempotent verb
+            // resumes the walk from the (already-registered) frontier.
+            $incompleteSteps[] = 'principals:traversal-ceiling';
+        }
+
+        if ($incompleteStep !== null) {
+            $incompleteSteps[] = $incompleteStep;
+        }
 
         if ($incompleteSteps !== []) {
             Log::warning('Built for Cloud offboard could not complete every containment step in-transaction; the registry rejection stands. Re-run the offboard after fixing the store to retry.', [
@@ -403,17 +427,31 @@ final class OffboardSubject
      * users carry — plus the ref itself as an address, which is what
      * claim codes and invitations are keyed on for human principals.
      *
-     * The user↔email expansion runs to a bounded fixpoint: users yield
-     * their emails, emails yield the accounts their accepted invitations
-     * created, and each round can only add — three rounds cover every
-     * chain the store can express without an unbounded walk.
+     * The user↔email expansion runs to a FIXED POINT (rework 3 Fix 3):
+     * users yield their emails, emails yield the accounts their accepted
+     * invitations created, and the walk ends when a round adds no new
+     * account — cycles terminate naturally (a known user is never "new"),
+     * and the finite user/invitation set bounds the rounds. The
+     * {@see self::PRINCIPAL_TRAVERSAL_CEILING} exists only against
+     * pathological data; hitting it returns `complete = false`, which the
+     * caller surfaces as an incomplete step. Already-registered
+     * principals seed the walk, so a re-run after a ceiling hit RESUMES
+     * from the registered frontier instead of re-truncating the same
+     * prefix.
      *
      * @param  list<string>  $boundUserIds
-     * @return array{list<string>, list<string>}
+     * @return array{list<string>, list<string>, bool} [user ids, emails, traversal complete]
      */
     private function resolvePrincipals(Subject $subject, array $boundUserIds, ?string $integrationNamespace): array
     {
-        $userIds = $boundUserIds;
+        /** @var list<string> $registered */
+        $registered = OffboardedSubject::query()
+            ->forSubject($subject)
+            ->where('user_id', '!=', OffboardedSubject::SUBJECT_ROW)
+            ->pluck('user_id')
+            ->all();
+
+        $userIds = [...$boundUserIds, ...$registered];
         $emails = [$subject->ref];
 
         // The integration identity's accepted-invitation accounts: the
@@ -459,7 +497,9 @@ final class OffboardSubject
             }
         }
 
-        for ($round = 0; $round < 3; $round++) {
+        $complete = false;
+
+        for ($round = 0; $round < self::PRINCIPAL_TRAVERSAL_CEILING; $round++) {
             $userIds = array_values(array_unique($userIds));
 
             if ($instance !== null && $userIds !== []) {
@@ -486,13 +526,17 @@ final class OffboardSubject
             $newUserIds = array_values(array_diff(array_map(strval(...), $acceptedByEmail), $userIds));
 
             if ($newUserIds === []) {
+                // The fixed point: this round's email set was computed
+                // from the FULL user set and discovered nothing new.
+                $complete = true;
+
                 break;
             }
 
             $userIds = [...$userIds, ...$newUserIds];
         }
 
-        return [array_values(array_unique($userIds)), array_values(array_unique($emails))];
+        return [array_values(array_unique($userIds)), array_values(array_unique($emails)), $complete];
     }
 
     /**

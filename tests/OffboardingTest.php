@@ -617,6 +617,152 @@ it('contains accounts created by accepted invitations addressed to the principal
         ->and(DB::table('password_reset_tokens')->count())->toBe(0);
 });
 
+/**
+ * Build an accepted-invitation chain hop0 → hop1 → … → hopN: user hop{i}
+ * invited hop{i+1}, who accepted (used_by). Returns the created user ids
+ * keyed by hop.
+ *
+ * @return array<int, string>
+ */
+function acceptedInvitationChain(int $hops): array
+{
+    $userIds = [];
+
+    for ($i = 0; $i <= $hops; $i++) {
+        $userIds[$i] = (string) DB::table('users')->insertGetId([
+            'name' => 'Hop '.$i,
+            'email' => 'hop'.$i.'@chain.test',
+            'password' => 'irrelevant',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    }
+
+    $invitations = [];
+
+    for ($i = 0; $i < $hops; $i++) {
+        $invitations[] = [
+            'id' => (string) Str::uuid(),
+            'email' => 'hop'.$i.'@chain.test',
+            'token' => hash('sha256', 'chain-invite-'.$i),
+            'used_by' => $userIds[$i + 1],
+            'accepted_at' => now(),
+            'expires_at' => now()->addDay(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ];
+    }
+
+    DB::table('invitations')->insert($invitations);
+
+    return $userIds;
+}
+
+it('contains an arbitrarily deep accepted-invitation chain to its fixed point (r3 Fix 3)', function (): void {
+    config(['session.driver' => 'database']);
+
+    // Five hops — two beyond the old hard cap of three rounds.
+    $chain = acceptedInvitationChain(5);
+    $deepest = $chain[5];
+
+    DB::table('sessions')->insert([
+        'id' => 'deepest-session',
+        'user_id' => $deepest,
+        'payload' => 'payload',
+        'last_activity' => now()->getTimestamp(),
+    ]);
+
+    DB::table('password_reset_tokens')->insert([
+        'email' => 'hop5@chain.test',
+        'token' => 'reset-hash',
+        'created_at' => now(),
+    ]);
+
+    $deepestCredential = $this->mintCredential([
+        'subject_type' => SubjectType::Application,
+        'subject_ref' => 'unrelated-app',
+        'user_id' => $deepest,
+    ]);
+
+    $result = app(OffboardSubject::class)(OffboardOptions::fromInput([
+        'subject_type' => 'user_principal',
+        'subject_ref' => 'hop0@chain.test',
+    ]));
+
+    // The DEEPEST hop is fully contained: registry, session, reset
+    // token, and its bound credential — and the walk reports complete.
+    expect($result->fullyContained())->toBeTrue()
+        ->and(OffboardedSubject::userIsOffboarded($deepest))->toBeTrue()
+        ->and(DB::table('sessions')->count())->toBe(0)
+        ->and(DB::table('password_reset_tokens')->count())->toBe(0)
+        ->and(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $deepestCredential->plaintext()))->toBeNull();
+
+    // Every intermediate hop too.
+    foreach ($chain as $userId) {
+        expect(OffboardedSubject::userIsOffboarded($userId) || $userId === $chain[0])->toBeTrue();
+    }
+});
+
+it('terminates on a cyclic invitation chain (r3 Fix 3)', function (): void {
+    config(['session.driver' => 'database']);
+
+    // hop0 → hop1 → hop2, and hop2's invitation points BACK at hop0.
+    $chain = acceptedInvitationChain(2);
+
+    DB::table('invitations')->insert([
+        'id' => (string) Str::uuid(),
+        'email' => 'hop2@chain.test',
+        'token' => hash('sha256', 'cycle-invite'),
+        'used_by' => $chain[0],
+        'accepted_at' => now(),
+        'expires_at' => now()->addDay(),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    $result = app(OffboardSubject::class)(OffboardOptions::fromInput([
+        'subject_type' => 'user_principal',
+        'subject_ref' => 'hop0@chain.test',
+    ]));
+
+    // A known user is never "new": the cycle closes the fixed point
+    // instead of looping, and everyone in it is contained.
+    expect($result->fullyContained())->toBeTrue()
+        ->and(OffboardedSubject::userIsOffboarded($chain[0]))->toBeTrue()
+        ->and(OffboardedSubject::userIsOffboarded($chain[2]))->toBeTrue();
+});
+
+it('surfaces the traversal ceiling and resumes from the registered frontier on re-run (r3 Fix 3)', function (): void {
+    config(['session.driver' => 'database']);
+
+    // A chain deeper than the ceiling: each round discovers one hop, so
+    // hops past PRINCIPAL_TRAVERSAL_CEILING stay undiscovered on the
+    // first run — and that is REPORTED, never silently truncated.
+    $depth = OffboardSubject::PRINCIPAL_TRAVERSAL_CEILING + 5;
+    $chain = acceptedInvitationChain($depth);
+    $deepest = $chain[$depth];
+
+    $first = app(OffboardSubject::class)(OffboardOptions::fromInput([
+        'subject_type' => 'user_principal',
+        'subject_ref' => 'hop0@chain.test',
+    ]));
+
+    expect($first->fullyContained())->toBeFalse()
+        ->and($first->incompleteSteps)->toContain('principals:traversal-ceiling')
+        ->and(OffboardedSubject::userIsOffboarded($deepest))->toBeFalse();
+
+    // The idempotent re-run seeds from the registered frontier and
+    // finishes the walk: the deepest hop is contained and the result is
+    // clean.
+    $second = app(OffboardSubject::class)(OffboardOptions::fromInput([
+        'subject_type' => 'user_principal',
+        'subject_ref' => 'hop0@chain.test',
+    ]));
+
+    expect($second->fullyContained())->toBeTrue()
+        ->and(OffboardedSubject::userIsOffboarded($deepest))->toBeTrue();
+});
+
 it('binds the version gate to the offboard target: a decoy external subject cannot offboard a victim (Fix 4)', function (): void {
     // The victim's REAL gate stands at version 7 (advanced by an invite —
     // the shared monotonic history).
