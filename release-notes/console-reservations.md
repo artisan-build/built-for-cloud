@@ -8,7 +8,9 @@ guard code, no migrations, no ability issuance, no key material.
 1. **Endpoint classification.** Every endpoint in `docs/http-contract.md` now carries a
    `classification`: `metadata` (bounded scalars/enums only, no free-text strings — safe for
    vendor-side reads) or `content` (application data — never transits the vendor), chosen from
-   each endpoint's documented success-path response shape.
+   each endpoint's documented success-path response shape. `GET /bfc/meta` is `content` for now
+   — its `product` field is an unbounded config-declared string — until a future behavioral
+   revision bounds it so the version-discovery endpoint can honestly become `metadata`.
 2. **Reserved Console names.** The `bfc-console` guard name, the `/bfc/console/*` endpoint
    namespace (first known member `/bfc/console/enter`), and the `bfc_delegated_actors` table
    name are documented as RESERVED — explicitly reserved-for-fast-follow, not implemented.

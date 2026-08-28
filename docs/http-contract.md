@@ -101,7 +101,7 @@ server-generated operational text and — per the single-reveal rule above — n
 
 | endpoint | classification | basis (success response shape) |
 |---|---|---|
-| `GET /bfc/meta` | `metadata` | version integers, capability enum, boolean; `product` is the integrating product's config-declared name, not application free-text |
+| `GET /bfc/meta` | `content` | `product` is an unbounded config-declared string; a future revision may bound it to reclassify |
 | `POST /bfc/ownership/claim` | `content` | single reveal of `owner_token` and `webhook_secret` |
 | `POST /bfc/ownership/release` | `content` | single reveal of the ownership claim code |
 | `POST /bfc/ownership/cancel-transfer` | `metadata` | `{"ok": true}` — a bounded boolean |
@@ -121,6 +121,11 @@ server-generated operational text and — per the single-reveal rule above — n
 
 Vendor-side reads of `metadata`-classified endpoints will be governed by the reserved
 `metadata:read` ability family (see [the Console reservations](#reserved--console-fast-follow-not-implemented)).
+
+Vendor-side (Console) reads will want the version-discovery endpoint, so a future BEHAVIORAL
+revision may constrain `product` to a bounded shape, letting `GET /bfc/meta` honestly become
+`metadata`; until then it is `content`, because an unrestricted config string is
+operator-authored free text.
 
 ---
 
