@@ -11,6 +11,7 @@ use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Testing\TestResponse;
 
 uses(RefreshDatabase::class, DetectsSecretLeaks::class);
@@ -170,7 +171,7 @@ it('answers the retryable server_error shape when the exchange fails unexpectedl
 it('contains the claim reveal to the single response egress (D7 leak harness)', function (): void {
     $code = issueClaimCode();
 
-    /** @var TestResponse<Illuminate\Http\JsonResponse> $response */
+    /** @var TestResponse<JsonResponse> $response */
     $response = $this->assertNoSecretLeakageOfMinted(
         fn (): TestResponse => hitchClaim('{"claim_code": "'.$code.'", "version": 1}'),
         fn (TestResponse $response): string => (string) $response->json('token'),
