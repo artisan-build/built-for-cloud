@@ -472,12 +472,99 @@ final class TokenRegistry
         });
     }
 
+    /**
+     * The PRECISE revoke verb (D2 consequence 1, D6): kill exactly one row
+     * by id — a same-named sibling (a rotation grace row, another install's
+     * credential) survives untouched. `revoke()` below stays the CLI-compat
+     * name verb and keeps its existing semantics: it expires EVERY
+     * resolvable row of the name.
+     *
+     * The predicate is RESOLVABILITY, not `revoked_at`: resolution ignores
+     * `revoked_at` (test-pinned legacy semantics — expiry is what kills),
+     * so an anomalous row carrying `revoked_at` with no effective expiry
+     * (an import, a manual repair) still authenticates. This verb kills
+     * whatever still resolves — stamping `expires_at` and, only where it
+     * is null, `revoked_at` — and thereby REPAIRS that anomaly on contact,
+     * with the audit event a real death deserves. Package verbs can no
+     * longer produce or leave behind the anomalous state.
+     *
+     * Idempotent only on rows that are already DEAD (expired — the one
+     * state that no longer authenticates): a no-op returning false, no
+     * second `revoked` audit event for the same death. Never a silent
+     * no-op on a row that still resolves.
+     */
+    public function revokeById(string $id, ?AuditActor $actor = null, AuditReason $reason = AuditReason::OperatorRequest): bool
+    {
+        return (bool) DB::transaction(function () use ($id, $actor, $reason): bool {
+            /** @var ApiToken|null $live */
+            $live = ApiToken::query()
+                ->whereKey($id)
+                ->resolvable()
+                ->lockForUpdate()
+                ->first(['id', 'revoked_at']);
+
+            if ($live === null) {
+                return false;
+            }
+
+            $now = now();
+
+            ApiToken::query()
+                ->whereKey($id)
+                ->update([
+                    'expires_at' => $now,
+                    // An anomalous row keeps its original revocation stamp;
+                    // the expiry above is what makes it true.
+                    'revoked_at' => $live->revoked_at ?? $now,
+                ]);
+
+            $this->recorder()->record(
+                event: LifecycleEventType::Revoked,
+                credentialId: $id,
+                actor: $actor,
+                reason: $reason,
+            );
+
+            return true;
+        });
+    }
+
     public function revoke(string $name, ?AuditActor $actor = null, AuditReason $reason = AuditReason::OperatorRequest): int
     {
         return DB::transaction(function () use ($name, $actor, $reason): int {
+            /** @var list<string> $ids */
+            $ids = ApiToken::query()
+                ->where('name', $name)
+                ->resolvable()
+                ->lockForUpdate()
+                ->pluck('id')
+                ->all();
+
+            return $this->revokeIds($ids, $actor, $reason);
+        });
+    }
+
+    /**
+     * Revoke EXACTLY these rows — the write is keyed on ids, never on a
+     * name, so a caller that authorized an id set revokes that set and
+     * nothing else: a same-named row created after the caller's locked
+     * select is simply not in this revocation (and never dies
+     * unauthorized). Rows in the list that are already dead are skipped —
+     * no second audit event for the same death. Returns how many rows
+     * actually died.
+     *
+     * @param  list<string>  $ids
+     */
+    public function revokeIds(array $ids, ?AuditActor $actor = null, AuditReason $reason = AuditReason::OperatorRequest): int
+    {
+        if ($ids === []) {
+            return 0;
+        }
+
+        return DB::transaction(function () use ($ids, $actor, $reason): int {
             /** @var list<string> $revokedIds */
             $revokedIds = ApiToken::query()
-                ->where('name', $name)
+                ->whereIn('id', $ids)
                 ->resolvable()
                 ->lockForUpdate()
                 ->pluck('id')
