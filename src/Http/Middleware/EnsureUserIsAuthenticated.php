@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
 
+use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use Closure;
 use Illuminate\Http\Request;
@@ -18,7 +19,7 @@ final class EnsureUserIsAuthenticated
      */
     public function handle(Request $request, Closure $next): Response
     {
-        if (Auth::check()) {
+        if ($this->sessionGuardConfigured() && Auth::check()) {
             // Full account containment (PRD 1.15, SEC-V3-04): a session
             // that survived offboarding — a store the offboard verb could
             // not enumerate — dies HERE, on its first appearance: the
@@ -47,5 +48,21 @@ final class EnsureUserIsAuthenticated
         }
 
         abort(401);
+    }
+
+    /**
+     * Whether the app HAS a session guard to check at all. A headless BfC
+     * app ships `auth.defaults.guard => null` and `auth.guards => []`, and
+     * asking the AuthManager for a guard that does not exist throws —
+     * turning a route that should answer 401 into a 500. Structural
+     * absence is "nobody is authenticated", the same stance
+     * {@see CredentialGuard} takes; a CONFIGURED guard that throws during
+     * resolution is a different state and still propagates.
+     */
+    private function sessionGuardConfigured(): bool
+    {
+        $guard = config('auth.defaults.guard');
+
+        return is_string($guard) && $guard !== '' && is_array(config('auth.guards.'.$guard));
     }
 }

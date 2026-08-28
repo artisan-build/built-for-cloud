@@ -106,3 +106,16 @@ it('registers no bfc route that throttles on anything but a named bfc limiter', 
 
     expect($unnamed)->toBe([]);
 });
+
+/**
+ * The personal-credentials surface (PRD 1.17) is the one package family
+ * that REQUIRES a session, so a headless app — no guard at all — has no
+ * personal surface. It must still answer, not explode: the throttle in
+ * front of it resolves its bucket without touching the AuthManager, and
+ * the session gate then rejects.
+ */
+it('rejects the personal surface on a headless app with no auth guard instead of erroring', function (): void {
+    $this->getJson('/bfc/me/credentials')->assertUnauthorized();
+    $this->postJson('/bfc/me/credentials', ['name' => 'ci'])->assertUnauthorized();
+    $this->deleteJson('/bfc/me/credentials/whatever')->assertUnauthorized();
+});

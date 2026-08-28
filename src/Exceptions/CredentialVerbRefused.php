@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Exceptions;
 
+use ArtisanBuild\BuiltForCloud\Contracts\DeclaresSelfServiceMintPolicy;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use RuntimeException;
 
@@ -42,6 +44,23 @@ final class CredentialVerbRefused extends RuntimeException
         return new self(sprintf(
             'The declaration marks "%s" unsupported for this app; a mint cannot set it.',
             $field,
+        ));
+    }
+
+    /**
+     * The self-service kind refusal (PRD 1.17, rework Fix 2): the
+     * personal surface offers `bearer` and nothing else until a
+     * declaration opts a kind in through
+     * {@see DeclaresSelfServiceMintPolicy}. A logged-in human cannot talk
+     * the surface into minting a signing key or an enrollment by naming
+     * one.
+     */
+    public static function selfServiceKind(CredentialKind $kind): self
+    {
+        return new self(sprintf(
+            'The self-service surface does not offer the "%s" credential kind. '
+            .'Kinds are opted in by the application declaration, never chosen by the requesting user.',
+            $kind->value,
         ));
     }
 

@@ -11,17 +11,16 @@ use ArtisanBuild\BuiltForCloud\Actions\RevokeCredential;
 use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
-use ArtisanBuild\BuiltForCloud\DeliveryShape;
 use ArtisanBuild\BuiltForCloud\Exceptions\ActivationRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\Concerns\RevealsDelivery;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintOptions;
-use ArtisanBuild\BuiltForCloud\MintResult;
 use ArtisanBuild\BuiltForCloud\RevokeOutcome;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\Subject;
@@ -46,6 +45,8 @@ use Symfony\Component\HttpFoundation\Response;
  */
 final class ManageCredentials
 {
+    use RevealsDelivery;
+
     public const CADENCE_HEADER = 'BFC-Presentation-Cadence';
 
     public function index(Request $request, ListCredentials $list): JsonResponse
@@ -216,59 +217,6 @@ final class ManageCredentials
             // audit event — matching the legacy by-id verb's semantics.
             RevokeOutcome::Revoked, RevokeOutcome::AlreadyDead => response()->noContent(),
         };
-    }
-
-    /**
-     * @return array<string, string>
-     */
-    private function deliveryPayload(MintResult $result): array
-    {
-        $payload = ['shape' => $result->delivery->value];
-
-        switch ($result->delivery) {
-            case DeliveryShape::Bearer:
-                if ($result->secret !== null) {
-                    $payload['secret'] = $result->secret->reveal();
-                }
-                break;
-            case DeliveryShape::BasicAuth:
-                $payload['username'] = (string) $result->basicUsername;
-
-                if ($result->secret !== null) {
-                    $payload['password'] = $result->secret->reveal();
-                }
-                break;
-            case DeliveryShape::EnrollmentCode:
-                if ($result->secret !== null) {
-                    $payload['enrollment_code'] = $result->secret->reveal();
-                }
-                break;
-            case DeliveryShape::SigningKey:
-                // The key id rides beside the key (non-secret — the row id
-                // the signature header will carry); the key itself is
-                // PENDING until the activation verb cuts it over, and the
-                // delivery fingerprint (also non-secret) is what the
-                // receiver confirms and activation requires.
-                $payload['key_id'] = $result->summary->id;
-
-                if ($result->deliveryFingerprint !== null) {
-                    $payload['delivery_fingerprint'] = $result->deliveryFingerprint;
-                }
-
-                if ($result->secret !== null) {
-                    $payload['signing_key'] = $result->secret->reveal();
-                }
-                break;
-            case DeliveryShape::SigningKeyCode:
-                if ($result->secret !== null) {
-                    $payload['claim_code'] = $result->secret->reveal();
-                }
-                break;
-            case DeliveryShape::None:
-                break;
-        }
-
-        return $payload;
     }
 
     /**
