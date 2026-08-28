@@ -60,14 +60,18 @@ final class RotationRefused extends RuntimeException
     /**
      * Fold A: a row already superseded by rotation never rotates again —
      * a second rotation of the same source would fork the lineage (A→B
-     * and A→C), and supersession that forks answers nothing. The
-     * successor is the row to rotate.
+     * and A→C), and supersession that forks answers nothing. Thrown only
+     * when no LIVE successor stands (re-invoking the verb on a stamped
+     * row with a live successor performs cutover completion instead):
+     * with the whole chain dead there is nothing to complete and nothing
+     * to rotate — mint a fresh credential.
      */
     public static function alreadyRotated(string $id, ?string $successorId): self
     {
         return new self(sprintf(
-            'Credential %s was already superseded by rotation%s and is living out its grace window; '
-            .'rotating it again would fork the lineage. Rotate its replacement instead.',
+            'Credential %s was already superseded by rotation%s, and its successor is no longer live: '
+            .'there is no cutover to complete, and rotating the stamped row again would fork the lineage. '
+            .'Mint a fresh credential instead.',
             $id,
             $successorId !== null ? sprintf(' (by credential %s)', $successorId) : '',
         ));

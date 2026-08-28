@@ -458,7 +458,13 @@ final class TokenRegistry
             throw RotationRefused::unknownName($name);
         }
 
-        return $this->rotateById($sourceIds[0], $newHash, $emergency, $actor);
+        // The name path cannot reach cutover completion: a stamped row
+        // with a live same-name successor is two resolvable rows (the
+        // ambiguity refusal above), and with the successor dead the
+        // completion does not qualify — so the returned token is always
+        // the row minted from $newHash, and callers may print the
+        // matching plaintext.
+        return $this->rotateById($sourceIds[0], $newHash, $emergency, $actor)->token;
     }
 
     /**
@@ -479,16 +485,22 @@ final class TokenRegistry
      * 2. A separate write sets the old row's grace expiry (one hour; NOW
      *    under emergency), never extending an earlier one. If it fails,
      *    the replacement stands and {@see RotationCutoverIncomplete} names
-     *    the still-live old row, which revoke-by-id can always kill
-     *    (failure path B). That kill IS the recovery — never a
-     *    re-rotation: a row already stamped `rotated_at` refuses to rotate
-     *    again (a second rotation of one source would fork the lineage);
-     *    the standing replacement is the rotatable row.
+     *    the still-live old row (failure path B).
+     *
+     * Re-invoking the verb on a `rotated_at`-stamped row NEVER mints again
+     * (the lineage never forks): with a lineage-verified live successor it
+     * performs the CUTOVER COMPLETION — the retirement write only, audited
+     * with its own reason — which is failure path B's recovery under the
+     * rotation's own authority, and the emergency kill of a graced old
+     * row. With no live successor it refuses. On the completion path the
+     * caller's $newHash is never stored, and the result says so
+     * ({@see LegacyRotationResult}) — a transport must not present its
+     * pre-generated plaintext.
      */
-    public function rotateById(string $id, string $newHash, bool $emergency = false, ?AuditActor $actor = null): ApiToken
+    public function rotateById(string $id, string $newHash, bool $emergency = false, ?AuditActor $actor = null): LegacyRotationResult
     {
-        /** @var ApiToken $newToken */
-        $newToken = DB::transaction(function () use ($id, $newHash, $emergency, $actor): ApiToken {
+        /** @var LegacyRotationResult $result */
+        $result = DB::transaction(function () use ($id, $newHash, $emergency, $actor): LegacyRotationResult {
             /** @var ApiToken|null $source */
             $source = ApiToken::query()
                 ->whereKey($id)
@@ -501,7 +513,7 @@ final class TokenRegistry
             }
 
             if ($source->rotated_at !== null) {
-                throw RotationRefused::alreadyRotated($id, $this->rotationSuccessorOf($id));
+                return $this->completeRotationCutover($source, $actor);
             }
 
             $newToken = $this->store(
@@ -544,24 +556,52 @@ final class TokenRegistry
                 supersededByCredentialId: (string) $newToken->getKey(),
             );
 
-            return $newToken;
+            return new LegacyRotationResult($newToken, (string) $source->getKey());
         });
 
         try {
             $this->retireRotatedRow($id, $emergency);
         } catch (Throwable $exception) {
-            throw RotationCutoverIncomplete::retirementFailed($id, (string) $newToken->getKey(), $exception);
+            throw RotationCutoverIncomplete::retirementFailed($id, (string) $result->token->getKey(), $exception);
         }
 
-        return $newToken->refresh();
+        return new LegacyRotationResult($result->token->refresh(), $result->supersededId, $result->completedCutover);
     }
 
     /**
-     * The cutover (phase 2): the superseded row's expiry becomes the grace
-     * end, at which point it dies by its own expiry — no reaper. The
-     * guarded predicate is the never-extend rule: a row already expiring
-     * earlier keeps its earlier death.
+     * The completion half of {@see rotateById}: the stamped row's live
+     * successor is looked up through the audit lineage and must itself
+     * still resolve — only then does re-invoking the verb retire the old
+     * row (the phase-2 write that follows in rotateById), audited with
+     * its own reason and minting NOTHING. Not a revoke bypass: an
+     * unstamped row never reaches here, and a stamped row whose chain is
+     * dead refuses.
      */
+    private function completeRotationCutover(ApiToken $source, ?AuditActor $actor): LegacyRotationResult
+    {
+        $id = (string) $source->getKey();
+        $successorId = $this->rotationSuccessorOf($id);
+
+        /** @var ApiToken|null $successor */
+        $successor = $successorId === null
+            ? null
+            : ApiToken::query()->whereKey($successorId)->resolvable()->first();
+
+        if ($successor === null) {
+            throw RotationRefused::alreadyRotated($id, $successorId);
+        }
+
+        $this->recorder()->record(
+            event: LifecycleEventType::Rotated,
+            credentialId: $id,
+            actor: $actor,
+            reason: AuditReason::CutoverCompletion,
+            supersededByCredentialId: (string) $successor->getKey(),
+        );
+
+        return new LegacyRotationResult($successor, $id, true);
+    }
+
     /**
      * The most recent successor the audit lineage records for a rotated
      * row, so a refused re-rotation can point at the row to rotate
@@ -578,6 +618,12 @@ final class TokenRegistry
         return is_string($successor) && $successor !== '' ? $successor : null;
     }
 
+    /**
+     * The cutover (phase 2): the superseded row's expiry becomes the grace
+     * end, at which point it dies by its own expiry — no reaper. The
+     * guarded predicate is the never-extend rule: a row already expiring
+     * earlier keeps its earlier death.
+     */
     private function retireRotatedRow(string $id, bool $emergency): void
     {
         $graceEnd = $emergency ? now() : now()->addHour();

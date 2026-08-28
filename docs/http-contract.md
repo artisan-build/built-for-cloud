@@ -57,9 +57,13 @@ Additive unless marked otherwise:
   Legacy rotation's replacement now inherits the source row's exact abilities, subject binding
   and remaining expiry (previously it was minted unscoped and non-expiring — the D6 defect), and
   name-based rotation refuses whenever more than one resolvable row shares the name. A row
-  already superseded by rotation refuses re-rotation (the lineage never forks), and the
+  already superseded by rotation never mints again (the lineage never forks): with a live
+  successor, re-invoking the rotate route performs the retirement-only **cutover completion**
+  (a `200` with `completed_cutover: true` and no secret); without one it refuses. The
   onboarding exchange sweep spares unified-store rows in rotation grace, as it always has on
-  `api_tokens`.
+  `api_tokens` — where the exemption requires the shape rotation actually leaves (the stamp
+  plus a grace-bounded expiry), and `rotated_at` is not mass-assignable, so the exemption
+  cannot be forged.
 - `GET /bfc/meta` `capabilities` gained `credentials`.
 - `POST /bfc/onboarding/issue` requires `ttl_seconds` (bounds below) and accepts nullable
   `email`; the claim surfaces speak the claim-contract error enum documented here.
@@ -286,15 +290,23 @@ dies immediately.
   lineage. Emits `issued` (replacement) and `rotated` (old row, carrying old → new lineage)
   audit events in the mint's own transaction.
 - **404** — no such id. **403** — the declaration denies `rotate` for the row's subject.
+- **200 — cutover completion.** Invoking this route on a row already superseded by rotation
+  (`rotated_at` set) whose lineage-recorded successor still resolves never mints again — it
+  retires the stamped row (immediately with `emergency: true`) under the `rotate` verb's own
+  authority, audited with reason `cutover_completion`. The body names the standing successor
+  and carries **no `plaintext`** (nothing was minted):
+  `{"id": "<successor>", "name": ..., "expires_at": ..., "abilities": [...],
+  "superseded_id": "<retired row>", "completed_cutover": true}`.
 - **409** — `{"message": "..."}`: the row no longer resolves (revoked or expired) — there is
-  nothing to rotate; mint a replacement instead — or it was **already superseded by rotation**:
-  a row in its grace window never rotates again (the lineage never forks); the error names the
-  successor, which is the row to rotate.
+  nothing to rotate; mint a replacement instead — or it was already superseded by rotation and
+  its successor no longer resolves: nothing to complete, and re-rotating would fork the
+  lineage; mint a fresh credential.
 - **500** — `{"message": "..."}`: the replacement was minted but the old row could not be
-  retired. The message names both ids: the old row is STILL LIVE (listed, `rotated_at` stamped)
-  and `DELETE /api/credentials/id/{id}` can always kill it — that kill IS the recovery (the
-  stamped row refuses re-rotation); no plaintext was delivered, so rotate the standing
-  replacement for a fresh delivery, or revoke it by id if unneeded.
+  retired. The message names both ids: the old row is STILL LIVE (listed, `rotated_at`
+  stamped). Recovery needs no authority beyond the rotation itself: invoke this route on the
+  stamped row again (the 200 completion above), or `DELETE /api/credentials/id/{id}` where
+  revoke is authorized; no plaintext was delivered, so rotate the standing replacement for a
+  fresh delivery, or revoke it by id if unneeded.
 
 Name-based rotation survives only as the `token:rotate` CLI convenience, and it now **refuses
 whenever more than one resolvable row shares the name** — it never picks one. Rotate by id here
@@ -513,22 +525,42 @@ Per kind:
 mint's own transaction; if any of those follow-up writes fail, EVERYTHING rolls back — no
 orphan credential — and retrying works.
 
+- **200 — cutover completion.** Invoking this route on a row **already superseded by
+  rotation** (`rotated_at` set) whose lineage-recorded successor is still live never mints
+  again — the lineage never forks. Instead it performs the narrowly-scoped retirement the
+  original rotation still owed (or, with `emergency: true`, kills a compromised graced old
+  row immediately), under the `rotate` verb's own authority — no `revoke` authority is
+  consulted, and it is not a revoke bypass: an unstamped row always gets the full
+  make-before-break (something is minted before anything is retired), and a stamped row
+  without a live successor refuses. Audited as a `rotated` event with reason
+  `cutover_completion`. Override options are refused on this path (`422`) — nothing is minted
+  for them to change. The body carries the standing successor and no secret:
+
+```json
+{
+  "credential": { "…": "the standing successor's summary row" },
+  "superseded_id": "the retired row's id",
+  "delivery": { "shape": "none" },
+  "completed_cutover": true
+}
+```
+
 - **404** — no such id. **403** — `{"message": "..."}`: the declaration denies `rotate` for
   the row's subject, the override is not authorized (not opted in, denied, or past a mint
   ceiling), or the kind does not rotate (`hmac`).
 - **409** — `{"message": "..."}`: the row is revoked, expired, or a pending enrollment — none
-  of which is a rotatable source — or it was **already superseded by rotation**: a row in its
-  grace window never rotates again (the lineage never forks); the error names the successor,
-  which is the row to rotate.
+  of which is a rotatable source — or it was already superseded by rotation and its successor
+  is **no longer live**: there is no cutover to complete, re-rotating would fork the lineage,
+  and the answer is a fresh mint.
 - **422** — `{"message": "..."}`: shared input validation (a change without `override`,
-  out-of-bounds `code_ttl_seconds`, malformed abilities/expiry/booleans) — identical refusals
-  on the CLI transport.
+  out-of-bounds `code_ttl_seconds`, malformed abilities/expiry/booleans, override options on
+  a completion) — identical refusals on the CLI transport.
 - **500** — `{"message": "..."}`: the replacement was committed but the old row could not be
   retired. The message names both ids; the old row is STILL LIVE, listed with its `rotated_at`
-  stamp, and `DELETE /bfc/credentials/{id}` can always kill it — that kill IS the recovery
-  (the stamped row refuses re-rotation). **No secret was delivered** — the sealed carrier is
-  discarded — so rotate the standing replacement for a fresh delivery, or revoke it by id if
-  unneeded.
+  stamp. The recovery needs no authority beyond the rotation itself: **invoke this route on
+  the stamped row again** — the 200 completion above — or `DELETE /bfc/credentials/{id}`
+  where revoke is authorized. **No secret was delivered** — the sealed carrier is discarded —
+  so rotate the standing replacement for a fresh delivery, or revoke it by id if unneeded.
 
 **The elsewhere-hosted / manual case.** When no automation can install the new secret (the
 credential lives in a system only a human can reach), this verb is still the whole flow: it

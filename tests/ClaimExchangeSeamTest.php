@@ -254,3 +254,35 @@ it('spares a unified row in rotation grace from the exchange sweep — the same 
     expect($graced->refresh()->revoked_at)->toBeNull()
         ->and($unmarked->refresh()->revoked_at)->not->toBeNull();
 });
+
+it('sweeps a stamped row whose expiry is not grace-bounded — the exemption requires the shape rotation actually leaves', function (): void {
+    bindUnifiedStore();
+
+    // An INCOMPLETE phase-B cutover: stamped, but retirement failed, so
+    // nothing bounds the row. The marker alone must not exempt it — spared,
+    // it would sit outside the sweep forever.
+    $unbounded = Credential::factory()->create([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'stamped@example.test',
+        'abilities' => [Scope::Consume->value],
+        'rotated_at' => now(),
+        'expires_at' => null,
+    ]);
+
+    // Stamped with an expiry BEYOND the grace horizon: also not the shape
+    // the rotate verb leaves — swept.
+    $overlong = Credential::factory()->create([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'stamped@example.test',
+        'abilities' => [Scope::Consume->value],
+        'rotated_at' => now(),
+        'expires_at' => now()->addDays(30),
+    ]);
+
+    $code = auditIssueCode('stamped@example.test');
+
+    $this->postJson('/bfc/onboarding/exchange', ['token' => $code])->assertCreated();
+
+    expect($unbounded->refresh()->revoked_at)->not->toBeNull()
+        ->and($overlong->refresh()->revoked_at)->not->toBeNull();
+});

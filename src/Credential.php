@@ -74,7 +74,11 @@ final class Credential extends Model implements Authenticatable
         'public_key',
         'status',
         'revoked_at',
-        'rotated_at',
+        // `rotated_at` is deliberately NOT fillable: it is rotation
+        // provenance only the rotate verb may assert (it exempts a row
+        // from the exchange sweep), so a consuming app's create()/fill()
+        // path must not be able to forge it. The verb stamps it through
+        // an explicit query update.
         'expires_at',
         'last_used_at',
     ];

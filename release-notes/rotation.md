@@ -54,22 +54,36 @@ delta in the note.
 `{"override": true, "expires_at": null}` (CLI `--override --clear-expiry`) turns a finite
 expiry into NO expiry, and `{"override": true, "abilities": []}` (CLI `--override
 --clear-abilities`) narrows to NO abilities. Absent fields always mean "preserve the
-source's".
+source's". **The CLI's explicitly empty values carry the HTTP meaning**: `--abilities=` and
+`--expires=` are present-and-none — byte-identical to the HTTP transport's `""` — not
+absence; they flow through the one shared normalization, so both transports accept and refuse
+the identical inputs with the identical messages.
 
-## The lineage never forks
+## The lineage never forks — and a stamped row's rotation can be COMPLETED
 
-A row already superseded by rotation (`rotated_at` set) refuses to rotate again on both
-stores: a second rotation of one source would fork the lineage (A→B and A→C) and supersession
-that forks answers nothing. The refusal names the successor — the rotatable row. The
-failure-path-B recovery is unaffected: it is the old-row *kill* (revoke-by-id), never a
-re-rotation.
+A row already superseded by rotation (`rotated_at` set) never mints again on either store: a
+second rotation of one source would fork the lineage (A→B and A→C) and supersession that
+forks answers nothing. But re-invoking the rotate verb on a stamped row whose
+lineage-recorded successor is still live performs the narrowly-scoped **cutover completion**:
+retirement of the old row only (immediate under `emergency` — the compromised-old-secret
+case), audited as a `rotated` event with reason `cutover_completion`, nothing minted, no
+secret. That makes a failed phase-B cutover recoverable under the rotate verb's own authority
+— a declaration allowing `rotate` but denying `revoke` is no longer stuck — without becoming
+a revoke bypass: an unstamped row always gets the full make-before-break, and a stamped row
+whose chain is dead refuses (mint a fresh credential). HTTP reports a completion as `200`
+with `completed_cutover: true` and a `none` delivery (legacy: no `plaintext` field); the CLI
+prints "Cutover completed" and reveals nothing.
 
-## The exchange sweep respects rotation grace on the unified store
+## The exchange sweep respects rotation grace on the unified store — honestly
 
-The onboarding exchange's name+scope sweep now spares unified-store rows carrying the
-`rotated_at` marker, exactly as it always has on `api_tokens` — a sweep that killed a grace
-row would break the make-before-break window rotation exists to provide. An unmarked
-same-name+scope collision still dies in the sweep.
+The onboarding exchange's name+scope sweep spares unified-store rows in rotation grace,
+exactly as it always has on `api_tokens` — a sweep that killed a grace row would break the
+make-before-break window rotation exists to provide. The exemption requires the SHAPE the
+rotate verb actually leaves — the `rotated_at` stamp **and** an expiry bounded by the grace
+horizon — so a stamped-but-unbounded row (an incomplete cutover, or anything else) is swept
+like an ordinary collision rather than exempted forever. And the marker cannot be forged:
+`rotated_at` is no longer mass-assignable on the unified store — only the rotate verb's own
+explicit write asserts it.
 
 ## Names are byte-exact
 

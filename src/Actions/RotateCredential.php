@@ -168,14 +168,22 @@ final class RotateCredential
             throw RotationRefused::sourceDead($id, ReportedStatus::Expired->value);
         }
 
-        // A row already superseded by rotation never rotates again: a
+        // A row already superseded by rotation never rotates AGAIN — a
         // second rotation of the SAME source would fork the lineage
         // (A→B and A→C), leaving supersession unable to say which
-        // replacement is current. The successor is the rotatable row.
-        // Failure path B is unaffected — its recovery is the old-row KILL
-        // (revoke-by-id), never a re-rotation of the stamped row.
+        // replacement is current. But when a lineage-verified LIVE
+        // successor stands, re-invoking the verb performs the narrowly
+        // scoped CUTOVER COMPLETION instead: retirement of the stamped
+        // row only, nothing minted. That closes failure path B (and the
+        // compromised-old-secret emergency on a graced row) under the
+        // rotate verb's own authority — retiring what a rotation
+        // superseded is part of the rotation the operator was authorized
+        // for, and it is no revoke bypass: only a stamped row with a
+        // live successor qualifies, and it is audited with its own
+        // reason code. A stamped row whose successor is dead (or whose
+        // lineage records none) still refuses.
         if ($source->rotated_at !== null) {
-            throw RotationRefused::alreadyRotated($id, $this->successorOf($id));
+            return $this->completeCutover($source, $options, $actor);
         }
 
         if ($source->kind === CredentialKind::Hmac) {
@@ -230,6 +238,52 @@ final class RotateCredential
         );
 
         return new RotationResult($result, $source->id);
+    }
+
+    /**
+     * The cutover-completion path (rework 3, Fix 3): the stamped source is
+     * retired — by the caller's transaction here (the audit event) and the
+     * shared phase-2 expiry-set that follows in __invoke — and the live
+     * successor is reported as the standing replacement with NOTHING
+     * minted and nothing to reveal. `emergency` keeps its meaning (the
+     * old row dies NOW instead of at grace end), which is exactly the
+     * compromised-old-secret case on an already-graced row. Override
+     * options are meaningless here — nothing is minted for them to
+     * change — and are refused rather than ignored.
+     */
+    private function completeCutover(Credential $source, RotateOptions $options, ?AuditActor $actor): RotationResult
+    {
+        $successorId = $this->successorOf($source->id);
+        $successor = $successorId !== null
+            ? Credential::query()->whereKey($successorId)->first()
+            : null;
+
+        if ($successor === null
+            || $successor->revoked_at !== null
+            || ($successor->expires_at !== null && ! $successor->expires_at->isAfter(now()))) {
+            throw RotationRefused::alreadyRotated($source->id, $successorId);
+        }
+
+        if ($options->override || $options->requestsChange()) {
+            throw InvalidCredentialInput::cutoverCompletionTakesNoOverrides();
+        }
+
+        $this->recorder->record(
+            event: LifecycleEventType::Rotated,
+            credentialId: $source->id,
+            actor: $actor,
+            reason: AuditReason::CutoverCompletion,
+            supersededByCredentialId: $successor->id,
+        );
+
+        return new RotationResult(
+            mint: new MintResult(
+                summary: $this->summarize($successor),
+                delivery: DeliveryShape::None,
+            ),
+            supersededId: $source->id,
+            completedCutover: true,
+        );
     }
 
     /**

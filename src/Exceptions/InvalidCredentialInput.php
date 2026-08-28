@@ -83,4 +83,12 @@ final class InvalidCredentialInput extends InvalidArgumentException
             .'the override changes.',
         );
     }
+
+    public static function cutoverCompletionTakesNoOverrides(): self
+    {
+        return new self(
+            'This credential was already superseded: re-invoking rotate completes the cutover by retiring it — '
+            .'nothing is minted, so override options do not apply here.',
+        );
+    }
 }

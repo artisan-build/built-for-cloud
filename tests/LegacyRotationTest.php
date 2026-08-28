@@ -6,15 +6,21 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditReason;
+use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesCredentialVerbs;
+use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
+use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Orchestra\Testbench\Attributes\WithConfig;
@@ -95,7 +101,7 @@ final class LegacyRotationTest extends TestCase
         $this->assertNull($second->refresh()->rotated_at);
         $this->assertSame(2, ApiToken::query()->where('name', 'dup')->count());
 
-        $replacement = $registry->rotateById($first->id, hash('sha256', 'dup-replacement'));
+        $replacement = $registry->rotateById($first->id, hash('sha256', 'dup-replacement'))->token;
 
         $this->assertSame([Scope::Consume->value], $replacement->abilities);
         $this->assertNotNull($first->refresh()->rotated_at);
@@ -144,7 +150,7 @@ final class LegacyRotationTest extends TestCase
         $registry = new TokenRegistry;
 
         $source = $registry->store('lineage', hash('sha256', 'lineage-old'));
-        $replacement = $registry->rotateById($source->id, hash('sha256', 'lineage-new'));
+        $replacement = $registry->rotateById($source->id, hash('sha256', 'lineage-new'))->token;
 
         $this->assertNotNull($source->refresh()->rotated_at);
 
@@ -279,36 +285,47 @@ final class LegacyRotationTest extends TestCase
     }
 
     /**
-     * Fold A on the legacy store: a row already stamped `rotated_at`
-     * refuses a second rotation — the lineage never forks (no A→B plus
-     * A→C) — and the refusal names the successor, which rotates on
-     * normally (a linear A→B→C chain).
+     * Fold A + Fix 3 on the legacy store: re-invoking the verb on a
+     * stamped row never mints again — with a live successor it performs
+     * the retirement-only cutover completion (audited with its own
+     * reason, the caller's hash never stored); with the successor dead it
+     * refuses. Either way the lineage stays linear, and the successor is
+     * the mintable rotation (A → B → C).
      */
-    public function test_a_row_already_in_grace_refuses_re_rotation_while_its_successor_rotates_on(): void
+    public function test_a_stamped_row_completes_instead_of_forking_and_refuses_once_its_successor_dies(): void
     {
         $registry = new TokenRegistry;
 
         $source = $registry->store('chain', hash('sha256', 'chain-a'));
-        $successor = $registry->rotateById($source->id, hash('sha256', 'chain-b'));
+        $successor = $registry->rotateById($source->id, hash('sha256', 'chain-b'))->token;
 
-        try {
-            $registry->rotateById($source->id, hash('sha256', 'chain-fork'));
-            $this->fail('Re-rotating a graced row was performed.');
-        } catch (RotationRefused $refused) {
-            $this->assertStringContainsString('already superseded by rotation', $refused->getMessage());
-            $this->assertStringContainsString((string) $successor->getKey(), $refused->getMessage());
-        }
+        // Re-invocation with a live successor: completion, no fork row,
+        // and the would-be hash was never stored.
+        $completion = $registry->rotateById($source->id, hash('sha256', 'chain-fork'));
 
-        // No fork was minted, and the source still carries exactly one
-        // rotated lineage event.
+        $this->assertTrue($completion->completedCutover);
+        $this->assertSame((string) $successor->getKey(), (string) $completion->token->getKey());
+        $this->assertSame($source->id, $completion->supersededId);
         $this->assertFalse(ApiToken::query()->where('token_hash', hash('sha256', 'chain-fork'))->exists());
+
         $this->assertSame(1, CredentialAuditEvent::query()
             ->where('credential_id', $source->id)
             ->where('event', LifecycleEventType::Rotated->value)
+            ->where('reason_code', AuditReason::CutoverCompletion->value)
             ->count());
 
-        // The successor is the rotatable row: A → B → C.
-        $third = $registry->rotateById((string) $successor->getKey(), hash('sha256', 'chain-c'));
+        // Every lineage event of the source names the ONE successor.
+        $supersededBy = CredentialAuditEvent::query()
+            ->where('credential_id', $source->id)
+            ->where('event', LifecycleEventType::Rotated->value)
+            ->pluck('superseded_by_credential_id')
+            ->unique()
+            ->all();
+
+        $this->assertSame([(string) $successor->getKey()], $supersededBy);
+
+        // The successor is the mintable rotation: A → B → C.
+        $third = $registry->rotateById((string) $successor->getKey(), hash('sha256', 'chain-c'))->token;
 
         $lineage = CredentialAuditEvent::query()
             ->where('credential_id', $successor->getKey())
@@ -316,6 +333,73 @@ final class LegacyRotationTest extends TestCase
             ->sole();
 
         $this->assertSame((string) $third->getKey(), $lineage->superseded_by_credential_id);
+
+        // Kill the whole chain's head: with no live successor, the
+        // stamped SUCCESSOR now refuses rather than completing.
+        $registry->revokeById((string) $third->getKey());
+
+        try {
+            $registry->rotateById((string) $successor->getKey(), hash('sha256', 'chain-dead'));
+            $this->fail('A stamped row with a dead successor was rotated.');
+        } catch (RotationRefused $refused) {
+            $this->assertStringContainsString('no longer live', $refused->getMessage());
+            $this->assertStringContainsString('Mint a fresh credential', $refused->getMessage());
+        }
+    }
+
+    /**
+     * Fix 3's authority case on the legacy HTTP surface: with a
+     * declaration allowing Rotate but denying Revoke, a failed phase-B
+     * cutover is completable through the rotate route alone — a 200
+     * carrying NO plaintext (nothing was minted; the pre-generated secret
+     * corresponds to no row) — while the revoke route stays 403.
+     */
+    public function test_the_http_route_completes_a_failed_cutover_under_rotate_authority_alone(): void
+    {
+        $this->app->bind(CredentialDeclaration::class, fn (): CredentialDeclaration => new class implements AuthorizesCredentialVerbs, CredentialDeclaration
+        {
+            public function resolveSubject(Request $request): ?Subject
+            {
+                return null;
+            }
+
+            public function authorize(Credential $credential, ?string $ability, Request $request): bool
+            {
+                return true;
+            }
+
+            public function authorizeVerb(CredentialVerb $verb, ?Subject $subject, Request $request): bool
+            {
+                return $verb !== CredentialVerb::Revoke;
+            }
+        });
+
+        $registry = new TokenRegistry;
+        $source = $registry->store('http-complete', hash('sha256', 'http-complete-old'), null, [Scope::Consume->value]);
+
+        DB::statement("CREATE TRIGGER bfc_fail_legacy_cutover_fix3 BEFORE UPDATE OF expires_at ON api_tokens WHEN NEW.rotated_at IS NOT NULL BEGIN SELECT RAISE(ABORT, 'forced cutover failure'); END");
+
+        $this->postJson('/api/credentials/id/'.$source->id.'/rotate', [], $this->legacyAdminHeaders())
+            ->assertStatus(500);
+
+        DB::statement('DROP TRIGGER bfc_fail_legacy_cutover_fix3');
+
+        // Revoke is denied by the matrix…
+        $this->deleteJson('/api/credentials/id/'.$source->id, [], $this->legacyAdminHeaders())
+            ->assertForbidden();
+
+        // …but re-invoking the rotate route completes the cutover.
+        $completion = $this->postJson('/api/credentials/id/'.$source->id.'/rotate', [], $this->legacyAdminHeaders())
+            ->assertOk();
+
+        $this->assertTrue((bool) $completion->json('completed_cutover'));
+        $this->assertSame($source->id, $completion->json('superseded_id'));
+        $this->assertArrayNotHasKey('plaintext', (array) $completion->json());
+
+        $source->refresh();
+        $this->assertNotNull($source->rotated_at);
+        $this->assertNotNull($source->expires_at);
+        $this->assertTrue($source->expires_at->lessThanOrEqualTo(now()->addHour()));
     }
 
     /**

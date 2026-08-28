@@ -17,12 +17,13 @@ use Throwable;
  *   its secret was NOT delivered — the sealed carrier is discarded, so
  *   nothing leaked and nothing usable is orphaned;
  * - the OLD row is still live, visible in the listing with its
- *   `rotated_at` stamp, and revoke-by-id can always kill it (the
- *   anomaly-repair semantics of the by-id revoke verbs);
- * - recovery is the old-row KILL, never a re-rotation: the stamped row
- *   refuses to rotate again (lineage never forks), and the standing
- *   replacement is the rotatable row — rotate IT for a fresh delivery,
- *   or revoke it by id if unneeded.
+ *   `rotated_at` stamp;
+ * - recovery is the old-row KILL, and it needs no authority beyond the
+ *   rotation itself: re-invoking rotate on the stamped row performs the
+ *   CUTOVER COMPLETION — retirement only, nothing minted, the lineage
+ *   never forks — and revoke-by-id also works where that verb is
+ *   authorized. The standing replacement can then be rotated for a
+ *   fresh delivery, or revoked by id if unneeded.
  */
 final class RotationCutoverIncomplete extends RuntimeException
 {
@@ -40,8 +41,9 @@ final class RotationCutoverIncomplete extends RuntimeException
         return new self(
             sprintf(
                 'Rotation minted replacement %s but could not retire credential %s, which is STILL LIVE '
-                .'(listed with its rotated_at stamp). Revoke %s by id to complete the cutover; no secret was '
-                .'delivered, so rotate the standing replacement %s for a fresh delivery, or revoke it by id if unused.',
+                .'(listed with its rotated_at stamp). Rotate %s again to complete the cutover (retirement only, '
+                .'nothing minted), or revoke it by id; no secret was delivered, so rotate the standing '
+                .'replacement %s for a fresh delivery, or revoke it by id if unused.',
                 $replacementId,
                 $supersededId,
                 $supersededId,

@@ -83,6 +83,12 @@ final class CredentialRotateCommand extends Command
             return self::FAILURE;
         }
 
+        if ($result->completedCutover) {
+            $this->describeCompletion($result);
+
+            return self::SUCCESS;
+        }
+
         $this->describe($result);
         $this->revealOnce($result);
 
@@ -90,13 +96,15 @@ final class CredentialRotateCommand extends Command
     }
 
     /**
-     * The shared-input array, with PRESENCE meaning what it means on the
-     * HTTP transport (Fix 3): a key appears exactly when the caller chose
-     * that dimension. `--abilities=`/`--expires=` provide a value; the
-     * `--clear-*` forms provide the dimension as EXPLICITLY NONE (the JSON
-     * transport's explicit null / empty list); passing neither leaves the
-     * key absent, which always means "preserve the source's". Null on
-     * conflicting spellings of one dimension.
+     * The shared-input array, with PRESENCE meaning exactly what it means
+     * on the HTTP transport (Fix 2/3): a key appears exactly when the
+     * caller passed the option at all. An EXPLICITLY EMPTY value
+     * (`--abilities=`, `--expires=`) is present-and-none — it flows
+     * through the shared normalization exactly like the HTTP transport's
+     * `""` and means "override to nothing" — the same thing the
+     * `--clear-*` spellings say; the two spellings of one dimension
+     * conflict only when one carries a VALUE. Passing neither leaves the
+     * key absent, which always means "preserve the source's".
      *
      * @return array<string, mixed>|null
      */
@@ -108,35 +116,52 @@ final class CredentialRotateCommand extends Command
             'code_ttl_seconds' => $this->stringOption('code-ttl'),
         ];
 
-        $abilities = $this->stringOption('abilities');
+        $abilitiesProvided = $this->optionProvided('abilities');
+        $abilities = $this->option('abilities');
 
         if ((bool) $this->option('clear-abilities')) {
-            if ($abilities !== null) {
+            if ($abilitiesProvided && is_string($abilities) && $abilities !== '') {
                 $this->error('Pass --abilities or --clear-abilities, not both.');
 
                 return null;
             }
 
             $input['abilities'] = [];
-        } elseif ($abilities !== null) {
-            $input['abilities'] = $abilities;
+        } elseif ($abilitiesProvided) {
+            // '' normalizes to explicit-none, byte-identical to HTTP "".
+            $input['abilities'] = (string) $abilities;
         }
 
-        $expires = $this->stringOption('expires');
+        $expiryProvided = $this->optionProvided('expires');
+        $expires = $this->option('expires');
 
         if ((bool) $this->option('clear-expiry')) {
-            if ($expires !== null) {
+            if ($expiryProvided && is_string($expires) && $expires !== '') {
                 $this->error('Pass --expires or --clear-expiry, not both.');
 
                 return null;
             }
 
             $input['expires_at'] = null;
-        } elseif ($expires !== null) {
-            $input['expires_at'] = $expires;
+        } elseif ($expiryProvided) {
+            // '' normalizes to explicit-none (no expiry), same as HTTP "".
+            $input['expires_at'] = (string) $expires;
         }
 
         return $input;
+    }
+
+    /**
+     * Raw presence: whether the caller passed the option AT ALL —
+     * `--abilities=` and a bare `--abilities` are provided; an absent
+     * option is not. `option()` alone cannot tell "absent" from "provided
+     * empty as null", which is exactly the presence signal the shared
+     * input contract keys on.
+     */
+    private function optionProvided(string $key): bool
+    {
+        return $this->option($key) !== null
+            || $this->input->hasParameterOption('--'.$key, true);
     }
 
     private function describe(RotationResult $result): void
@@ -156,6 +181,21 @@ final class CredentialRotateCommand extends Command
         $this->line((bool) $this->option('emergency')
             ? 'Emergency rotation: the old credential is dead now.'
             : 'The old credential stays resolvable through its grace window (one hour), then dies by its own expiry.');
+    }
+
+    /**
+     * The cutover-completion outcome: nothing was minted and there is no
+     * secret — the stamped old row was retired under the rotation's own
+     * authority, and the already-standing successor is reported.
+     */
+    private function describeCompletion(RotationResult $result): void
+    {
+        $this->line(sprintf(
+            'Cutover completed: credential %s retired%s; replacement %s already stands. Nothing was minted.',
+            $result->supersededId,
+            (bool) $this->option('emergency') ? ' immediately (emergency)' : ' into its grace window',
+            $result->mint->summary->id,
+        ));
     }
 
     /**

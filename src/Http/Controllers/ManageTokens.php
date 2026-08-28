@@ -260,7 +260,7 @@ final class ManageTokens
         $generated = $this->generator->generate();
 
         try {
-            $replacement = $this->tokens->rotateById(
+            $result = $this->tokens->rotateById(
                 $id,
                 $generated->hash,
                 $request->boolean('emergency'),
@@ -270,6 +270,24 @@ final class ManageTokens
             return response()->json(['message' => $refused->getMessage()], 409);
         } catch (RotationCutoverIncomplete $incomplete) {
             return response()->json(['message' => $incomplete->getMessage()], 500);
+        }
+
+        $replacement = $result->token;
+
+        // The completion path minted NOTHING (the standing successor was
+        // already live), so the pre-generated plaintext corresponds to no
+        // stored credential and must never be presented as one: a 200
+        // (nothing created) without a plaintext field, naming the
+        // successor and the retired row.
+        if ($result->completedCutover) {
+            return response()->json([
+                'id' => $replacement->id,
+                'name' => $replacement->name,
+                'expires_at' => $replacement->expires_at,
+                'abilities' => $replacement->abilities ?? [],
+                'superseded_id' => $id,
+                'completed_cutover' => true,
+            ]);
         }
 
         return response()->json([

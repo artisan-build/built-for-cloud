@@ -131,13 +131,15 @@ final class ManageCredentials
             abort(404);
         }
 
+        // The completion path created nothing: 200, the standing successor
+        // as `credential`, and a `none` delivery — there is no secret.
         return response()->json([
             'credential' => $result->mint->summary->toArray(),
             'superseded_id' => $result->supersededId,
             // The transport boundary: the ONE reveal (D7), same carrier
             // rule as the mint route.
             'delivery' => $this->deliveryPayload($result->mint),
-        ], 201);
+        ] + ($result->completedCutover ? ['completed_cutover' => true] : []), $result->completedCutover ? 200 : 201);
     }
 
     public function destroy(Request $request, RevokeCredential $revoke, string $id): Response

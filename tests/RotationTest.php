@@ -604,7 +604,7 @@ it('still treats absent override fields as preserve — presence, not value, is 
 
 // ---------------------------------------------- linear lineage (Fold A)
 
-it('refuses to re-rotate a row already in grace, pointing at its successor, while the successor rotates on', function (): void {
+it('never forks the lineage on re-invocation: a graced row with a live successor completes the cutover, and the successor rotates on', function (): void {
     $source = rotatableSource(['expires_at' => null]);
 
     $first = $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [], rotationAdminHeaders())
@@ -612,24 +612,29 @@ it('refuses to re-rotate a row already in grace, pointing at its successor, whil
 
     $successorId = (string) $first->json('credential.id');
 
-    // Re-rotating the graced row would fork the lineage: refused, naming
-    // the successor — identically on both transports.
-    $refusal = $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [], rotationAdminHeaders())
-        ->assertStatus(409);
+    // Re-invoking the verb on the graced row mints NOTHING — no A→C fork
+    // — it performs the retirement-only cutover completion, reporting the
+    // standing successor with a `none` delivery.
+    $completion = $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [], rotationAdminHeaders())
+        ->assertOk();
 
-    $message = (string) $refusal->json('message');
+    expect($completion->json('completed_cutover'))->toBeTrue()
+        ->and($completion->json('credential.id'))->toBe($successorId)
+        ->and($completion->json('superseded_id'))->toBe($source->id)
+        ->and($completion->json('delivery.shape'))->toBe('none')
+        ->and($completion->json('delivery.secret'))->toBeNull()
+        ->and(Credential::query()->count())->toBe(2);
 
-    expect($message)->toContain('already superseded by rotation')
-        ->and($message)->toContain($successorId)
-        ->and($message)->toContain('Rotate its replacement instead');
+    // The lineage stayed linear: every rotated event of the source names
+    // the ONE successor.
+    $sourceRotations = CredentialAuditEvent::query()
+        ->where('credential_id', $source->id)
+        ->where('event', LifecycleEventType::Rotated->value)
+        ->get();
 
-    expect(Artisan::call('bfc:credential:rotate', ['id' => $source->id, '--local' => true]))->toBe(1)
-        ->and(trim(Artisan::output()))->toBe($message);
+    expect($sourceRotations->pluck('superseded_by_credential_id')->unique()->all())->toBe([$successorId]);
 
-    // Exactly one rotated event for the source: the lineage never forked.
-    expect(rotationEventsFor($source->id))->toBe([LifecycleEventType::Rotated->value]);
-
-    // The successor is the rotatable row: the chain stays linear
+    // The successor is the mintable rotation: the chain stays linear
     // (A → B → C).
     $second = $this->postJson('/bfc/credentials/'.$successorId.'/rotate', [], rotationAdminHeaders())
         ->assertCreated();
@@ -640,6 +645,232 @@ it('refuses to re-rotate a row already in grace, pointing at its successor, whil
         ->sole();
 
     expect($rotated->superseded_by_credential_id)->toBe((string) $second->json('credential.id'));
+});
+
+it('refuses re-rotation of a stamped row whose successor is no longer live, identically on both transports', function (): void {
+    $source = rotatableSource(['expires_at' => null]);
+
+    $successorId = (string) $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [], rotationAdminHeaders())
+        ->assertCreated()
+        ->json('credential.id');
+
+    $this->deleteJson('/bfc/credentials/'.$successorId, [], rotationAdminHeaders())->assertNoContent();
+
+    $refusal = $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [], rotationAdminHeaders())
+        ->assertStatus(409);
+
+    $message = (string) $refusal->json('message');
+
+    expect($message)->toContain('already superseded by rotation')
+        ->and($message)->toContain($successorId)
+        ->and($message)->toContain('no longer live')
+        ->and($message)->toContain('Mint a fresh credential');
+
+    expect(Artisan::call('bfc:credential:rotate', ['id' => $source->id, '--local' => true]))->toBe(1)
+        ->and(trim(Artisan::output()))->toBe($message)
+        ->and(Credential::query()->count())->toBe(2);
+});
+
+// ------------------------------------ cutover completion authority (Fix 3)
+
+it('completes a failed cutover under rotate authority alone, with revoke denied, on both transports', function (): void {
+    // Rotate allowed, Revoke denied: exactly the declaration that made a
+    // failed phase B unrecoverable before the completion path existed.
+    app()->bind(CredentialDeclaration::class, fn (): CredentialDeclaration => new class implements AuthorizesCredentialVerbs, CredentialDeclaration
+    {
+        public function resolveSubject(Request $request): ?Subject
+        {
+            return null;
+        }
+
+        public function authorize(Credential $credential, ?string $ability, Request $request): bool
+        {
+            return true;
+        }
+
+        public function authorizeVerb(CredentialVerb $verb, ?Subject $subject, Request $request): bool
+        {
+            return $verb !== CredentialVerb::Revoke;
+        }
+    });
+
+    $cliSource = rotatableSource(['expires_at' => null]);
+    $httpSource = rotatableSource(['expires_at' => null]);
+
+    DB::statement("CREATE TRIGGER bfc_fail_cutover_fix3 BEFORE UPDATE OF expires_at ON credentials WHEN NEW.rotated_at IS NOT NULL BEGIN SELECT RAISE(ABORT, 'forced cutover failure'); END");
+
+    foreach ([$cliSource, $httpSource] as $source) {
+        $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [], rotationAdminHeaders())->assertStatus(500);
+    }
+
+    DB::statement('DROP TRIGGER bfc_fail_cutover_fix3');
+
+    // The revoke verb is denied, so the old rows cannot die that way…
+    $this->deleteJson('/bfc/credentials/'.$httpSource->id, [], rotationAdminHeaders())->assertForbidden();
+
+    // …but re-invoking ROTATE completes the cutover on either transport.
+    expect(Artisan::call('bfc:credential:rotate', ['id' => $cliSource->id, '--local' => true]))->toBe(0)
+        ->and(Artisan::output())->toContain('Cutover completed')
+        ->and(Artisan::output())->not->toContain('shown once');
+
+    $completion = $this->postJson('/bfc/credentials/'.$httpSource->id.'/rotate', [], rotationAdminHeaders())
+        ->assertOk();
+
+    expect($completion->json('completed_cutover'))->toBeTrue()
+        ->and($completion->json('delivery.shape'))->toBe('none');
+
+    foreach ([$cliSource, $httpSource] as $source) {
+        $source->refresh();
+
+        expect($source->expires_at)->not->toBeNull()
+            ->and($source->expires_at?->lessThanOrEqualTo(now()->addHour()))->toBeTrue();
+
+        expect(CredentialAuditEvent::query()
+            ->where('credential_id', $source->id)
+            ->where('event', LifecycleEventType::Rotated->value)
+            ->where('reason_code', AuditReason::CutoverCompletion->value)
+            ->count())->toBe(1);
+    }
+
+    // Nothing was minted by either completion: two sources, two successors.
+    expect(Credential::query()->count())->toBe(4);
+});
+
+it('kills a compromised graced old row immediately via emergency completion', function (): void {
+    $source = rotatableSource(['expires_at' => null]);
+
+    $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [], rotationAdminHeaders())->assertCreated();
+
+    // The old secret is compromised mid-grace: emergency completion
+    // retires it NOW, minting nothing.
+    $this->postJson('/bfc/credentials/'.$source->id.'/rotate', ['emergency' => true], rotationAdminHeaders())
+        ->assertOk();
+
+    $source->refresh();
+
+    expect(Credential::query()->active()->pluck('id')->all())->not->toContain($source->id)
+        ->and($source->expires_at?->lessThanOrEqualTo(now()))->toBeTrue()
+        ->and(Credential::query()->count())->toBe(2);
+});
+
+it('is no revoke bypass: an unstamped row cannot be retired without minting its replacement', function (): void {
+    app()->bind(CredentialDeclaration::class, fn (): CredentialDeclaration => new class implements AuthorizesCredentialVerbs, CredentialDeclaration
+    {
+        public function resolveSubject(Request $request): ?Subject
+        {
+            return null;
+        }
+
+        public function authorize(Credential $credential, ?string $ability, Request $request): bool
+        {
+            return true;
+        }
+
+        public function authorizeVerb(CredentialVerb $verb, ?Subject $subject, Request $request): bool
+        {
+            return $verb !== CredentialVerb::Revoke;
+        }
+    });
+
+    $source = rotatableSource(['expires_at' => null]);
+
+    // Rotating an unstamped row is ALWAYS the full make-before-break: a
+    // live replacement is minted before the old row is retired, so rotate
+    // authority can never simply destroy a subject's access.
+    $response = $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [], rotationAdminHeaders())
+        ->assertCreated();
+
+    expect($response->json('completed_cutover'))->toBeNull()
+        ->and(Credential::query()->count())->toBe(2)
+        ->and(Credential::query()->active()->pluck('id')->all())->toContain((string) $response->json('credential.id'));
+});
+
+it('refuses override options on a completion — nothing is minted for them to change', function (): void {
+    bindOverridableDeclaration();
+
+    $source = rotatableSource(['expires_at' => null]);
+
+    $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [], rotationAdminHeaders())->assertCreated();
+
+    $refusal = $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [
+        'override' => true,
+        'abilities' => ['consume', 'admin'],
+    ], rotationAdminHeaders())->assertStatus(422);
+
+    expect((string) $refusal->json('message'))->toContain('override options do not apply')
+        ->and(Credential::query()->count())->toBe(2);
+});
+
+// -------------------------------------- CLI presence parity (Fix 2)
+
+it('treats an explicitly empty CLI value as present-and-none, byte-identical to the HTTP empty string', function (): void {
+    bindOverridableDeclaration();
+
+    $cliSource = rotatableSource(['abilities' => ['consume', 'read']]);
+    $httpSource = rotatableSource(['abilities' => ['consume', 'read']]);
+
+    // CLI `--abilities=` and `--expires=`: provided-and-empty.
+    expect(Artisan::call('bfc:credential:rotate', [
+        'id' => $cliSource->id,
+        '--override' => true,
+        '--abilities' => '',
+        '--expires' => '',
+        '--local' => true,
+    ]))->toBe(0);
+
+    preg_match('/shown once: (\S+)/', Artisan::output(), $matches);
+    $cliReplacement = Credential::query()->where('secret_hash', hash('sha256', $matches[1]))->sole();
+
+    // HTTP "" on the same fields: the identical question.
+    $httpResponse = $this->postJson('/bfc/credentials/'.$httpSource->id.'/rotate', [
+        'override' => true,
+        'abilities' => '',
+        'expires_at' => '',
+    ], rotationAdminHeaders())->assertCreated();
+
+    $httpReplacement = Credential::query()->findOrFail((string) $httpResponse->json('credential.id'));
+
+    foreach ([$cliReplacement, $httpReplacement] as $replacement) {
+        expect($replacement->getAttributes()['abilities'])->toBeNull()
+            ->and($replacement->expires_at)->toBeNull();
+    }
+});
+
+it('refuses a provided-empty value without the override flag identically on both transports', function (): void {
+    $cliSource = rotatableSource();
+    $httpSource = rotatableSource();
+
+    expect(Artisan::call('bfc:credential:rotate', [
+        'id' => $cliSource->id,
+        '--abilities' => '',
+        '--local' => true,
+    ]))->toBe(1);
+    $cliMessage = trim(Artisan::output());
+
+    $httpResponse = $this->postJson('/bfc/credentials/'.$httpSource->id.'/rotate', [
+        'abilities' => '',
+    ], rotationAdminHeaders())->assertStatus(422);
+
+    expect($cliMessage)->toBe((string) $httpResponse->json('message'))
+        ->and($cliMessage)->toContain('override')
+        ->and($cliSource->refresh()->rotated_at)->toBeNull()
+        ->and($httpSource->refresh()->rotated_at)->toBeNull()
+        ->and(Credential::query()->count())->toBe(2);
+});
+
+// ------------------------------------ non-forgeable provenance (Fix 1)
+
+it('discards a mass-assigned rotated_at: only the rotate verb asserts the sweep-exempting marker', function (): void {
+    $forged = Credential::query()->create([
+        'kind' => CredentialKind::Bearer,
+        'subject_type' => 'external_consumer',
+        'subject_ref' => 'forger',
+        'abilities' => ['consume'],
+        'secret_hash' => hash('sha256', 'forged-secret'),
+        'rotated_at' => now(),
+    ]);
+
+    expect($forged->refresh()->rotated_at)->toBeNull();
 });
 
 // ------------------------------------------ grace-boundary precision (Fold B)
