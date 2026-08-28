@@ -32,7 +32,7 @@ final class CredentialMintCommand extends Command
     protected $signature = 'bfc:credential:mint
         {subject-type : What a revocation costs: application, installation, user_principal, external_consumer or operator}
         {subject-ref : The subject\'s partition key (tenancy lives here, never in the name)}
-        {--kind=bearer : bearer, basic or asymmetric}
+        {--kind=bearer : bearer, basic, asymmetric or hmac}
         {--name= : Decorative, freely editable, non-unique label}
         {--abilities= : Comma-separated abilities; omitted grants nothing}
         {--expires= : Credential expiry (ISO-8601). Omitted means NO expiry — never defaulted}
@@ -122,6 +122,22 @@ final class CredentialMintCommand extends Command
                 if ($result->secret !== null) {
                     $this->line('Enrollment code - shown once: '.$result->secret->reveal());
                 }
+                break;
+            case DeliveryShape::SigningKey:
+                $this->line('Signing key id: '.$result->summary->id);
+
+                if ($result->secret !== null) {
+                    $this->line('Save this signing key - shown once: '.$result->secret->reveal());
+                }
+
+                $this->line('The key is PENDING: it signs and verifies nothing until bfc:credential:activate cuts it over.');
+                break;
+            case DeliveryShape::SigningKeyCode:
+                if ($result->secret !== null) {
+                    $this->line('Claim code - shown once: '.$result->secret->reveal());
+                }
+
+                $this->line('Exchanging the code delivers the PENDING signing key and never activates it.');
                 break;
             case DeliveryShape::None:
                 $this->line('No secret to deliver: it was never ours to hand over.');

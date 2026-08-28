@@ -30,6 +30,23 @@ enum DeliveryShape: string
      */
     case EnrollmentCode = 'enrollment_code';
 
+    /**
+     * A per-subject hmac signing key, revealed ONCE in this result — the
+     * operator-controlled-counterparty path (D7, e.g. capstan hub↔spoke).
+     * The key is PENDING: it signs nothing and verifies nothing until the
+     * separate activation verb cuts it over (SEC-V3-01).
+     */
+    case SigningKey = 'signing_key';
+
+    /**
+     * A claim-primitive code whose EXCHANGE delivers a pending hmac
+     * signing key to an outside counterparty. The exchange delivers the
+     * key material and NEVER activates (SEC-V3-01): an inbox interceptor
+     * who redeems the link learns a key that signs nothing and verifies
+     * nothing, and live signing state is untouched.
+     */
+    case SigningKeyCode = 'signing_key_code';
+
     /** The secret was never ours to hand over. */
     case None = 'none';
 }

@@ -183,6 +183,21 @@ final class ManageCredentials
                     $payload['enrollment_code'] = $result->secret->reveal();
                 }
                 break;
+            case DeliveryShape::SigningKey:
+                // The key id rides beside the key (non-secret — the row id
+                // the signature header will carry); the key itself is
+                // PENDING until the activation verb cuts it over.
+                $payload['key_id'] = $result->summary->id;
+
+                if ($result->secret !== null) {
+                    $payload['signing_key'] = $result->secret->reveal();
+                }
+                break;
+            case DeliveryShape::SigningKeyCode:
+                if ($result->secret !== null) {
+                    $payload['claim_code'] = $result->secret->reveal();
+                }
+                break;
             case DeliveryShape::None:
                 break;
         }

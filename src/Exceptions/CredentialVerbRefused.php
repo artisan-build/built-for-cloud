@@ -45,11 +45,6 @@ final class CredentialVerbRefused extends RuntimeException
         ));
     }
 
-    public static function kindNotMintable(string $kind): self
-    {
-        return new self(sprintf('The "%s" credential kind is not mintable in this release.', $kind));
-    }
-
     /**
      * D6 point 6's third row, refused EXPLICITLY rather than falling
      * through to bearer semantics: hmac rotation is the pending→active

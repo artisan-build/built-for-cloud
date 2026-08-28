@@ -225,6 +225,22 @@ final class CredentialRotateCommand extends Command
                     $this->line('Enrollment code - shown once: '.$mint->secret->reveal());
                 }
                 break;
+            case DeliveryShape::SigningKey:
+                $this->line('Signing key id: '.$mint->summary->id);
+
+                if ($mint->secret !== null) {
+                    $this->line('Save this signing key - shown once: '.$mint->secret->reveal());
+                }
+
+                $this->line('The key is PENDING: the old key keeps signing until bfc:credential:activate cuts over.');
+                break;
+            case DeliveryShape::SigningKeyCode:
+                if ($mint->secret !== null) {
+                    $this->line('Claim code - shown once: '.$mint->secret->reveal());
+                }
+
+                $this->line('Exchanging the code delivers the PENDING replacement key; the old key keeps signing until activation.');
+                break;
             case DeliveryShape::None:
                 $this->line('No secret to deliver: it was never ours to hand over.');
                 break;

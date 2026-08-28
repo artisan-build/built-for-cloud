@@ -341,24 +341,40 @@ it('normalizes an empty abilities list to null identically on both transports', 
     }
 });
 
-it('refuses the hmac kind identically on both transports', function (): void {
+it('mints a pending hmac signing key identically on both transports, revealing it exactly once (PRD 1.21)', function (): void {
+    // CLI leg: the reveal-once delivery, and the row born PENDING.
     expect(Artisan::call('bfc:credential:mint', [
         'subject-type' => 'application',
-        'subject-ref' => 'postmaster',
+        'subject-ref' => 'postmaster-cli',
         '--kind' => 'hmac',
         '--local' => true,
-    ]))->toBe(1)
-        ->and(Artisan::output())->toContain('not mintable');
+    ]))->toBe(0);
 
-    $this->postJson('/bfc/credentials', [
+    $output = Artisan::output();
+
+    /** @var Credential $cliRow */
+    $cliRow = Credential::query()->where('subject_ref', 'postmaster-cli')->firstOrFail();
+
+    expect($output)->toContain('shown once')
+        ->and($output)->toContain('PENDING')
+        ->and($cliRow->status)->toBe(CredentialStatus::Pending)
+        ->and($cliRow->kind)->toBe(CredentialKind::Hmac)
+        ->and($cliRow->delivered_at)->not->toBeNull()
+        ->and($cliRow->secret_ciphertext)->not->toBeNull()
+        ->and($cliRow->secret_hash)->toBeNull();
+
+    // HTTP leg: same action, same shape, the delivery carries the key id.
+    $response = $this->postJson('/bfc/credentials', [
         'subject_type' => 'application',
-        'subject_ref' => 'postmaster',
+        'subject_ref' => 'postmaster-http',
         'kind' => 'hmac',
-    ], transportAdminHeaders())
-        ->assertForbidden()
-        ->assertJsonPath('message', fn (string $message): bool => str_contains($message, 'not mintable'));
+    ], transportAdminHeaders())->assertCreated();
 
-    expect(Credential::query()->count())->toBe(0);
+    expect($response->json('delivery.shape'))->toBe('signing_key')
+        ->and($response->json('delivery.key_id'))->toBe($response->json('credential.id'))
+        ->and((string) $response->json('delivery.signing_key'))->toMatch('/^[0-9a-f]{64}$/')
+        ->and($response->json('credential.status'))->toBe('pending')
+        ->and($response->json('credential.kind'))->toBe('hmac');
 });
 
 // --------------------------------------------------------------- mint: HTTP
