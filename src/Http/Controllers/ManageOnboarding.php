@@ -158,10 +158,17 @@ final class ManageOnboarding
         // The contract shapes every failure, so validation never falls
         // through to Laravel's 422: a missing or non-string code is the
         // enum's `invalid_code`, and a version this server does not speak
-        // is `unsupported_version` whatever type it arrived as.
-        $version = $request->input('version', 1);
+        // is `unsupported_version` whatever type it arrived as. `version`
+        // is REQUIRED on this surface (rework Fix 9): hitch's contract
+        // states "version is an integer in the body", so a request
+        // without one speaks a contract this server cannot identify —
+        // refused, never defaulted. (The onboarding exchange keeps its
+        // documented default; only this hitch-conformant face is strict.)
+        if (! $request->has('version')) {
+            return ClaimError::UnsupportedVersion->respond('The claim contract requires an explicit integer version in the request body; this server speaks version 1.');
+        }
 
-        if ($version !== 1) {
+        if ($request->input('version') !== 1) {
             return ClaimError::UnsupportedVersion->respond('This server speaks claim contract version 1.');
         }
 

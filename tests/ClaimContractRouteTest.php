@@ -101,10 +101,17 @@ it('answers each contract error enum with its documented status', function (): v
         ->assertStatus(410)->assertJsonPath('error', 'code_expired');
     $this->travelBack();
 
-    // unsupported_version — a version this server does not speak.
+    // unsupported_version — a version this server does not speak, and a
+    // MISSING version: the contract makes `version` an integer in the
+    // body, so an absent one is refused, never defaulted (rework Fix 9).
     $code = issueClaimCode();
     hitchClaim('{"claim_code": "'.$code.'", "version": 2}')
         ->assertStatus(400)->assertJsonPath('error', 'unsupported_version')->assertJsonPath('version', 1);
+    hitchClaim('{"claim_code": "'.$code.'"}')
+        ->assertStatus(400)->assertJsonPath('error', 'unsupported_version');
+
+    // The refusals burned nothing: the same code still claims.
+    hitchClaim('{"claim_code": "'.$code.'", "version": 1}')->assertOk();
 
     // Every error body carries the contract's three fields exactly.
     $shape = hitchClaim('{"claim_code": "'.str_repeat('cd', 32).'", "version": 1}')->json();

@@ -303,9 +303,11 @@ because the shape here is hitch's, not this package's. Mounted **unconditionally
 fixed path** — never behind a configurable prefix, never behind its own env flag.
 
 **Request** — `{"claim_code": "<claim code>", "version": 1}`. The code travels in the body,
-never the URL. `version` is the contract version the client speaks; anything but `1` is
-refused as `unsupported_version`, and a malformed or missing `claim_code` is `invalid_code`
-(never a Laravel `422` — the enum shapes every failure on this surface).
+never the URL. `version` is **required** — it is the contract version the client speaks
+(hitch always sends it); a missing or non-`1` version is refused as `unsupported_version`,
+and a malformed or missing `claim_code` is `invalid_code` (never a Laravel `422` — the enum
+shapes every failure on this surface). The onboarding exchange keeps its documented
+`version` default; only this hitch-conformant face is strict.
 
 - **200** —
 
