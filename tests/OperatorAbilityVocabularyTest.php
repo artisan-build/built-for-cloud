@@ -48,6 +48,7 @@ function operatorMutations(string $targetId): array
         'revoke' => ['deleteJson', '/bfc/credentials/'.$targetId, []],
         'activate' => ['postJson', '/bfc/credentials/'.$targetId.'/activate', ['delivery_fingerprint' => 'fp']],
         'invite' => ['postJson', '/bfc/invitations', ['email' => 'a@b.c', 'ttl_seconds' => 3600]],
+        'offboard' => ['postJson', '/bfc/subjects/offboard', ['subject_type' => 'external_consumer', 'subject_ref' => 'acme']],
     ];
 }
 

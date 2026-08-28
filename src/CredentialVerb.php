@@ -42,6 +42,16 @@ enum CredentialVerb: string
     /** Who may kill it. */
     case Revoke = 'revoke';
 
+    /**
+     * Who may offboard a whole SUBJECT (PRD 1.15, SEC-V3-04): full
+     * account containment — every bound credential in every lifecycle
+     * state, the outstanding codes and invitations, the sessions and
+     * reset tokens, in one action. The widest verb in the matrix, so a
+     * declaration can allow ordinary revocation while reserving
+     * offboarding for a narrower set of actors.
+     */
+    case Offboard = 'offboard';
+
     /** Where the new secret is delivered, and to whom. */
     case ReceiveReplacement = 'receive_replacement';
 }

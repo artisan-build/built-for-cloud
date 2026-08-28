@@ -23,6 +23,16 @@ final class InvalidCredentialInput extends InvalidArgumentException
         return new self(sprintf('Unknown credential kind "%s".', $kind));
     }
 
+    public static function unknownSubjectType(string $subjectType): self
+    {
+        return new self(sprintf('Unknown subject type "%s".', $subjectType));
+    }
+
+    public static function missingSubjectRef(): self
+    {
+        return new self('A subject ref is required.');
+    }
+
     public static function nonIntegerCodeTtl(): self
     {
         return new self('The enrollment-code ttl must be a whole number of seconds — no units, no trailing text.');

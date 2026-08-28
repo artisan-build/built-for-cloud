@@ -1,0 +1,403 @@
+<?php
+
+declare(strict_types=1);
+
+use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
+use ArtisanBuild\BuiltForCloud\Actions\OffboardSubject;
+use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\AuditActorType;
+use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesCredentialVerbs;
+use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
+use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\CredentialVerb;
+use ArtisanBuild\BuiltForCloud\Invitation;
+use ArtisanBuild\BuiltForCloud\LifecycleEventType;
+use ArtisanBuild\BuiltForCloud\MintOptions;
+use ArtisanBuild\BuiltForCloud\OffboardedSubject;
+use ArtisanBuild\BuiltForCloud\OffboardOptions;
+use ArtisanBuild\BuiltForCloud\OnboardingToken;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
+use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\Subject;
+use ArtisanBuild\BuiltForCloud\SubjectType;
+use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Str;
+use Illuminate\Testing\TestResponse;
+
+uses(RefreshDatabase::class, WithCredentials::class);
+
+/**
+ * PRD 1.15 / SEC-V3-04 — the offboard verb: full account containment,
+ * idempotent, one audit shape, version-gated for integration-driven
+ * offboards, with the guard rejecting the contained principal on every
+ * request thereafter.
+ */
+beforeEach(function (): void {
+    config(['auth.guards.bfc' => ['driver' => 'bfc', 'provider' => 'users']]);
+
+    Route::middleware('auth:bfc')->get('/offboard-guarded', fn (): array => ['ok' => true]);
+    Route::middleware(['web', 'bfc.auth'])->get('/offboard-session-guarded', fn (): array => ['ok' => true]);
+});
+
+function offboardHeaders(): array
+{
+    $operator = test()->mintCredential([
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => 'offboard-operator-'.bin2hex(random_bytes(4)),
+        'abilities' => [OperatorAbility::SubjectOffboard->value],
+    ]);
+
+    return ['Authorization' => $operator->bearerHeader()];
+}
+
+function offboardViaHttp(array $body): TestResponse
+{
+    return test()->postJson('/bfc/subjects/offboard', $body, offboardHeaders());
+}
+
+it('contains the whole account in one action: every credential state, codes, invitations, reset tokens, sessions', function (): void {
+    $user = User::query()->create([
+        'name' => 'Person',
+        'email' => 'person@example.com',
+        'password' => 'irrelevant',
+    ]);
+
+    // The subject's credentials, one per lifecycle state:
+    $active = $this->mintCredential([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'acme',
+        'user_id' => (string) $user->getKey(),
+    ]);
+
+    $grace = $this->mintCredential([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'acme',
+        'expires_at' => now()->addMinutes(30),
+    ]);
+    // rotated_at is not fillable by design; stamp it the way the verb does.
+    Credential::query()->whereKey($grace->credential->id)->update(['rotated_at' => now()]);
+
+    $pendingBearer = $this->mintCredential([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'acme',
+        'status' => 'pending',
+    ]);
+
+    // A pending hmac signing key WITH its outstanding delivery claim code.
+    $hmacResult = app(MintCredential::class)(
+        new Subject(SubjectType::ExternalConsumer, 'acme'),
+        MintOptions::fromInput(['kind' => 'hmac', 'code_ttl_seconds' => 3600]),
+    );
+
+    // A subject-stamped legacy api_tokens row.
+    $legacy = ApiToken::query()->create([
+        'name' => 'legacy-acme',
+        'token_hash' => hash('sha256', 'legacy-acme-secret'),
+        'abilities' => [Scope::Consume->value],
+        'subject_type' => SubjectType::ExternalConsumer->value,
+        'subject_ref' => 'acme',
+    ]);
+
+    // The principal's pending claim code, invitation, reset token, session.
+    $code = OnboardingToken::query()->create([
+        'id' => (string) Str::uuid(),
+        'email' => 'person@example.com',
+        'scope' => Scope::Consume->value,
+        'token_hash' => hash('sha256', 'pending-code'),
+        'expires_at' => now()->addHour(),
+    ]);
+
+    $invitation = Invitation::query()->create([
+        'id' => (string) Str::uuid(),
+        'email' => 'person@example.com',
+        'token' => hash('sha256', 'pending-invite'),
+        'expires_at' => now()->addDay(),
+    ]);
+
+    DB::table('password_reset_tokens')->insert([
+        'email' => 'person@example.com',
+        'token' => 'reset-token-hash',
+        'created_at' => now(),
+    ]);
+
+    config(['session.driver' => 'database']);
+
+    DB::table('sessions')->insert([
+        'id' => 'pre-existing-session',
+        'user_id' => $user->getKey(),
+        'payload' => 'payload',
+        'last_activity' => now()->getTimestamp(),
+    ]);
+
+    offboardViaHttp(['subject_type' => 'external_consumer', 'subject_ref' => 'acme'])
+        ->assertOk()
+        ->assertExactJson(['offboarded' => true]);
+
+    // Every credential in every lifecycle state is dead — active, grace,
+    // pending bearer, pending hmac, and the legacy row.
+    expect($active->credential->refresh()->revoked_at)->not->toBeNull()
+        ->and($grace->credential->refresh()->revoked_at)->not->toBeNull()
+        ->and($pendingBearer->credential->refresh()->revoked_at)->not->toBeNull()
+        ->and(Credential::query()->findOrFail($hmacResult->summary->id)->revoked_at)->not->toBeNull()
+        ->and($legacy->refresh()->revoked_at)->not->toBeNull();
+
+    // Every outstanding code and invitation is consumed/canceled — the
+    // hmac delivery code included — and the reset token and session are gone.
+    expect(OnboardingToken::query()->whereNull('consumed_at')->count())->toBe(0)
+        ->and($code->refresh()->consumed_at)->not->toBeNull()
+        ->and($invitation->refresh()->accepted_at)->not->toBeNull()
+        ->and(DB::table('password_reset_tokens')->count())->toBe(0)
+        ->and(DB::table('sessions')->count())->toBe(0);
+
+    // The registry holds the subject and its bound user.
+    expect(OffboardedSubject::subjectIsOffboarded(new Subject(SubjectType::ExternalConsumer, 'acme')))->toBeTrue()
+        ->and(OffboardedSubject::userIsOffboarded((string) $user->getKey()))->toBeTrue();
+
+    // One audit shape: a single subject-level `offboarded` event with the
+    // acting operator principal, plus per-credential `revoked` events
+    // with reason `offboarding` — ids only.
+    $offboarded = CredentialAuditEvent::query()
+        ->where('event', LifecycleEventType::Offboarded->value)
+        ->get();
+
+    expect($offboarded)->toHaveCount(1)
+        ->and($offboarded[0]->actor_type)->toBe(AuditActorType::OperatorIntegration)
+        ->and((string) $offboarded[0]->note)->toContain('external_consumer:acme');
+
+    $revoked = CredentialAuditEvent::query()
+        ->where('event', LifecycleEventType::Revoked->value)
+        ->where('reason_code', 'offboarding')
+        ->pluck('credential_id');
+
+    expect($revoked)->toContain($active->credential->id)
+        ->and($revoked)->toContain($grace->credential->id)
+        ->and($revoked)->toContain($pendingBearer->credential->id)
+        ->and($revoked)->toContain($hmacResult->summary->id)
+        ->and($revoked)->toContain((string) $legacy->getKey());
+});
+
+it('rejects the offboarded principal on every subsequent request — the guard is the belt under the sweep', function (): void {
+    $user = User::query()->create([
+        'name' => 'Person',
+        'email' => 'person@example.com',
+        'password' => 'irrelevant',
+    ]);
+
+    $offboardedSubjectCredential = $this->mintCredential([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'acme',
+        'user_id' => (string) $user->getKey(),
+    ]);
+
+    // A credential under a DIFFERENT subject, bound to the same user: the
+    // sweep never touches it, the registry still kills it.
+    $otherSubjectCredential = $this->mintCredential([
+        'subject_type' => SubjectType::Application,
+        'subject_ref' => 'other-app',
+        'user_id' => (string) $user->getKey(),
+    ]);
+
+    // Both authenticate before the offboard.
+    $this->getJson('/offboard-guarded', ['Authorization' => $offboardedSubjectCredential->bearerHeader()])->assertOk();
+    $this->getJson('/offboard-guarded', ['Authorization' => $otherSubjectCredential->bearerHeader()])->assertOk();
+
+    offboardViaHttp(['subject_type' => 'external_consumer', 'subject_ref' => 'acme'])->assertOk();
+
+    // …and neither does afterward.
+    $this->getJson('/offboard-guarded', ['Authorization' => $offboardedSubjectCredential->bearerHeader()])->assertUnauthorized();
+    $this->getJson('/offboard-guarded', ['Authorization' => $otherSubjectCredential->bearerHeader()])->assertUnauthorized();
+
+    // The untouched row proves it is the REGISTRY rejecting, not a revocation.
+    expect($otherSubjectCredential->credential->refresh()->revoked_at)->toBeNull();
+});
+
+it('rejects and invalidates a surviving session — the stated compensation for stores outside the transaction', function (): void {
+    // The array session driver stands in for every store the offboard
+    // transaction cannot enumerate: nothing is deleted at offboard time,
+    // and the registry + this middleware ARE the containment.
+    $user = User::query()->create([
+        'name' => 'Person',
+        'email' => 'person@example.com',
+        'password' => 'irrelevant',
+    ]);
+
+    offboardViaHttp(['subject_type' => 'user_principal', 'subject_ref' => 'person@example.com'])->assertOk();
+
+    expect(OffboardedSubject::userIsOffboarded((string) $user->getKey()))->toBeTrue();
+
+    // The pre-existing session presents itself: rejected, and invalidated.
+    $this->actingAs($user)->withSession(['residue' => 'still-here']);
+
+    $response = $this->get('/offboard-session-guarded');
+    $response->assertForbidden();
+
+    expect(session()->has('residue'))->toBeFalse();
+});
+
+it('is idempotent: a second offboard is a no-op with the same response shape and no new audit rows', function (): void {
+    $this->mintCredential([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'acme',
+    ]);
+
+    // ONE operator credential for both calls, so the audit-count delta
+    // isolates the offboard itself.
+    $headers = offboardHeaders();
+
+    $first = $this->postJson('/bfc/subjects/offboard', ['subject_type' => 'external_consumer', 'subject_ref' => 'acme'], $headers);
+    $first->assertOk()->assertExactJson(['offboarded' => true]);
+
+    $auditAfterFirst = CredentialAuditEvent::query()->count();
+
+    $second = $this->postJson('/bfc/subjects/offboard', ['subject_type' => 'external_consumer', 'subject_ref' => 'acme'], $headers);
+    $second->assertOk()->assertExactJson(['offboarded' => true]);
+
+    // No duplicate deaths, no duplicate subject event; the sensitive-read
+    // / denial channels are untouched by a clean repeat too.
+    expect(CredentialAuditEvent::query()->count())->toBe($auditAfterFirst)
+        ->and(OffboardedSubject::query()->whereNull('user_id')->count())->toBe(1);
+
+    // The action reports the repeat honestly: applied=false, zero counts.
+    $result = app(OffboardSubject::class)(
+        OffboardOptions::fromInput([
+            'subject_type' => 'external_consumer',
+            'subject_ref' => 'acme',
+        ]),
+    );
+
+    expect($result->applied)->toBeFalse()
+        ->and($result->revokedCredentials)->toBe(0)
+        ->and($result->consumedCodes)->toBe(0);
+});
+
+it('rides the shared version gate: a replayed or older offboard event is transactionally ignored', function (): void {
+    // Advance the shared entitlement to version 7 through the INVITE verb
+    // — one monotonic version per (namespace, subject) orders invites and
+    // offboards together (the gate table PR8 built is shared).
+    $admin = ['Authorization' => 'Bearer '.auditAdminToken('offboard-gate-admin')];
+
+    $this->postJson('/bfc/invitations', [
+        'email' => 'sponsor@example.com',
+        'ttl_seconds' => 3600,
+        'integration_namespace' => 'github-sponsors',
+        'event_id' => 'evt-invite-7',
+        'entitlement_version' => 7,
+        'external_subject' => 'sponsor-login',
+    ], $admin)->assertStatus(202);
+
+    $credential = $this->mintCredential([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'sponsor-login',
+    ]);
+
+    $event = fn (string $id, int $version): array => [
+        'subject_type' => 'external_consumer',
+        'subject_ref' => 'sponsor-login',
+        'integration_namespace' => 'github-sponsors',
+        'event_id' => $id,
+        'entitlement_version' => $version,
+        'external_subject' => 'sponsor-login',
+    ];
+
+    // An OLDER offboard event (version 6 < 7): uniform acknowledgement,
+    // and NOTHING was contained.
+    offboardViaHttp($event('evt-offboard-6', 6))->assertStatus(202)->assertExactJson(['accepted' => true]);
+
+    expect($credential->credential->refresh()->revoked_at)->toBeNull()
+        ->and(OffboardedSubject::query()->count())->toBe(0);
+
+    // A NEWER event (version 8): same uniform acknowledgement, and the
+    // containment ran — including the invite history's pending code.
+    offboardViaHttp($event('evt-offboard-8', 8))->assertStatus(202)->assertExactJson(['accepted' => true]);
+
+    expect($credential->credential->refresh()->revoked_at)->not->toBeNull()
+        ->and(Invitation::query()->whereNull('accepted_at')->count())->toBe(0)
+        ->and(OffboardedSubject::subjectIsOffboarded(new Subject(SubjectType::ExternalConsumer, 'sponsor-login')))->toBeTrue();
+
+    // A REPLAY of the applied event id: acknowledged, and a credential
+    // minted since is untouched — the replay re-contains nothing.
+    $later = $this->mintCredential([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'sponsor-login',
+    ]);
+
+    offboardViaHttp($event('evt-offboard-8', 8))->assertStatus(202)->assertExactJson(['accepted' => true]);
+
+    expect($later->credential->refresh()->revoked_at)->toBeNull();
+
+    // A partial event group refuses on both transports.
+    offboardViaHttp([
+        'subject_type' => 'external_consumer',
+        'subject_ref' => 'sponsor-login',
+        'integration_namespace' => 'github-sponsors',
+    ])->assertStatus(422);
+});
+
+it('runs the identical action on the CLI transport, --local required', function (): void {
+    $credential = $this->mintCredential([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'acme',
+    ]);
+
+    $this->artisan('bfc:subject:offboard', ['subject_type' => 'external_consumer', 'subject_ref' => 'acme'])
+        ->assertFailed();
+
+    expect($credential->credential->refresh()->revoked_at)->toBeNull();
+
+    $this->artisan('bfc:subject:offboard', [
+        'subject_type' => 'external_consumer',
+        'subject_ref' => 'acme',
+        '--local' => true,
+    ])
+        ->expectsOutputToContain('Subject offboarded: 1 credential(s) revoked')
+        ->assertSuccessful();
+
+    expect($credential->credential->refresh()->revoked_at)->not->toBeNull();
+
+    // The idempotent repeat, reported honestly.
+    $this->artisan('bfc:subject:offboard', [
+        'subject_type' => 'external_consumer',
+        'subject_ref' => 'acme',
+        '--local' => true,
+    ])
+        ->expectsOutputToContain('Subject already offboarded: 0 credential(s) revoked')
+        ->assertSuccessful();
+
+    // Junk subject types refuse identically to HTTP's 422.
+    $this->artisan('bfc:subject:offboard', [
+        'subject_type' => 'nonsense',
+        'subject_ref' => 'acme',
+        '--local' => true,
+    ])->assertFailed();
+});
+
+it('consults the declaration verb matrix under the offboard verb', function (): void {
+    app()->bind(CredentialDeclaration::class, static fn (): CredentialDeclaration => new class implements AuthorizesCredentialVerbs, CredentialDeclaration
+    {
+        public function resolveSubject(Request $request): ?Subject
+        {
+            return null;
+        }
+
+        public function authorize(Credential $credential, ?string $ability, Request $request): bool
+        {
+            return true;
+        }
+
+        public function authorizeVerb(CredentialVerb $verb, ?Subject $subject, Request $request): bool
+        {
+            return $verb !== CredentialVerb::Offboard;
+        }
+    });
+
+    offboardViaHttp(['subject_type' => 'external_consumer', 'subject_ref' => 'acme'])
+        ->assertForbidden();
+
+    expect(OffboardedSubject::query()->count())->toBe(0);
+});

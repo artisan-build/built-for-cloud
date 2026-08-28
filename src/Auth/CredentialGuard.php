@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
+use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Contracts\Auth\Authenticatable;
@@ -97,6 +98,16 @@ final class CredentialGuard implements Guard
         $credential = $this->resolveCredential($request);
 
         if ($credential === null) {
+            return null;
+        }
+
+        // Full account containment (PRD 1.15, SEC-V3-04): an offboarded
+        // subject — or a credential bound to a deactivated user, whatever
+        // subject IT belongs to — never authenticates again. The registry
+        // is the belt under the offboard verb's revocations, so even a
+        // row the sweep could not know about fails here, indistinguishably
+        // from every other rejection.
+        if (OffboardedSubject::rejects($credential)) {
             return null;
         }
 

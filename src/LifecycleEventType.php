@@ -27,6 +27,15 @@ enum LifecycleEventType: string
     case Activated = 'activated';
     case Rotated = 'rotated';
     case Revoked = 'revoked';
+
+    /**
+     * The one subject-level containment event the offboard verb emits
+     * (PRD 1.15, D8's one-audit-shape rule): the acting principal, the
+     * contained subject in the bounded note, ids only. The per-credential
+     * deaths it causes are ordinary `revoked` events with reason
+     * `offboarding`.
+     */
+    case Offboarded = 'offboarded';
     case Expiring = 'expiring';
     case SensitiveRead = 'sensitive_read';
     case DeniedAction = 'denied_action';

@@ -103,6 +103,10 @@ Additive unless marked otherwise:
   same claim-code primitive as the onboarding exchange, in hitch's published wire shape
   (`claim_code` in, `200 {"version", "token", "name", "expires_at"}` out, the same error
   enum), unconditional at a fixed path.
+- New route `POST /bfc/subjects/offboard` — the offboard verb (PRD 1.15, SEC-V3-04):
+  full account containment behind the `subject:offboard` ability, riding the invite verb's
+  shared integration version gate for integration-driven offboards. The lifecycle event
+  stream gains `offboarded`.
 - **The operator ability vocabulary ships (PRD 1.10 + GATE-3.7).** All additive, and a
   NARROWING only for credentials that never existed before it: the operator routes now
   authorize per verb family (`credential:read` / `credential:mint` / `credential:rotate` /
@@ -188,6 +192,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `DELETE /bfc/credentials/{id}` | `metadata` | empty `204` body |
 | `POST /bfc/credentials/{id}/rotate` | `content` | the `delivery` single reveal, plus summary rows |
 | `POST /bfc/credentials/{id}/activate` | `content` | no secret ever — but the summary row carries free-text names and subject refs |
+| `POST /bfc/subjects/offboard` | `metadata` | `{"offboarded": true}` / `{"accepted": true}` — bounded booleans only |
 
 Vendor-side reads of `metadata`-classified endpoints will be governed by the reserved
 `metadata:read` ability family (see [the Console reservations](#reserved--console-fast-follow-not-implemented)).
@@ -950,6 +955,73 @@ own pace. Nothing is left untracked at any point — the listing shows the old r
 the old → new lineage, and if the human misses the window the old row is already dead and the
 new one already works. Use `emergency` only when the old secret is known-compromised, because
 it trades the installation window away.
+
+---
+
+## Subjects — the offboard verb
+
+### POST /bfc/subjects/offboard
+
+*Admin token or operator credential holding `subject:offboard`* (its own verb-family
+ability — the widest verb, deliberately not granted by `credential:mint` or
+`credential:revoke`); the same two-transport rule (`bfc:subject:offboard --local` runs the
+identical action). Rate-limited via `bfc-operator-write`.
+
+**Full account containment** (PRD 1.15, SEC-V3-04). Deactivates a subject and, in one
+action: revokes EVERY bound credential in EVERY lifecycle state (active, rotation-grace,
+and pending — unexchanged enrollments and pending hmac signing keys included, in both the
+unified store and subject-stamped `api_tokens` rows); consumes the principal's outstanding
+claim codes (and their never-used make-before-break durables); cancels the principal's
+pending invitations; deletes the principal's password-reset tokens; invalidates sessions;
+and writes the containment registry on which the `bfc` guard — and the auth-foundation
+session middleware — reject the offboarded subject and its deactivated bound users on
+every request thereafter.
+
+**Session compensation, stated:** a database session store on the default connection is
+cleared inside the offboard transaction. A database store on another connection is cleared
+after commit; any other driver's storage cannot be enumerated per user. In every
+compensated case the registry row commits WITH the credential revocations, so whatever
+survives in session storage, the principal's next request is rejected (and a surviving
+session is invalidated on that first appearance).
+
+**Request:**
+
+```json
+{
+  "subject_type": "external_consumer",
+  "subject_ref": "acme",
+  "integration_namespace": "github-sponsors",
+  "event_id": "evt_0002",
+  "entitlement_version": 8,
+  "external_subject": "sponsor-login"
+}
+```
+
+The four integration-event fields are **all-or-none**, exactly as on the invite verb — and
+they ride the SAME version gate (the shared `integration_events` / `integration_entitlements`
+tables), so one monotonic entitlement version per (`integration_namespace`,
+`external_subject`) orders invites and offboards together: an offboard event **not newer**
+than the latest accepted version is transactionally acknowledged-and-ignored, and a
+replayed `event_id` answers idempotently with no state change.
+
+**The two response shapes, keyed on the REQUEST (never on state):**
+
+- **Direct path (no integration event): `200 {"offboarded": true}`** — identical for a
+  first containment and an idempotent repeat (a repeat revokes nothing, writes no new audit
+  rows, and changes nothing).
+- **Integration path: `202 {"accepted": true}` — always**, whatever the gate decided
+  (applied, ignored-older, or replayed); the body carries nothing a caller could probe gate
+  state from.
+- **403** — `{"message": "..."}`: the declaration's verb matrix denies `offboard` for the
+  subject. **422** — `{"message": "..."}`: shared input validation (unknown `subject_type`,
+  missing `subject_ref`, a partial integration-event group, an out-of-bounds or non-integer
+  `entitlement_version`, an over-length field). **500** — `{"message": "..."}`: the gate
+  lost every bounded contention attempt; nothing was applied, retrying is safe. Identical
+  refusals on the CLI transport.
+
+Audit shape (D8, one shape): a single `offboarded` lifecycle event carrying the acting
+principal and the contained subject (ids only), plus one ordinary `revoked` event per
+credential death with reason `offboarding`. A repeat offboard appends nothing.
 
 ---
 

@@ -18,6 +18,7 @@ use ArtisanBuild\BuiltForCloud\Commands\InvitationIssueCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand;
+use ArtisanBuild\BuiltForCloud\Commands\SubjectOffboardCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenCreateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenListCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenRevokeCommand;
@@ -36,6 +37,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageInvitations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
@@ -224,6 +226,13 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $router->post('/bfc/invitations', [ManageInvitations::class, 'store'])
             ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::CredentialMint->value]);
 
+        // The offboard verb (PRD 1.15, SEC-V3-04): full account
+        // containment behind its OWN verb-family ability — the widest
+        // verb, so a stolen mint- or revoke-scoped credential cannot
+        // reach it.
+        $router->post('/bfc/subjects/offboard', [ManageSubjects::class, 'offboard'])
+            ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::SubjectOffboard->value]);
+
         if ((bool) config('built-for-cloud.credential_api.enabled', false)) {
             $router->prefix(trim((string) config('built-for-cloud.credential_api.prefix', 'api/credentials'), '/'))
                 ->middleware('bfc.token.admin')
@@ -263,6 +272,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             OutboxDrainCommand::class,
             OwnershipMintClaimCommand::class,
             OwnershipRemintOwnerTokenCommand::class,
+            SubjectOffboardCommand::class,
             TokenCreateCommand::class,
             TokenListCommand::class,
             TokenRevokeCommand::class,
