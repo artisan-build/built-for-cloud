@@ -13,7 +13,7 @@ use RuntimeException;
 
 final class TokenUsageCommand extends Command
 {
-    protected $signature = 'token:usage {name?} {--execute} {--json} {--environment=}';
+    protected $signature = 'token:usage {name?} {--execute} {--json} {--environment=} {--local}';
 
     protected $description = 'Show Built for Cloud API token usage';
 
@@ -21,7 +21,8 @@ final class TokenUsageCommand extends Command
     {
         $name = $this->stringArgument('name');
 
-        if ((bool) $this->option('execute')) {
+        // `--local` (PRD 1.11) reads the local database directly.
+        if ((bool) $this->option('execute') || (bool) $this->option('local')) {
             $rows = $this->rows($reporter, $name);
 
             if ((bool) $this->option('json')) {

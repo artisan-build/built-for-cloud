@@ -10,6 +10,8 @@ use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesCredentialVerbs;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresPresentationCadence;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
+use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
+use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\TokenGenerator;
@@ -131,7 +133,18 @@ final class ManageTokens
             : null;
         $abilities = array_values($validated['abilities'] ?? []);
 
-        $this->tokens->store($name, $generated->hash, $expiresAt, $abilities);
+        // The store plus its `issued` audit event, one transaction —
+        // closing the legacy mint path's gap in the lifecycle stream.
+        DB::transaction(function () use ($request, $name, $generated, $expiresAt, $abilities): void {
+            $token = $this->tokens->store($name, $generated->hash, $expiresAt, $abilities);
+
+            app(LifecycleEventRecorder::class)->record(
+                event: LifecycleEventType::Issued,
+                credentialId: (string) $token->getKey(),
+                actor: $this->actor($request),
+                credentialExpiresAt: $expiresAt,
+            );
+        });
 
         return response()->json([
             'name' => $name,
