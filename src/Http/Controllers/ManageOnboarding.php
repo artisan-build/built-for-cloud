@@ -21,6 +21,7 @@ use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
 use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintedSecret;
@@ -154,6 +155,23 @@ final class ManageOnboarding
         }
 
         try {
+            // A code that delivers an hmac signing key runs its WHOLE
+            // exchange under the shared rewrap lock (check-through-commit
+            // — see {@see HmacWriterBarrier}): a concurrent exchange can
+            // turn a first delivery into a re-key inside the transaction,
+            // and a re-key's ciphertext commit must never straddle the
+            // rewrap's verified zero-count. While a rewrap run holds the
+            // lock, signing-key deliveries answer the claim contract's
+            // retryable server_error.
+            if ($this->presentedDeliversSigningKey($presented)) {
+                return app(HmacWriterBarrier::class)->locked(
+                    write: fn (): JsonResponse => $this->performExchange($presented),
+                    onBusy: static fn (): JsonResponse => ClaimError::ServerError->respond(
+                        'A signing-key storage cutover is running on this server, so signing-key deliveries are briefly paused. It is safe to retry shortly.',
+                    ),
+                );
+            }
+
             return $this->performExchange($presented);
         } catch (Throwable $exception) {
             // The claim contract's server_error: clients print `message`
@@ -162,6 +180,32 @@ final class ManageOnboarding
             // page carries exception and query detail.
             return $this->serverError($exception);
         }
+    }
+
+    /**
+     * The barrier pre-read: does the presented code redeem against an
+     * hmac credential? Advisory only — every authoritative check happens
+     * again inside the locked transaction; over-acquiring for a code
+     * that then refuses is harmless.
+     */
+    private function presentedDeliversSigningKey(string $presented): bool
+    {
+        /** @var OnboardingToken|null $code */
+        $code = OnboardingToken::query()
+            ->where('token_hash', OnboardingToken::hashToken($presented))
+            ->first(['id', 'durable_token_id', 'durable_store', 'consumed_at']);
+
+        if ($code === null
+            || $code->consumed_at !== null
+            || $code->durable_token_id === null
+            || $code->durableStore() !== DurableStore::Credentials) {
+            return false;
+        }
+
+        return Credential::query()
+            ->whereKey($code->durable_token_id)
+            ->where('kind', CredentialKind::Hmac->value)
+            ->exists();
     }
 
     private function performExchange(string $presented): JsonResponse
@@ -341,13 +385,15 @@ final class ManageOnboarding
         $rekeyed = $credential->delivered_at !== null;
 
         if ($rekeyed) {
-            // The writer barrier (SEC-V3-08): a re-key produces a fresh
-            // ciphertext, and every ciphertext-producing path pauses
-            // mid-rewrap — otherwise a redelivery on a lagging
-            // old-primary instance could land an old-version row right
-            // after the rewrap's verified zero-count. The claim contract
-            // has no retry-later value, so this answers as the retryable
-            // server_error (clients treat it as safe to retry).
+            // The mid-cutover pause (SEC-V3-08): a re-key produces a
+            // fresh ciphertext, and every ciphertext-producing path
+            // refuses while the store carries mixed key-versions. The
+            // check-through-commit exclusion against a RUNNING rewrap is
+            // the writer barrier around the whole exchange (see
+            // exchange()); this in-transaction check covers the rest of
+            // the staged cutover window, when no sweep holds the lock.
+            // The claim contract has no retry-later value, so this
+            // answers as the retryable server_error.
             if ($keyring->cutoverInProgress()) {
                 return ClaimError::ServerError->respond('A signing-key storage cutover is in progress on this server, so redelivery is paused. It is safe to retry shortly.');
             }

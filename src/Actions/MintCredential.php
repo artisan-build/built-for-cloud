@@ -16,8 +16,8 @@ use ArtisanBuild\BuiltForCloud\DeliveryShape;
 use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
-use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintedSecret;
@@ -242,17 +242,14 @@ final class MintCredential
 
         $keyring = app(HmacKeyring::class);
 
-        // The writer barrier (SEC-V3-08): EVERY ciphertext-producing path
-        // pauses mid-rewrap. Without it, a mint on an instance still
-        // running the old APP_KEY could land an old-version row right
-        // after the rewrap's zero-count, and the verified completion
-        // would authorize dropping a key a live row still needs.
-        if ($keyring->cutoverInProgress()) {
-            throw RewrapInProgress::refusing('minting');
-        }
-
+        // The writer barrier (SEC-V3-08, check-through-commit): the whole
+        // mint transaction runs under the shared rewrap lock — see
+        // {@see HmacWriterBarrier} for the lock discipline — so a mint on
+        // a lagging old-primary instance can neither pass the version
+        // check ahead of the sweep nor COMMIT an old-version row after
+        // the rewrap's verified zero-count.
         /** @var MintResult */
-        return DB::transaction(function () use ($subject, $options, $actor, $ttlSeconds, $keyring): MintResult {
+        return app(HmacWriterBarrier::class)->exclusive('minting', fn (): MintResult => DB::transaction(function () use ($subject, $options, $actor, $ttlSeconds, $keyring): MintResult {
             $signingKey = bin2hex(random_bytes(32));
             $encrypted = $keyring->encrypt($signingKey);
 
@@ -332,7 +329,7 @@ final class MintCredential
                 delivery: DeliveryShape::SigningKeyCode,
                 secret: $code,
             );
-        });
+        }));
     }
 
     private function summarize(Credential $credential): CredentialSummary

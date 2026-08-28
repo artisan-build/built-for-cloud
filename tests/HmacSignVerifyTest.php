@@ -305,6 +305,45 @@ it('caps accepted verifications per key per window, so one credential cannot fil
     expect(app(HmacVerifier::class)->verify(hmacSubject('other'), $bystanderHeader, 'body')->id)->toBe($bystander->id);
 });
 
+it('spends no rate budget on replays: one captured envelope replayed N times cannot rate-limit the legitimate holder (rework attempt-3 Fix 2)', function (): void {
+    config()->set('built-for-cloud.hmac.verification_rate_ceiling', 3);
+
+    $credential = activeKeyFor('acme');
+
+    // One genuine verification: one nonce slot, one budget unit.
+    $captured = headerSignedBy($credential, 'body-1');
+
+    expect(app(HmacVerifier::class)->verify(hmacSubject(), $captured, 'body-1')->id)->toBe($credential->id);
+
+    // The attacker replays the captured envelope five times: every one
+    // is rejected as a replay, and NONE spends a budget unit.
+    foreach (range(1, 5) as $attempt) {
+        try {
+            app(HmacVerifier::class)->verify(hmacSubject(), $captured, 'body-1');
+            $this->fail('Replay '.$attempt.' should have refused.');
+        } catch (HmacVerificationFailed $failed) {
+            expect($failed->reason)->toBe('replayed_nonce');
+        }
+    }
+
+    // The legitimate holder's remaining budget (2 of 3) is intact.
+    foreach ([2, 3] as $i) {
+        $fresh = headerSignedBy($credential, 'body-'.$i);
+
+        expect(app(HmacVerifier::class)->verify(hmacSubject(), $fresh, 'body-'.$i)->id)->toBe($credential->id);
+    }
+
+    // And the ceiling still binds a genuine flood of NEW nonces.
+    $overflow = headerSignedBy($credential, 'body-4');
+
+    try {
+        app(HmacVerifier::class)->verify(hmacSubject(), $overflow, 'body-4');
+        $this->fail('Verification should have refused.');
+    } catch (HmacVerificationFailed $failed) {
+        expect($failed->reason)->toBe('rate_limited');
+    }
+});
+
 it('rejects a leading-zero timestamp: the canonical wire form is injective (rework Fix 6)', function (): void {
     $credential = activeKeyFor('acme');
     $valid = headerSignedBy($credential, 'body');
@@ -525,6 +564,81 @@ it('answers the uniform 401 through bfc.hmac when the key STATE is broken — an
     ], content: 'body')
         ->assertUnauthorized()
         ->assertJsonPath('message', 'The request signature could not be verified.');
+});
+
+it('normalizes EVERY keyring failure to the uniform 401 — unsupported cipher, malformed ring entry, wrong-length key, absent APP_KEY (rework attempt-3 Fix 3)', function (): void {
+    app()->bind(CredentialDeclaration::class, static fn (): CredentialDeclaration => new class implements CredentialDeclaration, ResolvesHmacSubjects
+    {
+        public function resolveHmacSubject(Request $request): ?Subject
+        {
+            return new Subject(SubjectType::ExternalConsumer, 'acme');
+        }
+
+        public function resolveSubject(Request $request): ?Subject
+        {
+            return null;
+        }
+
+        public function authorize(Credential $credential, ?string $ability, Request $request): bool
+        {
+            return true;
+        }
+    });
+
+    Route::post('/hooks-ring-states', fn (): array => ['ok' => true])->middleware('bfc.hmac');
+
+    $credential = activeKeyFor('acme');
+
+    $healthy = [
+        'key' => config('app.key'),
+        'cipher' => config('app.cipher'),
+        'previous' => config('app.previous_keys'),
+    ];
+
+    $breakages = [
+        'unsupported cipher' => function (): void {
+            config()->set('app.cipher', 'ROT13');
+        },
+        'absent APP_KEY' => function (): void {
+            config()->set('app.key', '');
+        },
+        'malformed base64 ring entry, row on a departed version' => function () use ($credential): void {
+            config()->set('app.key', 'base64:'.base64_encode(random_bytes(32)));
+            config()->set('app.previous_keys', ['base64:!!!not-base64!!!']);
+            // The row's version now names neither the new primary nor a
+            // parseable ring entry.
+            Credential::query()->whereKey($credential->id)->update(['secret_key_version' => 'feedfacefeedface']);
+        },
+        'wrong-length ring key whose fingerprint matches' => function () use ($credential): void {
+            config()->set('app.key', 'short-key');
+            Credential::query()->whereKey($credential->id)->update([
+                'secret_key_version' => HmacKeyring::fingerprint('short-key'),
+            ]);
+        },
+    ];
+
+    foreach ($breakages as $state => $break) {
+        // Restore a healthy ring, craft a FRESH valid header (a reused
+        // one would trip the nonce instead and mask the case), then
+        // break the ring the stated way.
+        config()->set('app.key', $healthy['key']);
+        config()->set('app.cipher', $healthy['cipher']);
+        config()->set('app.previous_keys', $healthy['previous']);
+        Credential::query()->whereKey($credential->id)->update([
+            'secret_key_version' => app(HmacKeyring::class)->writeVersion(),
+        ]);
+
+        $header = headerSignedBy($credential->refresh(), 'body');
+
+        $break();
+
+        // The uniform refusal — never a 500, never a key-state detail.
+        $this->call('POST', '/hooks-ring-states', server: [
+            'HTTP_'.str_replace('-', '_', strtoupper(HmacEnvelope::HEADER)) => $header,
+        ], content: 'body')
+            ->assertUnauthorized()
+            ->assertJsonPath('message', 'The request signature could not be verified.');
+    }
 });
 
 it('fails closed through bfc.hmac when the declaration cannot derive subjects at all', function (): void {

@@ -10,6 +10,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\HmacKeyUnreadable;
 use Illuminate\Encryption\Encrypter;
 use RuntimeException;
 use SensitiveParameter;
+use Throwable;
 
 /**
  * The hmac kind's encryption keyring (SEC-V3-08): every hmac signing key
@@ -78,6 +79,15 @@ final class HmacKeyring
      * version SELECTS the key — decryption never tries the whole ring,
      * so a row whose key left the ring fails loudly and names the
      * version, never "mac invalid" roulette.
+     *
+     * EVERY failure on this read path leaves as {@see HmacKeyUnreadable}
+     * (rework Fix 3): an unsupported cipher, a wrong-length key, an
+     * absent APP_KEY, a malformed base64 ring entry, a corrupted or
+     * MAC-invalid payload — all key-STATE failures a caller (the verify
+     * middleware above all) must be able to normalize to one uniform
+     * refusal, never a bare framework exception that becomes a 500 and a
+     * key-state oracle. The original failure rides as `previous` for
+     * operator paths; the message stays generic and material-free.
      */
     public function decrypt(string $ciphertext, ?string $keyVersion): string
     {
@@ -85,10 +95,14 @@ final class HmacKeyring
             throw HmacKeyUnreadable::missingVersion();
         }
 
-        foreach ($this->readKeys() as $key) {
-            if (hash_equals(self::fingerprint($key), $keyVersion)) {
-                return $this->encrypterFor($key)->decryptString($ciphertext);
+        try {
+            foreach ($this->readKeys() as $key) {
+                if (hash_equals(self::fingerprint($key), $keyVersion)) {
+                    return $this->encrypterFor($key)->decryptString($ciphertext);
+                }
             }
+        } catch (Throwable $failure) {
+            throw HmacKeyUnreadable::ringFailure($keyVersion, $failure);
         }
 
         throw HmacKeyUnreadable::unknownVersion($keyVersion);

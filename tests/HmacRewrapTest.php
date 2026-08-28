@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -15,6 +16,7 @@ use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class, DetectsSecretLeaks::class);
 
@@ -150,7 +152,7 @@ it('admits one run at a time: a second invocation refuses while the lock is held
 
     try {
         expect(Artisan::call('bfc:hmac:rewrap'))->toBe(1)
-            ->and(Artisan::output())->toContain('Another rewrap run holds the lock');
+            ->and(Artisan::output())->toContain('holds the lock');
     } finally {
         $lock->release();
     }
@@ -269,4 +271,97 @@ it('pauses the exchange RE-KEY mid-rewrap as a retryable claim error, leaving th
     expect(Artisan::call('bfc:hmac:rewrap'))->toBe(0);
 
     $this->postJson('/bfc/onboarding/exchange', ['token' => $claimCode])->assertCreated();
+});
+
+it('excludes EVERY ciphertext writer while the rewrap lock is held — check-through-commit, with no version mismatch to see (rework Fix 1)', function (): void {
+    $headers = ['Authorization' => 'Bearer '.auditAdminToken('barrier-admin-'.bin2hex(random_bytes(4)))];
+
+    // Everything a writer needs, prepared while the lock is free: an
+    // ACTIVE key to rotate, and a delivered claim code ready to re-key.
+    $mintResult = app(MintCredential::class)(
+        new Subject(SubjectType::ExternalConsumer, 'barrier-client'),
+        MintOptions::fromInput(['kind' => 'hmac']),
+    );
+    $this->postJson('/bfc/credentials/'.$mintResult->summary->id.'/activate', [
+        'delivery_fingerprint' => (string) $mintResult->deliveryFingerprint,
+    ], $headers)->assertOk();
+
+    $claimResult = app(MintCredential::class)(
+        new Subject(SubjectType::ExternalConsumer, 'barrier-rekey-client'),
+        MintOptions::fromInput(['kind' => 'hmac', 'code_ttl_seconds' => 3600]),
+    );
+    assert($claimResult->secret !== null);
+    $claimCode = $claimResult->secret->reveal();
+    $this->postJson('/bfc/onboarding/exchange', ['token' => $claimCode])->assertCreated();
+
+    // The rewrap's verification window: the sweep holds the shared lock.
+    // Deliberately NO version mismatch is staged — the lock alone must
+    // exclude, because the writer's version check can race the count.
+    $lock = Cache::lock(HmacWriterBarrier::LOCK, 60);
+    expect($lock->get())->toBeTrue();
+
+    try {
+        // hmac mint: refused retry-later.
+        $mintRefused = $this->postJson('/bfc/credentials', [
+            'subject_type' => 'application',
+            'subject_ref' => 'locked-out-mint',
+            'kind' => 'hmac',
+        ], $headers)->assertStatus(409);
+
+        expect((string) $mintRefused->json('message'))->toContain('bfc:hmac:rewrap');
+
+        // hmac rotation's replacement mint: refused retry-later.
+        $this->postJson('/bfc/credentials/'.$mintResult->summary->id.'/rotate', [], $headers)
+            ->assertStatus(409);
+
+        // The exchange redelivery: the retryable claim error, and the
+        // stored ciphertext untouched.
+        $this->postJson('/bfc/onboarding/exchange', ['token' => $claimCode])
+            ->assertStatus(500)
+            ->assertJsonPath('error', 'server_error');
+    } finally {
+        $lock->release();
+    }
+
+    expect(Credential::query()->where('subject_ref', 'locked-out-mint')->count())->toBe(0);
+
+    // The lock released — the verification window over — every writer
+    // proceeds: the zero-count was authoritative while it ran.
+    $this->postJson('/bfc/credentials', [
+        'subject_type' => 'application',
+        'subject_ref' => 'locked-out-mint',
+        'kind' => 'hmac',
+    ], $headers)->assertCreated();
+
+    $this->postJson('/bfc/credentials/'.$mintResult->summary->id.'/rotate', [], $headers)->assertCreated();
+
+    $this->postJson('/bfc/onboarding/exchange', ['token' => $claimCode])->assertCreated();
+});
+
+it('aborts the sweep when the lock lease cannot be renewed — ownership lost mid-run never overlaps two sweeps (rework Fix 4)', function (): void {
+    Credential::factory()->hmac()->count(3)->create();
+    stageAppKeyRotation();
+
+    // Mid-run, right as the first row crosses, the lease lapses and a
+    // rival owner takes the lock (the crash-plus-expiry scenario).
+    $hijacked = false;
+
+    DB::listen(function ($query) use (&$hijacked): void {
+        if (! $hijacked && str_contains($query->sql, 'update "credentials"')) {
+            $hijacked = true;
+            Cache::lock(HmacWriterBarrier::LOCK)->forceRelease();
+            Cache::lock(HmacWriterBarrier::LOCK, 600)->get();
+        }
+    });
+
+    expect(Artisan::call('bfc:hmac:rewrap', ['--chunk' => 1]))->toBe(1);
+
+    $output = Artisan::output();
+
+    expect($output)->toContain('ownership was lost')
+        ->and($output)->toContain('Aborting');
+
+    // The sweep stopped instead of writing on without the lock: rows
+    // remain to cross, and a re-run resumes them.
+    expect(app(HmacKeyring::class)->cutoverInProgress())->toBeTrue();
 });

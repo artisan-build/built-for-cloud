@@ -23,6 +23,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintedSecret;
@@ -109,8 +110,24 @@ final class RotateCredential
      */
     public function __invoke(string $id, RotateOptions $options, ?AuditActor $actor = null): ?RotationResult
     {
+        $phaseOne = fn (): ?RotationResult => DB::transaction(fn (): ?RotationResult => $this->mintReplacement($id, $options, $actor));
+
+        // The writer barrier (SEC-V3-08, check-through-commit): an
+        // UNSTAMPED hmac source mints a fresh ciphertext, so its whole
+        // phase-1 transaction runs under the shared rewrap lock (see
+        // {@see HmacWriterBarrier} for the discipline) — the version
+        // check and the COMMIT cannot straddle the rewrap's verified
+        // zero-count. The peek is stable (a row's kind never changes);
+        // a stamped source takes the completion path, which writes no
+        // ciphertext and deliberately stays available mid-rewrap (an
+        // emergency kill must never wait on a sweep).
+        /** @var Credential|null $peeked */
+        $peeked = Credential::query()->whereKey($id)->first(['id', 'kind', 'rotated_at']);
+
         /** @var RotationResult|null $result */
-        $result = DB::transaction(fn (): ?RotationResult => $this->mintReplacement($id, $options, $actor));
+        $result = ($peeked?->kind === CredentialKind::Hmac && $peeked->rotated_at === null)
+            ? app(HmacWriterBarrier::class)->exclusive('rotation', $phaseOne)
+            : $phaseOne();
 
         if ($result === null) {
             return null;
@@ -213,11 +230,12 @@ final class RotateCredential
             return $this->completeCutover($source, $options, $actor);
         }
 
-        // The rewrap pause (SEC-V3-08) gates the MINTING branch only: a
-        // rotation writes fresh key material, which must not interleave
-        // with a half-finished re-encryption sweep. Cutover COMPLETION
-        // (above) stays available mid-rewrap — it retires, writes no key
-        // material, and an emergency kill must never wait on a sweep.
+        // The rewrap pause (SEC-V3-08) gates the MINTING branch only —
+        // enforced check-through-commit by the writer barrier __invoke
+        // wraps around this whole transaction for unstamped hmac
+        // sources; this in-transaction check is the belt for the one
+        // race the peek cannot see (a row stamped and un-stamped is
+        // impossible, but a lock-less call path must still refuse).
         if ($source->kind === CredentialKind::Hmac && $this->keyring->cutoverInProgress()) {
             throw RewrapInProgress::refusing('rotation');
         }

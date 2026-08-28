@@ -280,7 +280,10 @@ every previously delivered plaintext is dead, its `delivery_fingerprint` with it
 one live pending delivery per code ever exists. A redelivery attempted while an APP_KEY rewrap
 is in progress answers the retryable `server_error` (the re-key writes a fresh ciphertext, and
 every ciphertext-producing path pauses mid-cutover); the FIRST delivery of a code still works
-mid-cutover — it only reads through the keyring.
+through the staged cutover window — it only reads through the keyring — though while the
+`bfc:hmac:rewrap` sweep itself is RUNNING (minutes, not the whole window), every signing-key
+delivery briefly answers the same retryable `server_error`: deliveries and the sweep's
+completion verification share one lock, so no write can straddle the verified zero-count.
 
 Which store the durable lands in is the app's declaration: `api_tokens` by default; an app
 rebuilt on the unified store receives a `credentials` row instead (same wire shape here either

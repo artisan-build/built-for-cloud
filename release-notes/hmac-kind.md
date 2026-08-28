@@ -97,7 +97,9 @@ algorithm, key id, event type, timestamp, nonce, audience, and the body's sha256
   and **cardinality** — at most `built-for-cloud.hmac.verification_rate_ceiling` (default
   1000) accepted verifications per key per window, checked after the signature verifies (only
   the key's holder can spend its budget) and before any nonce is stored, so no single
-  credential can fill the shared cache. The nonce cache is only as fleet-wide as the default
+  credential can fill the shared cache. **Replays spend no budget**: a replayed nonce is
+  rejected before the counter, so replaying one captured envelope can never rate-limit the
+  legitimate holder. The nonce cache is only as fleet-wide as the default
   cache store: instance-local stores (array, file) bound replays per instance;
 - answers every middleware failure — key-STATE failures like an unreadable ring key or a
   corrupted ciphertext included — with one uniform 401, never a framework 500: nothing on the
@@ -115,11 +117,16 @@ own staged APP_KEY rotation — no new env vars. Rotating the APP_KEY of an app 
    mixed-primary fleet linger. From this moment the hmac store is **mid-cutover**: signing,
    verification, first delivery and revocation keep working (the keyring reads every version),
    but **every ciphertext-producing path — hmac minting, rotation, and exchange redelivery —
-   refuses with a retry-later error** until the cutover completes. That writer barrier is what
-   makes the completion gate trustworthy: no writer can land an old-version row behind the
-   zero-count.
+   refuses with a retry-later error** until the cutover completes. The barrier is
+   **check-through-commit**: writers and the rewrap share one lock (`bfc:hmac:rewrap`) — each
+   writer holds it across its version check, its write, and its transaction commit, and the
+   sweep holds it from its first re-encryption through its final zero-verification — so no
+   write can pass the check before the sweep and commit after the verified zero-count. That is
+   what makes the completion gate trustworthy.
 3. **Run `bfc:hmac:rewrap`** (locked — one run at a time, the lease renewed every batch so a
-   long sweep never outlives it; restartable — a killed run resumes by re-running). It
+   long sweep never outlives it, and a run that LOSES the lease aborts immediately rather than
+   ever letting two sweeps overlap; restartable — a killed or aborted run resumes by
+   re-running). It
    re-encrypts every hmac ciphertext under the new key and **succeeds only when it verifies
    zero old-version rows**. A row whose key-version names no ring key fails the run by id:
    restore that key to `APP_PREVIOUS_KEYS` and re-run — never drop ciphertexts. The lock is

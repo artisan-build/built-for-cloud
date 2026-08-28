@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacKeyUnreadable;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\FileStore;
 use Illuminate\Cache\Lock;
@@ -15,6 +16,7 @@ use Illuminate\Console\Command;
 use Illuminate\Contracts\Cache\Lock as LockContract;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Cache;
+use RuntimeException;
 
 /**
  * Stage 3 of the APP_KEY rotation over the hmac store (SEC-V3-08): after
@@ -74,10 +76,18 @@ final class HmacRewrapCommand extends Command
             ));
         }
 
-        $lock = Cache::lock('bfc:hmac:rewrap', self::LOCK_SECONDS);
+        // THE LOCK DISCIPLINE (see {@see HmacWriterBarrier}): this is the
+        // same lock every ciphertext writer takes around its
+        // check+write+commit. This run holds it from before the first
+        // re-encryption THROUGH the final verify-zero-old-version-rows
+        // count (released only in the finally below, after rewrap()
+        // returns) — so while the completion verification runs, no writer
+        // anywhere is between its version check and its commit, and the
+        // zero-count is authoritative.
+        $lock = Cache::lock(HmacWriterBarrier::LOCK, self::LOCK_SECONDS);
 
         if (! $lock->get()) {
-            $this->error('Another rewrap run holds the lock; only one runs at a time. Retry when it finishes (or after its lock expires).');
+            $this->error('Another rewrap run (or an in-flight hmac ciphertext write) holds the lock; only one holder at a time. Retry shortly.');
 
             return self::FAILURE;
         }
@@ -99,11 +109,29 @@ final class HmacRewrapCommand extends Command
         $unreadable = [];
 
         while (true) {
-            // A long sweep must not outlive its lease: renew per batch.
-            // (Every framework store's lock is a cache Lock; the guard
-            // only spares an exotic third-party implementation.)
+            // A long sweep must not outlive its lease: renew per batch —
+            // and if the renewal says ownership is LOST (the lease
+            // expired and someone else took the lock), ABORT the sweep
+            // immediately: continuing to write without the lock is
+            // exactly the overlap the lock exists to forbid. The rows
+            // already crossed stay crossed; a re-run resumes. (Every
+            // framework store's lock is a cache Lock; a third-party lock
+            // without refresh support keeps its original lease.)
             if ($lock instanceof Lock) {
-                $lock->refresh(self::LOCK_SECONDS);
+                try {
+                    $renewed = $lock->refresh(self::LOCK_SECONDS);
+                } catch (RuntimeException) {
+                    $renewed = true;
+                }
+
+                if (! $renewed) {
+                    $this->error(
+                        'The rewrap lock lease could not be renewed — ownership was lost mid-sweep. Aborting so two '
+                        .'sweeps can never overlap; progress is kept, re-run bfc:hmac:rewrap to resume.',
+                    );
+
+                    return self::FAILURE;
+                }
             }
 
             /** @var list<Credential> $rows */

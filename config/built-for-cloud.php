@@ -101,12 +101,14 @@ return [
     | `timestamp_tolerance_seconds` — how far a signed timestamp may sit
     | from this server's clock, in either direction (inclusive).
     |
-    | `verification_rate_ceiling` — accepted verifications per KEY per
-    | replay window. This is the nonce store's CARDINALITY bound: only
-    | signature-valid requests count against it, and it is checked before
-    | any nonce is stored, so one credential can never fill the shared
-    | cache with unique nonces. Size it above your busiest key's honest
-    | volume per window.
+    | `verification_rate_ceiling` — GENUINELY NEW accepted verifications
+    | per KEY per replay window. This is the nonce store's CARDINALITY
+    | bound: only signature-valid requests count against it, replayed
+    | nonces are rejected BEFORE the counter and spend nothing (a
+    | captured envelope replayed forever cannot rate-limit the honest
+    | holder), and the check runs before any nonce is stored, so one
+    | credential can never fill the shared cache with unique nonces.
+    | Size it above your busiest key's honest volume per window.
     |
     | The replay window (nonce + rate entries alike) is derived as
     | 2 x tolerance + 60s of margin: it strictly outlives the inclusive
