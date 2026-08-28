@@ -73,9 +73,9 @@ Additive unless marked otherwise:
   integration event (namespace + stable event id + monotonic entitlement version + external
   subject). The human path answers `201` with the single reveal, shape-identical whatever the
   prior state; the integration path answers one uniform `202` acknowledgement carrying no
-  invitation data, with delivery to an addressed invitee by mail. Issuing supersedes prior
-  pending invitations of the same email (and, for an applying event, of the same
-  namespace+subject).
+  invitation data, with delivery to an addressed invitee by mail. An addressed human invite
+  supersedes prior pending invitations of the same email; an applying integration event
+  supersedes only its own namespace+subject history.
 
 **api_version 1** — the 0.3.x baseline: `/bfc/meta`, `/bfc/ownership/*`, the pre-0.4 credential
 API listing shape.
@@ -318,11 +318,12 @@ characters); `role` is stored and never interpreted — the app's accept hook pr
 other free-text fields are bounded to 255 characters; oversize input is a `422` on both
 transports.
 
-**Supersession:** issuing an ADDRESSED invitation consumes every prior pending (unaccepted,
-unexpired) invitation of the same email — an issuer replaces a code by issuing again, and the
-old link then refuses as `code_already_claimed`. An APPLYING integration event likewise
-consumes every prior pending invitation of its (namespace, external subject). Open,
-non-integration codes supersede nothing (there is no subject to match).
+**Supersession, scoped precisely:** issuing an addressed HUMAN invitation consumes every prior
+pending (unaccepted, unexpired) invitation of the same email — an issuer replaces a code by
+issuing again, and the old link then refuses as `code_already_claimed`. An APPLYING integration
+event consumes ONLY its own (namespace, external subject) pending history — never another
+namespace's invitation, and never a human invitation that happens to share the recipient
+address. Open, non-integration codes supersede nothing (there is no subject to match).
 
 The four integration-event fields are **all-or-none** (SEC-V3-05): a plain human-issued invite
 carries none; a machine-issued event carries every one. `entitlement_version` is a whole number
@@ -331,8 +332,11 @@ values outside the range are rejected, never truncated or saturated. The version
 the latest accepted version per (`integration_namespace`, `external_subject`) and
 **transactionally ignores any event whose version is not newer**; a replayed `event_id` answers
 idempotently — same response, no second invitation, no state change — and a replay after the
-invitation was accepted does not resurrect it. Concurrent deliveries racing the gate's first
-row are re-decided against the winner and receive the same documented acknowledgement.
+invitation was accepted does not resurrect it. Concurrent deliveries racing a gate-row create
+are re-decided against the winner — up to **3 whole transactional attempts** per request
+(one request can lose the entitlement race and then the event-id race); past the bound the
+verb answers a clean `500 {"message": ...}` with **no partial state** — nothing was applied,
+and retrying is safe.
 
 **The two response shapes, keyed on the REQUEST (never on state):**
 

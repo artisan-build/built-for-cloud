@@ -58,11 +58,14 @@ shape: bigint and uuid inviter ids alike stringify; no FK — the package cannot
 user key type). One upgrade path for fresh and existing databases; an app-owned table (flag off
 or no `token` column) is never touched.
 
-**Rollback never drops the invitations table (FLT-F).** The create migration records as run
-whether it created the table, was flag-skipped, or found the app's own table already there — so
-at rollback time flag-on + table-present cannot prove whose table it is, and the package
-refuses to guess: `down()` is a deliberate no-op. An operator who truly wants the package's
-table gone drops it manually (`DROP TABLE invitations`).
+**Rollback never drops or reshapes the invitations table (FLT-F).** The create migration
+records as run whether it created the table, was flag-skipped, or found the app's own table
+already there — so at rollback time flag-on + table-present cannot prove whose table it is,
+and the package refuses to guess: the create migration's `down()` is a deliberate no-op, and
+so is the generalize migration's — a `token` column does not prove the package added
+`used_by`/`role`, and an app-owned table carrying all three must not lose columns to a batch
+rollback. An operator who truly wants the package's table (or the added columns) gone drops
+them manually (`DROP TABLE invitations` / `ALTER TABLE invitations DROP COLUMN ...`).
 
 ## The machine-callable invite verb + version gate (SEC-V3-05)
 
@@ -75,18 +78,21 @@ and every decided event id is recorded in `integration_events` so replays answer
 (no second invitation; replay-after-accept resurrects nothing). `entitlement_version` is bounded
 to **[1, 2^53]** — oversize values (including digit strings that would saturate integer
 parsing) are rejected, never accepted, so a poisoned maximum can never freeze a subject.
-Concurrent deliveries racing the gate's FIRST row for a (namespace, subject) — or the same
-event id — are re-decided in a fresh transaction against the winner's committed row and receive
-the documented acknowledgement, never a unique-violation 500. Both tables are event-kind
-generic — the offboarding verb (1.15) plugs into the same gate.
+Concurrent deliveries racing a gate-row create for a (namespace, subject) — or the same event
+id — are re-decided in fresh transactions against the winner's committed row, up to **3 whole
+attempts per request** (one request can lose the entitlement race and then the event-id race);
+past the bound the verb answers a clean, secret-free `500` with no partial state — nothing
+applied, safe to retry — never a raw unique-violation. Both tables are event-kind generic —
+the offboarding verb (1.15) plugs into the same gate.
 
-**Supersession** (mirroring the onboarding primitive): an APPLYING integration event consumes
-every prior pending (unaccepted, unexpired) invitation of its (namespace, subject); issuing an
-ADDRESSED invitation consumes every prior pending invitation of the same email. Superseded
-codes refuse acceptance as `code_already_claimed` (`used_by` null distinguishes supersession
-from a real acceptance). Open, non-integration codes supersede nothing. The package
-`Invitation::invite()` model helper (sink's path) is unchanged — supersession is the verb's
-semantic.
+**Supersession, scoped precisely** (mirroring the onboarding primitive): an APPLYING
+integration event consumes ONLY its own (namespace, subject) pending history — never another
+namespace's invitation, and never a human invitation sharing the recipient address; issuing an
+addressed HUMAN invitation consumes every prior pending invitation of the same email.
+Superseded codes refuse acceptance as `code_already_claimed` (`used_by` null distinguishes
+supersession from a real acceptance). Open, non-integration codes supersede nothing. The
+package `Invitation::invite()` model helper (sink's path) is unchanged — supersession is the
+verb's semantic.
 
 **Non-enumeration and the two response shapes:** the HUMAN path always issues and answers
 `201` with the single reveal, shape-identical whatever the prior state. The INTEGRATION path

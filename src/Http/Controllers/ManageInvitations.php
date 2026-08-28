@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 use ArtisanBuild\BuiltForCloud\Actions\IssueInvitation;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\IntegrationEventContention;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\InvitationOptions;
 use Illuminate\Http\JsonResponse;
@@ -46,6 +47,12 @@ final class ManageInvitations
             return response()->json(['message' => $invalid->getMessage()], 422);
         } catch (CredentialVerbRefused $refused) {
             return response()->json(['message' => $refused->getMessage()], 403);
+        } catch (IntegrationEventContention $contention) {
+            // The gate lost every bounded attempt to concurrent deliveries:
+            // a clean, secret-free server error — nothing was applied, no
+            // partial state remains, and the caller retries safely. Never
+            // the raw unique-violation with driver detail.
+            return response()->json(['message' => $contention->getMessage()], 500);
         }
 
         // A partial group already threw, so a complete group here IS the

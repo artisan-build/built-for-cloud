@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\Actions\Concerns\ConsultsDeclaration;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\IntegrationEventContention;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\IntegrationEntitlement;
 use ArtisanBuild\BuiltForCloud\IntegrationEvent;
@@ -47,17 +48,21 @@ use Throwable;
  * The version gate: an event's version must be NEWER than the latest
  * accepted for its (namespace, external subject) or the event is
  * transactionally acknowledged-and-ignored; a replayed event id answers
- * idempotently. Two concurrent FIRST events race their gate-row creates —
- * the loser's unique violation is caught and re-decided in a fresh
- * transaction against the winner's committed row, so both callers get the
- * documented acknowledgement, never a naked 500.
+ * idempotently. Concurrent deliveries racing a gate-row create are
+ * re-decided in fresh transactions against the winner's committed row —
+ * up to {@see GATE_ATTEMPTS} whole attempts, because one request can
+ * lose the entitlement race and then the event-id race; past the bound a
+ * clean {@see IntegrationEventContention} escapes (safe to retry, no
+ * partial state), never a naked unique-violation 500.
  *
- * Supersession (mirroring the onboarding primitive): an APPLYING
- * integration event consumes every prior pending invitation of its
- * (namespace, subject); an ADDRESSED invite consumes every prior pending
- * invitation of its email — both as conditional updates in the issue's
- * own transaction. Open, non-integration codes supersede nothing (there
- * is no subject to match).
+ * Supersession (mirroring the onboarding primitive), scoped precisely:
+ * an APPLYING integration event consumes every prior pending invitation
+ * of its OWN (namespace, subject) history and nothing else — never
+ * another namespace's invitation, never a human one sharing the email;
+ * an addressed HUMAN invite consumes every prior pending invitation of
+ * its email. Both are conditional updates in the issue's own
+ * transaction. Open, non-integration codes supersede nothing (there is
+ * no subject to match).
  *
  * The integration path returns ONE uniform acknowledgement whatever
  * happened (applied/ignored/replayed) and reveals nothing to the caller:
@@ -88,6 +93,15 @@ final class IssueInvitation
      */
     public const int MAX_ENTITLEMENT_VERSION = 9007199254740992;
 
+    /**
+     * The gate's contention bound: how many whole transactional attempts
+     * one request makes before giving up. Three, because one request can
+     * genuinely lose two distinct races back to back (the entitlement
+     * row's create, then the event id's) and still deserves the decided
+     * answer on a clean third pass.
+     */
+    public const int GATE_ATTEMPTS = 3;
+
     public function __construct(private readonly LifecycleEventRecorder $recorder) {}
 
     public function __invoke(InvitationOptions $options, ?AuditActor $actor = null): InvitationIssueResult
@@ -116,19 +130,25 @@ final class IssueInvitation
             return DB::transaction(fn (): InvitationIssueResult => $this->issue($options, $ttlSeconds, $actor));
         }
 
-        try {
-            /** @var InvitationIssueResult */
-            return DB::transaction(fn (): InvitationIssueResult => $this->decideIntegrationEvent($options, $ttlSeconds, $actor));
-        } catch (UniqueConstraintViolationException) {
-            // The concurrent-winner case: another delivery committed the
-            // gate row (the entitlement, or this very event id) between
-            // our check and our create, and our transaction rolled back
-            // whole. Re-decide in a FRESH transaction against what now
-            // stands — the ordinary replay/ignore-older logic answers the
-            // documented acknowledgement.
-            /** @var InvitationIssueResult */
-            return DB::transaction(fn (): InvitationIssueResult => $this->decideIntegrationEvent($options, $ttlSeconds, $actor));
+        // The concurrent-winner rescue: another delivery committing a gate
+        // row (the entitlement, or this very event id) between our check
+        // and our create rolls our transaction back whole; each retry
+        // re-enters a FRESH transaction and re-applies the ordinary
+        // replay/ignore-older logic against what now stands. Bounded at
+        // GATE_ATTEMPTS because losing BOTH races in one request is real
+        // (entitlement first, then the event id): past the bound a clean,
+        // secret-free contention error escapes — safe to retry, and no
+        // attempt leaves partial state (each rolled back whole).
+        for ($attempt = 1; $attempt <= self::GATE_ATTEMPTS; $attempt++) {
+            try {
+                /** @var InvitationIssueResult */
+                return DB::transaction(fn (): InvitationIssueResult => $this->decideIntegrationEvent($options, $ttlSeconds, $actor));
+            } catch (UniqueConstraintViolationException) {
+                // Loop; the next attempt re-decides from scratch.
+            }
         }
+
+        throw IntegrationEventContention::afterAttempts(self::GATE_ATTEMPTS);
     }
 
     /**
@@ -289,7 +309,14 @@ final class IssueInvitation
      */
     private function issue(InvitationOptions $options, int $ttlSeconds, ?AuditActor $actor): InvitationIssueResult
     {
-        if ($options->email !== null) {
+        // Email-wide supersession is the HUMAN path's semantic only: an
+        // issuer replaces the code they addressed. An integration event
+        // supersedes nothing here — its scope is exactly its own
+        // (namespace, subject) history, consumed by the caller — so an
+        // applied event for one namespace can never consume another
+        // namespace's invitation, or a human one, that happens to share
+        // the recipient address.
+        if ($options->email !== null && ! $options->integrationEventComplete()) {
             $this->supersedePending(Invitation::query()->where('email', $options->email));
         }
 

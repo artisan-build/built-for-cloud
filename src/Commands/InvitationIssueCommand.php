@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\Actions\IssueInvitation;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Commands\Concerns\ParsesCredentialVerbInput;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\IntegrationEventContention;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\InvitationOptions;
 use Illuminate\Console\Command;
@@ -58,7 +59,7 @@ final class InvitationIssueCommand extends Command
                 ]),
                 AuditActor::cliOperator(),
             );
-        } catch (CredentialVerbRefused|InvalidCredentialInput $refused) {
+        } catch (CredentialVerbRefused|IntegrationEventContention|InvalidCredentialInput $refused) {
             $this->error($refused->getMessage());
 
             return self::FAILURE;

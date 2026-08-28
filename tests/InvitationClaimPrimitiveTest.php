@@ -288,6 +288,31 @@ it('never drops even the table the package itself created — rollback is a docu
         ->and(Schema::hasColumn('invitations', 'token'))->toBeTrue();
 });
 
+it('leaves an app-owned table with token, role and used_by columns intact through batch rollback', function (): void {
+    // A `token` column proves nothing about ownership: an app-owned
+    // table can carry token, role AND used_by of its own. A batch
+    // rollback (generalize then create, flag ON) must not strip its
+    // columns or drop it — both down()s are documented no-ops.
+    Schema::dropIfExists('invitations');
+    Schema::create('invitations', function (Blueprint $table): void {
+        $table->id();
+        $table->string('token')->unique();
+        $table->string('role')->nullable();
+        $table->string('used_by')->nullable();
+    });
+
+    $generalizeMigration = require __DIR__.'/../database/migrations/2026_08_28_600001_generalize_invitations_table.php';
+    $createMigration = require __DIR__.'/../database/migrations/2026_06_22_000010_create_invitations_table.php';
+
+    $generalizeMigration->down();
+    $createMigration->down();
+
+    expect(Schema::hasTable('invitations'))->toBeTrue()
+        ->and(Schema::hasColumn('invitations', 'token'))->toBeTrue()
+        ->and(Schema::hasColumn('invitations', 'role'))->toBeTrue()
+        ->and(Schema::hasColumn('invitations', 'used_by'))->toBeTrue();
+});
+
 it('never generalizes an app-shaped invitations table', function (): void {
     // The additive migration is guarded on the PACKAGE's shape: an
     // invitations table without the hashed token column belongs to the

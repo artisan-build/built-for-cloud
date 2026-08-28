@@ -47,24 +47,19 @@ return new class extends Migration
         });
     }
 
+    /**
+     * A deliberate NO-OP — the same stance as the create migration's
+     * `down()`: a `token` column does not PROVE the package added
+     * `used_by`/`role` (an app-owned table can carry all three), and
+     * dropping columns the app owns is unrecoverable data loss. Nothing
+     * this migration changed is reverted — the added columns stay, email
+     * nullability stays, the invited_by widening stays (rows written
+     * since may depend on all of them). An operator who truly wants the
+     * columns gone drops them manually
+     * (release-notes/invitations-convergence.md).
+     */
     public function down(): void
     {
-        if (config('built-for-cloud.auth_foundation.invitations') === false
-            || ! Schema::hasTable('invitations')
-            || ! Schema::hasColumn('invitations', 'token')) {
-            return;
-        }
-
-        // Only the added columns are removed. Email nullability and the
-        // invited_by widening are NOT reverted: rows written since may
-        // carry nulls or 64-character refs, and a narrowing rollback would
-        // destroy data.
-        Schema::table('invitations', function (Blueprint $table): void {
-            foreach (['used_by', 'role'] as $column) {
-                if (Schema::hasColumn('invitations', $column)) {
-                    $table->dropColumn($column);
-                }
-            }
-        });
+        // Intentionally empty: rollback never reshapes the invitations table.
     }
 };

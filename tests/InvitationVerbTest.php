@@ -85,6 +85,27 @@ function capturedDeliveryCode(): string
     return (string) $code;
 }
 
+/**
+ * Every delivered code, in send order.
+ *
+ * @return list<string>
+ */
+function capturedDeliveryCodes(): array
+{
+    $codes = [];
+
+    Notification::assertSentOnDemand(
+        InvitationDeliveryNotification::class,
+        function (InvitationDeliveryNotification $notification) use (&$codes): bool {
+            $codes[] = $notification->invitationCode;
+
+            return true;
+        },
+    );
+
+    return $codes;
+}
+
 // PR8 locked AC 1 (verb path): ttl required and bounded, identically on
 // both transports, with no hidden default anywhere.
 
@@ -262,6 +283,47 @@ it('supersedes the prior pending code when a newer event applies — a stolen ol
         ->and(Invitation::query()->whereNull('accepted_at')->count())->toBe(1);
 });
 
+it('scopes integration supersession to its own namespace and subject — shared-email invitations survive', function (): void {
+    Notification::fake();
+
+    // A human invitation and two namespaces' invitations all share one
+    // recipient address.
+    $human = inviteOverHttp(['email' => 'shared@example.test', 'ttl_seconds' => 3600]);
+    $human->assertCreated();
+
+    inviteIntegrationEvent('evt-a1', 1, ['namespace' => 'ns-a', 'subject' => 'subj-a', 'email' => 'shared@example.test'])->assertStatus(202);
+    inviteIntegrationEvent('evt-b1', 1, ['namespace' => 'ns-b', 'subject' => 'subj-b', 'email' => 'shared@example.test'])->assertStatus(202);
+
+    // ns-b applies a NEWER event: only its own prior code may die — the
+    // human invitation and ns-a's invitation stay alive despite the
+    // shared email.
+    inviteIntegrationEvent('evt-b2', 2, ['namespace' => 'ns-b', 'subject' => 'subj-b', 'email' => 'shared@example.test'])->assertStatus(202);
+
+    $codes = capturedDeliveryCodes();
+
+    expect($codes)->toHaveCount(3)
+        ->and(Invitation::query()->whereNull('accepted_at')->count())->toBe(3);
+
+    /** @var Invitation $superseded */
+    $superseded = Invitation::query()->whereNotNull('accepted_at')->sole();
+
+    // The one superseded row is ns-b's OWN prior code (evt-b1's), marked
+    // as supersession, not acceptance.
+    expect($superseded->getAttributes()['token'])->toBe(hash('sha256', $codes[1]))
+        ->and($superseded->used_by)->toBeNull();
+
+    // ns-a's code is still pending, and the human invitation still
+    // accepts (one acceptance only — both are addressed to the same
+    // email, and users.email is unique).
+    expect(
+        Invitation::query()->where('token', hash('sha256', $codes[0]))->whereNull('accepted_at')->exists(),
+    )->toBeTrue();
+
+    $user = Invitation::accept((string) $human->json('invitation_code'), ['name' => 'Human Invitee', 'password' => 'pw']);
+
+    expect($user->getAttribute('email'))->toBe('shared@example.test');
+});
+
 it('ignores an out-of-order older version arriving first-reversed', function (): void {
     Notification::fake();
 
@@ -389,6 +451,100 @@ it('rescues a racing duplicate event id into the documented acknowledgement', fu
     expect($competitorFired)->toBeTrue()
         ->and(IntegrationEvent::query()->where('event_id', 'evt-race-dup')->count())->toBe(1)
         ->and(Invitation::query()->count())->toBeLessThanOrEqual(1);
+});
+
+it('survives losing both gate races in one request — the third attempt decides', function (): void {
+    Notification::fake();
+
+    // Attempt 1 loses the ENTITLEMENT-row race; attempt 2 loses the
+    // EVENT-id race; attempt 3 runs clean and applies. (Each injected
+    // competitor shares this test's single connection, so it rolls back
+    // with the attempt it sabotaged — which is exactly what leaves the
+    // next attempt a clean slate to decide on.)
+    $entitlementInjected = false;
+    $eventInjected = false;
+
+    DB::listen(function (QueryExecuted $query) use (&$entitlementInjected, &$eventInjected): void {
+        if (preg_match('/^\s*select\b/i', $query->sql) !== 1) {
+            return;
+        }
+
+        if (! $entitlementInjected && str_contains($query->sql, 'integration_entitlements')) {
+            $entitlementInjected = true;
+
+            DB::table('integration_entitlements')->insert([
+                'id' => (string) Str::uuid(),
+                'integration_namespace' => 'github-sponsors',
+                'external_subject' => 'sponsor-login',
+                'entitlement_version' => 9,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            return;
+        }
+
+        if ($entitlementInjected && ! $eventInjected && str_contains($query->sql, 'integration_events')) {
+            $eventInjected = true;
+
+            DB::table('integration_events')->insert([
+                'id' => (string) Str::uuid(),
+                'integration_namespace' => 'github-sponsors',
+                'event_id' => 'evt-double-loss',
+                'external_subject' => 'sponsor-login',
+                'event_kind' => 'invite',
+                'entitlement_version' => 3,
+                'applied' => true,
+                'invitation_id' => null,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+    });
+
+    inviteIntegrationEvent('evt-double-loss', 3)->assertStatus(202);
+
+    expect($entitlementInjected)->toBeTrue()
+        ->and($eventInjected)->toBeTrue()
+        ->and(IntegrationEvent::query()->where('event_id', 'evt-double-loss')->count())->toBe(1)
+        ->and(IntegrationEntitlement::query()->count())->toBe(1)
+        ->and(Invitation::query()->count())->toBe(1);
+});
+
+it('escapes cleanly after the contention bound with no partial state', function (): void {
+    Notification::fake();
+
+    // EVERY attempt loses the entitlement race: past the bound the verb
+    // answers a clean, secret-free server error, and no attempt left
+    // anything behind.
+    $collisions = 0;
+
+    DB::listen(function (QueryExecuted $query) use (&$collisions): void {
+        if (preg_match('/^\s*select\b/i', $query->sql) === 1
+            && str_contains($query->sql, 'integration_entitlements')) {
+            $collisions++;
+
+            DB::table('integration_entitlements')->insert([
+                'id' => (string) Str::uuid(),
+                'integration_namespace' => 'github-sponsors',
+                'external_subject' => 'sponsor-login',
+                'entitlement_version' => 9,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+    });
+
+    $response = inviteIntegrationEvent('evt-doomed', 3);
+
+    $response->assertStatus(500);
+
+    expect((string) $response->json('message'))->toContain('safe to retry')
+        ->and((string) $response->getContent())->not->toContain('SQL')
+        ->and($collisions)->toBe(3)
+        ->and(IntegrationEntitlement::query()->count())->toBe(0)
+        ->and(IntegrationEvent::query()->count())->toBe(0)
+        ->and(Invitation::query()->count())->toBe(0);
 });
 
 // PR8 rework Fix 2: entitlement versions are bounded to [1, 2^53] — an
