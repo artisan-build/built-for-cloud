@@ -6,6 +6,8 @@ use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
 use ArtisanBuild\BuiltForCloud\Actions\OffboardSubject;
 use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
+use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesCredentialVerbs;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
@@ -28,6 +30,7 @@ use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnifiedStoreDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -755,6 +758,75 @@ function offboardSignedHeader(Credential $credential, string $body): string
 
     return $envelope->headerValue(hash_hmac('sha256', $envelope->canonical($body), $key));
 }
+
+it('never resolves an offboarded principal anywhere — the resolver is the containment choke point (r3 Fix 1)', function (): void {
+    // A unified-store declaration so the verify surface resolves against
+    // `credentials`, with its first-use burn.
+    config(['built-for-cloud.credentials.declaration' => UnifiedStoreDeclaration::class]);
+
+    $user = User::query()->create([
+        'name' => 'Person',
+        'email' => 'person@example.com',
+        'password' => 'irrelevant',
+    ]);
+
+    // Bound to the user under an UNRELATED subject: the sweep never
+    // touches this row — only the registry can kill it — and its linked
+    // claim code is still awaiting its first-use burn.
+    $minted = $this->mintCredential([
+        'subject_type' => SubjectType::Application,
+        'subject_ref' => 'unrelated-app',
+        'user_id' => (string) $user->getKey(),
+    ]);
+
+    $code = OnboardingToken::query()->create([
+        'id' => (string) Str::uuid(),
+        'email' => null,
+        'scope' => Scope::Consume->value,
+        'token_hash' => hash('sha256', 'linked-first-use-code'),
+        'durable_token_id' => $minted->credential->id,
+        'durable_store' => 'credentials',
+        'expires_at' => now()->addHour(),
+    ]);
+
+    // Positive control: before containment the secret validates (the
+    // resolver path — no usage recorded, nothing burned).
+    expect(auth('bfc')->validate(['secret' => $minted->plaintext()]))->toBeTrue();
+
+    offboardViaHttp(['subject_type' => 'user_principal', 'subject_ref' => 'person@example.com'])->assertOk();
+
+    // 1 — the raw resolver: null, though the row itself is unrevoked.
+    expect(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $minted->plaintext()))->toBeNull()
+        ->and($minted->credential->refresh()->revoked_at)->toBeNull();
+
+    // 2 — CredentialGuard::validate(), a path the per-gate patch missed.
+    expect(auth('bfc')->validate(['secret' => $minted->plaintext()]))->toBeFalse();
+
+    // 3 — the onboarding verify surface, the other missed path: refused
+    // as an unknown secret, and the FIRST-USE BURN DOES NOT FIRE — the
+    // linked code is untouched, no usage stamped.
+    $this->postJson('/bfc/onboarding/verify', [], ['Authorization' => 'Bearer '.$minted->plaintext()])
+        ->assertStatus(404)
+        ->assertJsonPath('error', 'code_not_found');
+
+    expect($code->refresh()->consumed_at)->toBeNull()
+        ->and($minted->credential->refresh()->last_used_at)->toBeNull();
+
+    // 4 — a credential minted AFTER containment for the offboarded
+    // subject itself resolves to null too: the registry keys on the
+    // subject, so the choke point catches rows born after the sweep.
+    $postMint = $this->mintCredential([
+        'subject_type' => SubjectType::UserPrincipal,
+        'subject_ref' => 'person@example.com',
+    ]);
+
+    expect(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $postMint->plaintext()))->toBeNull();
+
+    // The three gates (auth:bfc, the operator gate, the hmac verifier)
+    // keep their own coverage in the Fix 2 tests below — all riding this
+    // one resolver check now, except the hmac verifier's key selection,
+    // which never resolves by secret and keeps its load-bearing check.
+});
 
 it('rejects an offboarded bound user\'s operator credential on the operator gate itself (Fix 2)', function (): void {
     $user = User::query()->create([
