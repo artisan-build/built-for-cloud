@@ -8,11 +8,12 @@ use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
+use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Testing\TestResponse;
 
-uses(RefreshDatabase::class);
+uses(RefreshDatabase::class, DetectsSecretLeaks::class);
 
 /**
  * PRD 1.12 / OSS-8 / EXEC-11 — the hitch claim-contract route, verified
@@ -164,6 +165,21 @@ it('answers the retryable server_error shape when the exchange fails unexpectedl
     app()->instance(DurableCredentialMinter::class, $workingMinter);
 
     hitchClaim('{"claim_code": "'.$code.'", "version": 1}')->assertOk();
+});
+
+it('contains the claim reveal to the single response egress (D7 leak harness)', function (): void {
+    $code = issueClaimCode();
+
+    /** @var TestResponse<Illuminate\Http\JsonResponse> $response */
+    $response = $this->assertNoSecretLeakageOfMinted(
+        fn (): TestResponse => hitchClaim('{"claim_code": "'.$code.'", "version": 1}'),
+        fn (TestResponse $response): string => (string) $response->json('token'),
+    );
+
+    $response->assertOk();
+
+    // The response IS the delivery: exactly one reveal, nothing beyond it.
+    $this->assertRevealsSecretExactlyOnce((string) $response->getContent(), (string) $response->json('token'));
 });
 
 it('refuses a signing-key code before any burn and leaves it presentable on the exchange surface', function (): void {
