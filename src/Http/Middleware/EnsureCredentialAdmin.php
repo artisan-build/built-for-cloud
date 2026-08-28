@@ -41,6 +41,13 @@ final class EnsureCredentialAdmin
      * The admin-equivalent ability a unified-store operator credential
      * must hold to operate the credential verbs over HTTP. The installer
      * mints its operator credential with exactly this.
+     *
+     * RESERVED in this ability vocabulary (Console fast-follow,
+     * unimplemented): the `metadata:read` ability family —
+     * least-privilege, read-audited, for future vendor-side reads of
+     * `metadata`-classified endpoints (docs/http-contract.md, "Endpoint
+     * classification"). No credential is issued with it and nothing
+     * enforces it in this release.
      */
     public const string ABILITY = 'credential:admin';
 

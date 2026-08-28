@@ -33,6 +33,13 @@ use Throwable;
  * - Session-guarded routes never reach this guard, so a bearer riding along
  *   on one is never consumed and never stamps usage.
  *
+ * RESERVED matrix row (Console fast-follow, unimplemented): a future
+ * `bfc-console` delegated-session guard adds one more rule — on a request
+ * carrying both a local `web` session and a delegated session, the delegated
+ * guard wins for the acting principal AND for any UI/attribution branching,
+ * never a union of the two. Recorded here so the decided rule survives until
+ * that guard ships; nothing enforces it in this release.
+ *
  * The guard NEVER consults `built-for-cloud.fallback_token` or any other env
  * pseudo-credential — there is no code path from here to it. All rejections
  * are indistinguishable 401s: expired, revoked, pending and unknown secrets

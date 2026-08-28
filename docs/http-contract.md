@@ -85,6 +85,43 @@ API listing shape.
 Secrets appear in exactly one place each: the response field documented as the **single reveal**.
 No secret is ever retrievable again; store it on receipt.
 
+## Endpoint classification
+
+Every endpoint carries exactly one `classification`, chosen from its documented success-path
+(2xx) response shape. This column is the durable privacy boundary that future vendor-side
+surfaces (the product vendor's control plane and Console) rely on:
+
+- **`metadata`** — the response carries bounded scalars and enum values only, no free-text
+  strings. Safe for vendor-side reads.
+- **`content`** — the response carries application data (free-text names, identities, prose,
+  or any single-reveal secret). Content never transits the vendor.
+
+Error responses are outside the column: every surface shares prose `message` fields, which are
+server-generated operational text and — per the single-reveal rule above — never carry a secret.
+
+| endpoint | classification | basis (success response shape) |
+|---|---|---|
+| `GET /bfc/meta` | `metadata` | version integers, capability enum, boolean; `product` is the integrating product's config-declared name, not application free-text |
+| `POST /bfc/ownership/claim` | `content` | single reveal of `owner_token` and `webhook_secret` |
+| `POST /bfc/ownership/release` | `content` | single reveal of the ownership claim code |
+| `POST /bfc/ownership/cancel-transfer` | `metadata` | `{"ok": true}` — a bounded boolean |
+| `POST /bfc/onboarding/issue` | `content` | single reveal of the claim code, plus a free-text email address |
+| `POST /bfc/onboarding/exchange` | `content` | single reveal of the durable secret, plus the free-text credential name |
+| `POST /bfc/onboarding/verify` | `content` | carries the free-text credential name |
+| `GET /api/credentials` | `content` | rows carry free-text names, subject refs and client identities |
+| `GET /api/credentials/client-observations` | `content` | client-claimed free-text identities |
+| `POST /api/credentials` | `content` | single reveal of the minted plaintext, plus the free-text name |
+| `DELETE /api/credentials/id/{id}` | `metadata` | empty `204` body |
+| `POST /api/credentials/id/{id}/rotate` | `content` | single reveal of the replacement plaintext |
+| `DELETE /api/credentials/{name}` | `metadata` | `revoked_ids` only — bounded opaque identifiers |
+| `GET /bfc/credentials` | `content` | summary rows carry free-text names and subject refs |
+| `POST /bfc/credentials` | `content` | the `delivery` single reveal, plus free-text name/subject fields |
+| `DELETE /bfc/credentials/{id}` | `metadata` | empty `204` body |
+| `POST /bfc/credentials/{id}/rotate` | `content` | the `delivery` single reveal, plus summary rows |
+
+Vendor-side reads of `metadata`-classified endpoints will be governed by the reserved
+`metadata:read` ability family (see [the Console reservations](#reserved--console-fast-follow-not-implemented)).
+
 ---
 
 ## Metadata
@@ -204,6 +241,27 @@ verification burns the claim code that minted the credential.
 - **200** — `{"ok": true, "name": "...", "scope": "consume"}`.
 - **400 `invalid_code`** — no credential presented; **404 `code_not_found`** — nothing live
   matches.
+
+### Envelope versioning and reserved extensions
+
+The claim handshake is versioned end to end: the exchange request carries `version` (default
+`1`), the error envelope answers with its own `version`, and a server that does not speak a
+requested version refuses with `unsupported_version` rather than guessing. Compatibility rule 1
+applies to these surfaces exactly as everywhere else: **the claim-surface response envelopes —
+the ownership claim's and the onboarding exchange's alike — may grow additive fields in any
+release without an `api_version` bump**, and consumers must ignore fields they do not recognize.
+
+Two extension slots are RESERVED by name — documented intent only, not implemented, carrying no
+fields and no routes in this release:
+
+- **A countersigning-key exchange at claim time.** A future revision may add additive
+  key-exchange fields to the claim/exchange envelopes so the two parties can countersign at
+  claim. No key material of any kind travels on these surfaces today.
+- **A re-key verb for already-claimed apps.** A future additive route letting an app that has
+  already claimed re-run the key exchange without re-onboarding. New routes are additive under
+  rule 1.
+
+Neither reservation changes any request or response shape in this release.
 
 ---
 
@@ -570,3 +628,33 @@ own pace. Nothing is left untracked at any point — the listing shows the old r
 the old → new lineage, and if the human misses the window the old row is already dead and the
 new one already works. Use `emergency` only when the old secret is known-compromised, because
 it trades the installation window away.
+
+---
+
+## RESERVED — Console fast-follow (not implemented)
+
+The vendor-side Console is a decided fast-follow. So that it can land without reopening this
+shipped contract, the following names are RESERVED here now. **None of this exists in this
+release: no routes, no guard, no table, no ability issuance.** This section deliberately
+contains no `### METHOD /path` route headings — the mechanical route-completeness check covers
+live routes only, and nothing here is one.
+
+- **Guard name `bfc-console`** — reserved for the Console's delegated-session guard. No guard
+  by this name is registered.
+- **Endpoint namespace `/bfc/console/*`** — reserved for Console endpoints; the first known
+  member will be `/bfc/console/enter`. No route under this namespace exists.
+- **Table name `bfc_delegated_actors`** — reserved for the Console's delegated-actor records.
+  No such table or migration exists.
+- **Dual-session precedence (reserved matrix row).** The session/token precedence matrix (the
+  `bfc` guard's docblock and `release-notes/unified-store-guard.md`) reserves a row for the
+  future `bfc-console` delegated-session guard, recording the decided rule now: on a request
+  carrying both a local `web` session and a delegated session, **the delegated guard wins —
+  for the acting principal and for any UI/attribution branching — never a union of the two.**
+  Nothing enforces this in this release.
+- **Ability family `metadata:read`** — reserved in the ability vocabulary alongside `admin`
+  and `credential:admin`: least-privilege, read-audited, for future vendor-side reads of
+  `metadata`-classified endpoints (see [Endpoint classification](#endpoint-classification)).
+  No credential is issued with it and nothing enforces it in this release.
+
+Everything else Console-related remains held behind the Console PRD's decision D6; this
+section reserves exactly these names and nothing more.
