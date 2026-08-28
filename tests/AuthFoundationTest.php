@@ -255,7 +255,9 @@ it('fails create-admin clearly when the is_admin column is missing', function ()
 });
 
 it('creates and accepts invitations exactly once', function (): void {
-    $invitation = Invitation::invite('new@user.test');
+    // PR8's documented break (release-notes/invitations-convergence.md):
+    // the ttl is REQUIRED — the old 7-day default is gone.
+    $invitation = Invitation::invite('new@user.test', 604800);
     $plainTextToken = $invitation->token;
     $tokenHash = hash('sha256', $plainTextToken);
 
@@ -265,7 +267,7 @@ it('creates and accepts invitations exactly once', function (): void {
         ->and(Invitation::query()->whereKey($invitation->getKey())->value('token'))->toBe($tokenHash)
         ->and(Invitation::query()->whereKey($invitation->getKey())->value('token'))->not->toBe($plainTextToken);
 
-    $secondInvitation = Invitation::invite('another@user.test');
+    $secondInvitation = Invitation::invite('another@user.test', 604800);
 
     expect($secondInvitation->token)->not->toBe($plainTextToken);
 
@@ -298,7 +300,7 @@ it('creates and accepts invitations exactly once', function (): void {
 });
 
 it('ignores admin escalation attempts while accepting invitations', function (): void {
-    $invitation = Invitation::invite('mallory@user.test');
+    $invitation = Invitation::invite('mallory@user.test', 604800);
 
     $user = Invitation::accept($invitation->token, [
         'name' => 'Mallory',

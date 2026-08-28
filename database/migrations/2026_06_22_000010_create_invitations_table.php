@@ -25,12 +25,19 @@ return new class extends Migration
         });
     }
 
+    /**
+     * A deliberate NO-OP (FLT-F, PRD 1.13): the package refuses to drop a
+     * table it cannot prove it created. up() records this migration as
+     * run whether it created the table, was skipped by the flag, or was
+     * skipped because the APP's own table pre-existed — so at rollback
+     * time, flag-on + table-present does NOT distinguish the package's
+     * table from the app's, and no flag or hasTable check can. Dropping
+     * wrongly is unrecoverable data loss; not dropping costs an operator
+     * one manual `DROP TABLE invitations` when they truly want the
+     * package's table gone (release-notes/invitations-convergence.md).
+     */
     public function down(): void
     {
-        if (config('built-for-cloud.auth_foundation.invitations') === false) {
-            return;
-        }
-
-        Schema::dropIfExists('invitations');
+        // Intentionally empty: rollback never drops the invitations table.
     }
 };
