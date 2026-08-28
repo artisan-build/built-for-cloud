@@ -5,8 +5,12 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Testing;
 
 use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Scope;
 use Illuminate\Foundation\Testing\TestCase;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schema;
 use PHPUnit\Framework\Assert;
 
@@ -164,6 +168,182 @@ trait ContractAssertions
 
         Assert::assertStringNotContainsString('token_hash', (string) $response->getContent());
         Assert::assertStringNotContainsString('secret_hash', (string) $response->getContent());
+    }
+
+    /**
+     * The transport-parity suite (PRD 1.0 + 1.6): for each two-transport
+     * verb — mint, list, revoke — exercise the SAME action through BOTH
+     * transports (`--local` CLI and HTTP) and assert identical outcomes:
+     * row state, audit events, delivery-shape content. Run this in a
+     * consuming app's CI; a verb that behaves differently per transport is
+     * a bug by definition (a verb one transport lacks even more so).
+     *
+     * The suite runs under the app's ACTIVE declaration. If that
+     * declaration denies the issue verb, the parity it asserts is refusal
+     * parity — both transports must refuse, and neither may leave a row.
+     */
+    public function assertBuiltForCloudTransportParityContract(): void
+    {
+        $rows = $this->assertBuiltForCloudMintTransportParity();
+
+        $this->assertBuiltForCloudListTransportParity();
+
+        if ($rows !== null) {
+            $this->assertBuiltForCloudRevokeTransportParity($rows['cli'], $rows['http']);
+        }
+    }
+
+    /**
+     * @return array{cli: Credential, http: Credential}|null the minted rows, or null when the declaration refused (refusal parity asserted instead)
+     */
+    public function assertBuiltForCloudMintTransportParity(): ?array
+    {
+        $admin = $this->mintBuiltForCloudAdminToken('parity-admin');
+
+        $cliRef = 'parity-cli-'.bin2hex(random_bytes(4));
+        $httpRef = 'parity-http-'.bin2hex(random_bytes(4));
+
+        $cliExit = Artisan::call('bfc:credential:mint', [
+            'subject-type' => 'external_consumer',
+            'subject-ref' => $cliRef,
+            '--abilities' => 'consume',
+            '--local' => true,
+        ]);
+        $cliOutput = Artisan::output();
+
+        $httpResponse = $this->postJson('/bfc/credentials', [
+            'subject_type' => 'external_consumer',
+            'subject_ref' => $httpRef,
+            'abilities' => ['consume'],
+        ], $this->builtForCloudBearerHeaders($admin));
+
+        if ($httpResponse->status() === 403) {
+            // Refusal parity: what one transport refuses, the other must
+            // refuse identically — and neither leaves a row behind.
+            Assert::assertNotSame(0, $cliExit, 'HTTP refused the mint but the CLI performed it: the transports disagree.');
+            Assert::assertSame(
+                0,
+                Credential::query()->whereIn('subject_ref', [$cliRef, $httpRef])->count(),
+                'A refused mint left a credential row behind.',
+            );
+
+            return null;
+        }
+
+        $httpResponse->assertCreated();
+        Assert::assertSame(0, $cliExit, 'The CLI mint failed where the HTTP mint succeeded: the transports disagree.');
+
+        // Delivery-shape parity: both transports delivered a bearer secret,
+        // revealed exactly once at their own boundary, and each secret
+        // hashes to its row's stored digest.
+        Assert::assertSame(1, preg_match('/shown once: (\S+)/', $cliOutput, $matches), 'The CLI mint revealed no secret.');
+        $cliSecret = $matches[1];
+        Assert::assertSame(1, substr_count($cliOutput, $cliSecret), 'The CLI revealed the secret more than once.');
+
+        Assert::assertSame('bearer', $httpResponse->json('delivery.shape'));
+        $httpSecret = (string) $httpResponse->json('delivery.secret');
+        Assert::assertNotSame('', $httpSecret);
+
+        /** @var Credential $cliRow */
+        $cliRow = Credential::query()->where('subject_ref', $cliRef)->sole();
+        /** @var Credential $httpRow */
+        $httpRow = Credential::query()->where('subject_ref', $httpRef)->sole();
+
+        Assert::assertSame($cliRow->secret_hash, hash('sha256', $cliSecret));
+        Assert::assertSame($httpRow->secret_hash, hash('sha256', $httpSecret));
+
+        // Row-state parity, modulo the identity fields that differ by
+        // construction (id, subject_ref, hash, timestamps).
+        foreach (['kind', 'status', 'abilities', 'name', 'user_id', 'expires_at'] as $attribute) {
+            Assert::assertEquals(
+                $cliRow->getAttribute($attribute),
+                $httpRow->getAttribute($attribute),
+                sprintf('The %s attribute differs between the CLI-minted and HTTP-minted rows.', $attribute),
+            );
+        }
+
+        // Audit parity: one `issued` event each, attributed to the
+        // transport's own honest actor.
+        Assert::assertSame([LifecycleEventType::Issued->value], $this->builtForCloudEventsFor($cliRow->id));
+        Assert::assertSame([LifecycleEventType::Issued->value], $this->builtForCloudEventsFor($httpRow->id));
+
+        return ['cli' => $cliRow, 'http' => $httpRow];
+    }
+
+    public function assertBuiltForCloudListTransportParity(): void
+    {
+        $admin = $this->mintBuiltForCloudAdminToken('parity-list-admin');
+
+        $cliExit = Artisan::call('bfc:credential:list', ['--json' => true, '--local' => true]);
+        Assert::assertSame(0, $cliExit);
+
+        $cliRows = json_decode(trim(Artisan::output()), true);
+
+        $httpRows = $this->getJson('/bfc/credentials', $this->builtForCloudBearerHeaders($admin))
+            ->assertOk()
+            ->json();
+
+        // Identical rows, identical serialization, identical order — the
+        // one action serializes for both transports, so this is equality,
+        // not resemblance.
+        Assert::assertSame($httpRows, $cliRows, 'The CLI and HTTP listings disagree.');
+    }
+
+    public function assertBuiltForCloudRevokeTransportParity(Credential $cliTarget, Credential $httpTarget): void
+    {
+        $admin = $this->mintBuiltForCloudAdminToken('parity-revoke-admin');
+
+        $cliExit = Artisan::call('bfc:credential:revoke', ['id' => $cliTarget->id, '--local' => true]);
+        $cliOutput = Artisan::output();
+
+        $httpResponse = $this->deleteJson('/bfc/credentials/'.$httpTarget->id, [], $this->builtForCloudBearerHeaders($admin));
+
+        if ($httpResponse->status() === 403) {
+            Assert::assertNotSame(0, $cliExit, 'HTTP refused the revoke but the CLI performed it: the transports disagree.');
+            Assert::assertNull($cliTarget->refresh()->revoked_at, 'A refused revoke killed the CLI row anyway.');
+
+            return;
+        }
+
+        $httpResponse->assertNoContent();
+        Assert::assertSame(0, $cliExit, 'The CLI revoke failed where the HTTP revoke succeeded: the transports disagree.');
+
+        Assert::assertNotNull($cliTarget->refresh()->revoked_at);
+        Assert::assertNotNull($httpTarget->refresh()->revoked_at);
+
+        // Delivery parity: revocation reveals nothing on either transport.
+        Assert::assertStringNotContainsString('shown once', $cliOutput);
+        Assert::assertSame('', (string) $httpResponse->getContent());
+
+        Assert::assertSame(
+            [LifecycleEventType::Issued->value, LifecycleEventType::Revoked->value],
+            $this->builtForCloudEventsFor($cliTarget->id),
+        );
+        Assert::assertSame(
+            [LifecycleEventType::Issued->value, LifecycleEventType::Revoked->value],
+            $this->builtForCloudEventsFor($httpTarget->id),
+        );
+    }
+
+    /**
+     * The credential's audit events as a SORTED list — two events recorded
+     * in the same clock second have no deterministic order under random
+     * uuids, and the parity claim is about which events exist.
+     *
+     * @return list<string>
+     */
+    private function builtForCloudEventsFor(string $credentialId): array
+    {
+        $events = CredentialAuditEvent::query()
+            ->where('credential_id', $credentialId)
+            ->pluck('event')
+            ->map(static fn (mixed $event): string => $event instanceof LifecycleEventType ? $event->value : (string) $event) /** @phpstan-ignore cast.string (pluck's value shape depends on the cast) */
+            ->values()
+            ->all();
+
+        sort($events);
+
+        return $events;
     }
 
     public function mintBuiltForCloudAdminToken(string $name = 'contract-admin'): string
