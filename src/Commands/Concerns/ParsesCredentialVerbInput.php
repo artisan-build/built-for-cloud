@@ -24,25 +24,6 @@ trait ParsesCredentialVerbInput
     }
 
     /**
-     * @return list<string>|null
-     */
-    private function abilitiesOption(): ?array
-    {
-        $value = $this->stringOption('abilities');
-
-        if ($value === null) {
-            return null;
-        }
-
-        $abilities = array_values(array_filter(array_map(
-            static fn (string $ability): string => trim($ability),
-            explode(',', $value),
-        ), static fn (string $ability): bool => $ability !== ''));
-
-        return $abilities === [] ? null : $abilities;
-    }
-
-    /**
      * The unified verbs run over exactly two transports (PRD 1.0): this
      * command with `--local` (zero Cloud dependency, direct database, same
      * process) or the versioned HTTP contract. There is no cloud-wrapped

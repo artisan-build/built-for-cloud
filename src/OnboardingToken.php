@@ -15,6 +15,7 @@ use Illuminate\Database\Eloquent\Model;
  * @property string $scope
  * @property string $token_hash
  * @property string|null $durable_token_id
+ * @property DurableStore|null $durable_store
  * @property CarbonInterface|null $consumed_at
  * @property CarbonInterface $expires_at
  * @property CarbonInterface|null $created_at
@@ -37,6 +38,7 @@ final class OnboardingToken extends Model
         'scope',
         'token_hash',
         'durable_token_id',
+        'durable_store',
         'consumed_at',
         'expires_at',
     ];
@@ -47,9 +49,21 @@ final class OnboardingToken extends Model
     protected function casts(): array
     {
         return [
+            'durable_store' => DurableStore::class,
             'consumed_at' => 'datetime',
             'expires_at' => 'datetime',
         ];
+    }
+
+    /**
+     * The store the linked durable was minted into. NULL backfills to
+     * `api_tokens` — the only store that existed before the seam toggle —
+     * so a pre-toggle linkage is never re-interpreted by whatever the
+     * CURRENT declaration targets.
+     */
+    public function durableStore(): DurableStore
+    {
+        return $this->durable_store ?? DurableStore::ApiTokens;
     }
 
     public static function hashToken(string $token): string

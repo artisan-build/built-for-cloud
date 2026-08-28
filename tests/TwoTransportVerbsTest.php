@@ -192,23 +192,82 @@ it('mints an asymmetric enrollment via the CLI: a pending row and a linked claim
         ->and($event->code_ttl_seconds)->toBe(900);
 });
 
-it('requires a bounded code ttl for the asymmetric kind on both transports', function (): void {
+it('requires a bounded code ttl for the asymmetric kind on both transports, with the same error', function (): void {
     expect(Artisan::call('bfc:credential:mint', [
         'subject-type' => 'application',
         'subject-ref' => 'reel-app-8',
         '--kind' => 'asymmetric',
         '--local' => true,
-    ]))->toBe(1)
-        ->and(Artisan::output())->toContain('codeTtlSeconds');
+    ]))->toBe(1);
 
-    $this->postJson('/bfc/credentials', [
+    $cliMessage = trim(Artisan::output());
+
+    $response = $this->postJson('/bfc/credentials', [
         'subject_type' => 'application',
         'subject_ref' => 'reel-app-8',
         'kind' => 'asymmetric',
         'code_ttl_seconds' => 30,
     ], transportAdminHeaders())->assertUnprocessable();
 
-    expect(Credential::query()->count())->toBe(0);
+    // The ONE bounds rule, enforced in the action: the same message on
+    // both transports.
+    expect($cliMessage)->toContain((string) $response->json('message'))
+        ->and(Credential::query()->count())->toBe(0);
+});
+
+it('rejects a non-integer code ttl identically on both transports — 60junk is junk, never 60', function (): void {
+    expect(Artisan::call('bfc:credential:mint', [
+        'subject-type' => 'application',
+        'subject-ref' => 'reel-junk',
+        '--kind' => 'asymmetric',
+        '--code-ttl' => '60junk',
+        '--local' => true,
+    ]))->toBe(1);
+
+    $cliMessage = trim(Artisan::output());
+
+    $response = $this->postJson('/bfc/credentials', [
+        'subject_type' => 'application',
+        'subject_ref' => 'reel-junk',
+        'kind' => 'asymmetric',
+        'code_ttl_seconds' => '60junk',
+    ], transportAdminHeaders())->assertUnprocessable();
+
+    $httpMessage = (string) $response->json('message');
+
+    expect($httpMessage)->toContain('whole number')
+        ->and($cliMessage)->toContain($httpMessage)
+        // Nothing was minted from the junk — neither a row nor a code.
+        ->and(Credential::query()->count())->toBe(0)
+        ->and(OnboardingToken::query()->count())->toBe(0);
+});
+
+it('normalizes an empty abilities list to null identically on both transports', function (): void {
+    // HTTP: an explicit empty array.
+    $this->postJson('/bfc/credentials', [
+        'subject_type' => 'external_consumer',
+        'subject_ref' => 'empty-http',
+        'abilities' => [],
+    ], transportAdminHeaders())->assertCreated()
+        ->assertJsonPath('credential.abilities', null);
+
+    // CLI: a comma-and-whitespace string that normalizes to nothing.
+    expect(Artisan::call('bfc:credential:mint', [
+        'subject-type' => 'external_consumer',
+        'subject-ref' => 'empty-cli',
+        '--abilities' => ' , ,',
+        '--local' => true,
+    ]))->toBe(0);
+
+    // One canonical shape at rest and in every listing row: null.
+    expect(Credential::query()->where('subject_ref', 'empty-http')->sole()->abilities)->toBeNull()
+        ->and(Credential::query()->where('subject_ref', 'empty-cli')->sole()->abilities)->toBeNull();
+
+    Artisan::call('bfc:credential:list', ['--json' => true, '--local' => true]);
+
+    foreach (json_decode(trim(Artisan::output()), true) as $row) {
+        expect($row['abilities'])->toBeNull();
+    }
 });
 
 it('refuses the hmac kind identically on both transports', function (): void {

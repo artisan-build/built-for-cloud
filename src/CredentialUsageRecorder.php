@@ -45,10 +45,13 @@ final class CredentialUsageRecorder
     {
         return (bool) DB::transaction(function () use ($credential): bool {
             // Code-then-durable lock order, matching exchange — see
-            // TokenRegistry::burnFirstUse for why.
+            // TokenRegistry::burnFirstUse for why. Only codes RECORDED
+            // into the unified store: api_tokens linkages (including the
+            // null backfill) are the legacy registry's to burn.
             /** @var list<OnboardingToken> $pendingCodes */
             $pendingCodes = OnboardingToken::query()
                 ->where('durable_token_id', $credential->getKey())
+                ->where('durable_store', DurableStore::Credentials->value)
                 ->whereNull('consumed_at')
                 ->lockForUpdate()
                 ->get(['id', 'email'])
@@ -95,6 +98,7 @@ final class CredentialUsageRecorder
         /** @var OnboardingToken|null */
         return OnboardingToken::query()
             ->where('durable_token_id', $credential->getKey())
+            ->where('durable_store', DurableStore::Credentials->value)
             ->whereNotNull('consumed_at')
             ->orderByDesc('consumed_at')
             ->first(['id', 'email']);

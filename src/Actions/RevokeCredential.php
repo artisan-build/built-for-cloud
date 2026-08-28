@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
+use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
@@ -63,6 +64,7 @@ final class RevokeCredential
 
             OnboardingToken::query()
                 ->where('durable_token_id', $id)
+                ->where('durable_store', DurableStore::Credentials->value)
                 ->whereNull('consumed_at')
                 ->update(['consumed_at' => $now]);
 

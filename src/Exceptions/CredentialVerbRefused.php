@@ -49,12 +49,4 @@ final class CredentialVerbRefused extends RuntimeException
     {
         return new self(sprintf('The "%s" credential kind is not mintable in this release.', $kind));
     }
-
-    public static function enrollmentCodeTtlRequired(): self
-    {
-        return new self(
-            'Minting an asymmetric credential delivers an enrollment code, and the code\'s '
-            .'ttl is required: pass codeTtlSeconds between 60 and 604800.',
-        );
-    }
 }

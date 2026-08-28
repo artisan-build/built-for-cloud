@@ -7,16 +7,14 @@ namespace ArtisanBuild\BuiltForCloud\Commands;
 use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Commands\Concerns\ParsesCredentialVerbInput;
-use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\DeliveryShape;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\MintResult;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use Illuminate\Console\Command;
-use Illuminate\Support\Carbon;
-use Throwable;
 
 /**
  * The mint verb's CLI transport (PRD 1.0 + 1.6): the same
@@ -58,40 +56,23 @@ final class CredentialMintCommand extends Command
             return self::FAILURE;
         }
 
-        $kind = CredentialKind::tryFrom((string) $this->option('kind'));
-
-        if ($kind === null) {
-            $this->error('Unknown credential kind. One of: '.implode(', ', CredentialKind::values()).'.');
-
-            return self::FAILURE;
-        }
-
-        $expires = $this->stringOption('expires');
-
-        try {
-            $expiresAt = $expires === null ? null : Carbon::parse($expires);
-        } catch (Throwable) {
-            $this->error('The --expires value is not a parseable timestamp.');
-
-            return self::FAILURE;
-        }
-
-        $codeTtl = $this->stringOption('code-ttl');
-
+        // Validation and normalization live in the shared input object and
+        // the action, NOT here — the CLI must reject exactly what HTTP
+        // rejects (Fix 4: `--code-ttl=60junk` is junk, never 60).
         try {
             $result = $mint(
                 new Subject($subjectType, (string) $this->argument('subject-ref')),
-                new MintOptions(
-                    kind: $kind,
-                    name: $this->stringOption('name'),
-                    abilities: $this->abilitiesOption(),
-                    expiresAt: $expiresAt,
-                    userId: $this->stringOption('user'),
-                    codeTtlSeconds: $codeTtl === null ? null : (int) $codeTtl,
-                ),
+                MintOptions::fromInput([
+                    'kind' => $this->stringOption('kind'),
+                    'name' => $this->stringOption('name'),
+                    'abilities' => $this->stringOption('abilities'),
+                    'expires_at' => $this->stringOption('expires'),
+                    'user_id' => $this->stringOption('user'),
+                    'code_ttl_seconds' => $this->stringOption('code-ttl'),
+                ]),
                 AuditActor::cliOperator(),
             );
-        } catch (CredentialVerbRefused $refused) {
+        } catch (CredentialVerbRefused|InvalidCredentialInput $refused) {
             $this->error($refused->getMessage());
 
             return self::FAILURE;

@@ -7,11 +7,13 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnifiedStoreDeclaration;
+use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
@@ -127,6 +129,66 @@ it('re-exchanges make-before-break on the unified store: the pending durable die
     $this->postJson('/bfc/onboarding/verify', [], ['Authorization' => 'Bearer '.$first])
         ->assertNotFound()
         ->assertJsonPath('error', 'code_not_found');
+});
+
+// Fix 3: the store transition. The code records which store its durable
+// was minted into, and make-before-break revokes in the RECORDED store —
+// a declaration switching stores between exchanges must not strand a
+// still-live durable in the old one (two live secrets).
+
+it('revokes the recorded api_tokens durable on re-exchange after the declaration switches to the unified store', function (): void {
+    // First exchange under the DEFAULT declaration: the durable lands in
+    // api_tokens, and under first_use burn the code stays unburned.
+    $code = auditIssueCode('switch@example.test');
+
+    $first = (string) $this->postJson('/bfc/onboarding/exchange', ['token' => $code])
+        ->assertCreated()->json('durable_token');
+
+    $apiRow = ApiToken::query()->where('name', 'switch@example.test')->sole();
+    $codeRow = OnboardingToken::query()->where('durable_token_id', $apiRow->getKey())->sole();
+
+    expect($codeRow->durableStore())->toBe(DurableStore::ApiTokens)
+        ->and($codeRow->consumed_at)->toBeNull()
+        ->and($apiRow->token_hash)->toBe(hash('sha256', $first));
+
+    // The app rebuilds: the declaration now targets the unified store.
+    bindUnifiedStore();
+
+    // Re-exchange the same unburned code (the lost-token path).
+    $second = (string) $this->postJson('/bfc/onboarding/exchange', ['token' => $code])
+        ->assertCreated()->json('durable_token');
+
+    // The old durable died in its RECORDED store — nothing stranded…
+    expect($apiRow->refresh()->revoked_at)->not->toBeNull()
+        ->and(app(TokenRegistry::class)->resolve($first))->toBeNull();
+
+    // …and exactly ONE live credential exists: the fresh unified row.
+    $live = Credential::query()->whereNull('revoked_at')->sole();
+
+    expect($live->secret_hash)->toBe(hash('sha256', $second))
+        ->and(ApiToken::query()->where('name', 'switch@example.test')->whereNull('revoked_at')->count())->toBe(0);
+});
+
+it('treats a null durable_store as api_tokens — the backfill semantics for pre-column linkages', function (): void {
+    $code = auditIssueCode('legacy-null@example.test');
+
+    $first = (string) $this->postJson('/bfc/onboarding/exchange', ['token' => $code])
+        ->assertCreated()->json('durable_token');
+
+    $apiRow = ApiToken::query()->where('name', 'legacy-null@example.test')->sole();
+
+    // Simulate a linkage written before the column existed.
+    OnboardingToken::query()
+        ->where('durable_token_id', $apiRow->getKey())
+        ->update(['durable_store' => null]);
+
+    bindUnifiedStore();
+
+    $this->postJson('/bfc/onboarding/exchange', ['token' => $code])->assertCreated();
+
+    expect($apiRow->refresh()->revoked_at)->not->toBeNull()
+        ->and(app(TokenRegistry::class)->resolve($first))->toBeNull()
+        ->and(Credential::query()->whereNull('revoked_at')->count())->toBe(1);
 });
 
 it('sweeps the live same-subject durable on exchange (D1d) while sparing rows governed by other pending codes', function (): void {

@@ -13,7 +13,9 @@ use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\DeliveryShape;
+use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintedSecret;
@@ -182,8 +184,11 @@ final class MintCredential
     {
         $ttlSeconds = $options->codeTtlSeconds;
 
+        // Input bounds, enforced in the ACTION so both transports reject
+        // identically (Fix 4): the CLI maps this to a failure exit, HTTP
+        // to a 422.
         if ($ttlSeconds === null || $ttlSeconds < self::CODE_TTL_MIN_SECONDS || $ttlSeconds > self::CODE_TTL_MAX_SECONDS) {
-            throw CredentialVerbRefused::enrollmentCodeTtlRequired();
+            throw InvalidCredentialInput::codeTtlOutOfBounds();
         }
 
         /** @var MintResult */
@@ -212,6 +217,9 @@ final class MintCredential
                 'scope' => Scope::Onboard->value,
                 'token_hash' => $code->hash(),
                 'durable_token_id' => $credential->id,
+                // The linkage names its store: the pending row lives in the
+                // unified store whatever the declaration currently targets.
+                'durable_store' => DurableStore::Credentials,
                 'expires_at' => now()->addSeconds($ttlSeconds),
             ]);
 

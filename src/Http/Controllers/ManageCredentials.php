@@ -8,10 +8,10 @@ use ArtisanBuild\BuiltForCloud\Actions\ListCredentials;
 use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
 use ArtisanBuild\BuiltForCloud\Actions\RevokeCredential;
 use ArtisanBuild\BuiltForCloud\AuditActor;
-use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\DeliveryShape;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\MintResult;
 use ArtisanBuild\BuiltForCloud\RevokeOutcome;
@@ -19,7 +19,6 @@ use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Carbon;
 use Illuminate\Validation\Rule;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -61,34 +60,26 @@ final class ManageCredentials
 
     public function store(Request $request, MintCredential $mint): JsonResponse
     {
-        /** @var array{subject_type: string, subject_ref: string, kind?: string|null, name?: string|null, abilities?: list<string>|null, expires_at?: string|null, user_id?: string|null, code_ttl_seconds?: int|null} $validated */
+        // Only the subject pair is validated here (it shapes the Subject
+        // argument); everything else is normalized by the SHARED input
+        // object and the action, so this transport rejects exactly what
+        // the CLI rejects (Fix 4) — with the same message, as a 422.
+        /** @var array{subject_type: string, subject_ref: string} $validated */
         $validated = $request->validate([
             'subject_type' => ['required', 'string', Rule::in(SubjectType::values())],
             'subject_ref' => ['required', 'string'],
-            'kind' => ['nullable', 'string', Rule::in(CredentialKind::values())],
-            'name' => ['nullable', 'string'],
-            'abilities' => ['nullable', 'array'],
-            'abilities.*' => ['string'],
-            'expires_at' => ['nullable', 'date'],
-            'user_id' => ['nullable', 'string'],
-            'code_ttl_seconds' => ['nullable', 'integer', 'between:60,604800'],
         ]);
-
-        $abilities = $validated['abilities'] ?? null;
 
         try {
             $result = $mint(
                 new Subject(SubjectType::from($validated['subject_type']), $validated['subject_ref']),
-                new MintOptions(
-                    kind: CredentialKind::from($validated['kind'] ?? CredentialKind::Bearer->value),
-                    name: $validated['name'] ?? null,
-                    abilities: $abilities === null ? null : array_values($abilities),
-                    expiresAt: isset($validated['expires_at']) ? Carbon::parse($validated['expires_at']) : null,
-                    userId: $validated['user_id'] ?? null,
-                    codeTtlSeconds: $validated['code_ttl_seconds'] ?? null,
-                ),
+                MintOptions::fromInput($request->only([
+                    'kind', 'name', 'abilities', 'expires_at', 'user_id', 'code_ttl_seconds',
+                ])),
                 $this->actor($request),
             );
+        } catch (InvalidCredentialInput $invalid) {
+            return response()->json(['message' => $invalid->getMessage()], 422);
         } catch (CredentialVerbRefused $refused) {
             return response()->json(['message' => $refused->getMessage()], 403);
         }
@@ -151,13 +142,21 @@ final class ManageCredentials
     }
 
     /**
-     * D8's actor on the HTTP path: the admin token the gate authenticated,
-     * stashed by the middleware. The id, never the credential.
+     * D8's actor on the HTTP path, reflecting WHICH STORE authenticated:
+     * a legacy admin `api_tokens` row audits as an `admin_token` actor, a
+     * unified-store operator credential as an `operator_integration`
+     * actor. The id, never the credential.
      */
     private function actor(Request $request): ?AuditActor
     {
-        $actorId = $request->attributes->get('bfc.actor_token_id');
+        $tokenId = $request->attributes->get('bfc.actor_token_id');
 
-        return is_string($actorId) && $actorId !== '' ? AuditActor::adminToken($actorId) : null;
+        if (is_string($tokenId) && $tokenId !== '') {
+            return AuditActor::adminToken($tokenId);
+        }
+
+        $credentialId = $request->attributes->get('bfc.actor_credential_id');
+
+        return is_string($credentialId) && $credentialId !== '' ? AuditActor::operatorIntegration($credentialId) : null;
     }
 }
