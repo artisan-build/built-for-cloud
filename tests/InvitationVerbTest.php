@@ -236,11 +236,14 @@ it('applies in-order versions and transactionally ignores an older one', functio
 it('supersedes the prior pending code when a newer event applies — a stolen older code dies', function (): void {
     Notification::fake();
 
-    inviteIntegrationEvent('evt-v1', 1)->assertStatus(202);
+    // The sponsor's email CHANGES between events, so only the (namespace,
+    // subject) supersession — not the same-email one — can kill the v1
+    // code.
+    inviteIntegrationEvent('evt-v1', 1, ['email' => 'sponsor-old@example.test'])->assertStatus(202);
 
     $stolenCode = capturedDeliveryCode();
 
-    inviteIntegrationEvent('evt-v2', 2)->assertStatus(202);
+    inviteIntegrationEvent('evt-v2', 2, ['email' => 'sponsor-new@example.test'])->assertStatus(202);
 
     // The v1 code was superseded by the applying v2 event: it refuses
     // with the already-claimed class, and its used_by stays null —
