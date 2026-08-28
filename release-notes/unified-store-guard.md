@@ -93,6 +93,12 @@ The guard ships explicit, tested precedence semantics:
 - **Session routes never consume a bearer implicitly.** A session-guarded
   route authenticates by session; a bearer riding along is ignored and its
   `last_used_at` is not stamped.
+- **RESERVED (Console fast-follow, unimplemented):** a future `bfc-console`
+  delegated-session guard adds one more row — on a request carrying both a
+  local `web` session and a delegated session, **the delegated guard wins**,
+  for the acting principal and for any UI/attribution branching, never a
+  union of the two. Recorded now so the Console lands without reopening this
+  matrix; no such guard exists in this release.
 
 ## Abilities middleware
 
