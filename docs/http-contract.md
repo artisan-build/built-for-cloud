@@ -227,8 +227,11 @@ plane holds this instance.
 ### POST /bfc/ownership/claim
 
 Public (`bfc-claim` throttle). Exchange a one-time ownership claim token for the owner's admin
-token. The claim token comes from the install migration's TTY output, from
-`bfc:ownership:mint-claim`, or from a release handoff.
+token. The claim token comes from `bfc:ownership:mint-claim` (TTY, shown once) or from a
+release handoff. The install migration's initial mint deliberately yields NO deliverable
+token: its plaintext is dropped, never logged (the D7 fix — a logged claim token is an
+admin-yielding secret in the application log), so an unclaimed environment re-mints with the
+command.
 
 **Request** — `{"token": "<claim token>", "notify_callback": "https://..." | null}`
 (`notify_callback` optional: where ownership webhooks are delivered.)

@@ -2,10 +2,8 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\OwnershipClaimMinter;
+use ArtisanBuild\BuiltForCloud\Database\MintInitialOwnershipClaim;
 use Illuminate\Database\Migrations\Migration;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 
 return new class extends Migration
 {
@@ -15,19 +13,10 @@ return new class extends Migration
             return;
         }
 
-        $claimed = DB::table('ownership')
-            ->whereNotNull('owner_token_id')
-            ->exists();
-
-        if ($claimed || DB::table('ownership_claims')->whereNull('consumed_at')->exists()) {
-            return;
-        }
-
-        [$plainTextToken] = app(OwnershipClaimMinter::class)->mint();
-
-        Log::info('Built for Cloud ownership claim token minted.', [
-            'claim_token' => $plainTextToken,
-        ]);
+        // The whole behaviour — the data_migrations surface flag, the
+        // idempotence checks, and the D7-fixed secret-free logging —
+        // lives in the invokable so it is directly testable.
+        app(MintInitialOwnershipClaim::class)();
     }
 
     public function down(): void
