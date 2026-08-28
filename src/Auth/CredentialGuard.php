@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialAuthenticator;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Contracts\Auth\Authenticatable;
@@ -122,8 +123,15 @@ final class CredentialGuard implements Guard
             throw new AuthorizationException('This credential is not authorized.');
         }
 
-        // Presenting a valid secret is a use; stamp only on full acceptance.
-        Credential::query()->whereKey($credential->getKey())->update(['last_used_at' => now()]);
+        // Presenting a valid secret is a use; record only on full
+        // acceptance — and the recorder answers whether the authentication
+        // STANDS (SEC-2): a row revoked or expired between the resolving
+        // read and the usage write fails here. A FIRST use is the burn
+        // point for `first_use` declarations whose durables live in this
+        // store: the linked claim code is consumed in the same transaction.
+        if (! app(CredentialUsageRecorder::class)->recordUsage($credential)) {
+            return null;
+        }
 
         $this->credential = $credential;
         $this->user = $principal;

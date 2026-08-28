@@ -74,10 +74,13 @@ use Throwable;
  * No state bleeds between tests: every hook is an event listener on the
  * per-test application instance.
  *
- * Future (later PRs): the TTY-delivery commands, where printing once IS the
- * delivery, will need an explicit reveal-once console allowance
- * (an assertConsoleRevealsOnce-style helper). Deliberately not built until
- * those commands exist — this trait only asserts absence.
+ * The mint surfaces (the two-transport verbs, the installer mint) use two
+ * additional helpers: assertNoSecretLeakageOfMinted(), for actions whose
+ * marker is BORN inside the watched action (a mint generates its own
+ * secret, so the caller extracts it from the action's result after the
+ * fact), and assertRevealsSecretExactlyOnce(), the reveal-once allowance —
+ * printing once to the TTY (or once in the HTTP response) IS the delivery,
+ * and everything beyond that single reveal must be marker-free.
  */
 trait DetectsSecretLeaks
 {
@@ -140,6 +143,56 @@ trait DetectsSecretLeaks
         $this->assertNoLeaks();
 
         return $result;
+    }
+
+    /**
+     * The mint-surface variant of assertNoSecretLeakage(): the marker is
+     * born INSIDE the watched action (a mint generates its own secret), so
+     * the caller extracts it from the action's result once the action has
+     * run — `$markerFrom($result)` — and every side-effect channel captured
+     * during the action is then asserted marker-free. The action's own
+     * observable delivery (console output, the HTTP response object) is not
+     * a side-effect channel; assert it separately with
+     * {@see assertRevealsSecretExactlyOnce}.
+     */
+    public function assertNoSecretLeakageOfMinted(callable $act, callable $markerFrom): mixed
+    {
+        $this->beginLeakWatch('__bfc_marker_pending__'.bin2hex(random_bytes(8)));
+
+        $result = $act();
+
+        $marker = $markerFrom($result);
+
+        if (! is_string($marker) || $marker === '') {
+            Assert::fail('assertNoSecretLeakageOfMinted() could not extract the minted secret from the action result.');
+        }
+
+        $this->leakWatchMarker = $marker;
+
+        $this->assertNoLeaks();
+
+        return $result;
+    }
+
+    /**
+     * The reveal-once allowance (D7): the delivery channel — captured
+     * console output, an HTTP response body — must carry the secret
+     * EXACTLY once, and beyond that single reveal must be marker-free in
+     * every recoverable form.
+     */
+    public function assertRevealsSecretExactlyOnce(string $captured, string $marker): void
+    {
+        Assert::assertSame(
+            1,
+            substr_count($captured, $marker),
+            'The delivery channel must reveal the secret exactly once.',
+        );
+
+        $beyondReveal = (string) preg_replace('/'.preg_quote($marker, '/').'/', '[THE-ONE-REVEAL]', $captured, 1);
+
+        if (($form = $this->leakingFormOf($beyondReveal, $marker)) !== null) {
+            Assert::fail('Beyond the single reveal, the delivery channel still carried the marker ('.$form.').');
+        }
     }
 
     public function beginLeakWatch(string $marker): void

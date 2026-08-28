@@ -7,11 +7,17 @@ namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditReason;
+use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\BurnMode;
 use ArtisanBuild\BuiltForCloud\ClaimError;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresBurnMode;
+use ArtisanBuild\BuiltForCloud\Contracts\DeclaresDurableStore;
 use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
+use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
+use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintedSecret;
@@ -240,6 +246,10 @@ final class ManageOnboarding
             return ClaimError::InvalidCode->respond('The request presented no credential to verify.');
         }
 
+        if ($this->durableStore() === DurableStore::Credentials) {
+            return $this->verifyUnifiedDurable($request, $bearer);
+        }
+
         try {
             // Resolution is the burn point for `first_use` providers: the
             // atomic first-use transition inside resolveModel() consumes the
@@ -260,6 +270,37 @@ final class ManageOnboarding
             'ok' => true,
             'name' => $durableToken->name,
             'scope' => $durableToken->abilities[0] ?? null,
+        ]);
+    }
+
+    /**
+     * The verify surface for a declaration whose durables live in the
+     * unified store: the same wire contract, resolved against
+     * `credentials`. Usage recording is the burn point here exactly as
+     * `resolveModel()` is for `api_tokens` — a first use consumes the
+     * claim code in the same transaction, and a row that died between the
+     * resolving read and the usage write does not verify.
+     */
+    private function verifyUnifiedDurable(Request $request, string $bearer): JsonResponse
+    {
+        try {
+            $credential = app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $bearer);
+
+            if ($credential !== null && ! app(CredentialUsageRecorder::class)->recordUsage($credential)) {
+                $credential = null;
+            }
+        } catch (Throwable $exception) {
+            return $this->serverError($exception);
+        }
+
+        if ($credential === null) {
+            return ClaimError::CodeNotFound->respond('No live credential matches the one presented.');
+        }
+
+        return response()->json([
+            'ok' => true,
+            'name' => $credential->name,
+            'scope' => $credential->abilities[0] ?? null,
         ]);
     }
 
@@ -284,6 +325,20 @@ final class ManageOnboarding
         return $this->declaration instanceof DeclaresBurnMode
             ? $this->declaration->burnMode()
             : BurnMode::FirstUse;
+    }
+
+    /**
+     * Which store the seam mints into (PRD 1.0): `api_tokens` unless the
+     * declaration opts into the unified store. The exchange's
+     * make-before-break revocations follow the SAME answer — a code's
+     * durable link and the name+scope sweep both act on the store the
+     * durable actually lives in.
+     */
+    private function durableStore(): DurableStore
+    {
+        return $this->declaration instanceof DeclaresDurableStore
+            ? $this->declaration->durableCredentialStore()
+            : DurableStore::ApiTokens;
     }
 
     /**
@@ -339,6 +394,10 @@ final class ManageOnboarding
      */
     private function revokeActiveDurable(string $name, string $scope, string $exchangingCodeId): array
     {
+        if ($this->durableStore() === DurableStore::Credentials) {
+            return $this->revokeActiveUnifiedDurable($name, $scope, $exchangingCodeId);
+        }
+
         /** @var list<ApiToken> $tokens */
         $tokens = ApiToken::query()
             ->resolvable()
@@ -379,10 +438,74 @@ final class ManageOnboarding
     }
 
     /**
+     * The unified-store half of the D1d sweep: same exclusions, expressed
+     * on `credentials` columns. The tenancy key here is `subject_ref` (the
+     * unified minter sets it from the claim's name), the scope is an
+     * ability, and there is no rotation-grace exclusion yet because the
+     * unified rotate verb — the only writer of grace rows — ships in a
+     * later release.
+     *
+     * @return list<string> the ids of the durables actually revoked
+     */
+    private function revokeActiveUnifiedDurable(string $name, string $scope, string $exchangingCodeId): array
+    {
+        /** @var list<Credential> $credentials */
+        $credentials = Credential::query()
+            ->where('kind', CredentialKind::Bearer->value)
+            ->where('subject_ref', $name)
+            ->active()
+            ->lockForUpdate()
+            ->get()
+            ->all();
+
+        /** @var list<string> $linkedToOtherCodes */
+        $linkedToOtherCodes = OnboardingToken::query()
+            ->whereKeyNot($exchangingCodeId)
+            ->whereNull('consumed_at')
+            ->whereNotNull('durable_token_id')
+            ->pluck('durable_token_id')
+            ->all();
+
+        $revoked = [];
+
+        foreach ($credentials as $credential) {
+            if (! $credential->hasAbility($scope)) {
+                continue;
+            }
+
+            if (in_array($credential->getKey(), $linkedToOtherCodes, true)) {
+                continue;
+            }
+
+            $credential->forceFill(['revoked_at' => now()])->save();
+
+            $revoked[] = (string) $credential->getKey();
+        }
+
+        return $revoked;
+    }
+
+    /**
      * @return string|null the revoked durable's id, or null when no row matched
      */
     private function revokeDurableById(string $tokenId): ?string
     {
+        if ($this->durableStore() === DurableStore::Credentials) {
+            /** @var Credential|null $credential */
+            $credential = Credential::query()
+                ->whereKey($tokenId)
+                ->lockForUpdate()
+                ->first();
+
+            if ($credential === null) {
+                return null;
+            }
+
+            $credential->forceFill(['revoked_at' => $credential->revoked_at ?? now()])->save();
+
+            return (string) $credential->getKey();
+        }
+
         /** @var ApiToken|null $token */
         $token = ApiToken::query()
             ->whereKey($tokenId)
