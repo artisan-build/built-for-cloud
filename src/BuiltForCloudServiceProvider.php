@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\Commands\CredentialMintCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialRevokeCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialRotateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\FallbackTokenGenerateCommand;
+use ArtisanBuild\BuiltForCloud\Commands\HmacRewrapCommand;
 use ArtisanBuild\BuiltForCloud\Commands\InstallOperatorCredentialCommand;
 use ArtisanBuild\BuiltForCloud\Commands\InvitationIssueCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand;
@@ -196,6 +197,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 CredentialRevokeCommand::class,
                 CredentialRotateCommand::class,
                 FallbackTokenGenerateCommand::class,
+                HmacRewrapCommand::class,
                 InstallOperatorCredentialCommand::class,
                 InvitationIssueCommand::class,
                 OutboxDrainCommand::class,
