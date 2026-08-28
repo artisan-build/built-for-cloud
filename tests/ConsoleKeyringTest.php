@@ -26,13 +26,21 @@ it('refuses to store anything that is not a 32-byte ed25519 public key (locked A
     $keyring = new ConsoleKeyring;
 
     $rejected = [
+        // Unparseable encodings: neither hex nor base64url, so nothing
+        // is decoded and no length is guessed at. (`z` is IN the
+        // base64url alphabet — a string of them decodes fine and is
+        // refused on length instead, which is a different branch, so
+        // these cases use characters that appear in neither encoding.)
         '',
         'not-a-key',
+        str_repeat('*', 64),
+        'AAAA+AAAA/AAAA==',
+        '-----BEGIN PUBLIC KEY-----',
+        // Right encoding, wrong length.
         bin2hex(random_bytes(16)),   // 16 bytes
         bin2hex(random_bytes(31)),   // one byte short
         bin2hex(random_bytes(33)),   // one byte long
-        str_repeat('z', 64),         // right length, not hex or base64url
-        '-----BEGIN PUBLIC KEY-----',
+        str_repeat('z', 64),         // decodes as base64url to 48 bytes
     ];
 
     foreach ($rejected as $material) {
@@ -43,18 +51,72 @@ it('refuses to store anything that is not a 32-byte ed25519 public key (locked A
     expect(ConsoleKey::query()->count())->toBe(0);
 });
 
-it('refuses the private half of a keypair outright (locked AC 10)', function (): void {
+it('refuses 32 bytes that are not a usable ed25519 point (locked AC 10)', function (): void {
+    $keyring = new ConsoleKeyring;
+
+    // Fixed values, not random ones, deliberately: roughly one random
+    // 32-byte string in twenty IS a valid point, so a random fixture
+    // would make this test flake. Each of these was checked to fail
+    // libsodium's point test — all-zero and all-ones are small-order /
+    // non-canonical, the third is a value that simply does not decode
+    // to a curve point.
+    $notPoints = [
+        str_repeat('00', 32),
+        str_repeat('ff', 32),
+        '4eee3cfe6c43f0deb6c655ebd4a89800cd292dfbaf811fe548261ff0b1e7d6e2',
+    ];
+
+    foreach ($notPoints as $material) {
+        expect(strlen((string) hex2bin($material)))->toBe(32)
+            ->and(fn (): ConsoleKey => $keyring->add('k-'.bin2hex(random_bytes(4)), $material))
+            ->toThrow(InvalidArgumentException::class);
+    }
+
+    // Every real public key passes, which is the half that matters:
+    // the check must never refuse a key the vendor actually delivered.
+    foreach (range(1, 25) as $ignored) {
+        $public = AsymmetricSecretKey::generate(new Version4)->getPublicKey()->toHexString();
+
+        expect($keyring->add('k-'.bin2hex(random_bytes(4)), $public)->public_key)->toBe($public);
+    }
+});
+
+it('refuses the 64-byte expanded secret key on length (locked AC 10)', function (): void {
     $secret = AsymmetricSecretKey::generate(new Version4);
 
-    // A v4 Ed25519 SECRET key is 64 bytes; the ring takes 32-byte public
-    // keys and nothing else, so the one delivery that would give this
-    // app signing authority it must never hold cannot be filed at all.
+    // A v4 Ed25519 SECRET key is 64 bytes and the ring takes 32, so the
+    // delivery that would hand this app signing authority it must never
+    // hold cannot be filed — in either encoding.
     expect(fn (): ConsoleKey => (new ConsoleKeyring)->add('k1', $secret->encode()))
         ->toThrow(InvalidArgumentException::class)
         ->and(fn (): ConsoleKey => (new ConsoleKeyring)->add('k1', bin2hex($secret->raw())))
         ->toThrow(InvalidArgumentException::class);
 
     expect(ConsoleKey::query()->count())->toBe(0);
+});
+
+it('cannot tell a 32-byte seed from a public key, so custody is the protocol\'s job not the ring\'s', function (): void {
+    // The uncomfortable truth this test pins, so no docblock can drift
+    // away from it: an Ed25519 SEED is the private half in compact form
+    // and is 32 bytes, exactly like a public key. This one — a fixed
+    // fixture, chosen because it also happens to encode a valid curve
+    // point, as roughly one in twenty random values does — files
+    // happily. Nothing about the bytes gives it away.
+    $seed = hex2bin('d1908fa3b5e26f4b0c4367bf676107ec45fb0e4305c68b8fea0fdb99dfb27cb2');
+    $keypair = sodium_crypto_sign_seed_keypair((string) $seed);
+
+    // It is genuinely private material: it derives a real signing key.
+    expect(strlen(sodium_crypto_sign_secretkey($keypair)))->toBe(64);
+
+    $filed = (new ConsoleKeyring)->add('k-seed', bin2hex((string) $seed));
+
+    expect($filed->public_key)->toBe(bin2hex((string) $seed));
+
+    // Which is why the custody guarantee lives elsewhere: the vendor
+    // hands over public halves only, nothing in this package asks for or
+    // transports a private one, and — decisively — there is no code path
+    // here that signs anything, so a seed filed by mistake is inert. It
+    // is not a key the ring could ever use to mint an assertion.
 });
 
 it('has no column capable of holding private key material (locked AC 10)', function (): void {

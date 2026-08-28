@@ -2,7 +2,9 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\Console\Assertion;
 use ArtisanBuild\BuiltForCloud\Console\AssertionRefusalReason;
+use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyring;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleRole;
 use ArtisanBuild\BuiltForCloud\Exceptions\AssertionRefused;
@@ -105,23 +107,51 @@ it('accepts an assertion minted slightly ahead of this clock and refuses one bey
     $secret = consoleKeypair();
     consoleFileKey('k1', $secret);
 
-    // The issuer's clock runs 4 seconds ahead of ours; the configured
-    // 5-second skew is spent exactly here.
-    $withinSkew = consoleMint($secret, consoleClaims([
-        'iat' => $now->addSeconds(4)->toAtomString(),
-        'nbf' => $now->addSeconds(4)->toAtomString(),
-        'exp' => $now->addSeconds(94)->toAtomString(),
+    // Driven at the boundary: the configured skew is 5 seconds, so an
+    // issuer clock 4 or exactly 5 seconds ahead is tolerated and 6 is
+    // not. `exp` stays inside the wall-clock TTL ceiling in every case,
+    // so nothing here is answered by the TTL rule instead.
+    $mint = static fn (int $ahead): string => consoleMint($secret, consoleClaims([
+        'iat' => $now->addSeconds($ahead)->toAtomString(),
+        'nbf' => $now->addSeconds($ahead)->toAtomString(),
+        'exp' => $now->addSeconds($ahead + 60)->toAtomString(),
     ]));
 
-    expect(consoleVerify($withinSkew)->subject)->toBe('operator_42');
+    expect(consoleVerify($mint(4))->subject)->toBe('operator_42')
+        ->and(consoleVerify($mint(5))->subject)->toBe('operator_42')
+        ->and(consoleRefusal($mint(6))->reason)->toBe(AssertionRefusalReason::NotYetValid)
+        ->and(consoleRefusal($mint(30))->reason)->toBe(AssertionRefusalReason::NotYetValid);
+});
 
-    $beyondSkew = consoleMint($secret, consoleClaims([
-        'iat' => $now->addSeconds(30)->toAtomString(),
-        'nbf' => $now->addSeconds(30)->toAtomString(),
+it('caps the window on this server clock, so an early iat cannot buy extra life (locked AC 7)', function (): void {
+    $now = CarbonImmutable::parse('2026-08-28T12:00:00+00:00');
+    $this->travelTo($now);
+
+    $secret = consoleKeypair();
+    consoleFileKey('k1', $secret);
+
+    // `iat` five seconds ahead — inside the skew, so the not-yet-valid
+    // rule lets it through — with a span of exactly the configured 120
+    // second bound. The token's OWN arithmetic is legal; accepting it
+    // would leave this app honouring the assertion until now + 125,
+    // past the bound it just enforced. The wall-clock half refuses it.
+    $token = consoleMint($secret, consoleClaims([
+        'iat' => $now->addSeconds(5)->toAtomString(),
+        'nbf' => $now->addSeconds(5)->toAtomString(),
+        'exp' => $now->addSeconds(125)->toAtomString(),
+    ]));
+
+    expect(consoleRefusal($token)->reason)->toBe(AssertionRefusalReason::TtlTooLong);
+
+    // One second inside the ceiling and the same shape verifies, so the
+    // refusal above is the ceiling talking and not the early `iat`.
+    $atCeiling = consoleMint($secret, consoleClaims([
+        'iat' => $now->addSeconds(5)->toAtomString(),
+        'nbf' => $now->addSeconds(5)->toAtomString(),
         'exp' => $now->addSeconds(120)->toAtomString(),
     ]));
 
-    expect(consoleRefusal($beyondSkew)->reason)->toBe(AssertionRefusalReason::NotYetValid);
+    expect(consoleVerify($atCeiling)->subject)->toBe('operator_42');
 });
 
 it('refuses an assertion whose own ttl exceeds this deployment bound even though it has not expired (locked AC 7)', function (): void {
@@ -166,10 +196,14 @@ it('refuses an assertion minted for another deployment (locked AC 3)', function 
     expect(consoleVerify($token)->audience)->toBe('https://other-customer.test');
 });
 
-it('falls back to app.url when no console audience is configured', function (): void {
+it('refuses to verify against app.url when no console audience is configured', function (): void {
     $secret = consoleKeypair();
     consoleFileKey('k1', $secret);
 
+    // Two deployments can easily share an APP_URL — localhost, a cloned
+    // .env, a shared load-balancer hostname — and an audience two
+    // deployments share stops a stolen assertion at neither. So there is
+    // no fallback: an unset audience fails closed and loudly.
     config([
         'built-for-cloud.console.audience' => null,
         'app.url' => 'https://configured-by-app-url.test',
@@ -177,7 +211,7 @@ it('falls back to app.url when no console audience is configured', function (): 
 
     $token = consoleMint($secret, consoleClaims(['aud' => 'https://configured-by-app-url.test']));
 
-    expect(consoleVerify($token)->audience)->toBe('https://configured-by-app-url.test');
+    expect(fn (): mixed => consoleVerify($token))->toThrow(RuntimeException::class);
 });
 
 it('refuses an assertion from an issuer other than the configured one (locked AC 8)', function (): void {
@@ -191,17 +225,20 @@ it('refuses an assertion from an issuer other than the configured one (locked AC
 
 // ------------------------------------------------------------ the crypto
 
-it('refuses a token whose payload was tampered with (locked AC 4)', function (): void {
+it('refuses a token whose claims were tampered with (locked AC 4)', function (): void {
     $secret = consoleKeypair();
     consoleFileKey('k1', $secret);
 
-    $token = consoleMint($secret, consoleClaims());
+    $token = consoleMint($secret, consoleClaims(['role' => 'member']));
 
-    // A byte inside the claims segment.
-    $tampered = consoleFlipCharacter($token, strlen('v4.public.') + 12);
+    // The privilege escalation this check exists for: `member` rewritten
+    // to `admin` in the signed claims. The helper asserts the result is
+    // still decodable base64 carrying valid JSON, so the refusal below
+    // can only be the signature — not a broken encoding the verifier
+    // would have reported under the same reason.
+    $tampered = consoleTamperClaims($token, '"role":"member"', '"role":"admin"');
 
-    expect($tampered)->not->toBe($token)
-        ->and(consoleRefusal($tampered)->reason)->toBe(AssertionRefusalReason::SignatureInvalid);
+    expect(consoleRefusal($tampered)->reason)->toBe(AssertionRefusalReason::SignatureInvalid);
 });
 
 it('refuses a token whose signature was tampered with (locked AC 4)', function (): void {
@@ -210,9 +247,8 @@ it('refuses a token whose signature was tampered with (locked AC 4)', function (
 
     $token = consoleMint($secret, consoleClaims());
 
-    // The trailing bytes of the payload segment ARE the signature.
-    $signatureByte = strrpos($token, '.') - 3;
-    $tampered = consoleFlipCharacter($token, $signatureByte);
+    // One bit of the signature, claims left byte-for-byte intact.
+    $tampered = consoleTamperSignature($token);
 
     expect($tampered)->not->toBe($token)
         ->and(consoleRefusal($tampered)->reason)->toBe(AssertionRefusalReason::SignatureInvalid);
@@ -232,9 +268,14 @@ it('refuses a token signed by the wrong key under a filed key id', function (): 
 
 // ------------------------------------------------------------- the keyring
 
-it('refuses a token signed by a keypair the ring never heard of (locked AC 5)', function (): void {
+it('refuses a stranger keypair token at keyring lookup, before any signature work (locked AC 5)', function (): void {
     consoleFileKey('k1', consoleKeypair());
 
+    // A whole foreign keypair, presenting its own key id. It never
+    // reaches signature verification — no row answers for the `kid`, so
+    // the ring refuses first. (The signature path against a FILED key id
+    // is driven by the wrong-key test above; these are the two ways a
+    // stranger's token dies, and this is the earlier one.)
     $stranger = consoleKeypair();
     $token = consoleMint($stranger, consoleClaims(), 'k-stranger');
 
@@ -334,10 +375,27 @@ it('refuses a v3.public token and older version headers (locked AC 9)', function
     }
 });
 
-it('refuses anything that is not a token at all', function (): void {
+it('refuses input that never reaches the parser at all', function (): void {
     consoleFileKey('k1', consoleKeypair());
 
-    foreach (['', 'not-a-token', 'v4.public', str_repeat('v4.public.a', 1000)] as $garbage) {
+    // These two are stopped by the size guards before any parsing: an
+    // empty string, and a token past MAX_TOKEN_LENGTH — an endpoint that
+    // will base64-parse a megabyte has been handed cheap CPU to spend.
+    $oversize = 'v4.public.'.str_repeat('a', AssertionVerifier::MAX_TOKEN_LENGTH);
+
+    expect(strlen($oversize))->toBeGreaterThan(AssertionVerifier::MAX_TOKEN_LENGTH)
+        ->and(consoleRefusal('')->reason)->toBe(AssertionRefusalReason::MalformedToken)
+        ->and(consoleRefusal($oversize)->reason)->toBe(AssertionRefusalReason::MalformedToken);
+});
+
+it('refuses strings that reach the parser and are not tokens', function (): void {
+    consoleFileKey('k1', consoleKeypair());
+
+    // Right size, wrong everything else: no PASETO header at all, a
+    // header with no payload separator, and a well-headed token whose
+    // body is garbage — the last one gets all the way to PASETO's own
+    // message parsing before it dies.
+    foreach (['not-a-token', 'v4.public', 'v4.public.@@@@@@', 'v4.public.abc.def.ghi'] as $garbage) {
         expect(consoleRefusal($garbage)->reason)->toBe(AssertionRefusalReason::MalformedToken);
     }
 });
@@ -418,6 +476,48 @@ it('refuses claims that are absent, mistyped, or unparseable', function (): void
     }
 });
 
+it('carries html metacharacters through verbatim — escaping is the rendering sink\'s job (locked AC 13)', function (): void {
+    $secret = consoleKeypair();
+    consoleFileKey('k1', $secret);
+
+    // A display name is issuer-supplied free text: apostrophes, accents,
+    // ampersands and angle brackets are all legitimate in a human name,
+    // and the mint-side charset limits are Scalpels' business. This
+    // verifier bounds LENGTH and rejects CONTROL characters, and that is
+    // all it claims — so a payload-shaped name arrives intact.
+    //
+    // This test exists to tell PR5's implementer, who builds the
+    // privileged chrome that renders this string, that escaping is
+    // theirs to do. If it ever fails because the verifier started
+    // stripping or encoding, the chrome's contract changed and every
+    // rendering sink needs re-reading.
+    $hostile = '<img src=x onerror=alert(1)>';
+    $agency = 'Ben & Jerry\'s "Agency" <b>';
+
+    $assertion = consoleVerify(consoleMint($secret, consoleClaims([
+        'display_name' => $hostile,
+        'on_behalf_of' => $agency,
+    ])));
+
+    expect($assertion->displayName)->toBe($hostile)
+        ->and($assertion->onBehalfOf)->toBe($agency)
+        ->and($assertion->attribution())->toBe($hostile.' ('.$agency.')');
+});
+
+it('cannot be constructed without going through a verifier by accident (locked AC 1)', function (): void {
+    // PHP cannot restrict a static factory to one caller, so the
+    // protection is: no public constructor, and a factory whose name
+    // states what the caller is asserting. PR3 opens a delegated session
+    // from this object and PR4 grants admin standing from it — an
+    // instance conjured with no token is an unauthenticated admin, so
+    // `new Assertion(role: Admin)` must not be something a hurried
+    // implementer can reach for.
+    $constructor = (new ReflectionClass(Assertion::class))->getConstructor();
+
+    expect($constructor?->isPrivate())->toBeTrue()
+        ->and(method_exists(Assertion::class, 'fromVerifiedClaims'))->toBeTrue();
+});
+
 // ------------------------------------------------------- the anti-oracle
 
 it('answers every refusal with the same class and the same reason-free message (locked AC 12)', function (): void {
@@ -489,7 +589,7 @@ it('fails loudly rather than trusting any issuer when none is configured', funct
         ->toThrow(RuntimeException::class);
 });
 
-it('refuses to verify at all when neither a console audience nor app.url is configured', function (): void {
+it('refuses to verify at all when no audience is configured anywhere', function (): void {
     $secret = consoleKeypair();
     consoleFileKey('k1', $secret);
 

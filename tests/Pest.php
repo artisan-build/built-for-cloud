@@ -11,6 +11,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\AssertionRefused;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Tests\TestCase;
 use Carbon\CarbonImmutable;
+use ParagonIE\ConstantTime\Base64UrlSafe;
 use ParagonIE\Paseto\Builder;
 use ParagonIE\Paseto\Keys\Version4\AsymmetricSecretKey;
 use ParagonIE\Paseto\Protocol\Version4;
@@ -134,19 +135,50 @@ function consoleMint(AsymmetricSecretKey $secret, array $claims, string $keyId =
 }
 
 /**
- * Flip one character inside a token segment, leaving the wire form
- * intact — the shape a real tampering attempt takes.
+ * Rewrite a v4.public token's CLAIMS, keeping the original signature and
+ * footer — the shape a real tampering attempt takes.
+ *
+ * The mutation happens on the decoded bytes rather than on base64
+ * characters so the result is provably still decodable base64 carrying
+ * valid JSON: a flipped base64 character could instead have broken the
+ * encoding or the JSON, and the verifier answers `signature_invalid` for
+ * every parse failure alike, so such a test could not tell which check
+ * it had actually driven.
  */
-function consoleFlipCharacter(string $token, int $offset): string
+function consoleTamperClaims(string $token, string $search, string $replacement): string
 {
-    // Every replacement is itself a base64url character, and the swap
-    // is total rather than alphabet-conditional: a tamper helper that
-    // sometimes left the token untouched would make a signature test
-    // pass for the wrong reason on the runs where it did nothing.
-    $position = $offset < 0 ? strlen($token) + $offset : $offset;
-    $token[$position] = $token[$position] === 'a' ? 'b' : 'a';
+    [$header, $purpose, $payload, $footer] = explode('.', $token);
 
-    return $token;
+    $blob = Base64UrlSafe::decode($payload);
+    $claims = substr($blob, 0, -SODIUM_CRYPTO_SIGN_BYTES);
+    $signature = substr($blob, -SODIUM_CRYPTO_SIGN_BYTES);
+
+    $tampered = str_replace($search, $replacement, $claims);
+
+    expect($tampered)->not->toBe($claims)
+        ->and(json_decode($tampered, true))->toBeArray();
+
+    return implode('.', [
+        $header,
+        $purpose,
+        Base64UrlSafe::encodeUnpadded($tampered.$signature),
+        $footer,
+    ]);
+}
+
+/**
+ * Flip one bit of the SIGNATURE, leaving the claims byte-for-byte
+ * intact, so the only thing the verifier can be objecting to is the
+ * signature itself.
+ */
+function consoleTamperSignature(string $token): string
+{
+    [$header, $purpose, $payload, $footer] = explode('.', $token);
+
+    $blob = Base64UrlSafe::decode($payload);
+    $blob[strlen($blob) - 1] = chr(ord($blob[strlen($blob) - 1]) ^ 0x01);
+
+    return implode('.', [$header, $purpose, Base64UrlSafe::encodeUnpadded($blob), $footer]);
 }
 
 /**
