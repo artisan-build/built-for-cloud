@@ -253,6 +253,48 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Surface Selection (PRD 1.14, fleet F2)
+    |--------------------------------------------------------------------------
+    |
+    | Which framework surfaces this app mounts. Five independently
+    | selectable families, ALL ON by default (exactly today's behavior);
+    | an app turns off what it does not use — this is what lets an app
+    | stop mounting `/bfc/*` entirely instead of leaving a live
+    | POST /bfc/ownership/claim minting admin rows into tables it never
+    | reads.
+    |
+    | `routes`          — every HTTP route the package mounts (all of
+    |                     /bfc/* and the legacy credential API). The
+    |                     middleware ALIASES (bfc.ability, bfc.hmac, …)
+    |                     stay registered either way, so an app with
+    |                     routes off can still gate its own routes.
+    | `migrations`      — loadMigrationsFrom for the package's schema
+    |                     migrations. Off means the app owns the schema
+    |                     (vendor:publish or its own copies).
+    | `commands`        — the bfc:* / token:* artisan commands.
+    | `listeners`       — the package's event listeners (the ownership
+    |                     webhook queue).
+    | `data_migrations` — DATA-writing migration steps (today: the
+    |                     initial ownership-claim mint). Distinct from
+    |                     `migrations` because an app may want the schema
+    |                     without the framework seeding state into it.
+    |
+    | No single route is individually configurable — the claim surfaces
+    | in particular are never env-gated one by one (PRD 1.12); a family
+    | is mounted whole or not at all.
+    |
+    */
+
+    'surfaces' => [
+        'routes' => env('BUILT_FOR_CLOUD_SURFACE_ROUTES', true),
+        'migrations' => env('BUILT_FOR_CLOUD_SURFACE_MIGRATIONS', true),
+        'commands' => env('BUILT_FOR_CLOUD_SURFACE_COMMANDS', true),
+        'listeners' => env('BUILT_FOR_CLOUD_SURFACE_LISTENERS', true),
+        'data_migrations' => env('BUILT_FOR_CLOUD_SURFACE_DATA_MIGRATIONS', true),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Auth Foundation
     |--------------------------------------------------------------------------
     |

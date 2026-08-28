@@ -10,6 +10,13 @@ Every route below is verified mechanically: a package test enumerates the regist
 asserts each appears here, and that every route this document names is real. A route heading has
 the form `### METHOD /path`.
 
+One mounting switch exists, and only one: the surface-selection key (PRD 1.14,
+`built-for-cloud.surfaces.routes`) can unmount this **entire HTTP surface as one family** —
+for apps that use the package's store and CLI without serving its HTTP contract. No single
+route is individually configurable, no route ever moves behind a prefix except the legacy
+credential API's documented one, and an instance that serves any of this contract serves all
+of it.
+
 ## Versioning and compatibility
 
 Two discriminators, reported by [`GET /bfc/meta`](#get-bfcmeta):
