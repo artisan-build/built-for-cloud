@@ -15,7 +15,7 @@ egress:
 - **The plaintext lives outside the object** — in a class-level WeakMap
   keyed by instance — so `var_export`, `print_r`, `var_dump`,
   `get_object_vars()`, `json_encode(get_object_vars())` and reflection
-  property walks show nothing.
+  walks over the instance's properties show nothing.
 - **Serialization throws.** `serialize()`, `__sleep`, `__serialize` and
   `json_encode()` all throw, so a queued job payload, cache write, session
   put, log context or component snapshot cannot carry the value out.
@@ -32,11 +32,14 @@ egress:
 - The constructor parameter carries `#[SensitiveParameter]`, so stack
   traces and exception context redact it.
 
-The one rule the carrier cannot enforce: a consumer that assigns
-`$carrier->reveal()` to a variable owns that copy. The carrier makes
-accidental egress structurally impossible, not deliberate egress.
-Delivery shapes (PRD 1.6, later releases) wrap this class; it stays final
-and metadata-free so they can.
+What the carrier cannot enforce: a consumer that assigns
+`$carrier->reveal()` to a variable owns that copy, and reflection is not
+an egress boundary — `ReflectionProperty` on the class-level store can
+recover an unrevealed plaintext, because no in-memory design resists
+reflection. The carrier makes accidental egress
+(serialize/json/dump/export) structurally impossible, not deliberate
+egress. Delivery shapes (PRD 1.6, later releases) wrap this class; it
+stays final and metadata-free so they can.
 
 ## The harness: `Testing\DetectsSecretLeaks`
 
@@ -49,20 +52,34 @@ $this->assertNoSecretLeakage($plaintext, fn () => $this->postJson(...));
 ```
 
 Watched channels: **log** (every record's message + context), **database**
-(every INSERT/UPDATE binding during the action plus a post-action sweep of
-every table's stored values — a value that is exactly
+(INSERT/UPDATE/REPLACE write statements during the action — Eloquent's
+write shapes; data-modifying CTEs, procedures and raw PDO writes are
+caught only by the at-rest sweep — plus a post-action sweep of every
+table's stored values, where a value that is exactly
 `hash('sha256', marker)` is allowed, the intended at-rest form), **queue**
-(every payload created, sync driver included), **cache** (every value
-written), and the **session** payload. Per-artifact helpers cover the
-rest: `assertResponseCarriesNoSecret` (body + headers),
+(the real enqueued artifact: JobQueued payloads, the raw body of every
+processing job — the sync driver's observable point — the serialized job
+object itself, and a sweep of `Queue::fake()`'s pushed jobs), **cache**
+(every value written), and the **session** payload. Per-artifact helpers
+cover the rest: `assertResponseCarriesNoSecret` (body + headers),
 `assertConsoleOutputCarriesNoSecret`, and `assertExceptionCarriesNoSecret`
-(message, rendered trace, context, the whole previous chain). Failure
-messages name the leaking channel and redact the marker. No state bleeds
-between tests.
+(message, rendered trace, context, the whole previous chain).
+
+Detection sees through recoverable encodings, not just literal bytes:
+every captured string is also scanned URL-decoded, JSON-unescaped, and
+with every base64-alphabet run decoded — which is what catches a logged
+`Basic base64(user:secret)` header. If the watched action throws, the
+captured channels are still asserted: a leak fails the test naming both
+signals; a clean throw propagates untouched. Failure messages name the
+leaking channel and the matched form, and never echo the leaked content.
+No state bleeds between tests.
 
 Every channel ships with a falsifiability self-test that deliberately
-plants the marker in that channel and asserts the harness catches it — a
-detector that cannot catch a planted leak is a detector that cannot fail.
+plants the marker in that channel — literal and encoded, throwing and
+not — and asserts the harness catches it; a detector that cannot catch a
+planted leak is a detector that cannot fail. On the guard path itself, a
+deliberately leaky middleware that logs the Authorization header proves
+the harness would fire on the basic path.
 
 ## The D7 row this discharges
 

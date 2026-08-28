@@ -18,7 +18,7 @@ use WeakMap;
  * - The plaintext is held OUTSIDE the object — a class-level WeakMap keyed
  *   by instance — so `var_export`, `print_r`, `var_dump`,
  *   `get_object_vars()`, `json_encode(get_object_vars())` and reflection
- *   property walks see no secret.
+ *   walks over the INSTANCE's properties see no secret.
  * - PHP serialization throws (`__serialize` and `__sleep`), so a queued
  *   job payload, cache write, session put or component snapshot cannot
  *   carry it.
@@ -36,9 +36,13 @@ use WeakMap;
  * exposes the sha256 — the intended at-rest form — any number of times; a
  * hash is not a secret.
  *
- * The one rule this class cannot enforce: a consumer that assigns
- * `$carrier->reveal()` to a variable owns that copy. The carrier makes
- * ACCIDENTAL egress structurally impossible, not deliberate egress.
+ * What this class cannot enforce: a consumer that assigns
+ * `$carrier->reveal()` to a variable owns that copy, and reflection is
+ * NOT an egress boundary — `ReflectionProperty` on the class-level store
+ * can recover an unrevealed plaintext, because no in-memory design
+ * resists reflection. The carrier makes ACCIDENTAL egress
+ * (serialize/json/dump/export) structurally impossible, not deliberate
+ * egress.
  *
  * Delivery shapes (PRD 1.6, later releases) wrap this class rather than
  * routing around it; it stays final and metadata-free so they can.

@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use PHPUnit\Framework\AssertionFailedError;
@@ -300,4 +301,100 @@ it('fails when asserting without a watch', function (): void {
 
     expect($failure)->toBeInstanceOf(AssertionFailedError::class)
         ->and($failure->getMessage())->toContain('beginLeakWatch');
+});
+
+it('detects a base64-encoded marker written to the cache', function (): void {
+    $marker = leakMarker();
+
+    $failure = plantAndCatch(function () use ($marker): void {
+        Cache::put('encoded', base64_encode($marker), 60);
+    }, $marker);
+
+    expect($failure)->toBeInstanceOf(AssertionFailedError::class)
+        ->and($failure->getMessage())->toContain('[cache]')
+        ->and($failure->getMessage())->toContain('base64-decoded');
+});
+
+it('detects a logged basic authorization header hiding the marker in base64', function (): void {
+    $marker = leakMarker();
+
+    $failure = plantAndCatch(function () use ($marker): void {
+        Log::info('incoming request', ['authorization' => 'Basic '.base64_encode('user:'.$marker)]);
+    }, $marker);
+
+    expect($failure)->toBeInstanceOf(AssertionFailedError::class)
+        ->and($failure->getMessage())->toContain('[log]')
+        ->and($failure->getMessage())->toContain('base64-decoded')
+        ->and($failure->getMessage())->not->toContain($marker);
+});
+
+it('detects a url-encoded marker in a log record', function (): void {
+    $marker = leakMarker();
+
+    $failure = plantAndCatch(function () use ($marker): void {
+        Log::info('redirecting to ?token='.str_replace('_', '%5F', $marker));
+    }, $marker);
+
+    expect($failure)->toBeInstanceOf(AssertionFailedError::class)
+        ->and($failure->getMessage())->toContain('[log]')
+        ->and($failure->getMessage())->toContain('url-decoded');
+});
+
+it('detects a json-escaped marker in a log record', function (): void {
+    $marker = leakMarker();
+
+    $escaped = implode('', array_map(
+        static fn (string $char): string => sprintf('\u%04x', ord($char)),
+        str_split($marker),
+    ));
+
+    $failure = plantAndCatch(function () use ($escaped): void {
+        Log::info('raw body: {"token":"'.$escaped.'"}');
+    }, $marker);
+
+    expect($failure)->toBeInstanceOf(AssertionFailedError::class)
+        ->and($failure->getMessage())->toContain('[log]')
+        ->and($failure->getMessage())->toContain('json-unescaped');
+});
+
+it('still fails when a leaking action throws', function (): void {
+    $marker = leakMarker();
+
+    $failure = plantAndCatch(function () use ($marker): void {
+        Log::info('planted '.$marker);
+
+        throw new DomainException('the domain broke');
+    }, $marker);
+
+    expect($failure)->toBeInstanceOf(AssertionFailedError::class)
+        ->and($failure->getMessage())->toContain('[log]')
+        ->and($failure->getMessage())->toContain('DomainException')
+        ->and($failure->getMessage())->toContain('the domain broke');
+});
+
+it('propagates the exception when a throwing action does not leak', function (): void {
+    $marker = leakMarker();
+
+    expect(function () use ($marker): void {
+        $this->assertNoSecretLeakage($marker, function (): void {
+            Log::info('all quiet');
+
+            throw new DomainException('clean but broken');
+        });
+    })->toThrow(DomainException::class, 'clean but broken');
+});
+
+it('detects a marker in a job pushed onto a faked queue', function (): void {
+    Queue::fake();
+
+    $marker = leakMarker();
+
+    $failure = plantAndCatch(function () use ($marker): void {
+        MarkerCarryingJob::dispatch($marker);
+    }, $marker);
+
+    expect($failure)->toBeInstanceOf(AssertionFailedError::class)
+        ->and($failure->getMessage())->toContain('[queue]')
+        ->and($failure->getMessage())->toContain('faked queue')
+        ->and($failure->getMessage())->not->toContain($marker);
 });
