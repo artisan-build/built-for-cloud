@@ -18,7 +18,9 @@ final class MetaController
             'product' => config('built-for-cloud.product'),
             'bfc_version' => BuiltForCloud::VERSION,
             'api_version' => BuiltForCloud::API_VERSION,
-            'capabilities' => ['tokens', 'ownership', 'onboarding', 'webhooks'],
+            // Additive per the compatibility rule (docs/http-contract.md):
+            // consumers feature-detect on membership, never on position.
+            'capabilities' => ['tokens', 'ownership', 'onboarding', 'webhooks', 'credentials'],
             'claimed' => $ownership !== null && $ownership->owner_token_id !== null,
         ]);
     }
