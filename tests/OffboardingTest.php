@@ -345,6 +345,116 @@ it('rides the shared version gate: a replayed or older offboard event is transac
     ])->assertStatus(422);
 });
 
+it('contains the accounts accepted integration invitations created (Fix 1)', function (): void {
+    $admin = ['Authorization' => 'Bearer '.auditAdminToken('fix1-admin')];
+
+    // The integration invited a human (version 1, addressed)…
+    $this->postJson('/bfc/invitations', [
+        'email' => 'sponsor-user@example.com',
+        'ttl_seconds' => 3600,
+        'integration_namespace' => 'github-sponsors',
+        'event_id' => 'evt-invite-1',
+        'entitlement_version' => 1,
+        'external_subject' => 'sponsor-x',
+    ], $admin)->assertStatus(202);
+
+    // …and the invitee accepted: the ceremony created their account and
+    // stamped the invitation's used_by (the state accept() leaves).
+    $created = User::query()->create([
+        'name' => 'Sponsor User',
+        'email' => 'sponsor-user@example.com',
+        'password' => 'irrelevant',
+    ]);
+
+    /** @var Invitation $invitation */
+    $invitation = Invitation::query()->sole();
+    $invitation->forceFill([
+        'used_by' => (string) $created->getKey(),
+        'accepted_at' => now(),
+    ])->save();
+
+    // The created user holds no credential at all — before Fix 1 nothing
+    // linked them to the subject and everything below survived.
+    config(['session.driver' => 'database']);
+
+    DB::table('sessions')->insert([
+        'id' => 'created-user-session',
+        'user_id' => $created->getKey(),
+        'payload' => 'payload',
+        'last_activity' => now()->getTimestamp(),
+    ]);
+
+    DB::table('password_reset_tokens')->insert([
+        'email' => 'sponsor-user@example.com',
+        'token' => 'reset-hash',
+        'created_at' => now(),
+    ]);
+
+    $boundCredential = $this->mintCredential([
+        'subject_type' => SubjectType::Application,
+        'subject_ref' => 'unrelated-app',
+        'user_id' => (string) $created->getKey(),
+    ]);
+
+    // The integration offboards its subject (version 2, target derived).
+    offboardViaHttp([
+        'integration_namespace' => 'github-sponsors',
+        'event_id' => 'evt-offboard-2',
+        'entitlement_version' => 2,
+        'external_subject' => 'sponsor-x',
+    ])->assertStatus(202);
+
+    // The created account is dead: registry row, sessions, reset tokens,
+    // and any credential bound to them — full containment.
+    expect(OffboardedSubject::userIsOffboarded((string) $created->getKey()))->toBeTrue()
+        ->and(DB::table('sessions')->count())->toBe(0)
+        ->and(DB::table('password_reset_tokens')->count())->toBe(0);
+
+    $this->getJson('/offboard-guarded', ['Authorization' => $boundCredential->bearerHeader()])->assertUnauthorized();
+
+    // Another namespace's accepted invitee sharing the external-subject
+    // string is NOT swept — the history is bound by namespace.
+});
+
+it('contains accounts created by accepted invitations addressed to the principal on the direct path (Fix 1)', function (): void {
+    // The principal invited someone under their own address chain: an
+    // invitation addressed to the principal's email, accepted, creating a
+    // second account.
+    User::query()->create([
+        'name' => 'Principal',
+        'email' => 'person@example.com',
+        'password' => 'irrelevant',
+    ]);
+
+    $created = User::query()->create([
+        'name' => 'Invited',
+        'email' => 'invited@example.com',
+        'password' => 'irrelevant',
+    ]);
+
+    Invitation::query()->create([
+        'id' => (string) Str::uuid(),
+        'email' => 'person@example.com',
+        'token' => hash('sha256', 'accepted-invite'),
+        'used_by' => (string) $created->getKey(),
+        'accepted_at' => now(),
+        'expires_at' => now()->addDay(),
+    ]);
+
+    DB::table('password_reset_tokens')->insert([
+        'email' => 'invited@example.com',
+        'token' => 'reset-hash',
+        'created_at' => now(),
+    ]);
+
+    offboardViaHttp(['subject_type' => 'user_principal', 'subject_ref' => 'person@example.com'])->assertOk();
+
+    // The email chain found the created account: person@ → invitation →
+    // used_by → invited@'s reset token.
+    expect(OffboardedSubject::userIsOffboarded((string) $created->getKey()))->toBeTrue()
+        ->and(DB::table('password_reset_tokens')->count())->toBe(0);
+});
+
 it('binds the version gate to the offboard target: a decoy external subject cannot offboard a victim (Fix 4)', function (): void {
     // The victim's REAL gate stands at version 7 (advanced by an invite —
     // the shared monotonic history).

@@ -200,7 +200,7 @@ final class OffboardSubject
             $entitlement->forceFill(['entitlement_version' => $options->entitlementVersion])->save();
         }
 
-        $this->contain($subject, $actor);
+        $this->contain($subject, $actor, $options->integrationNamespace);
 
         // An applying offboard also cancels every pending invitation its
         // own (namespace, subject) history issued — a stolen invite code
@@ -236,7 +236,7 @@ final class OffboardSubject
     /**
      * The containment itself, inside the caller's transaction.
      */
-    private function contain(Subject $subject, ?AuditActor $actor): OffboardResult
+    private function contain(Subject $subject, ?AuditActor $actor, ?string $integrationNamespace = null): OffboardResult
     {
         $alreadyContained = OffboardedSubject::query()
             ->forSubject($subject)
@@ -287,9 +287,10 @@ final class OffboardSubject
             $revoked++;
         }
 
-        // 2 — the principal's users: every user a credential binds, plus
+        // 2 — the principal's users: every user a credential binds, every
+        // account an accepted invitation of this principal CREATED, plus
         // (for a human principal) the account whose email IS the ref.
-        [$userIds, $emails] = $this->resolvePrincipals($subject, array_values(array_unique($boundUserIds)));
+        [$userIds, $emails] = $this->resolvePrincipals($subject, array_values(array_unique($boundUserIds)), $integrationNamespace);
 
         // 3 — outstanding claim codes addressed to the principal, with
         // their never-used make-before-break durables.
@@ -337,47 +338,102 @@ final class OffboardSubject
 
     /**
      * The principal set: the bound user ids from the subject's
-     * credentials (already collected), the human account whose email is
-     * the ref (user_principal subjects), and every email those users
-     * carry — plus the ref itself as an address, which is what claim
-     * codes and invitations are keyed on for human principals.
+     * credentials (already collected); every account an ACCEPTED
+     * invitation of this principal created (rework Fix 1 — `used_by` is
+     * the account an acceptance ceremony made, followed both through the
+     * integration event history's invitation ids and through addressed
+     * invitations of the principal's emails); the human account whose
+     * email is the ref (user_principal subjects); and every email those
+     * users carry — plus the ref itself as an address, which is what
+     * claim codes and invitations are keyed on for human principals.
+     *
+     * The user↔email expansion runs to a bounded fixpoint: users yield
+     * their emails, emails yield the accounts their accepted invitations
+     * created, and each round can only add — three rounds cover every
+     * chain the store can express without an unbounded walk.
      *
      * @param  list<string>  $boundUserIds
      * @return array{list<string>, list<string>}
      */
-    private function resolvePrincipals(Subject $subject, array $boundUserIds): array
+    private function resolvePrincipals(Subject $subject, array $boundUserIds, ?string $integrationNamespace): array
     {
         $userIds = $boundUserIds;
         $emails = [$subject->ref];
 
+        // The integration identity's accepted-invitation accounts: the
+        // applied event history maps (namespace, external_subject) to
+        // invitation ids; `used_by` names each created account. Bound by
+        // namespace, so another integration's user who happens to share
+        // the external subject string is never swept.
+        if ($integrationNamespace !== null) {
+            /** @var list<string> $invitedUserIds */
+            $invitedUserIds = Invitation::query()
+                ->whereIn('id', IntegrationEvent::query()
+                    ->where('integration_namespace', $integrationNamespace)
+                    ->where('external_subject', $subject->ref)
+                    ->where('applied', true)
+                    ->whereNotNull('invitation_id')
+                    ->pluck('invitation_id')
+                    ->all())
+                ->whereNotNull('used_by')
+                ->pluck('used_by')
+                ->all();
+
+            $userIds = [...$userIds, ...array_map(strval(...), $invitedUserIds)];
+        }
+
         $model = config('auth.providers.users.model');
+        $instance = null;
 
         if (is_string($model) && class_exists($model) && is_subclass_of($model, Model::class)) {
-            /** @var Model $instance */
-            $instance = new $model;
+            /** @var Model $candidate */
+            $candidate = new $model;
 
-            if (Schema::hasTable($instance->getTable())) {
-                if ($subject->type === SubjectType::UserPrincipal) {
-                    /** @var Model|null $byEmail */
-                    $byEmail = $model::query()->where('email', $subject->ref)->first();
-
-                    if ($byEmail !== null) {
-                        $userIds[] = (string) $byEmail->getKey();
-                    }
-                }
-
-                if ($userIds !== []) {
-                    /** @var list<string> $userEmails */
-                    $userEmails = $model::query()
-                        ->whereIn($instance->getKeyName(), array_values(array_unique($userIds)))
-                        ->pluck('email')
-                        ->filter(static fn (mixed $email): bool => is_string($email) && $email !== '')
-                        ->values()
-                        ->all();
-
-                    $emails = [...$emails, ...$userEmails];
-                }
+            if (Schema::hasTable($candidate->getTable())) {
+                $instance = $candidate;
             }
+        }
+
+        if ($instance !== null && $subject->type === SubjectType::UserPrincipal) {
+            /** @var Model|null $byEmail */
+            $byEmail = $instance::query()->where('email', $subject->ref)->first();
+
+            if ($byEmail !== null) {
+                $userIds[] = (string) $byEmail->getKey();
+            }
+        }
+
+        for ($round = 0; $round < 3; $round++) {
+            $userIds = array_values(array_unique($userIds));
+
+            if ($instance !== null && $userIds !== []) {
+                /** @var list<string> $userEmails */
+                $userEmails = $instance::query()
+                    ->whereIn($instance->getKeyName(), $userIds)
+                    ->pluck('email')
+                    ->filter(static fn (mixed $email): bool => is_string($email) && $email !== '')
+                    ->values()
+                    ->all();
+
+                $emails = [...$emails, ...$userEmails];
+            }
+
+            $emails = array_values(array_unique($emails));
+
+            /** @var list<string> $acceptedByEmail */
+            $acceptedByEmail = Invitation::query()
+                ->whereIn('email', $emails)
+                ->whereNotNull('used_by')
+                ->pluck('used_by')
+                ->all();
+
+            $newUserIds = array_values(array_diff(array_map(strval(...), $acceptedByEmail), $userIds));
+
+            if ($newUserIds === []) {
+                break;
+            }
+
+            $userIds = [...$userIds, ...$newUserIds];
         }
 
         return [array_values(array_unique($userIds)), array_values(array_unique($emails))];
