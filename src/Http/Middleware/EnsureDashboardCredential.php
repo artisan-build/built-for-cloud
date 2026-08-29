@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
 
+use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
 use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
@@ -47,19 +48,39 @@ use Throwable;
  *  1. **A `bfc` guard that exists.** A package-mounted route may not
  *     depend on the consuming app having registered one; a name with no
  *     guard behind it is a bounded 401, not a 500 out of the AuthManager.
- *  2. **An authenticated unified-store credential.** The guard resolves
- *     that store only, so a legacy admin `api_tokens` secret and a
- *     `FALLBACK_TOKEN` never authenticate here at all, and an expired,
- *     revoked or offboarded principal resolves to nothing. Every one of
- *     those is the same 401.
- *  3. **The app's declaration authorizing it** for `metadata:read` —
+ *  2. **A bearer that is not ALSO something else.** Before anything is
+ *     resolved, the presented bytes are compared against the configured
+ *     `FALLBACK_TOKEN` and against the legacy `api_tokens` store; a
+ *     match is refused.
+ *
+ *     This is not belt-and-braces. The `bfc` guard has no code path to
+ *     either store, so neither can authenticate a request HERE — and
+ *     that fact, which an earlier docblock stated as if it settled
+ *     something, is beside the point. The danger runs the other way:
+ *     set `FALLBACK_TOKEN` to the plaintext of a real exact-
+ *     `{metadata:read}` credential (or file the same bytes as a legacy
+ *     admin token) and the dashboard read succeeds while the SAME bytes
+ *     stay admin-equivalent on the legacy surfaces. D16 requires the
+ *     dashboard credential to be unable to touch mutating surfaces;
+ *     aliased bytes can, so the alias is what has to be refused.
+ *
+ *     The check is deliberately side-effect-free — a digest comparison
+ *     and one existence query, no usage stamped, no client identity
+ *     observed, no row resolved — and its answer is the ordinary 401,
+ *     because telling a caller "these bytes are also something else" is
+ *     the one thing an aliasing probe wants to learn.
+ *
+ *  3. **An authenticated unified-store credential.** The guard resolves
+ *     that store only, and an expired, revoked or offboarded principal
+ *     resolves to nothing. Every one of those is the same 401.
+ *  4. **The app's declaration authorizing it** for `metadata:read` —
  *     the hook {@see EnsureCredentialAbility} calls, kept because an app
  *     narrowing its own credentials must be able to narrow this one too.
- *  4. **An operator subject.** The contract heads this route "operator
+ *  5. **An operator subject.** The contract heads this route "operator
  *     credential"; the ability vocabulary is an operator vocabulary, and
  *     a credential minted for an application principal is not an
  *     operator however its abilities list reads.
- *  5. **An ability set exactly equal to `{metadata:read}`.** Not a
+ *  6. **An ability set exactly equal to `{metadata:read}`.** Not a
  *     superset. D16 does not say "a credential that has
  *     `metadata:read`"; it says the dashboard credential is
  *     "least-privilege, read-audited, **unable to touch
@@ -101,6 +122,14 @@ final class EnsureDashboardCredential
      */
     public function handle(Request $request, Closure $next): Response
     {
+        // BEFORE anything resolves. An aliased bearer must not stamp
+        // usage, observe a client identity or touch a row on its way to
+        // being refused, and it must be refused with the same answer an
+        // unknown one gets.
+        if ($this->isAliased((string) $request->bearerToken())) {
+            abort(401);
+        }
+
         $guard = $this->guard();
 
         if ($guard === null) {
@@ -166,6 +195,41 @@ final class EnsureDashboardCredential
         $request->attributes->set('bfc.actor_credential_id', $credential->id);
 
         return $next($request);
+    }
+
+    /**
+     * Whether these bearer bytes are ALSO the configured fallback token
+     * or a row in the legacy `api_tokens` store.
+     *
+     * Side-effect-free by construction: a constant-time digest
+     * comparison, then one `exists()` query on a hashed column. Nothing
+     * is resolved, stamped or observed, so an aliasing probe learns
+     * nothing from timing a row it cannot see and nothing from the
+     * response, which is the ordinary 401.
+     *
+     * EVERY legacy row counts, revoked and expired included. A revoked
+     * row is not usable on the legacy surfaces today, but the question
+     * here is not "can these bytes act elsewhere right now" — it is
+     * whether this deployment has ever filed them as something else. A
+     * dashboard credential whose bytes are on file in a second store is
+     * not the least-privilege credential D16 describes, whatever that
+     * store's row currently says.
+     */
+    private function isAliased(string $bearer): bool
+    {
+        if ($bearer === '') {
+            return false;
+        }
+
+        $fallback = config('built-for-cloud.fallback_token');
+
+        if (is_string($fallback)
+            && $fallback !== ''
+            && hash_equals(hash('sha256', $fallback), hash('sha256', $bearer))) {
+            return true;
+        }
+
+        return ApiToken::query()->where('token_hash', hash('sha256', $bearer))->exists();
     }
 
     /**
