@@ -148,6 +148,18 @@ Additive unless marked otherwise:
   `console:key:write` — deliberately NOT the `credential:rotate` family, so no
   already-issued credential gains console key-custody power on upgrade.
 
+- **The Console ops-vitals read ships (Console PRD D9/D15/D16).** All additive. New route
+  [`GET /bfc/console/vitals`](#get-bfcconsolevitals), classified `metadata`, behind the
+  `metadata:read` ability — which moves from RESERVED to ENFORCED in this release, and which
+  **`credential:admin` deliberately does not satisfy**: the route is mounted behind the
+  exact-match ability gate rather than the operator gate, because D16 forbids the
+  ownership/admin credential on any dashboard read path and the operator gate grants
+  break-glass whatever ability a route names. `GET /bfc/meta` `capabilities` gains
+  `console-vitals`. The `sensitive_read` lifecycle event now also covers vitals reads. Apps
+  may declare an optional headline stat through the new
+  `ArtisanBuild\BuiltForCloud\Contracts\DeclaresHeadlineStat` declaration interface; the
+  package ships no label vocabulary of its own.
+
 **api_version 1** — the 0.3.x baseline: `/bfc/meta`, `/bfc/ownership/*`, the pre-0.4 credential
 API listing shape.
 
@@ -180,8 +192,10 @@ API listing shape.
   app implements one**). The MCP
   pair `mcp:read` / `mcp:admin` is the per-tool vocabulary consuming apps wire in front of
   each MCP tool (read vs destructive administration — distinct grants, checked exact-match;
-  no operator ability implies either). `metadata:read` remains RESERVED, unissued and
-  unenforced. There is **no wildcard**; a credential with no abilities can do nothing. The
+  no operator ability implies either), and `metadata:read` is checked by that same exact-match
+  primitive — it is the Console dashboard's read ability
+  ([`GET /bfc/console/vitals`](#get-bfcconsolevitals)), and the ONE name in this vocabulary
+  that the break-glass below cannot reach. There is **no wildcard**; a credential with no abilities can do nothing. The
   one admin-equivalent name is **`credential:admin`** — the explicit break-glass, expanding
   to exactly the seven operator abilities `credential:read`, `credential:mint`,
   `credential:rotate`, `credential:revoke`, `subject:offboard`, `audit:read` and
@@ -318,10 +332,21 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/me/credentials` | `content` | the `delivery` single reveal, plus free-text name/subject fields |
 | `DELETE /bfc/me/credentials/{id}` | `metadata` | empty `204` body |
 | `POST /bfc/console/re-key` | `metadata` | key ids from a bounded charset, a fixed status enum and a timestamp — no free text, and never any key material |
+| `GET /bfc/console/vitals` | `metadata` | bounded integers, a fixed health enum, a semver-validated `app_version`, a timestamp, and a headline label drawn from the app's declared vocabulary — no free text anywhere, and deliberately no `product` |
 | `POST /bfc/subjects/offboard` | `metadata` | `{"offboarded": true, "fully_contained": bool}` / `{"accepted": true, "fully_contained": bool}` — bounded booleans only |
 
-Vendor-side reads of `metadata`-classified endpoints will be governed by the reserved
-`metadata:read` ability family (see [the Console reservations](#reserved--console-fast-follow-not-implemented)).
+Vendor-side reads of `metadata`-classified endpoints are governed by the `metadata:read`
+ability family. One route enforces it today —
+[`GET /bfc/console/vitals`](#get-bfcconsolevitals) — and it is the least-privilege,
+read-audited credential the Console dashboard uses. **A `metadata` classification is not by
+itself an access grant:** the other rows in this table keep the gates they already had, and
+`metadata:read` opens exactly the routes that name it.
+
+The classification is verified against real responses rather than asserted here:
+`ArtisanBuild\BuiltForCloud\Testing\ContractAssertions::assertBuiltForCloudMetadataShape()`
+fails on any string in a payload that is not an enum member, a bounded identifier, a semver or
+a timestamp, and the package's own suite points it at the `metadata` rows above. Its docblock
+states what it does not catch.
 
 Vendor-side (Console) reads will want the version-discovery endpoint, so a future BEHAVIORAL
 revision may constrain `product` to a bounded shape, letting `GET /bfc/meta` honestly become
@@ -343,7 +368,7 @@ Public (`bfc-public` throttle). Identifies the instance.
   "product": "Sink",
   "bfc_version": "0.4.0",
   "api_version": 2,
-  "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials", "console-keys"],
+  "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials", "console-keys", "console-vitals"],
   "claimed": true
 }
 ```
@@ -356,6 +381,10 @@ claim-time key exchange and `POST /bfc/console/re-key`. It deliberately does **n
 `console` — key custody is not the Console. There is no delegated guard, no enter endpoint and
 no delegated-actor table in this release, and a control plane that read `console` as "this
 deployment can be entered" would be reading a promise nothing here keeps.
+
+`console-vitals` means this instance serves [`GET /bfc/console/vitals`](#get-bfcconsolevitals).
+It is named for the one surface it serves, not for the dashboard that reads it: the fleet
+dashboard is the vendor's, and nothing in this release renders anything.
 
 ---
 
@@ -1552,20 +1581,127 @@ route. Nothing about this transport's shape should be copied to a verb that hand
 
 ---
 
+## Console vitals
+
+### GET /bfc/console/vitals
+
+*Operator credential carrying `metadata:read`* — rate-limited (`bfc-vitals`), classified
+`metadata`, audited as a `sensitive_read`. The ops-vitals read behind the vendor's fleet
+dashboard (Console PRD D9).
+
+**The credential is the point of this route, so read the gate carefully.** `metadata:read` is
+the ONLY thing that opens it. Not an admin `api_tokens` token — the `bfc` guard authenticates
+the unified credential store and has no path to the legacy store, so a legacy admin secret is
+a `401` here. Not `FALLBACK_TOKEN`, for the same structural reason. And **not
+`credential:admin`**: unlike every operator verb route, this one is not mounted behind the
+operator gate, because that gate grants a break-glass credential whatever ability a route
+names. This route uses the exact-match ability gate, where no ability implies another. Console
+PRD D16 forbids "using the ownership/admin credential for any dashboard read path", and a
+route mounted behind the operator gate could not have enforced it.
+
+**Request** — no body. One optional header:
+
+- `BFC-Contract-Version` — the `api_version` the caller believes this app speaks. Absent means
+  no expectation was stated. A value that is not exactly this app's major does **not** refuse
+  the request: the response reports this app's real `api_version` with `health: "degraded"`, so
+  a dashboard can render the skew. D9 is explicit that displaying skew is the dashboard's job,
+  and a caller cannot do that with an error.
+
+**200**
+
+```json
+{
+  "version": 1,
+  "api_version": 2,
+  "bfc_version": "0.5.0",
+  "app_version": "1.4.2",
+  "health": "ok",
+  "deployed_at": "2026-08-29T09:14:00+00:00",
+  "deploy_age_seconds": 5820,
+  "queue": {
+    "pending": 3,
+    "reserved": 1,
+    "failed": 0,
+    "oldest_pending_age_seconds": 41
+  },
+  "headline": {"value": 128, "label": "active-sessions", "unit": "count"}
+}
+```
+
+- `version` — this payload's own shape version, independent of `api_version`. It bumps when a
+  field here is removed, renamed or retyped.
+- `api_version`, `bfc_version` — the same two discriminators
+  [`GET /bfc/meta`](#get-bfcmeta) reports, so a dashboard needs one request per app, not two.
+- `app_version` — the application's own release, **echoed only when it is semver-shaped**, else
+  `null` with `health: "degraded"`. The value is operator-authored config, and this endpoint is
+  `metadata`-classified: it forwards a bounded version or nothing. (This is precisely why
+  `GET /bfc/meta`, whose `product` is unbounded, is classified `content`.)
+- `health` — `"ok"` | `"degraded"` | `"down"`. **This endpoint returns only the first two.**
+  `"down"` is in the vocabulary for the dashboard, which needs a value for an app that did not
+  answer at all; a served `200` is itself proof of reachability, so there is no state this
+  endpoint could observe that `"down"` would describe.
+- `deployed_at` / `deploy_age_seconds` — when this deployment last shipped, and its age in
+  seconds, both `null` when the app declares no deploy time. The age is signed: a `deployed_at`
+  in the future reports a negative age rather than a clamped zero, because clock skew between
+  the app and the vendor is something an operator should see rather than something this
+  endpoint should hide.
+- `queue` — backlog integers, **every one nullable, and `null` never means zero.** It means
+  this endpoint did not obtain the number, for one of two reasons the payload does not
+  distinguish and `health` does: the driver does not report it (only the `database` queue
+  driver exposes the pending/reserved split and an enqueue time to the package — every other
+  driver reports `pending` from the connection's own size and nulls the rest, and health stays
+  `"ok"`, since nothing failed), or the read FAILED, which degrades.
+- `headline` — the app's ONE headline stat, or `null`. `value` is a number, `unit` is
+  `count` | `seconds` | `bytes` | `percent` | `null`, and **`label` is a code from a static
+  vocabulary the APP declares**, in its own repo, at conversion time (D15) — by implementing
+  `ArtisanBuild\BuiltForCloud\Contracts\DeclaresHeadlineStat`. The package ships no
+  vocabulary: an app that declares none reports `"headline": null` rather than a fabricated
+  stat. A label outside the app's declared vocabulary, a vocabulary whose members are not
+  bounded identifiers, and a non-finite value are each **refused** — the field drops to `null`
+  and `health` degrades. What the package enforces is that consequence, not the vocabulary's
+  provenance: `headlineLabels()` is a PHP method and could compute anything, so "static and
+  code-reviewed" is held by the app's review of that method's body, and the package's guarantee
+  is only that nothing outside what it returns reaches the wire.
+
+**This route never reports a dependency failure as an error** (D9). An unreachable queue, an
+unparseable declared deploy time, a refused `app_version`, a refused headline and a stated
+contract-version disagreement all produce a `200` carrying every field that could be filled and
+`health: "degraded"`. A vitals endpoint that answers `500` when the queue is down tells a fleet
+dashboard nothing about the app it most needs to describe.
+
+**The one thing that can fail this route is the audit append**, and that is deliberate.
+`metadata:read` is read-audited (D16): every success writes one `sensitive_read` lifecycle
+event, with the acting credential as an `operator_integration` actor, ids only — inside a
+transaction, before the payload is assembled, and NOT best-effort. A vendor read this
+deployment cannot record is one it does not serve. D9's never-error rule governs what vitals
+reports about the app's dependencies; it does not govern whether the read itself is recorded.
+
+- **401** — no credential, an unknown one, an expired or revoked one, an offboarded principal's,
+  a legacy `api_tokens` secret, or `FALLBACK_TOKEN`. All indistinguishable from one another;
+  the audit stream keeps what distinction there is.
+- **403** — a live unified-store credential that does not hold `metadata:read`, `credential:admin`
+  included. Audited as `denied_action`.
+- **429** — beyond the `bfc-vitals` limits (per presented credential, and per IP).
+
+---
+
 ## RESERVED — Console fast-follow (not implemented)
 
 The vendor-side Console is a decided fast-follow. So that it can land without reopening this
 shipped contract, the following names are RESERVED here now. **Except where a bullet says
-otherwise, none of this exists in this release: no guard, no table, no ability issuance.** One
-reservation has since been drawn on — the `/bfc/console/*` namespace now has a live member,
-documented in [Console key custody](#console-key-custody) above, not here. This section
+otherwise, none of this exists in this release: no guard, no table, no ability issuance.** Two
+reservations have since been drawn on and have left this section: the `/bfc/console/*`
+namespace now has live members, documented above rather than here, and the `metadata:read`
+ability family is now ENFORCED — see [Authentication](#authentication) and
+[`GET /bfc/console/vitals`](#get-bfcconsolevitals). This section
 deliberately contains no `### METHOD /path` route headings — the mechanical route-completeness
 check covers live routes only, and nothing here is one.
 
 - **Guard name `bfc-console`** — reserved for the Console's delegated-session guard. No guard
   by this name is registered.
-- **Endpoint namespace `/bfc/console/*`** — reserved for Console endpoints. Its first member is
-  live: [`POST /bfc/console/re-key`](#post-bfcconsolere-key), the key-custody verb documented
+- **Endpoint namespace `/bfc/console/*`** — reserved for Console endpoints. Two members are
+  live: [`POST /bfc/console/re-key`](#post-bfcconsolere-key), the key-custody verb, and
+  [`GET /bfc/console/vitals`](#get-bfcconsolevitals), the ops-vitals read — both documented
   above. `/bfc/console/enter` remains reserved and unimplemented.
 - **Table name `bfc_delegated_actors`** — reserved for the Console's delegated-actor records.
   No such table or migration exists.
@@ -1575,10 +1711,5 @@ check covers live routes only, and nothing here is one.
   carrying both a local `web` session and a delegated session, **the delegated guard wins —
   for the acting principal and for any UI/attribution branching — never a union of the two.**
   Nothing enforces this in this release.
-- **Ability family `metadata:read`** — reserved in the ability vocabulary alongside `admin`
-  and `credential:admin`: least-privilege, read-audited, for future vendor-side reads of
-  `metadata`-classified endpoints (see [Endpoint classification](#endpoint-classification)).
-  No credential is issued with it and nothing enforces it in this release.
-
 Everything else Console-related remains held behind the Console PRD's decision D6; this
 section reserves exactly these names and nothing more.
