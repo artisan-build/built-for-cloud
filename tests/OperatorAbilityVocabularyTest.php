@@ -62,6 +62,7 @@ it('locks the vocabulary names and the break-glass equivalence', function (): vo
         ->and(OperatorAbility::CredentialRevoke->value)->toBe('credential:revoke')
         ->and(OperatorAbility::SubjectOffboard->value)->toBe('subject:offboard')
         ->and(OperatorAbility::AuditRead->value)->toBe('audit:read')
+        ->and(OperatorAbility::ConsoleKeyWrite->value)->toBe('console:key:write')
         ->and(OperatorAbility::McpRead->value)->toBe('mcp:read')
         ->and(OperatorAbility::ADMIN)->toBe(EnsureCredentialAdmin::ABILITY)
         ->and(OperatorAbility::RESERVED_METADATA_READ)->toBe('metadata:read')
@@ -72,6 +73,11 @@ it('locks the vocabulary names and the break-glass equivalence', function (): vo
             OperatorAbility::CredentialRevoke,
             OperatorAbility::SubjectOffboard,
             OperatorAbility::AuditRead,
+            // Console key custody is admin-equivalent (the break-glass
+            // is a marking someone chose) but is NOT in any other
+            // family — `credential:rotate` in particular does not reach
+            // it (rework B2).
+            OperatorAbility::ConsoleKeyWrite,
         ]);
 
     // The reserved name stays reserved: no enum case enforces it.

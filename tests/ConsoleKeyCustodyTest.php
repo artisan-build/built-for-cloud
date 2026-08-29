@@ -5,13 +5,16 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\BurnMode;
+use ArtisanBuild\BuiltForCloud\Commands\ConsoleReKeyCommand;
 use ArtisanBuild\BuiltForCloud\Console\AssertionRefusalReason;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKey;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyFiled;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyring;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresBurnMode;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
@@ -26,6 +29,8 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Queue;
 use ParagonIE\Paseto\Keys\Version4\AsymmetricSecretKey;
+use Symfony\Component\Console\Input\ArrayInput;
+use Symfony\Component\Console\Output\BufferedOutput;
 
 uses(RefreshDatabase::class, WithCredentials::class);
 
@@ -35,13 +40,22 @@ uses(RefreshDatabase::class, WithCredentials::class);
  * claim time, and afterwards through the re-key verb that retrofits a
  * fleet which has already claimed.
  *
- * The two properties every test here is really defending:
+ * The property every test here defends: **whoever controls a filed key
+ * controls who can enter this deployment as an admin.** Every path that
+ * writes a keyring row is a takeover path, so the tests are about
+ * authority and atomicity at least as much as about mechanics:
  *
- *  1. **Additive.** An envelope that carries no key behaves exactly as
+ *  1. **Authority is explicit per surface.** An ownership claim carries
+ *     it implicitly (its holder is becoming the admin anyway); an
+ *     onboarding code carries it only if issued with it; the route
+ *     wants `console:key:write`; the CLI's authority is host access and
+ *     says so.
+ *  2. **Additive.** An envelope that carries no key behaves exactly as
  *     it did before this release, down to its response keys.
- *  2. **Make-before-break.** A re-key activates a new key and retires
- *     nothing, so a LIVE deployment can be re-keyed mid-traffic;
- *     retirement is a separate, later act.
+ *  3. **Make-before-break.** A re-key activates a new key and retires
+ *     nothing; retirement is a separate, later act, and it sticks.
+ *  4. **Atomic.** A refused delivery leaves nothing behind — no row, no
+ *     burn, no owner token.
  */
 beforeEach(function (): void {
     config([
@@ -59,6 +73,7 @@ beforeEach(function (): void {
  * An operator credential holding exactly the abilities named.
  *
  * @param  list<string>|null  $abilities
+ * @param  array<string, mixed>  $attributes
  */
 function keyCustodyOperator(?array $abilities, array $attributes = []): MintedTestCredential
 {
@@ -70,11 +85,11 @@ function keyCustodyOperator(?array $abilities, array $attributes = []): MintedTe
 }
 
 /**
- * An operator credential that may re-key.
+ * An operator credential that may write console keys.
  */
-function keyCustodyRotator(): MintedTestCredential
+function keyCustodyWriter(): MintedTestCredential
 {
-    return keyCustodyOperator([OperatorAbility::CredentialRotate->value]);
+    return keyCustodyOperator([OperatorAbility::ConsoleKeyWrite->value]);
 }
 
 /**
@@ -88,13 +103,32 @@ function keyCustodyClaimCode(string $plaintext = 'console-claim'): string
 }
 
 /**
+ * Claim the deployment with no key, the way a fleet that predates this
+ * feature is already claimed. Every re-key test needs this: an unclaimed
+ * deployment refuses to be keyed at all (rework A6).
+ */
+function keyCustodyClaimedDeployment(): string
+{
+    $response = test()->postJson('/bfc/ownership/claim', [
+        'token' => keyCustodyClaimCode('owner-'.bin2hex(random_bytes(6))),
+    ]);
+
+    $response->assertCreated();
+
+    return (string) $response->json('owner_token');
+}
+
+/**
  * A fresh onboarding claim code, issued through the real verb.
+ *
+ * `$keyAuthority` is what the issuing operator decides: without it the
+ * code cannot deliver a console key at all (rework B1).
  *
  * Local rather than borrowed from another test file so this suite runs
  * standalone under a `--filter`, which is the convention `tests/Pest.php`
  * states for shared helpers.
  */
-function keyCustodyOnboardingCode(string $email = 'console@example.test'): string
+function keyCustodyOnboardingCode(string $email = 'console@example.test', bool $keyAuthority = false): string
 {
     $plaintext = 'admin-'.bin2hex(random_bytes(16));
 
@@ -108,6 +142,7 @@ function keyCustodyOnboardingCode(string $email = 'console@example.test'): strin
         'email' => $email,
         'scope' => Scope::Consume->value,
         'ttl_seconds' => 3600,
+        'console_key_authority' => $keyAuthority,
     ], ['Authorization' => 'Bearer '.$plaintext]);
 
     $response->assertCreated();
@@ -117,11 +152,53 @@ function keyCustodyOnboardingCode(string $email = 'console@example.test'): strin
 
 /**
  * The public half of a fresh vendor keypair, in the hex form a real
- * delivery carries.
+ * delivery carries. Every call yields DIFFERENT material on purpose:
+ * material is unique per deployment now (rework B4), so a test that
+ * reused one key across key ids would be testing that rule by accident.
  */
-function keyCustodyPublicKey(AsymmetricSecretKey $secret): string
+function keyCustodyPublicKey(?AsymmetricSecretKey $secret = null): string
 {
-    return $secret->getPublicKey()->toHexString();
+    return ($secret ?? consoleKeypair())->getPublicKey()->toHexString();
+}
+
+/**
+ * Run the CLI verb with key material on its INPUT STREAM, which is what
+ * the command reads instead of argv (rework B3).
+ *
+ * Driven through `Command::run()` with a memory stream rather than
+ * Laravel's `artisan()` helper, because `artisan()` gives the command no
+ * stream and it would fall back to the test runner's own STDIN.
+ *
+ * @return array{int, string} exit status and captured output
+ */
+function keyCustodyRunCli(string $keyId, ?string $publicKey, bool $local = true): array
+{
+    $command = app(ConsoleReKeyCommand::class);
+    $command->setLaravel(app());
+
+    $parameters = ['key_id' => $keyId];
+
+    if ($local) {
+        $parameters['--local'] = true;
+    }
+
+    $stream = fopen('php://memory', 'r+');
+
+    if ($publicKey !== null) {
+        fwrite($stream, $publicKey."\n");
+    }
+
+    rewind($stream);
+
+    $input = new ArrayInput($parameters);
+    $input->setStream($stream);
+
+    $output = new BufferedOutput;
+    $status = $command->run($input, $output);
+
+    fclose($stream);
+
+    return [$status, $output->fetch()];
 }
 
 /**
@@ -213,12 +290,14 @@ it('files the delivered public key on the ownership claim and reports the key id
     expect(consoleVerify(consoleMint($secret, consoleClaims(), 'k1'))->keyId)->toBe('k1');
 });
 
-it('files the delivered public key on the onboarding exchange and reports the key id (AC1)', function (): void {
+it('files the delivered public key on an AUTHORIZED onboarding exchange and reports the key id (AC1)', function (): void {
+    keyCustodyClaimedDeployment();
+
     $secret = consoleKeypair();
     $public = keyCustodyPublicKey($secret);
 
     $response = $this->postJson('/bfc/onboarding/exchange', [
-        'token' => keyCustodyOnboardingCode('console@example.test'),
+        'token' => keyCustodyOnboardingCode('console@example.test', keyAuthority: true),
         'console_key' => ['key_id' => 'k1', 'public_key' => $public],
     ]);
 
@@ -233,7 +312,7 @@ it('files the delivered public key on the onboarding exchange and reports the ke
 
 // ------------------------------------------ AC2 — backward compatibility
 
-it('leaves both claim envelopes byte-identical when no key is delivered (AC2)', function (): void {
+it('leaves both claim envelopes and the issue verb byte-identical when no key is involved (AC2)', function (): void {
     // The ownership claim: the pre-console response shape, EXACTLY —
     // three keys, no `console_key` at all (absent, not null).
     $claim = $this->postJson('/bfc/ownership/claim', ['token' => keyCustodyClaimCode()]);
@@ -264,10 +343,140 @@ it('leaves both claim envelopes byte-identical when no key is delivered (AC2)', 
         ->and(CredentialAuditEvent::query()->where('note', 'like', 'console%')->count())->toBe(0);
 });
 
+it('leaves the issue response unchanged unless key-custody authority was granted (AC2)', function (): void {
+    $plaintext = 'admin-'.bin2hex(random_bytes(16));
+
+    ApiToken::query()->create([
+        'name' => 'issuer',
+        'token_hash' => hash('sha256', $plaintext),
+        'abilities' => [Scope::Admin->value],
+    ]);
+
+    $plain = $this->postJson('/bfc/onboarding/issue', [
+        'email' => 'a@b.test',
+        'ttl_seconds' => 3600,
+    ], ['Authorization' => 'Bearer '.$plaintext]);
+
+    $plain->assertCreated();
+
+    expect(array_keys((array) $plain->json()))->toBe(['claim_code', 'email']);
+
+    $granted = $this->postJson('/bfc/onboarding/issue', [
+        'email' => 'c@d.test',
+        'ttl_seconds' => 3600,
+        'console_key_authority' => true,
+    ], ['Authorization' => 'Bearer '.$plaintext]);
+
+    $granted->assertCreated()->assertJsonPath('console_key_authority', true);
+});
+
+it('treats an explicit console_key null as absence, not as a delivery (AC2, J3)', function (): void {
+    // Documented in ConsoleKeyDelivery::optionalFrom and previously
+    // unexercised: null is "no key", NOT a half-filled object.
+    $claim = $this->postJson('/bfc/ownership/claim', [
+        'token' => keyCustodyClaimCode(),
+        'console_key' => null,
+    ]);
+
+    $claim->assertCreated();
+
+    expect(array_keys((array) $claim->json()))->toBe(['owner_token', 'webhook_secret', 'product']);
+
+    // Same on the exchange, and note the code carries NO key authority:
+    // a null delivery must not even be read as an attempt, or this would
+    // refuse.
+    $exchange = $this->postJson('/bfc/onboarding/exchange', [
+        'token' => keyCustodyOnboardingCode('null@example.test'),
+        'console_key' => null,
+    ]);
+
+    $exchange->assertCreated();
+
+    expect(array_keys((array) $exchange->json()))->toBe(['durable_token', 'name'])
+        ->and(ConsoleKey::query()->count())->toBe(0);
+});
+
+// --------------------------------- AC13 — claim codes need the authority
+
+it('refuses a console key delivered on a code with no key-custody authority (AC13)', function (): void {
+    keyCustodyClaimedDeployment();
+
+    // The routine code an operator hands a low-privilege integration.
+    $code = keyCustodyOnboardingCode('integration@example.test', keyAuthority: false);
+
+    $refusal = $this->postJson('/bfc/onboarding/exchange', [
+        'token' => $code,
+        'console_key' => ['key_id' => 'k1', 'public_key' => keyCustodyPublicKey()],
+    ]);
+
+    // 403: the caller presented a perfectly good code; it just does not
+    // carry this authority.
+    $refusal->assertStatus(403)->assertJsonStructure(['message']);
+
+    $row = OnboardingToken::query()->where('token_hash', OnboardingToken::hashToken($code))->sole();
+
+    // The WHOLE exchange rolled back — the check runs before the burn
+    // and before the mint, so an unauthorized attempt costs nothing.
+    expect(ConsoleKey::query()->count())->toBe(0)
+        ->and($row->consumed_at)->toBeNull()
+        ->and($row->durable_token_id)->toBeNull()
+        ->and($row->console_key_filed_at)->toBeNull()
+        ->and(Credential::query()->count())->toBe(0);
+
+    // And the code still works for what it WAS issued to do.
+    $this->postJson('/bfc/onboarding/exchange', ['token' => $code])->assertCreated();
+});
+
+it('spends key-custody authority on the first key and refuses a second (AC13)', function (): void {
+    keyCustodyBurnAtExchange();
+    keyCustodyClaimedDeployment();
+
+    $code = keyCustodyOnboardingCode('once@example.test', keyAuthority: true);
+
+    $this->postJson('/bfc/onboarding/exchange', [
+        'token' => $code,
+        'console_key' => ['key_id' => 'k1', 'public_key' => keyCustodyPublicKey()],
+    ])->assertCreated();
+
+    $row = OnboardingToken::query()->where('token_hash', OnboardingToken::hashToken($code))->sole();
+
+    expect($row->console_key_filed_at)->not->toBeNull()
+        ->and($row->mayFileConsoleKey())->toBeFalse();
+
+    // Under `first_use` a code stays presentable, so without the spend
+    // stamp one authorized code could file a second standing
+    // admin-entry authority under a fresh key id. It cannot.
+    $second = $this->postJson('/bfc/onboarding/exchange', [
+        'token' => $code,
+        'console_key' => ['key_id' => 'k2', 'public_key' => keyCustodyPublicKey()],
+    ]);
+
+    expect($second->getStatusCode())->toBeIn([403, 409])
+        ->and(ConsoleKey::query()->count())->toBe(1);
+});
+
+it('cannot be granted key-custody authority through mass assignment (AC13)', function (): void {
+    // The flag is not fillable, so nothing a request body reaches can
+    // set it — the same discipline api_tokens.rotated_at uses.
+    $token = OnboardingToken::query()->create([
+        'email' => 'forged@example.test',
+        'scope' => Scope::Consume->value,
+        'token_hash' => OnboardingToken::hashToken('forged'),
+        'expires_at' => now()->addHour(),
+        'console_key_authority' => true,
+        'console_key_filed_at' => null,
+    ]);
+
+    expect($token->refresh()->console_key_authority)->toBeFalse()
+        ->and($token->mayFileConsoleKey())->toBeFalse();
+});
+
 // ------------------------------------------------ AC3 — refused material
 
 it('refuses key material the keyring will not store and files nothing (AC3)', function (): void {
-    $rotator = keyCustodyRotator();
+    keyCustodyClaimedDeployment();
+
+    $writer = keyCustodyWriter();
     $shape = 0;
 
     foreach (keyCustodyRejectedMaterial() as $description => $material) {
@@ -275,68 +484,55 @@ it('refuses key material the keyring will not store and files nothing (AC3)', fu
 
         // Through the re-key verb…
         $this->postJson('/bfc/console/re-key', ['key_id' => 'k'.$shape, 'public_key' => $material], [
-            'Authorization' => $rotator->bearerHeader(),
+            'Authorization' => $writer->bearerHeader(),
         ])->assertStatus(422);
 
-        // …and through the claim envelope, which is the half that proves
-        // the claim surface routes into PR1's keyring rather than
-        // carrying its own, laxer, check. A fresh address per shape: the
-        // claim surface is throttled at 10/min per IP and this loop is
-        // about material, not limits.
-        $code = keyCustodyClaimCode('claim-'.md5($description));
+        // …and through an AUTHORIZED claim code, which is the half that
+        // proves the claim surface routes into PR1's keyring rather than
+        // carrying its own, laxer, check.
+        $code = keyCustodyOnboardingCode('shape'.$shape.'@example.test', keyAuthority: true);
 
-        $this->withServerVariables(['REMOTE_ADDR' => '10.0.1.'.$shape])
-            ->postJson('/bfc/ownership/claim', [
-                'token' => $code,
-                'console_key' => ['key_id' => 'k'.$shape, 'public_key' => $material],
-            ])->assertStatus(422);
+        $this->postJson('/bfc/onboarding/exchange', [
+            'token' => $code,
+            'console_key' => ['key_id' => 'k'.$shape, 'public_key' => $material],
+        ])->assertStatus(422);
 
-        expect(ConsoleKey::query()->count())->toBe(0)
-            ->and(Ownership::current()?->owner_token_id)->toBeNull();
+        expect(ConsoleKey::query()->count())->toBe(0);
 
-        // Fail-closed AND atomic: the single-use code was not spent, so
-        // the deployment can still be claimed once the delivery is fixed.
-        $this->withServerVariables(['REMOTE_ADDR' => '10.0.1.'.$shape])
-            ->postJson('/bfc/ownership/claim', ['token' => $code])->assertCreated();
+        // Fail-closed AND atomic: the code was not spent, so the
+        // delivery can be retried once it is fixed.
+        $row = OnboardingToken::query()->where('token_hash', OnboardingToken::hashToken($code))->sole();
 
-        // Reset for the next shape.
-        Ownership::query()->delete();
+        expect($row->consumed_at)->toBeNull()
+            ->and($row->mayFileConsoleKey())->toBeTrue();
     }
 });
 
 it('refuses a malformed key id on the same terms as malformed material (AC3)', function (): void {
-    $public = keyCustodyPublicKey(consoleKeypair());
-    $rotator = keyCustodyRotator();
+    keyCustodyClaimedDeployment();
+
+    $writer = keyCustodyWriter();
 
     // NOT in this list: a trailing newline. Laravel's global TrimStrings
     // middleware strips it before any package code runs, so over HTTP
     // "k1\n" simply IS "k1" and files legitimately. The ring's own `\z`
     // anchor is what refuses it where trimming does not happen — the CLI
     // case below drives exactly that.
-    foreach (['', 'has spaces', str_repeat('k', 65), 'k/1', 'k 1'] as $index => $keyId) {
-        $this->postJson('/bfc/console/re-key', ['key_id' => $keyId, 'public_key' => $public], [
-            'Authorization' => $rotator->bearerHeader(),
+    foreach (['', 'has spaces', str_repeat('k', 65), 'k/1', 'k 1'] as $keyId) {
+        $this->postJson('/bfc/console/re-key', ['key_id' => $keyId, 'public_key' => keyCustodyPublicKey()], [
+            'Authorization' => $writer->bearerHeader(),
         ])->assertStatus(422);
-
-        $this->withServerVariables(['REMOTE_ADDR' => '10.0.2.'.$index])
-            ->postJson('/bfc/ownership/claim', [
-                'token' => keyCustodyClaimCode('claim-'.md5($keyId)),
-                'console_key' => ['key_id' => $keyId, 'public_key' => $public],
-            ])->assertStatus(422);
     }
 
-    // The untrimmed transport: argv reaches the ring exactly as typed.
-    $this->artisan('bfc:console:re-key', [
-        'key_id' => "k1\n",
-        'public_key' => $public,
-        '--local' => true,
-    ])->assertFailed();
+    // The untrimmed transport: the stream reaches the ring as sent.
+    [$status] = keyCustodyRunCli("k1\n", keyCustodyPublicKey());
 
-    expect(ConsoleKey::query()->count())->toBe(0);
+    expect($status)->toBe(1)
+        ->and(ConsoleKey::query()->count())->toBe(0);
 });
 
 it('refuses a half-filled console_key object rather than reading it as absence (AC3)', function (): void {
-    $public = keyCustodyPublicKey(consoleKeypair());
+    $public = keyCustodyPublicKey();
 
     foreach ([['key_id' => 'k1'], ['public_key' => $public], ['key_id' => 'k1', 'public_key' => 42], 'k1'] as $payload) {
         $this->postJson('/bfc/ownership/claim', [
@@ -349,38 +545,129 @@ it('refuses a half-filled console_key object rather than reading it as absence (
         ->and(Ownership::current()?->owner_token_id)->toBeNull();
 });
 
-it('leaves an at-exchange claim code presentable when the delivered key is refused (AC3)', function (): void {
+// --------------------- J2 — the in-transaction rollback, driven for real
+
+it('rolls the ownership claim back when the delivered key id is already on file (J2)', function (): void {
+    // The ONE refusal that reaches the in-transaction throw: everything
+    // shape-related refuses before the transaction opens, so only this
+    // exercises performClaim's rollback and its actor plumbing.
+    keyCustodyClaimedDeployment();
+    keyCustodyRunCli('k1', keyCustodyPublicKey());
+
+    expect(ConsoleKey::query()->count())->toBe(1);
+
+    // A SECOND deployment claim (a transfer) that re-uses `k1`.
+    $owner = Ownership::current();
+    $ownerTokenBefore = $owner?->owner_token_id;
+
+    $release = $this->postJson('/bfc/ownership/release', [], [
+        'Authorization' => 'Bearer '.keyCustodyAdminToken(),
+    ]);
+
+    $release->assertCreated();
+
+    $successorCode = (string) $release->json('ownership_claim_code');
+
+    $refusal = $this->postJson('/bfc/ownership/claim', [
+        'token' => $successorCode,
+        'console_key' => ['key_id' => 'k1', 'public_key' => keyCustodyPublicKey()],
+    ]);
+
+    $refusal->assertStatus(409)->assertJsonStructure(['message']);
+
+    // Rolled back whole: the successor did not take ownership, the
+    // successor's single-use code is unconsumed and still presentable,
+    // and no second keyring row exists.
+    expect(Ownership::current()?->owner_token_id)->toBe($ownerTokenBefore)
+        ->and(OwnershipClaim::query()->whereNull('consumed_at')->count())->toBe(1)
+        ->and(ConsoleKey::query()->count())->toBe(1);
+
+    // The refusal was audited against the party that presented the code.
+    $denied = CredentialAuditEvent::query()
+        ->where('event', LifecycleEventType::DeniedAction->value)
+        ->where('note', 'like', 'console%')
+        ->sole();
+
+    expect($denied->actor_type)->toBe(AuditActorType::CredentialHolder)
+        ->and($denied->actor_ref)->not->toBeNull()
+        ->and((string) $denied->note)->toContain('console_key_id_in_use');
+
+    // …and the successor code still works once the delivery is fixed.
+    $this->postJson('/bfc/ownership/claim', ['token' => $successorCode])->assertCreated();
+});
+
+it('rolls an at-exchange onboarding exchange back when the key id is already on file (J2)', function (): void {
     keyCustodyBurnAtExchange();
+    keyCustodyClaimedDeployment();
+    keyCustodyRunCli('k1', keyCustodyPublicKey());
 
-    $code = keyCustodyOnboardingCode('rollback@example.test');
+    $code = keyCustodyOnboardingCode('rollback@example.test', keyAuthority: true);
 
-    $this->postJson('/bfc/onboarding/exchange', [
+    // `k1` is taken, so this refuses INSIDE the locked transaction —
+    // after the burn would have run under AtExchange, and after the
+    // durable mint. Both must be undone.
+    $refusal = $this->postJson('/bfc/onboarding/exchange', [
         'token' => $code,
-        'console_key' => ['key_id' => 'k1', 'public_key' => bin2hex(random_bytes(31))],
-    ])->assertStatus(422);
+        'console_key' => ['key_id' => 'k1', 'public_key' => keyCustodyPublicKey()],
+    ]);
+
+    $refusal->assertStatus(409)->assertJsonStructure(['message']);
 
     $row = OnboardingToken::query()->where('token_hash', OnboardingToken::hashToken($code))->sole();
 
     expect($row->consumed_at)->toBeNull()
         ->and($row->durable_token_id)->toBeNull()
-        ->and(ConsoleKey::query()->count())->toBe(0);
+        ->and($row->console_key_filed_at)->toBeNull()
+        ->and(ConsoleKey::query()->count())->toBe(1)
+        // No durable survived the rollback either.
+        ->and(ApiToken::query()->where('name', 'rollback@example.test')->count())->toBe(0);
 
-    // …and the fixed delivery still works on the same code.
+    $denied = CredentialAuditEvent::query()
+        ->where('event', LifecycleEventType::DeniedAction->value)
+        ->where('note', 'like', 'console%')
+        ->sole();
+
+    expect($denied->actor_type)->toBe(AuditActorType::CredentialHolder)
+        ->and($denied->actor_ref)->toBe($row->id);
+
+    // …and the code is still good for a fixed delivery.
     $this->postJson('/bfc/onboarding/exchange', [
         'token' => $code,
-        'console_key' => ['key_id' => 'k1', 'public_key' => keyCustodyPublicKey(consoleKeypair())],
+        'console_key' => ['key_id' => 'k2', 'public_key' => keyCustodyPublicKey()],
     ])->assertCreated();
 });
+
+/**
+ * A legacy admin `api_tokens` row's plaintext. The ownership RELEASE
+ * verb wants an admin token and does not care which one, so this mints
+ * a fresh one rather than pretending to have kept the owner token's
+ * single reveal.
+ */
+function keyCustodyAdminToken(): string
+{
+    $plaintext = 'admin-'.bin2hex(random_bytes(16));
+
+    ApiToken::query()->create([
+        'name' => 'admin-'.bin2hex(random_bytes(4)),
+        'token_hash' => hash('sha256', $plaintext),
+        'abilities' => [Scope::Admin->value],
+    ]);
+
+    return $plaintext;
+}
 
 // ----------------------------------------- AC4 — re-key, make-before-break
 
 it('re-keys an already-claimed deployment without re-onboarding and without retiring (AC4)', function (): void {
     // A deployment that claimed BEFORE this feature existed: no key.
-    $claim = $this->postJson('/bfc/ownership/claim', ['token' => keyCustodyClaimCode()]);
-    $claim->assertCreated();
+    keyCustodyClaimedDeployment();
 
     $ownershipBefore = Ownership::current();
-    $rotator = keyCustodyRotator();
+    $ownerTokenBefore = $ownershipBefore?->owner_token_id;
+
+    expect($ownerTokenBefore)->not->toBeNull();
+
+    $writer = keyCustodyWriter();
 
     // The retrofit: the first key arrives on a live, claimed deployment.
     $first = consoleKeypair();
@@ -388,7 +675,7 @@ it('re-keys an already-claimed deployment without re-onboarding and without reti
     $this->postJson('/bfc/console/re-key', [
         'key_id' => 'k1',
         'public_key' => keyCustodyPublicKey($first),
-    ], ['Authorization' => $rotator->bearerHeader()])
+    ], ['Authorization' => $writer->bearerHeader()])
         ->assertCreated()
         ->assertJsonPath('console_key.key_id', 'k1')
         ->assertJsonPath('console_key.active_key_ids', ['k1']);
@@ -399,7 +686,7 @@ it('re-keys an already-claimed deployment without re-onboarding and without reti
     $this->postJson('/bfc/console/re-key', [
         'key_id' => 'k2',
         'public_key' => keyCustodyPublicKey($second),
-    ], ['Authorization' => $rotator->bearerHeader()])
+    ], ['Authorization' => $writer->bearerHeader()])
         ->assertCreated()
         ->assertJsonPath('console_key.key_id', 'k2')
         // The overlap, reported rather than inferred.
@@ -412,16 +699,21 @@ it('re-keys an already-claimed deployment without re-onboarding and without reti
         ->and(consoleVerify(consoleMint($first, consoleClaims(), 'k1'))->keyId)->toBe('k1')
         ->and(consoleVerify(consoleMint($second, consoleClaims(), 'k2'))->keyId)->toBe('k2');
 
-    // No re-onboarding happened: the same ownership row, the same owner
-    // token, still working.
-    expect(Ownership::current()?->owner_token_id)->toBe($ownershipBefore?->owner_token_id)
-        ->and(OwnershipClaim::query()->whereNull('consumed_at')->count())->toBe(0);
+    // No re-onboarding happened: the SAME ownership row, the same owner
+    // token id — compared against a value asserted non-null above, so
+    // this cannot pass by both sides being null.
+    expect(Ownership::current()?->owner_token_id)->toBe($ownerTokenBefore)
+        ->and(Ownership::query()->count())->toBe(1)
+        // No fresh onboarding code was minted or consumed to do it.
+        ->and(OnboardingToken::query()->count())->toBe(0);
 });
 
 // ----------------------------------------- AC5 — retirement is separate
 
 it('keeps retirement a separate operation that ends only the retired key (AC5)', function (): void {
-    $rotator = keyCustodyRotator();
+    keyCustodyClaimedDeployment();
+
+    $writer = keyCustodyWriter();
     $first = consoleKeypair();
     $second = consoleKeypair();
 
@@ -429,7 +721,7 @@ it('keeps retirement a separate operation that ends only the retired key (AC5)',
         $this->postJson('/bfc/console/re-key', [
             'key_id' => $keyId,
             'public_key' => keyCustodyPublicKey($secret),
-        ], ['Authorization' => $rotator->bearerHeader()])->assertCreated();
+        ], ['Authorization' => $writer->bearerHeader()])->assertCreated();
     }
 
     // Retirement is a keyring operation, deliberately NOT reachable from
@@ -442,70 +734,209 @@ it('keeps retirement a separate operation that ends only the retired key (AC5)',
         ->and(consoleVerify(consoleMint($second, consoleClaims(), 'k2'))->keyId)->toBe('k2');
 });
 
-// ---------------------------------------------------- AC6 — the gate
+// ------------------------------------- AC16 — retirement cannot be undone
 
-it('gates the re-key verb on an operator credential carrying the rotate family (AC6)', function (): void {
-    $public = keyCustodyPublicKey(consoleKeypair());
-    $body = ['key_id' => 'k1', 'public_key' => $public];
+it('refuses to re-file a retired key\'s material under a new key id (AC16)', function (): void {
+    keyCustodyClaimedDeployment();
 
-    // No credential at all.
-    $anonymous = $this->postJson('/bfc/console/re-key', $body);
-    $anonymous->assertUnauthorized();
+    $writer = keyCustodyWriter();
+    $retired = consoleKeypair();
+    $retiredPublic = keyCustodyPublicKey($retired);
 
-    // A credential that authenticates but lacks the ability.
-    $reader = keyCustodyOperator([OperatorAbility::CredentialRead->value]);
-    $this->postJson('/bfc/console/re-key', $body, ['Authorization' => $reader->bearerHeader()])
-        ->assertForbidden();
+    $this->postJson('/bfc/console/re-key', ['key_id' => 'k1', 'public_key' => $retiredPublic], [
+        'Authorization' => $writer->bearerHeader(),
+    ])->assertCreated();
 
-    // A credential with NO abilities at all (least privilege default).
-    $bare = keyCustodyOperator(null);
-    $this->postJson('/bfc/console/re-key', $body, ['Authorization' => $bare->bearerHeader()])
-        ->assertForbidden();
+    (new ConsoleKeyring)->retire('k1');
 
-    // Expired and revoked rotate-capable credentials.
-    $expired = keyCustodyOperator([OperatorAbility::CredentialRotate->value], ['expires_at' => now()->subMinute()]);
-    $revoked = keyCustodyOperator([OperatorAbility::CredentialRotate->value], ['revoked_at' => now()]);
+    expect(consoleRefusal(consoleMint($retired, consoleClaims(), 'k1'))->reason)
+        ->toBe(AssertionRefusalReason::RetiredKey);
 
-    $expiredResponse = $this->postJson('/bfc/console/re-key', $body, ['Authorization' => $expired->bearerHeader()]);
-    $revokedResponse = $this->postJson('/bfc/console/re-key', $body, ['Authorization' => $revoked->bearerHeader()]);
+    // Retirement is the ONLY revocation this design has. Re-filing the
+    // same bytes under a fresh key id would undo it outright.
+    $refusal = $this->postJson('/bfc/console/re-key', ['key_id' => 'k2', 'public_key' => $retiredPublic], [
+        'Authorization' => $writer->bearerHeader(),
+    ]);
 
-    $expiredResponse->assertUnauthorized();
-    $revokedResponse->assertUnauthorized();
+    $refusal->assertStatus(409)->assertJsonStructure(['message']);
 
-    // The refusals that MUST be indistinguishable are: no credential, an
-    // unknown one, and a dead one. Distinguishing those would say whether
-    // a presented secret ever named a real row.
-    $unknown = $this->postJson('/bfc/console/re-key', $body, ['Authorization' => 'Bearer '.bin2hex(random_bytes(32))]);
+    // Same refusal through the claim envelope and the CLI — the rule
+    // lives in the shared action, not in one surface.
+    $this->postJson('/bfc/onboarding/exchange', [
+        'token' => keyCustodyOnboardingCode('retired@example.test', keyAuthority: true),
+        'console_key' => ['key_id' => 'k3', 'public_key' => $retiredPublic],
+    ])->assertStatus(409);
 
-    expect($expiredResponse->getContent())->toBe($anonymous->getContent())
-        ->and($revokedResponse->getContent())->toBe($anonymous->getContent())
-        ->and($unknown->getContent())->toBe($anonymous->getContent())
-        ->and($unknown->getStatusCode())->toBe($anonymous->getStatusCode());
+    [$cliStatus] = keyCustodyRunCli('k4', $retiredPublic);
 
-    // The ability failure is deliberately a 403, not folded into the 401
-    // above: it is the package's published gate semantics on EVERY
-    // operator route ("missing/unknown → 401, authenticated without the
-    // ability → 403"), and the caller it separates is one that already
-    // proved it holds a live credential — there is no existence to leak.
-    expect($reader->credential->refresh()->revoked_at)->toBeNull();
+    expect($cliStatus)->toBe(1);
 
-    // Nothing was filed by any refusal.
+    // The retired key is still retired, and nothing new verifies.
+    $row = ConsoleKey::query()->sole();
+
+    expect($row->key_id)->toBe('k1')
+        ->and($row->retired_at)->not->toBeNull()
+        ->and(keyCustodyActiveIds())->toBe([])
+        ->and(consoleRefusal(consoleMint($retired, consoleClaims(), 'k1'))->reason)
+        ->toBe(AssertionRefusalReason::RetiredKey);
+});
+
+// -------------------------- AC6 / AC14 / AC17 — the gate and its refusals
+
+it('gates the re-key verb on its own console:key:write ability (AC14)', function (): void {
+    keyCustodyClaimedDeployment();
+
+    $body = fn (): array => ['key_id' => 'k'.bin2hex(random_bytes(2)), 'public_key' => keyCustodyPublicKey()];
+
+    // THE finding: a rotate-scoped credential must NOT reach this verb.
+    // Folding console keys into the rotate family would have handed
+    // Console-admin takeover to every such credential already issued.
+    $rotator = keyCustodyOperator([OperatorAbility::CredentialRotate->value]);
+
+    $this->postJson('/bfc/console/re-key', $body(), ['Authorization' => $rotator->bearerHeader()])
+        ->assertStatus(UniformConsoleKeyRefusal::STATUS);
+
     expect(ConsoleKey::query()->count())->toBe(0);
 
-    // And the admin-equivalent break-glass reaches the verb.
+    // Every other narrow family is refused too.
+    foreach ([
+        OperatorAbility::CredentialRead,
+        OperatorAbility::CredentialMint,
+        OperatorAbility::CredentialRevoke,
+        OperatorAbility::SubjectOffboard,
+        OperatorAbility::AuditRead,
+        OperatorAbility::McpAdmin,
+    ] as $ability) {
+        $narrow = keyCustodyOperator([$ability->value]);
+
+        $this->postJson('/bfc/console/re-key', $body(), ['Authorization' => $narrow->bearerHeader()])
+            ->assertStatus(UniformConsoleKeyRefusal::STATUS);
+    }
+
+    expect(ConsoleKey::query()->count())->toBe(0);
+
+    // The dedicated ability works…
+    $this->postJson('/bfc/console/re-key', ['key_id' => 'writer', 'public_key' => keyCustodyPublicKey()], [
+        'Authorization' => keyCustodyWriter()->bearerHeader(),
+    ])->assertCreated();
+
+    // …and so does the explicit break-glass, which is a marking an
+    // operator chose rather than a family that widened under them.
     $breakGlass = keyCustodyOperator([OperatorAbility::ADMIN]);
-    $this->postJson('/bfc/console/re-key', $body, ['Authorization' => $breakGlass->bearerHeader()])
-        ->assertCreated();
+
+    $this->postJson('/bfc/console/re-key', ['key_id' => 'break-glass', 'public_key' => keyCustodyPublicKey()], [
+        'Authorization' => $breakGlass->bearerHeader(),
+    ])->assertCreated();
+
+    // …and a legacy admin token, as on every operator surface.
+    $adminPlaintext = 'legacy-admin-'.bin2hex(random_bytes(16));
+
+    ApiToken::query()->create([
+        'name' => 'legacy-admin',
+        'token_hash' => hash('sha256', $adminPlaintext),
+        'abilities' => [Scope::Admin->value],
+    ]);
+
+    $this->postJson('/bfc/console/re-key', ['key_id' => 'legacy', 'public_key' => keyCustodyPublicKey()], [
+        'Authorization' => 'Bearer '.$adminPlaintext,
+    ])->assertCreated();
+
+    expect(ConsoleKey::query()->count())->toBe(3);
+});
+
+it('answers every pre-authorization failure with one identical refusal (AC6, AC17)', function (): void {
+    keyCustodyClaimedDeployment();
+
+    $body = ['key_id' => 'k1', 'public_key' => keyCustodyPublicKey()];
+
+    $anonymous = $this->postJson('/bfc/console/re-key', $body);
+    $unknown = $this->postJson('/bfc/console/re-key', $body, ['Authorization' => 'Bearer '.bin2hex(random_bytes(32))]);
+
+    $lacking = $this->postJson('/bfc/console/re-key', $body, [
+        'Authorization' => keyCustodyOperator([OperatorAbility::CredentialRead->value])->bearerHeader(),
+    ]);
+
+    $bare = $this->postJson('/bfc/console/re-key', $body, [
+        'Authorization' => keyCustodyOperator(null)->bearerHeader(),
+    ]);
+
+    $expired = $this->postJson('/bfc/console/re-key', $body, [
+        'Authorization' => keyCustodyOperator([OperatorAbility::ConsoleKeyWrite->value], ['expires_at' => now()->subMinute()])->bearerHeader(),
+    ]);
+
+    $revoked = $this->postJson('/bfc/console/re-key', $body, [
+        'Authorization' => keyCustodyOperator([OperatorAbility::ConsoleKeyWrite->value], ['revoked_at' => now()])->bearerHeader(),
+    ]);
+
+    // ALL of them, byte for byte and status for status — including the
+    // ability failure, which every OTHER operator route answers as a
+    // distinguishable 403 (rework A5). Here the split would tell a
+    // caller holding a stale bearer whether it is the credential that
+    // can take the deployment.
+    foreach ([$unknown, $lacking, $bare, $expired, $revoked] as $refusal) {
+        expect($refusal->getStatusCode())->toBe($anonymous->getStatusCode())
+            ->and($refusal->getContent())->toBe($anonymous->getContent());
+    }
+
+    expect($anonymous->getStatusCode())->toBe(UniformConsoleKeyRefusal::STATUS)
+        ->and($anonymous->json('message'))->toBe(UniformConsoleKeyRefusal::MESSAGE)
+        ->and(ConsoleKey::query()->count())->toBe(0);
+
+    // The distinction survives INTERNALLY: the gate still records which
+    // failure each one was.
+    $notes = CredentialAuditEvent::query()
+        ->where('event', LifecycleEventType::DeniedAction->value)
+        ->pluck('note')
+        ->map(static fn (mixed $note): string => (string) $note)
+        ->all();
+
+    expect(collect($notes)->filter(static fn (string $n): bool => str_contains($n, 'token_auth_failure'))->count())->toBeGreaterThan(0)
+        ->and(collect($notes)->filter(static fn (string $n): bool => str_contains($n, 'lacks console:key:write'))->count())->toBeGreaterThan(0);
+});
+
+// -------------------------------------- AC18 — an unclaimed deployment
+
+it('refuses to key a deployment nobody owns (AC18)', function (): void {
+    // The installer mints an operator credential from the HOST, before
+    // and independently of any ownership claim — which is why the gate
+    // alone never proved "already claimed".
+    $writer = keyCustodyWriter();
+
+    expect(Ownership::current()?->owner_token_id)->toBeNull();
+
+    $refusal = $this->postJson('/bfc/console/re-key', [
+        'key_id' => 'k1',
+        'public_key' => keyCustodyPublicKey(),
+    ], ['Authorization' => $writer->bearerHeader()]);
+
+    $refusal->assertStatus(409)->assertJsonStructure(['message']);
+
+    // The CLI is refused on the same rule — host access does not make a
+    // deployment owned.
+    [$cliStatus] = keyCustodyRunCli('k1', keyCustodyPublicKey());
+
+    expect($cliStatus)->toBe(1)
+        ->and(ConsoleKey::query()->count())->toBe(0);
+
+    // Once claimed, the same request works.
+    keyCustodyClaimedDeployment();
+
+    $this->postJson('/bfc/console/re-key', [
+        'key_id' => 'k1',
+        'public_key' => keyCustodyPublicKey(),
+    ], ['Authorization' => $writer->bearerHeader()])->assertCreated();
 });
 
 // ------------------------------------------------------- AC7 — the audit
 
 it('audits a successful re-key and a refused one with the actor typed (AC7)', function (): void {
-    $rotator = keyCustodyRotator();
-    $public = keyCustodyPublicKey(consoleKeypair());
+    keyCustodyClaimedDeployment();
+
+    $writer = keyCustodyWriter();
+    $public = keyCustodyPublicKey();
 
     $this->postJson('/bfc/console/re-key', ['key_id' => 'k1', 'public_key' => $public], [
-        'Authorization' => $rotator->bearerHeader(),
+        'Authorization' => $writer->bearerHeader(),
     ])->assertCreated();
 
     $filed = CredentialAuditEvent::query()->where('event', LifecycleEventType::Delivered->value)->sole();
@@ -513,7 +944,7 @@ it('audits a successful re-key and a refused one with the actor typed (AC7)', fu
 
     foreach ([$filed, $activated] as $event) {
         expect($event->actor_type)->toBe(AuditActorType::OperatorIntegration)
-            ->and($event->actor_ref)->toBe($rotator->credential->id)
+            ->and($event->actor_ref)->toBe($writer->credential->id)
             ->and((string) $event->note)->toContain('k1')
             // Ids only: the delivered material never reaches the stream.
             ->and((string) $event->note)->not->toContain($public);
@@ -524,31 +955,33 @@ it('audits a successful re-key and a refused one with the actor typed (AC7)', fu
     // A refused re-key — same key id, different material — is audited too.
     $this->postJson('/bfc/console/re-key', [
         'key_id' => 'k1',
-        'public_key' => keyCustodyPublicKey(consoleKeypair()),
-    ], ['Authorization' => $rotator->bearerHeader()])->assertStatus(409);
+        'public_key' => keyCustodyPublicKey(),
+    ], ['Authorization' => $writer->bearerHeader()])->assertStatus(409);
 
     $denied = CredentialAuditEvent::query()
         ->where('event', LifecycleEventType::DeniedAction->value)
-        ->where('note', 'like', 'console%')
+        ->where('note', 'like', 'console countersigning%')
         ->sole();
 
     expect($denied->actor_type)->toBe(AuditActorType::OperatorIntegration)
-        ->and($denied->actor_ref)->toBe($rotator->credential->id)
+        ->and($denied->actor_ref)->toBe($writer->credential->id)
         ->and((string) $denied->note)->toContain('console_key_id_in_use')
         ->and((string) $denied->note)->toContain('key id k1');
 });
 
 it('keeps a hostile key id out of the audit note (AC7)', function (): void {
-    $rotator = keyCustodyRotator();
+    keyCustodyClaimedDeployment();
+
+    $writer = keyCustodyWriter();
 
     $this->postJson('/bfc/console/re-key', [
         'key_id' => "k1\nfabricated: audit line",
-        'public_key' => keyCustodyPublicKey(consoleKeypair()),
-    ], ['Authorization' => $rotator->bearerHeader()])->assertStatus(422);
+        'public_key' => keyCustodyPublicKey(),
+    ], ['Authorization' => $writer->bearerHeader()])->assertStatus(422);
 
     $denied = CredentialAuditEvent::query()
         ->where('event', LifecycleEventType::DeniedAction->value)
-        ->where('note', 'like', 'console%')
+        ->where('note', 'like', 'console countersigning%')
         ->sole();
 
     expect($denied->actor_type)->toBe(AuditActorType::OperatorIntegration)
@@ -556,34 +989,61 @@ it('keeps a hostile key id out of the audit note (AC7)', function (): void {
         ->and((string) $denied->note)->not->toContain('fabricated');
 });
 
+it('audits a REFUSED cli re-key as cli_operator (AC15, J3)', function (): void {
+    keyCustodyClaimedDeployment();
+    keyCustodyRunCli('k1', keyCustodyPublicKey());
+
+    // Same key id again: the refusal path, on the transport whose
+    // refusal audit was previously static-only.
+    [$status] = keyCustodyRunCli('k1', keyCustodyPublicKey());
+
+    expect($status)->toBe(1);
+
+    $denied = CredentialAuditEvent::query()
+        ->where('event', LifecycleEventType::DeniedAction->value)
+        ->where('note', 'like', 'console countersigning%')
+        ->sole();
+
+    expect($denied->actor_type)->toBe(AuditActorType::CliOperator)
+        ->and($denied->actor_ref)->toBeNull()
+        ->and((string) $denied->note)->toContain('console_key_id_in_use')
+        ->and((string) $denied->note)->toContain('key id k1');
+});
+
 // -------------------------------------------------- AC8 — rate limiting
 
 it('rate-limits the re-key verb as an operator write (AC8)', function (): void {
-    $rotator = keyCustodyRotator();
-    $public = keyCustodyPublicKey(consoleKeypair());
+    keyCustodyClaimedDeployment();
+
+    $writer = keyCustodyWriter();
+    $public = keyCustodyPublicKey();
 
     // The first delivery files; every repeat is a clean 409 — and each
     // one still spends limiter budget, because the throttle runs BEFORE
     // the gate and the controller.
     $this->postJson('/bfc/console/re-key', ['key_id' => 'k1', 'public_key' => $public], [
-        'Authorization' => $rotator->bearerHeader(),
+        'Authorization' => $writer->bearerHeader(),
     ])->assertCreated();
 
     for ($i = 2; $i <= 60; $i++) {
         $this->postJson('/bfc/console/re-key', ['key_id' => 'k1', 'public_key' => $public], [
-            'Authorization' => $rotator->bearerHeader(),
+            'Authorization' => $writer->bearerHeader(),
         ])->assertStatus(409);
     }
 
-    $this->postJson('/bfc/console/re-key', ['key_id' => 'k1', 'public_key' => $public], [
-        'Authorization' => $rotator->bearerHeader(),
-    ])->assertStatus(429);
+    $throttled = $this->postJson('/bfc/console/re-key', ['key_id' => 'k1', 'public_key' => $public], [
+        'Authorization' => $writer->bearerHeader(),
+    ]);
+
+    // 429 stays 429: the uniform-refusal middleware sits INSIDE the
+    // throttle, so a rate limit never disguises itself as a refusal.
+    $throttled->assertStatus(429);
 
     // Bounded across addresses too: the per-credential bucket is the one
     // that makes a stolen credential bounded wherever it is replayed.
     $this->withServerVariables(['REMOTE_ADDR' => '10.9.9.9'])
         ->postJson('/bfc/console/re-key', ['key_id' => 'k2', 'public_key' => $public], [
-            'Authorization' => $rotator->bearerHeader(),
+            'Authorization' => $writer->bearerHeader(),
         ])->assertStatus(429);
 
     expect(ConsoleKey::query()->count())->toBe(1);
@@ -591,101 +1051,149 @@ it('rate-limits the re-key verb as an operator write (AC8)', function (): void {
 
 // ---------------------------------------------------- AC9 — two transports
 
-it('produces identical outcomes over HTTP and the artisan verb (AC9)', function (): void {
-    $rotator = keyCustodyRotator();
+it('produces identical EFFECTS over HTTP and the artisan verb, with different authority (AC9)', function (): void {
+    keyCustodyClaimedDeployment();
 
-    // IDENTICAL key material down each leg, under the one input a ring
-    // cannot legitimately receive twice — the key id. Holding the
-    // material fixed makes the TRANSPORT the only variable.
-    $secret = consoleKeypair();
-    $public = keyCustodyPublicKey($secret);
+    $writer = keyCustodyWriter();
 
-    $http = $this->postJson('/bfc/console/re-key', ['key_id' => 'parity-http', 'public_key' => $public], [
-        'Authorization' => $rotator->bearerHeader(),
-    ]);
+    // Parity here means identical EFFECTS for a caller each transport
+    // has authorized — NOT identical authorization. The HTTP leg proves
+    // a `console:key:write` credential; the CLI leg proves host access
+    // and nothing else (rework B3). The material differs per leg because
+    // material is unique per deployment.
+    $httpSecret = consoleKeypair();
+    $cliSecret = consoleKeypair();
+
+    $http = $this->postJson('/bfc/console/re-key', [
+        'key_id' => 'parity-http',
+        'public_key' => keyCustodyPublicKey($httpSecret),
+    ], ['Authorization' => $writer->bearerHeader()]);
 
     $http->assertCreated();
 
-    $this->artisan('bfc:console:re-key', [
-        'key_id' => 'parity-cli',
-        'public_key' => $public,
-        '--local' => true,
-    ])->assertSuccessful();
+    [$cliStatus, $cliOutput] = keyCustodyRunCli('parity-cli', keyCustodyPublicKey($cliSecret));
+
+    expect($cliStatus)->toBe(0);
 
     $viaHttp = ConsoleKey::query()->where('key_id', 'parity-http')->sole();
     $viaCli = ConsoleKey::query()->where('key_id', 'parity-cli')->sole();
 
-    // Same stored form, same lifecycle state, both trusted.
-    expect($viaCli->public_key)->toBe($viaHttp->public_key)
-        ->and($viaCli->activated_at)->not->toBeNull()
+    // Same lifecycle state, both trusted, both verifying.
+    expect($viaCli->activated_at)->not->toBeNull()
         ->and($viaCli->retired_at)->toBeNull()
         ->and($viaHttp->retired_at)->toBeNull()
-        ->and(keyCustodyActiveIds())->toBe(['parity-cli', 'parity-http']);
+        ->and(keyCustodyActiveIds())->toBe(['parity-cli', 'parity-http'])
+        ->and(consoleVerify(consoleMint($httpSecret, consoleClaims(), 'parity-http'))->keyId)->toBe('parity-http')
+        ->and(consoleVerify(consoleMint($cliSecret, consoleClaims(), 'parity-cli'))->keyId)->toBe('parity-cli');
 
-    // Same events, differing only in the actor each transport can
-    // honestly name.
+    // Same events; the actor is the one honest difference, and the CLI
+    // output says so in the operator's transcript.
     foreach ([LifecycleEventType::Delivered, LifecycleEventType::Activated] as $event) {
-        $notes = CredentialAuditEvent::query()->where('event', $event->value)->get();
+        $actors = CredentialAuditEvent::query()
+            ->where('event', $event->value)
+            ->orderBy('note')
+            ->pluck('actor_type')
+            ->all();
 
-        expect($notes)->toHaveCount(2)
-            ->and($notes->pluck('actor_type')->all())
-            ->toBe([AuditActorType::OperatorIntegration, AuditActorType::CliOperator]);
+        expect($actors)->toHaveCount(2)
+            ->and($actors)->toContain(AuditActorType::OperatorIntegration)
+            ->and($actors)->toContain(AuditActorType::CliOperator);
     }
 
+    expect($cliOutput)->toContain('HOST ACCESS')
+        ->and($cliOutput)->toContain(OperatorAbility::ConsoleKeyWrite->value);
+
     // Refusal parity: each transport refuses the other's key id with the
-    // same server-authored message.
-    $httpRefusal = $this->postJson('/bfc/console/re-key', ['key_id' => 'parity-cli', 'public_key' => $public], [
-        'Authorization' => $rotator->bearerHeader(),
-    ]);
+    // same server-authored message. Asserted against a non-empty string
+    // so a dropped `message` cannot make this pass vacuously.
+    $httpRefusal = $this->postJson('/bfc/console/re-key', [
+        'key_id' => 'parity-cli',
+        'public_key' => keyCustodyPublicKey(),
+    ], ['Authorization' => $writer->bearerHeader()]);
 
     $httpRefusal->assertStatus(409);
 
-    $this->artisan('bfc:console:re-key', [
-        'key_id' => 'parity-http',
-        'public_key' => $public,
-        '--local' => true,
-    ])->assertFailed()->expectsOutputToContain((string) $httpRefusal->json('message'));
+    $sharedMessage = (string) $httpRefusal->json('message');
+
+    expect($sharedMessage)->not->toBe('');
+
+    [$cliRefusalStatus, $cliRefusalOutput] = keyCustodyRunCli('parity-http', keyCustodyPublicKey());
+
+    expect($cliRefusalStatus)->toBe(1)
+        ->and($cliRefusalOutput)->toContain($sharedMessage);
 
     // …and refuse the same bad material with the same message.
-    $httpInvalid = $this->postJson('/bfc/console/re-key', ['key_id' => 'parity-new', 'public_key' => 'not-a-key'], [
-        'Authorization' => $rotator->bearerHeader(),
-    ]);
+    $httpInvalid = $this->postJson('/bfc/console/re-key', [
+        'key_id' => 'parity-new',
+        'public_key' => 'not-a-key',
+    ], ['Authorization' => $writer->bearerHeader()]);
 
     $httpInvalid->assertStatus(422);
 
-    $this->artisan('bfc:console:re-key', [
-        'key_id' => 'parity-new',
-        'public_key' => 'not-a-key',
-        '--local' => true,
-    ])->assertFailed()->expectsOutputToContain((string) $httpInvalid->json('message'));
+    $invalidMessage = (string) $httpInvalid->json('message');
+
+    expect($invalidMessage)->not->toBe('');
+
+    [$cliInvalidStatus, $cliInvalidOutput] = keyCustodyRunCli('parity-new', 'not-a-key');
+
+    expect($cliInvalidStatus)->toBe(1)
+        ->and($cliInvalidOutput)->toContain($invalidMessage);
 
     // Neither refusal filed anything.
     expect(ConsoleKey::query()->count())->toBe(2);
 });
 
-it('refuses the artisan verb without --local, exactly as the credential verbs do (AC9)', function (): void {
-    $this->artisan('bfc:console:re-key', [
-        'key_id' => 'k1',
-        'public_key' => keyCustodyPublicKey(consoleKeypair()),
-    ])->assertFailed();
+it('takes key material on stdin and not on argv (AC15)', function (): void {
+    keyCustodyClaimedDeployment();
 
-    expect(ConsoleKey::query()->count())->toBe(0);
+    // Structural: there is no argument to leak into shell history or
+    // `ps` output. A key id alone is not a substitution recipe.
+    $definition = app(ConsoleReKeyCommand::class)->getDefinition();
+
+    expect($definition->hasArgument('key_id'))->toBeTrue()
+        ->and($definition->hasArgument('public_key'))->toBeFalse();
+
+    // Behavioural: the material actually comes off the stream.
+    $secret = consoleKeypair();
+
+    [$status] = keyCustodyRunCli('k1', keyCustodyPublicKey($secret));
+
+    expect($status)->toBe(0)
+        ->and(consoleVerify(consoleMint($secret, consoleClaims(), 'k1'))->keyId)->toBe('k1');
+
+    // An empty stream is a refusal, never an empty-string delivery.
+    [$emptyStatus, $emptyOutput] = keyCustodyRunCli('k2', null);
+
+    expect($emptyStatus)->toBe(1)
+        ->and($emptyOutput)->toContain('stdin')
+        ->and(ConsoleKey::query()->count())->toBe(1);
+});
+
+it('refuses the artisan verb without --local, exactly as the credential verbs do (AC9)', function (): void {
+    keyCustodyClaimedDeployment();
+
+    [$status] = keyCustodyRunCli('k1', keyCustodyPublicKey(), local: false);
+
+    expect($status)->toBe(1)
+        ->and(ConsoleKey::query()->count())->toBe(0);
 });
 
 // ------------------------------------------------- AC10 — idempotent-safe
 
 it('refuses a repeated key id cleanly and never replaces the material behind it (AC10)', function (): void {
-    $rotator = keyCustodyRotator();
-    $original = keyCustodyPublicKey(consoleKeypair());
-    $replacement = keyCustodyPublicKey(consoleKeypair());
+    keyCustodyClaimedDeployment();
+
+    $writer = keyCustodyWriter();
+    $original = keyCustodyPublicKey();
+    $replacement = keyCustodyPublicKey();
 
     $this->postJson('/bfc/console/re-key', ['key_id' => 'k1', 'public_key' => $original], [
-        'Authorization' => $rotator->bearerHeader(),
+        'Authorization' => $writer->bearerHeader(),
     ])->assertCreated();
 
     // Different material under a live key id: key substitution, refused.
     $substitution = $this->postJson('/bfc/console/re-key', ['key_id' => 'k1', 'public_key' => $replacement], [
-        'Authorization' => $rotator->bearerHeader(),
+        'Authorization' => $writer->bearerHeader(),
     ]);
 
     // A CLEAN refusal — the contract's prose shape, not a 500.
@@ -695,7 +1203,7 @@ it('refuses a repeated key id cleanly and never replaces the material behind it 
     // id names one key for the life of the row, and the surface does not
     // special-case identical bytes.
     $this->postJson('/bfc/console/re-key', ['key_id' => 'k1', 'public_key' => $original], [
-        'Authorization' => $rotator->bearerHeader(),
+        'Authorization' => $writer->bearerHeader(),
     ])->assertStatus(409);
 
     // One row, original material intact.
@@ -705,7 +1213,7 @@ it('refuses a repeated key id cleanly and never replaces the material behind it 
     // Same on the claim envelopes, and there the refusal takes the whole
     // claim with it.
     $this->postJson('/bfc/onboarding/exchange', [
-        'token' => keyCustodyOnboardingCode('dupe@example.test'),
+        'token' => keyCustodyOnboardingCode('dupe@example.test', keyAuthority: true),
         'console_key' => ['key_id' => 'k1', 'public_key' => $replacement],
     ])->assertStatus(409)->assertJsonStructure(['message']);
 
@@ -716,7 +1224,9 @@ it('refuses a repeated key id cleanly and never replaces the material behind it 
 // ------------------------------------- AC11 — private material, honestly
 
 it('refuses a 64-byte ed25519 SECRET key on both transports, and cannot detect a 32-byte seed (AC11)', function (): void {
-    $rotator = keyCustodyRotator();
+    keyCustodyClaimedDeployment();
+
+    $writer = keyCustodyWriter();
 
     // (1) DETECTABLE. The 64-byte expanded secret key is 128 hex
     // characters; nothing of that length stores, and the column is not
@@ -727,17 +1237,15 @@ it('refuses a 64-byte ed25519 SECRET key on both transports, and cannot detect a
     expect(strlen($secretKeyHex))->toBe(128);
 
     $this->postJson('/bfc/console/re-key', ['key_id' => 'sk', 'public_key' => $secretKeyHex], [
-        'Authorization' => $rotator->bearerHeader(),
+        'Authorization' => $writer->bearerHeader(),
     ])->assertStatus(422);
 
-    $this->artisan('bfc:console:re-key', [
-        'key_id' => 'sk',
-        'public_key' => $secretKeyHex,
-        '--local' => true,
-    ])->assertFailed();
+    [$cliStatus] = keyCustodyRunCli('sk', $secretKeyHex);
 
-    $this->postJson('/bfc/ownership/claim', [
-        'token' => keyCustodyClaimCode(),
+    expect($cliStatus)->toBe(1);
+
+    $this->postJson('/bfc/onboarding/exchange', [
+        'token' => keyCustodyOnboardingCode('sk@example.test', keyAuthority: true),
         'console_key' => ['key_id' => 'sk', 'public_key' => $secretKeyHex],
     ])->assertStatus(422);
 
@@ -764,32 +1272,54 @@ it('refuses a 64-byte ed25519 SECRET key on both transports, and cannot detect a
     $this->postJson('/bfc/console/re-key', [
         'key_id' => 'seed',
         'public_key' => $seedThatPassesThePointTest,
-    ], ['Authorization' => $rotator->bearerHeader()])->assertCreated();
+    ], ['Authorization' => $writer->bearerHeader()])->assertCreated();
 
     expect(ConsoleKey::query()->sole()->public_key)->toBe($seedThatPassesThePointTest);
 });
 
-it('never reveals key material back out of a delivery surface (AC11)', function (): void {
-    $rotator = keyCustodyRotator();
-    $public = keyCustodyPublicKey(consoleKeypair());
-
-    $response = $this->postJson('/bfc/console/re-key', ['key_id' => 'k1', 'public_key' => $public], [
-        'Authorization' => $rotator->bearerHeader(),
-    ]);
-
-    $response->assertCreated();
-
-    expect($response->getContent())->not->toContain($public);
+it('never reveals key material back out of any delivery surface (AC11, A7)', function (): void {
+    // The claim envelope, on a fresh deployment.
+    $claimPublic = keyCustodyPublicKey();
 
     $claim = $this->postJson('/bfc/ownership/claim', [
         'token' => keyCustodyClaimCode(),
-        'console_key' => ['key_id' => 'k2', 'public_key' => keyCustodyPublicKey(consoleKeypair())],
+        'console_key' => ['key_id' => 'k1', 'public_key' => $claimPublic],
     ]);
 
     $claim->assertCreated();
 
-    expect((array) $claim->json('console_key'))
-        ->toHaveKeys(['key_id', 'status', 'activated_at', 'active_key_ids'])
+    expect($claim->getContent())->not->toContain($claimPublic)
         ->and(array_keys((array) $claim->json('console_key')))
-        ->not->toContain('public_key');
+        ->toBe(['key_id', 'status', 'activated_at', 'active_key_ids']);
+
+    // The route.
+    $routePublic = keyCustodyPublicKey();
+
+    $response = $this->postJson('/bfc/console/re-key', ['key_id' => 'k2', 'public_key' => $routePublic], [
+        'Authorization' => keyCustodyWriter()->bearerHeader(),
+    ]);
+
+    $response->assertCreated();
+
+    expect($response->getContent())->not->toContain($routePublic);
+
+    // And the CLI's operator transcript.
+    $cliPublic = keyCustodyPublicKey();
+
+    [$cliStatus, $cliOutput] = keyCustodyRunCli('k3', $cliPublic);
+
+    expect($cliStatus)->toBe(0)
+        ->and($cliOutput)->not->toContain($cliPublic);
+
+    // The shared result object carries no material to leak in the first
+    // place: three scalars and a list of key ids, with no ConsoleKey
+    // model on it whose `public_key` a dump or a log could reach
+    // (rework A7 — an earlier revision held the model and said it did
+    // not).
+    $properties = array_map(
+        static fn (ReflectionProperty $property): string => $property->getName(),
+        (new ReflectionClass(ConsoleKeyFiled::class))->getProperties(),
+    );
+
+    expect($properties)->toBe(['keyId', 'activatedAt', 'activeKeyIds']);
 });
