@@ -32,5 +32,10 @@ use BackedEnum;
  * requiring every case's backing value to be a bounded identifier. What
  * remains — whether the vocabulary is a GOOD one — is the app's code
  * review, and nothing in a package can decide it.
+ *
+ * WHICH enum applies is settled separately, and structurally:
+ * {@see DeclaresHeadlineStat::HEADLINE_VOCABULARY} is a class constant,
+ * so it is a constant expression rather than something a method could
+ * select from a request or a row.
  */
 interface HeadlineLabel extends BackedEnum {}

@@ -20,13 +20,15 @@ use ArtisanBuild\BuiltForCloud\Vitals\HeadlineStat;
  * the one label the vendor sees a package concern rather than an app
  * decision — which is the failure the decision exists to prevent.
  *
- * THE VOCABULARY IS AN ENUM CLASS, not a list of strings, and that is
- * what makes "never runtime data" structural rather than aspirational:
- * {@see self::headlineVocabulary} returns the class-string of an enum
- * implementing {@see HeadlineLabel}, and its case set — the vocabulary —
- * is fixed at compile time. `Tag::pluck('slug')->all()` cannot satisfy
- * this signature. See {@see HeadlineLabel} for what that does and does
- * not settle.
+ * THE VOCABULARY IS A CONSTANT NAMING AN ENUM CLASS, and both halves of
+ * that are what make "never runtime data" structural rather than
+ * aspirational: {@see self::HEADLINE_VOCABULARY} must be a constant
+ * expression, so WHICH vocabulary applies is fixed when the file is
+ * parsed, and the class it names implements {@see HeadlineLabel}, which
+ * extends `BackedEnum`, so WHAT is in that vocabulary is a case set
+ * fixed at compile time too. `Tag::pluck('slug')->all()` cannot satisfy
+ * either half. See {@see HeadlineLabel} for what this does and does not
+ * settle.
  */
 interface DeclaresHeadlineStat
 {
@@ -45,15 +47,32 @@ interface DeclaresHeadlineStat
      * The enum class whose cases are this app's complete label
      * vocabulary, or null when this app declares none.
      *
+     * **A CONSTANT, not a method, and that is the enforcement.** A class
+     * constant's value must be a constant expression, so it is fixed
+     * when the file is parsed: it cannot be read off a request, a
+     * database row, a config value or a tenant. An earlier revision made
+     * this a method returning a class-string — the emitted VALUES were
+     * already compile-time enum cases, so no free text could reach the
+     * vendor either way, but which vocabulary applied could still be
+     * selected at runtime, and the docblock claimed more than that. Now
+     * the class and its cases are both compile-time, and the claim and
+     * the code say the same thing.
+     *
      * Null and a stat are a CONTRADICTION in the app's own declaration,
      * not an ordinary state: the payload reports no headline AND
      * degrades, so the operator sees that the app asked for something
      * its declaration does not permit. Null with no stat is ordinary and
      * degrades nothing.
      *
-     * @return class-string<HeadlineLabel>|null
+     * The type is `?string` and deliberately carries no
+     * `class-string<HeadlineLabel>` annotation. An annotation here would
+     * be a promise the interface cannot keep — an implementer may write
+     * any constant expression, `self::class` included — and it would
+     * make static analysis treat {@see CollectVitals}'s runtime checks
+     * as dead code. The checks are the guarantee; the type is only what
+     * PHP enforces.
      */
-    public function headlineVocabulary(): ?string;
+    public const ?string HEADLINE_VOCABULARY = null;
 
     /**
      * The current headline, or null when this app has nothing to report
