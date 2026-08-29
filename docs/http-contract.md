@@ -1893,15 +1893,33 @@ one.
   `onceUsingId` and `viaRemember` do not exist on it, and its user provider answers null/false
   to every credential-shaped question for every input. "No password, no login path" is a
   property of the types, not a set of methods that refuse.
-  *Pinned by* `tests/ConsoleSessionWriterScanTest.php`, which **enumerates** every file under
-  `src/` able to write a delegated session key and requires the set to be exactly the one
-  permitted writer — and which is itself driven over a fixture containing a differently named
-  writer, so it is proven able to fail. (A fixed list of absent method names could not express
-  this: adding a writer nobody listed would leave such a test green.) Also by
-  `tests/ConsoleRedemptionTest.php` ("exposes no way to log a delegated actor in without signed
-  bytes"; "refuses a token whose claims were rewritten to claim the admin role") and
-  `tests/ConsoleDelegatedActorTest.php` ("refuses every credential lookup unconditionally"; "has
-  no credential-shaped entry point on the guard at all").
+  **Two scans enforce this, and they cover the two shapes the escape has actually taken.** A
+  FILE scan requires exactly one file under `src/` to be able to write a delegated session key,
+  and that file's writer to be private. A PUBLIC-SURFACE scan requires `ConsoleGuard`'s public
+  API to be exactly a known set, so a new public method cannot quietly call that private writer
+  while every file assertion stays green. Both are driven over fixtures carrying the offence, so
+  both are proven able to fail.
+
+  **What they do not enforce**, because the alternative is an absolute nobody can hold: PHP
+  cannot express "no future public method may call this private method" as a language
+  guarantee. These are tripwires — they make the change impossible to introduce *silently*, not
+  impossible to introduce. Uncovered specifically: a **novel write form** (the scanner
+  recognises a fixed textual list of instance mutators — `->put(`, `->replace(`, `->merge(`,
+  `->push(`, `->flash(`, `->now(`, `->flashInput(` — not all PHP or Laravel write forms); a key
+  **assembled at runtime**; **reflection** into the private writer; anything **outside `src/`**,
+  which is the session-store boundary below; and a change to `redeem()`'s **own body**, which
+  the token tests cover instead.
+
+  *Pinned by* `tests/ConsoleSessionWriterScanTest.php` ("has exactly one file in src/ that can
+  write a delegated session key"; "keeps the one writer unreachable from outside the guard";
+  "has exactly the public surface it is meant to have on the one class that can write";
+  "collects and names a differently-named writer when the walk meets one"; "names an unremarked
+  public method, and a removed one"), `tests/ConsoleRedemptionTest.php` ("exposes no way to log
+  a delegated actor in without signed bytes"; "refuses a token whose claims were rewritten to
+  claim the admin role") and `tests/ConsoleDelegatedActorTest.php` ("refuses every credential
+  lookup unconditionally, not merely the ones that do not match"; "has no credential-shaped
+  entry point on the guard at all").
+
   The one public seam the `Guard` contract forces is `setUser()`, which Laravel's `actingAs()`
   uses. It sets an in-memory principal for the current request and writes **nothing** to the
   session, and the guard additionally requires that the session itself names the principal —
@@ -1916,9 +1934,8 @@ one.
   to reach states a real redemption cannot produce — and it is not a credential or a login
   path, which is what §4.3 governs. The guarantee that is made and held is narrower and exact:
   **no package API assembles a delegated session without verified assertion bytes.**
-  *Pinned by* `tests/ConsoleSessionWriterScanTest.php` — the enumeration above is what makes
-  this a package-wide statement rather than a claim about the classes someone remembered to
-  name.
+  *Pinned by* `tests/ConsoleSessionWriterScanTest.php` — the enumeration above is what makes this
+  a package-wide statement rather than a claim about the classes someone remembered to name.
 
   **A failed redemption cannot hand back a usable delegated session.** Laravel writes and
   regenerates the session before it dispatches its `Login` event, so a host application's
@@ -1934,6 +1951,7 @@ one.
     delegated identity, in either double-failure case — the compensation's in-memory flush
     precedes the store I/O that fails, and that id names a record which was never written
     (nothing is persisted mid-request; the store is written once, at the end).
+
   - **Not guaranteed:** a record under the **prior** id may survive, **carrying whatever
     identity it already held — including a delegated one.** A redemption can begin from an
     already-delegated session (an operator re-entering the console), and with the store
@@ -1945,9 +1963,10 @@ one.
   *Pinned by* `tests/ConsoleRedemptionTest.php` ("leaves no usable session when a Login listener
   throws during redemption"; "surfaces the original failure, not the compensation failure, when
   the session store is unreachable"; "leaves a later request unauthenticated when the store
-  recovers before the response is saved"; "…when the store is still down at save time"; and
-  "leaves a PRE-EXISTING delegated record alive under its own id when the store fails at
-  teardown", which asserts the residue itself).
+  recovers before the response is saved"; "leaves a later request unauthenticated when the store
+  is still down at save time"; and "leaves a PRE-EXISTING delegated record alive under its own id
+  when the store fails at teardown", which asserts the residue itself).
+
   **Remember-me:** this guard never queues a recaller cookie. Laravel still *checks* for one
   when a session carries no identifier, so that branch is reachable; it is fail-closed because
   the delegated-actor provider's `retrieveByToken()` returns null for every input, so no
@@ -2001,12 +2020,13 @@ one.
   its principal through the delegated guard. That is the condition under which this becomes a
   real privilege leak; it is a property of the host runtime and cannot be prevented from inside
   a guard.
-  *Pinned by* `tests/ConsoleGuardScopingTest.php`, which models the property rather than
-  invoking Octane (no dependency here): "would resolve a non-console route through the delegated
-  guard on a runtime that never sandboxes config" — asserting the resolved PRINCIPAL, since a
-  refusal reports the same guard name — plus "does not leak into the next request when the
-  config repository is cloned per request" and "leaves auth.defaults.guard pointed at the
+  *Pinned by* `tests/ConsoleGuardScopingTest.php`, which models the property rather than invoking
+  Octane (no dependency here): "would resolve a non-console route through the delegated guard on a
+  runtime that never sandboxes config" — asserting the resolved PRINCIPAL, since a refusal reports
+  the same guard name — plus "does not leak into the next request when the config repository is
+  cloned per request, the way Octane clones it" and "leaves auth.defaults.guard pointed at the
   console guard, and forgetting guards does not put it back".
+
   A **REFUSED** delegated session (capped, unreadable claims, contained actor) is TERMINAL on
   every route: the request resolves no principal at all and no package surface falls back to
   the local user, whose session the guard has invalidated anyway.

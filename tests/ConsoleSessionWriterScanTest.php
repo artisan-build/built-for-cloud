@@ -3,7 +3,11 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuard;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleSession;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleSessionClock;
 use ArtisanBuild\BuiltForCloud\Tests\DelegatedSessionWriterScan;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SurfaceWithExtraPublicMethod;
+use ArtisanBuild\BuiltForCloud\Tests\PublicSurfaceScan;
 
 /**
  * THE PACKAGE-WIDE MINTING GUARANTEE, expressed as an enumeration.
@@ -118,3 +122,74 @@ it('names every session mutator it knows about, and none of them in prose', func
     'a comment is not a write' => ['// $s->put(ConsoleSession::ROLE, "admin");', []],
     'a docblock is not a write' => ['/** never $s->put("bfc_console.role", …) here */', []],
 ]);
+
+// ─── The public surface: the escape a file scan cannot see ──────────────────
+
+it('has exactly the public surface it is meant to have on the one class that can write', function (): void {
+    // THE ESCAPE THIS CLOSES. The file scan above says only ConsoleGuard
+    // can write a delegated session key. It cannot see a NEW PUBLIC
+    // METHOD on ConsoleGuard that calls the existing private
+    // beginSession(): every file assertion stays green while "only
+    // redeem() mints" becomes false. The scan enumerated files; the
+    // guarantee is about reachable operations, so this enumerates those.
+    //
+    // Adding a public method reds this test, and whoever adds it has to
+    // extend the list in the same diff. That is the enforcement — not
+    // prevention, which PHP cannot give, but a change that cannot be
+    // made silently.
+    // Grouped so each name says why it is allowed to exist, then sorted
+    // to meet the scan's own contract — this is a SET, and the order it
+    // is written in should serve the reader.
+    $expected = [
+        '__construct',
+        // The delegated principal, typed, plus its session-bound claims
+        // and the refusal reason the structured 401 reports.
+        'actor',
+        'claims',
+        'refusalReason',
+        // THE ONE OPERATION THAT MINTS. Everything else on this list
+        // either reads or ends a session.
+        'redeem',
+        // Ends one. Deliberately not the framework's logout().
+        'logout',
+        // The Guard contract's own six, none of which can mint:
+        // validate() is false for every input, and setUser() writes
+        // nothing to the session.
+        'check',
+        'guest',
+        'hasUser',
+        'id',
+        'setUser',
+        'user',
+        'validate',
+        // Read-only: names a session key, grants nothing.
+        'getName',
+    ];
+
+    sort($expected);
+
+    expect(PublicSurfaceScan::of(ConsoleGuard::class))->toBe($expected);
+});
+
+it('has exactly the public surface it is meant to have on the two classes that read the keys', function (): void {
+    // Symmetric cover: a new public writer on either of these would be
+    // caught by the file scan, but a new public READER is drift too —
+    // a second place deciding what a delegated claim means is the
+    // divergence hazard this package has already deleted twice.
+    expect(PublicSurfaceScan::of(ConsoleSession::class))->toBe(['claims', 'hasState', 'keys'])
+        ->and(PublicSurfaceScan::of(ConsoleSessionClock::class))->toBe(['evaluate']);
+});
+
+it('names an unremarked public method, and a removed one', function (): void {
+    // Proven able to fail, on the reviewer's exact scenario: a class
+    // with a private writer and a second public method reaching it.
+    expect(PublicSurfaceScan::unexpectedIn(SurfaceWithExtraPublicMethod::class, ['redeem']))
+        ->toBe(['enterFromTrustedSource']);
+
+    // A REMOVAL is drift too: if redeem() vanished the guarantee would
+    // still read as true while meaning something else entirely.
+    expect(PublicSurfaceScan::missingFrom(SurfaceWithExtraPublicMethod::class, ['redeem', 'mintDirectly']))
+        ->toBe(['mintDirectly'])
+        ->and(PublicSurfaceScan::unexpectedIn(SurfaceWithExtraPublicMethod::class, ['redeem', 'enterFromTrustedSource']))
+        ->toBe([]);
+});

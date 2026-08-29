@@ -45,33 +45,58 @@ use Throwable;
  * documented as NOT being proof of provenance — so consuming code could
  * assemble an assertion carrying `role=admin` and hand it over, and a
  * delegated admin session existed with no signature ever checked.
- * WHAT IS CLAIMED, EXACTLY, and where it is pinned. **Only
+ * WHAT IS CLAIMED, EXACTLY, and what enforces it. **Only
  * {@see redeem()} mints a delegated session through this package**;
  * {@see setUser()} supplies an unverified in-request principal and
- * directly persists nothing. That is not the same as "a delegated
- * session cannot exist without a signature" — anything that can write
- * the session store can write the five keys one consists of, which
- * {@see ConsoleSession} states as the boundary and which this package's
- * own tests rely on. Console PRD §4.3's "no password, no login path"
- * holds on both halves: no guard would accept credentials for this
+ * directly persists nothing. That is deliberately narrower than "a
+ * delegated session cannot exist without a signature" — anything that
+ * can write the session store can write the five keys one consists of,
+ * which {@see ConsoleSession} states as the boundary and which this
+ * package's own tests rely on. Console PRD §4.3's "no password, no login
+ * path" holds on both halves: no guard would accept credentials for this
  * principal type, and no package API mints a session without verified
  * bytes.
- *   Pinned, PACKAGE-WIDE, by `tests/ConsoleSessionWriterScanTest.php`,
- *   which ENUMERATES every file under `src/` able to write a delegated
- *   session key and requires the set to be exactly this one — and is
- *   itself driven over a fixture containing a differently named writer,
- *   so it is proven able to fail. That matters because the citations
- *   that came before it could not express the claim: a fixed list of
- *   absent method names stays green when someone adds a writer nobody
- *   listed. Those narrower tests still stand for what they do cover —
- *   `tests/ConsoleRedemptionTest.php` ("exposes no way to log a
+ *
+ * TWO SCANS ENFORCE IT, and between them they cover the two shapes the
+ * escape has actually taken. A FILE scan requires exactly one file under
+ * `src/` to be able to write a delegated session key, and that file's
+ * writer to be private. A PUBLIC-SURFACE scan requires this class's
+ * public API to be exactly a known set, so a new public method cannot
+ * quietly call that private writer while every file assertion stays
+ * green. Both are driven over fixtures carrying the offence, so both are
+ * proven able to fail.
+ *
+ * WHAT THEY DO NOT ENFORCE, stated because the alternative is an
+ * absolute nobody can hold. **PHP cannot express "no future public
+ * method may call this private method" as a language guarantee**, and
+ * three attempts to express it as a test each found a new escape. These
+ * are tripwires: they make the change impossible to introduce SILENTLY,
+ * not impossible to introduce. Specifically uncovered —
+ *
+ *  - **a novel write form.** The scanner recognises a FIXED TEXTUAL LIST
+ *    of instance mutators (`->put(`, `->replace(`, `->merge(`, `->push(`,
+ *    `->flash(`, `->now(`, `->flashInput(`), not all PHP or Laravel write
+ *    forms; a session written some other way is not caught.
+ *  - **a key assembled at runtime**, which matches no literal.
+ *  - **reflection into the private writer**, which no surface scan sees.
+ *  - **anything outside `src/`**, which is the session-store boundary.
+ *  - **a change to {@see redeem()}'s own body** — the token tests cover
+ *    that, not these scans.
+ *
+ *   Pinned by `tests/ConsoleSessionWriterScanTest.php` — "has exactly one
+ *   file in src/ that can write a delegated session key", "keeps the one
+ *   writer unreachable from outside the guard", "has exactly the public
+ *   surface it is meant to have on the one class that can write",
+ *   "collects and names a differently-named writer when the walk meets
+ *   one" and "names an unremarked public method, and a removed one";
+ *   plus `tests/ConsoleRedemptionTest.php` — "exposes no way to log a
  *   delegated actor in without signed bytes", "refuses a token whose
- *   claims were rewritten to claim the admin role", "does not
+ *   claims were rewritten to claim the admin role" and "does not
  *   authenticate a principal handed to setUser, even alongside
- *   hand-written claims", whose positive control also pins the
- *   boundary) and `tests/ConsoleDelegatedActorTest.php` ("refuses every
- *   credential lookup unconditionally", "has no credential-shaped entry
- *   point on the guard at all").
+ *   hand-written claims"; and `tests/ConsoleDelegatedActorTest.php` —
+ *   "refuses every credential lookup unconditionally, not merely the
+ *   ones that do not match" and "has no credential-shaped entry point on
+ *   the guard at all".
  *
  * ONE MORE THING `setUser()` DOES, said rather than left implied: the
  * inner guard dispatches `Authenticated` synchronously from it, so a
@@ -128,9 +153,8 @@ use Throwable;
  *   Pinned by `tests/ConsoleGuardScopingTest.php` — "would resolve a
  *   non-console route through the delegated guard on a runtime that
  *   never sandboxes config" (the leak is real, asserted on the resolved
- *   PRINCIPAL rather than the guard name, which a refusal shares), "does
- *   not leak into the next request when the config repository is cloned
- *   per request", and "leaves auth.defaults.guard pointed at the console
+ *   PRINCIPAL rather than the guard name, which a refusal shares), "does not leak into the next request when the config repository is cloned
+ *   per request, the way Octane clones it", and "leaves auth.defaults.guard pointed at the console
  *   guard, and forgetting guards does not put it back". Those model the
  *   property a runtime must provide; they do not invoke Octane, which is
  *   not a dependency here.
@@ -167,13 +191,13 @@ use Throwable;
  * THE CLOCK IS EVALUATED FIRST, before the inner guard is asked, so a
  * capped session reports `assertion_age_cap` rather than the
  * `session_invalidated` a vanished principal would produce.
- *   Pinned by `tests/ConsoleSessionCapTest.php` — the four "…when X is
- *   the FIRST thing anything reads" tests drive `id()`, `hasUser()`,
+ *   Pinned by `tests/ConsoleSessionCapTest.php` — the four "refuses a capped session when id() is the FIRST thing anything reads" tests drive `id()`, `hasUser()`,
  *   `check()` and `user()` each as the genuinely first read, because
  *   once anything has called {@see actor()} the refusal is cached and a
  *   wrapper forwarding an entry point blindly would pass; plus "refuses
  *   and destroys a capped session on a route carrying no console
- *   middleware" and "sits exactly on the cap boundary".
+ *   middleware" and "sits exactly on the cap boundary: one second inside passes, the boundary
+ *   itself refuses".
  *
  * REFUSAL DOES NOT CALL `logout()`. It forgets the in-memory principal
  * and INVALIDATES the session (flushed, id regenerated), which does

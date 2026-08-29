@@ -228,9 +228,10 @@ fails to revoke something already live, and no ordering fixes that.
 *Pinned by* `tests/ConsoleRedemptionTest.php` — "surfaces the original
 failure, not the compensation failure, when the session store is
 unreachable", "leaves a later request unauthenticated when the store
-recovers before the response is saved", "…when the store is still down at
-save time", and "leaves a PRE-EXISTING delegated record alive under its
-own id when the store fails at teardown".
+recovers before the response is saved", "leaves a later request
+unauthenticated when the store is still down at save time", and "leaves
+a PRE-EXISTING delegated record alive under its own id when the store
+fails at teardown".
 
 The residue, stated rather than glossed: code that can write the session
 store directly can assemble a delegated session, because that is what
@@ -240,11 +241,28 @@ delegated session without verified assertion bytes** — and the guard
 additionally requires the session to name the principal, so the public
 `setUser()` seam the `Guard` contract forces cannot be combined with
 hand-written claims to act as a delegated admin.
-*Pinned by* `tests/ConsoleSessionWriterScanTest.php`, which enumerates
-every file under `src/` able to write a delegated session key and
-requires the set to be exactly the one permitted writer — proven able to
-fail against a fixture carrying a differently named writer, because a
-fixed list of absent method names cannot express a package-wide negative.
+
+Two scans enforce that. A FILE scan requires exactly one file under
+`src/` to be able to write a delegated session key, with its writer
+private; a PUBLIC-SURFACE scan requires `ConsoleGuard`'s public API to be
+exactly a known set, so a new public method cannot quietly call that
+private writer while every file assertion stays green. Both are proven
+able to fail against fixtures.
+
+They are tripwires, not locks, and the gap is worth knowing: PHP cannot
+express "no future public method may call this private method", so what
+these buy is that the change cannot be made SILENTLY. Uncovered: a novel
+write form (the scanner knows a fixed textual list of instance mutators,
+not every PHP or Laravel write form), a key assembled at runtime,
+reflection into the private writer, anything outside `src/`, and a change
+to `redeem()`'s own body.
+
+*Pinned by* `tests/ConsoleSessionWriterScanTest.php` — "has exactly one
+file in src/ that can write a delegated session key", "keeps the one
+writer unreachable from outside the guard", "has exactly the public
+surface it is meant to have on the one class that can write" and "names
+an unremarked public method, and a removed one".
+
 Also by `tests/ConsoleRedemptionTest.php` — "offers no public way to
 write a delegated session's claims" and "does not authenticate a
 principal handed to setUser, even alongside hand-written claims", whose
