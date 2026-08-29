@@ -2642,6 +2642,17 @@ detail and never said to be unreadable reads exactly like one you can query.
 `GET /bfc/meta` advertises `app-action-audit-emit`, and the verb is the point: this deployment
 **records** app-action events. It does not say they can be fetched.
 
+This sentence is held against what the package's routes REACH, not against how they are spelled.
+Every registered route is classified by whether its action can arrive at the event or ledger
+tables — through the classes it names in code, transitively, stopping at the one emission door —
+so a listing mounted under a name that mentions neither the stream nor auditing is still reported.
+The bound is that the walk follows this package's own class names: a route that reads through a
+collaborator the application supplies is outside it.
+*Pinned by* `tests/AppActionAuditTest.php` ("advertises the app-action emit capability without
+promising a way to read the stream", "names a route that reads the app-action stream under a name
+that mentions neither", "follows a read one class past the route, and stops at the emission door"
+and "pins the emission door's public surface, so a read verb cannot join it unnoticed").
+
 ### Storage
 
 For each successful emission, one row in `bfc_app_action_events` and one row in

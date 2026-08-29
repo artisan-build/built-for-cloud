@@ -17,8 +17,12 @@ use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
+use ArtisanBuild\BuiltForCloud\Tests\AppActionReadTransportScan;
 use ArtisanBuild\BuiltForCloud\Tests\AppActionRetentionScan;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ConsoleEventsDigest;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ConsoleEventsReport;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ConsoleEventsSource;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ConsoleEventsTally;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\CountedAppAction;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SinkAppAction;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnboundedAppAction;
@@ -975,39 +979,138 @@ it('advertises the app-action emit capability without promising a way to read th
 
     expect($capabilities)->toContain('app-action-audit-emit');
 
-    // The previous revision asserted `not->toContain('app-action-audit')`,
-    // which is ELEMENT equality on an array: the shipped name is
-    // `app-action-audit-emit`, so it could never fail whatever the
-    // capability was called. And it probed ONE invented path for a 404,
-    // which says nothing about any other path. Both are replaced by an
-    // enumeration over what is actually registered — the only shape that
-    // can fail — and the enumeration is driven over a fixture route so
-    // it is proven able to.
-    $readingRoutes = static function (): array {
-        $found = [];
+    // WHAT REPLACED THE URI PIN, AND WHY. The previous revision matched
+    // registered URIs against `/app.?action|audit/i` and asserted the
+    // set was empty; its positive control mounted
+    // `/bfc/console/app-actions` and watched the regex report it, which
+    // proves the regex works and says nothing about the claim. A
+    // package controller at `/bfc/console/events` listing
+    // `AppActionEvent` rows was invisible to it while the contract's
+    // sentence stayed green — the third time on this build that a check
+    // deciding on a SPELLING could not see the thing that was missing.
+    //
+    // So the classification is over what a route REACHES, and every
+    // registered route is visited and bucketed rather than selected.
+    // The floor first, because a scan that enumerated nothing would
+    // report an empty read-transport list too.
+    $classified = AppActionReadTransportScan::classify(Route::getRoutes()->getRoutes());
 
-        foreach (Route::getRoutes()->getRoutes() as $route) {
-            if (! str_starts_with($route->getActionName(), 'ArtisanBuild\\BuiltForCloud\\')) {
-                continue;
-            }
+    expect(count($classified))->toBeGreaterThan(20)
+        ->and($classified)->toHaveKey('POST /bfc/console/enter');
 
-            // Any package route whose URI names this stream would be a
-            // read transport for it, whatever it was called.
-            if (preg_match('/app.?action|audit/i', $route->uri()) === 1) {
-                $found[] = '/'.$route->uri();
-            }
-        }
+    // The one route that legitimately touches the stream is the door,
+    // and it is classified as writing rather than exempted by name: an
+    // exemption on the sole emitter is the blind spot the enumeration
+    // exists to prevent.
+    expect($classified['POST /bfc/console/enter'])->toBe(AppActionReadTransportScan::EMITS);
 
-        sort($found);
+    expect(AppActionReadTransportScan::readTransportsIn(Route::getRoutes()->getRoutes()))->toBe([]);
+});
 
-        return $found;
-    };
+it('names a route that reads the app-action stream under a name that mentions neither', function (): void {
+    // PROVEN ABLE TO FAIL, on the route the old pin was blind to. None
+    // of these three paths or class names contains `app-action` or
+    // `audit`, and the old URI heuristic reports every one of them as
+    // clean.
+    Route::get('/bfc/console/events', ConsoleEventsDigest::class);
+    Route::get('/bfc/console/summary', ConsoleEventsReport::class);
+    Route::get('/bfc/console/tally', ConsoleEventsTally::class);
 
-    expect($readingRoutes())->toBe([]);
+    // The heuristic this replaces, run over the same routes, to show
+    // that the fixtures genuinely defeat it rather than being caught by
+    // both instruments.
+    $byUri = array_values(array_filter(
+        ['/bfc/console/events', '/bfc/console/summary', '/bfc/console/tally'],
+        static fn (string $uri): bool => preg_match('/app.?action|audit/i', $uri) === 1,
+    ));
 
-    // Proven able to fail, through the SAME closure: a package route
-    // that would be a read transport is named by it.
-    Route::get('/bfc/console/app-actions', MetaController::class);
+    expect($byUri)->toBe([]);
 
-    expect($readingRoutes())->toBe(['/bfc/console/app-actions']);
+    expect(AppActionReadTransportScan::readTransportsIn(Route::getRoutes()->getRoutes()))->toBe([
+        'GET /bfc/console/events',
+        'GET /bfc/console/tally',
+    ]);
+
+    // AND THE THIRD ONE IS THE BOUND, asserted where it lands rather
+    // than described in a docblock. `/bfc/console/summary` reads the
+    // stream through a class that is not part of this package, and the
+    // walk follows the names of PACKAGE classes only — so it is
+    // classified `unrelated` and this scan does not see it.
+    //
+    // That is the right scope for the sentence being held (the contract
+    // claims what THIS RELEASE ships, and an app's own listing over its
+    // own tables is the app's), and it is also the honest limit: a
+    // package route delegating to a host-supplied collaborator is
+    // outside the walk. The same read one hop through a package class
+    // IS followed, which is what the next test drives.
+    expect(AppActionReadTransportScan::classify(Route::getRoutes()->getRoutes()))
+        ->toHaveKey('GET /bfc/console/summary')
+        ->and(AppActionReadTransportScan::classify(Route::getRoutes()->getRoutes())['GET /bfc/console/summary'])
+        ->toBe(AppActionReadTransportScan::UNRELATED);
+});
+
+it('follows a read one class past the route, and stops at the emission door', function (): void {
+    // The two halves of the walk, driven directly rather than through
+    // the router, over a fixture class map — so both are asserted on
+    // classes this test names rather than on whatever `src/` happens to
+    // contain today.
+    $classes = [
+        'AppActionEvent' => AppActionEvent::class,
+        'AppActionRecorder' => AppActionRecorder::class,
+        'ConsoleEventsSource' => ConsoleEventsSource::class,
+    ];
+
+    // One hop: the controller names no model, the class it delegates to
+    // does. A direct-reference check passes this.
+    expect(AppActionReadTransportScan::namesIn(
+        (string) file_get_contents(__DIR__.'/Fixtures/ConsoleEventsReport.php'),
+        $classes,
+    ))->toBe([ConsoleEventsSource::class])
+        ->and(AppActionReadTransportScan::bucketFor(ConsoleEventsReport::class, $classes))
+        ->toBe(AppActionReadTransportScan::READS);
+
+    // And the door STOPS the walk. The recorder names both models, so a
+    // walk that passed through it would report `ConsoleEnter` — the one
+    // route that is supposed to touch this stream — as a read
+    // transport, and the answer to that would have been an exemption on
+    // exactly the wrong route.
+    expect(AppActionReadTransportScan::reachableFrom(AppActionRecorder::class))
+        ->toBe([])
+        ->and(AppActionReadTransportScan::namesIn(
+            AppActionReadTransportScan::codeOf(AppActionRecorder::class),
+            $classes,
+        ))->toContain(AppActionEvent::class);
+});
+
+it('pins the emission door\'s public surface, so a read verb cannot join it unnoticed', function (): void {
+    // THE PREMISE THE WALK RESTS ON, asserted rather than assumed.
+    // Stopping at the recorder is only safe while the recorder is not
+    // itself a way to read: a `recent()` or a `for()` added to it
+    // tomorrow would make every emitter a read transport while the scan
+    // reported clean, because the scan deliberately does not look past
+    // the door.
+    //
+    // What is pinned is the SURFACE, not a property of the verbs. There
+    // is no check here that a method is a write — `record()` returns the
+    // `AppActionEvent` it has just inserted, which is a write result and
+    // not a query, and nothing mechanical here could tell those two
+    // apart. What this does is make an addition visible: a third public
+    // method, or either of these two returning a builder or a
+    // collection instead, reds this test and sends whoever added it to
+    // the walk that assumes the door is closed.
+    expect(PublicSurfaceScan::of(AppActionRecorder::class))
+        ->toBe(['dedupKeyFor', 'record']);
+
+    $returns = [];
+
+    foreach ((new ReflectionClass(AppActionRecorder::class))->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
+        $returns[$method->getName()] = (string) $method->getReturnType();
+    }
+
+    ksort($returns);
+
+    expect($returns)->toBe([
+        'dedupKeyFor' => 'string',
+        'record' => AppActionEvent::class,
+    ]);
 });
