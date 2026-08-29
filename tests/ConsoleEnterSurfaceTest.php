@@ -46,9 +46,19 @@ final class ConsoleEnterSurfaceTest extends TestCase
         $this->assertContains('console-enter', (array) $this->getJson('/bfc/meta')->json('capabilities'));
     }
 
+    public function test_the_chrome_interceptor_rides_the_same_predicate_as_the_door(): void
+    {
+        // Refusing rather than missing again: the structured 401 proves
+        // the route exists where a 404 would not.
+        $this->get('/bfc/console/chrome.js')->assertStatus(401)->assertHeader('BFC-Console-Reentry', '1');
+
+        $this->assertContains('console-chrome-assets', (array) $this->getJson('/bfc/meta')->json('capabilities'));
+    }
+
     #[WithConfig('built-for-cloud.surfaces.routes', false, false)]
     public function test_routes_off_unmounts_the_door_like_every_other_package_route(): void
     {
         $this->post('/bfc/console/enter', ['assertion' => 'nope'])->assertNotFound();
+        $this->get('/bfc/console/chrome.js')->assertNotFound();
     }
 }

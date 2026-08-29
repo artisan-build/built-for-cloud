@@ -95,10 +95,15 @@ final class ConsoleDisabledTest extends TestCase
         // operator to, and `GET /bfc/meta` must not say otherwise.
         $this->post('/bfc/console/enter', ['assertion' => 'nope'])->assertNotFound();
 
+        // Nor any of the chrome: a deployment that never asked for the
+        // Console serves no interceptor and advertises none.
+        $this->get('/bfc/console/chrome.js')->assertNotFound();
+
         $capabilities = (array) $this->getJson('/bfc/meta')->json('capabilities');
 
         $this->assertNotContains('console-enter', $capabilities);
         $this->assertNotContains('console-guard', $capabilities);
+        $this->assertNotContains('console-chrome-assets', $capabilities);
     }
 
     public function test_the_console_gate_refuses_rather_than_erroring(): void

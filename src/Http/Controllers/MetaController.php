@@ -60,6 +60,23 @@ final class MetaController
             // that defined its own `bfc-console` guard has the guard
             // machinery and does NOT get the package's door.
             //
+            // `console-chrome-assets` is named for the two things this
+            // deployment SERVES: the `bfc::layout` view namespace and
+            // the re-entry interceptor at
+            // `GET /bfc/console/chrome.js`. Not `console-chrome`, and
+            // the difference is the whole of the name — whether any
+            // PAGE in this app actually wears the chrome is the
+            // application's own decision, made by whichever of its
+            // templates extends `bfc::layout`, and no package
+            // capability can see that or promise it. A control plane
+            // reading `console-chrome` as "an operator handed here will
+            // see whose session they are in" would be reading a promise
+            // this package cannot keep; `console-chrome-assets` says
+            // only that the machinery is served, which is exactly what
+            // is true. Its condition is the one the chrome route is
+            // mounted under, so the capability and the route can never
+            // disagree.
+            //
             // `app-action-audit-emit` says this deployment RECORDS
             // app-action audit events (Console PRD D17): the
             // `bfc_app_action_events` table, its outbox, and the
@@ -99,6 +116,7 @@ final class MetaController
 
         if (ConsoleGuardConfiguration::servesDelegatedEntry()) {
             $capabilities[] = 'console-enter';
+            $capabilities[] = 'console-chrome-assets';
         }
 
         return $capabilities;

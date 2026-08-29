@@ -29,6 +29,7 @@ use ArtisanBuild\BuiltForCloud\Commands\TokenUsageCommand;
 use ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleChrome;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuard;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActorProvider;
@@ -39,6 +40,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleEnter;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
@@ -65,6 +67,7 @@ use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Contracts\Session\Session;
+use Illuminate\Contracts\View\View as ViewContract;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
@@ -74,6 +77,7 @@ use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 use Throwable;
 
@@ -127,6 +131,28 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         if ($this->surfaceEnabled('migrations')) {
             $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
         }
+
+        // The package view namespace (Console PRD D11). NOT a selectable
+        // surface, and for the same reason the middleware aliases are
+        // not: it mounts nothing. A namespace is a name an application
+        // has to reach for — an app that never writes `bfc::` renders
+        // nothing of ours — so there is no behaviour here for a flag to
+        // switch off.
+        $this->loadViewsFrom(__DIR__.'/../resources/views', 'bfc');
+
+        // D14 in the template layer: the ONE layout reads the ONE
+        // resolved acting principal, and it reads it HERE rather than
+        // inside the Blade file. A layout that called a resolver, a
+        // guard or `auth()` for itself would be a second read of the
+        // request's identity, which is precisely what D14 forbids —
+        // this composer takes the value the resolver already built for
+        // this request and hands the template a bounded view of it.
+        View::composer('bfc::layout', function (ViewContract $view): void {
+            $view->with(
+                'bfcConsoleChrome',
+                ConsoleChrome::from($this->app->make(ActingPrincipalResolver::class)->resolve()),
+            );
+        });
 
         if ($this->surfaceEnabled('listeners')) {
             Event::listen(OwnershipReleasePending::class, QueueOwnershipWebhook::class);
@@ -219,6 +245,17 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $this->publishes([
                 __DIR__.'/../config/built-for-cloud.php' => $this->app->configPath('built-for-cloud.php'),
             ], 'built-for-cloud-config');
+
+            // The one layout and its chrome partial, publishable the
+            // ordinary Laravel way so an app can restyle the chrome
+            // without forking the package. Publishing does NOT create a
+            // second layout: Laravel's namespaced view finder prefers
+            // the published copy over the package's for the SAME view
+            // name, so `bfc::layout` still names one template — the
+            // app's, once it has taken ownership of it.
+            $this->publishes([
+                __DIR__.'/../resources/views' => $this->app->resourcePath('views/vendor/bfc'),
+            ], 'built-for-cloud-views');
         }
     }
 
@@ -313,7 +350,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // start, and so the MUTATING verbs are CSRF-protected. Without
         // it a session-riding forgery on a logged-in user's browser
         // could mint or revoke their credentials.
-        $personal = $this->personalSessionMiddleware($router);
+        $personal = $this->browserSessionMiddleware($router);
 
         $router->get('/bfc/me/credentials', [PersonalCredentials::class, 'index'])
             ->middleware(['throttle:bfc-personal', ...$personal, 'bfc.auth']);
@@ -421,6 +458,62 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $router->get('/bfc/console/vitals', ConsoleVitals::class)
             ->middleware(['throttle:bfc-vitals', EnsureDashboardCredential::class]);
 
+        // THE CHROME'S ONE ROUTE (Console PRD D7/D11): the re-entry
+        // interceptor, served from the app's own origin so a consuming
+        // app never has to loosen `script-src` to run it. Fixed
+        // `/bfc/console/*` path, an ordinary member of the routes
+        // family, mounted under the SAME condition as the door — the
+        // chrome is only reachable through this package's own delegated
+        // guard, so an app that brought its own `bfc-console` guard gets
+        // neither.
+        //
+        // Its stack, outermost first:
+        //
+        //  1. the browser session stack, because the delegated session
+        //     lives in the app's cookie session;
+        //  2. `bfc.console` — the structured re-entry 401 IN FRONT of
+        //     the framework's own answer;
+        //  3. `auth:bfc-console` — Laravel's own middleware, which is
+        //     what makes the console guard the guard of this request;
+        //  4. `throttle:bfc-console-chrome`.
+        //
+        // BOTH of the middle two, on every chrome route. A chrome route
+        // carrying only the guard scoping renders nothing for a capped
+        // operator and never tells their browser to re-enter;
+        // `tests/ConsoleChromeRouteScan.php` enumerates that, and their
+        // ORDER, rather than trusting either.
+        //
+        // **THE THROTTLE IS LAST, AND EVERY OTHER ROUTE IN THIS FILE
+        // PUTS IT FIRST.** That inversion is forced by the framework and
+        // it is not a preference. Laravel sorts a route's middleware by
+        // `$middlewarePriority`, in which `AuthenticatesRequests`
+        // outranks `ThrottleRequests`; a throttle listed IN FRONT of
+        // `auth:bfc-console` therefore causes Laravel to hoist the auth
+        // middleware above everything that follows the throttle —
+        // `bfc.console` included — and a request with no delegated
+        // session then gets the framework's generic
+        // `AuthenticationException` (a redirect to a `login` route that
+        // a headless app does not have) instead of D7's structured 401.
+        // Re-entry would be dead. Neither `bfc.console` nor
+        // `PreventRequestForgery` is in the priority map, so with the
+        // throttle last the declared order survives the sort intact.
+        //
+        // THE COST, named: the PRE-GATE path is not rate-limited by this
+        // route. What a refused fetch costs is a session read and a
+        // guard read — the same as any page in the host application, and
+        // nothing this route does amplifies it — and the throttle still
+        // bounds a runaway client that IS entitled to the script.
+        if (ConsoleGuardConfiguration::servesDelegatedEntry()) {
+            $router->get('/bfc/console/chrome.js', ConsoleChromeScript::class)
+                ->name(ConsoleChrome::SCRIPT_ROUTE)
+                ->middleware([
+                    ...$this->browserSessionMiddleware($router),
+                    'bfc.console',
+                    'auth:'.ConsoleGuardConfiguration::GUARD,
+                    'throttle:bfc-console-chrome',
+                ]);
+        }
+
         // The offboard verb (PRD 1.15, SEC-V3-04): full account
         // containment behind its OWN verb-family ability — the widest
         // verb, so a stolen mint- or revoke-scoped credential cannot
@@ -449,8 +542,12 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     }
 
     /**
-     * The browser-session stack the personal surface rides (PRD 1.17,
-     * rework Fix 1) — the CSRF protection on its mutating verbs included.
+     * The browser-session stack the package's BROWSER routes ride — the
+     * personal-credentials surface (PRD 1.17, rework Fix 1), the CSRF
+     * protection on its mutating verbs included, and the console
+     * chrome's interceptor asset (Console PRD D11), which needs the same
+     * session started for a different reason: it is what the delegated
+     * guard reads.
      *
      * PREFERRED: the host's own `web` group. It is the right answer in a
      * standard Laravel app for two reasons — it is the stack that app's
@@ -469,7 +566,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
      *
      * @return list<string>
      */
-    private function personalSessionMiddleware(Router $router): array
+    private function browserSessionMiddleware(Router $router): array
     {
         if ($router->hasMiddlewareGroup('web')) {
             return ['web'];
@@ -641,6 +738,19 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // behind one office NAT, not for a machine: the assertions are
         // vendor-signed and single-use, so the limiter bounds noise
         // rather than search.
+        // The chrome asset's limiter. Keyed on the IP alone: the fetch
+        // rides a session cookie rather than a bearer, so there is no
+        // credential digest to bucket on. It sits INSIDE the gate rather
+        // than in front of it — mountRoutes() carries the framework
+        // reason — so what it bounds is a client that is entitled to the
+        // script and asking for it too often. 120/min is a page-load
+        // budget for a human with several tabs open, against a response
+        // of a few hundred static bytes.
+        RateLimiter::for(
+            'bfc-console-chrome',
+            fn (Request $request): Limit => Limit::perMinute(120)->by('bfc-console-chrome-ip|'.($request->ip() ?? 'unknown')),
+        );
+
         RateLimiter::for(
             'bfc-console-enter',
             fn (Request $request): Limit => Limit::perMinute(30)->by('bfc-console-enter-ip|'.($request->ip() ?? 'unknown')),

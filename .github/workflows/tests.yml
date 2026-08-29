@@ -29,6 +29,17 @@ jobs:
           tools: composer:v2
           coverage: none
 
+      # The console re-entry interceptor is JavaScript, and
+      # tests/ConsoleReentryInterceptorTest.php is the only thing that
+      # EXECUTES it — through node. Pinned here rather than inherited
+      # from whatever the runner image happens to ship: without this
+      # step those tests would skip and the lane would stay green on the
+      # component carrying the same-origin check.
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+
       - name: Install Dependencies
         run: composer install --no-interaction --prefer-dist --optimize-autoloader
 
@@ -61,6 +72,17 @@ jobs:
           extensions: gmp, sodium
           tools: composer:v2
           coverage: none
+
+      # The console re-entry interceptor is JavaScript, and
+      # tests/ConsoleReentryInterceptorTest.php is the only thing that
+      # EXECUTES it — through node. Pinned here rather than inherited
+      # from whatever the runner image happens to ship: without this
+      # step those tests would skip and the lane would stay green on the
+      # component carrying the same-origin check.
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
 
       # `update`, not `install`: with no committed lock, `install` resolves the
       # NEWEST version satisfying each constraint, which is exactly the blind
