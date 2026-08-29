@@ -55,9 +55,11 @@ final class ConsoleSession
 
     /**
      * Write everything one redemption puts in the session. Called by
-     * {@see ConsoleHandoff::redeem()}, which is the one path PR4's enter
-     * endpoint uses — the pieces are written together so a session can
-     * never carry an age without claims or claims without an age.
+     * {@see ConsoleGuard::redeem()}, which is the one operation that can
+     * create a delegated session at all — the pieces are written
+     * together, inside the transaction that holds the actor's row lock,
+     * so a session can never carry an age without claims or claims
+     * without an age.
      */
     public static function begin(Session $session, Assertion $assertion): void
     {

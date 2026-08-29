@@ -123,9 +123,11 @@ final class DelegatedActor extends Model implements Authenticatable
      * case included — is a different actor.
      *
      * INTERNAL. This is the storage half and it does NOT decide whether
-     * the actor may act: it returns deactivated rows too. Every caller
-     * must go through {@see ConsoleHandoff::redeem()}, which fails closed
-     * on a deactivated actor BEFORE anything is logged in.
+     * the actor may act: it returns deactivated rows too, and it verifies
+     * nothing — writing a row here grants nothing, because no session can
+     * be created from it. {@see ConsoleGuard::redeem()} is the only
+     * operation that turns an actor into a principal, and it fails closed
+     * on a deactivated one under a row lock BEFORE anything is logged in.
      *
      * `deactivated_at` is deliberately never cleared. A fresh, valid
      * assertion means the ISSUER still vouches for the human; it says
@@ -275,10 +277,17 @@ final class DelegatedActor extends Model implements Authenticatable
     }
 
     /**
-     * Always null: there is no remember-token column and no "remember
-     * me" for a delegated session. A delegated session's life is bounded
-     * by D7's clocks and by nothing else, so a cookie that outlived them
-     * would be the one way the browser got a say in revocation.
+     * Always null. {@see ConsoleGuard} never queues a recaller cookie, so
+     * nothing this package writes could ever produce a token to return —
+     * a delegated session's life is bounded by D7's clocks and by nothing
+     * else, and a cookie that outlived them would be the one way the
+     * browser got a say in revocation.
+     *
+     * Null is also load-bearing on the two paths that DO call this:
+     * `SessionGuard::logout()` cycles a remember token only when this is
+     * non-empty, and `EloquentUserProvider::retrieveByToken()` refuses
+     * outright on a falsy one — so even a stock provider pointed at this
+     * model could not recall a session from a cookie.
      */
     public function getRememberToken(): ?string
     {

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Exceptions;
 
-use ArtisanBuild\BuiltForCloud\Console\ConsoleHandoff;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleGuard;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActorProvider;
 use RuntimeException;
 
@@ -16,7 +16,7 @@ use RuntimeException;
  * It is a refusal rather than a silent no-op because the two are not the
  * same thing: the issuer still vouches for this human — the signature,
  * the audience and the clocks all held — and the local decision to
- * contain them is what stops the entry. {@see ConsoleHandoff::redeem()}
+ * contain them is what stops the entry. {@see ConsoleGuard::redeem()}
  * throws BEFORE anything is logged in, so a deactivated actor cannot be
  * the principal for even the one request that redeemed the assertion.
  * Without that, the {@see DelegatedActorProvider} refusal would only
@@ -27,9 +27,10 @@ use RuntimeException;
  * separately from the decision that refuses it: the row's
  * `last_handoff_*` copy is refreshed, so an operator looking at a
  * contained actor can see that entry was attempted and with what claims.
- * That is why {@see ConsoleHandoff::redeem()} uses two transactions
- * rather than one — a single transaction would roll the record back
- * along with the refusal, and the attempt would leave no trace.
+ * That is why {@see ConsoleGuard::redeem()} commits the record
+ * separately from the decision — a single transaction would roll the
+ * record back along with the refusal, and the attempt would leave no
+ * trace.
  */
 final class DelegatedActorDeactivated extends RuntimeException
 {

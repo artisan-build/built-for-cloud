@@ -19,16 +19,16 @@ use SensitiveParameter;
  * including a correct one, because there is nothing here to match
  * against: the table has no password column and
  * {@see DelegatedActor::getAuthPassword()} is the empty string every
- * hasher already refuses. `retrieveByToken` is null for the same reason
- * (no remember-token column, no "remember me" for a delegated session),
+ * hasher already refuses. `retrieveByToken` is null for the same reason,
  * and `updateRememberToken` has nothing to write.
  *
  * THIS IS WHERE §4.3's "no login path" IS ACTUALLY HELD, together with
- * {@see ConsoleGuard} having no `attempt()`, no `loginUsingId()` and no
- * remember-me path at all. The two together mean the question is never
- * asked and could not be answered yes if it were — a structural
- * property, not a convention, and not something the model's own methods
- * are doing.
+ * {@see ConsoleGuard} having no `attempt()`, no `loginUsingId()`, and
+ * exactly one operation that creates a principal — one that takes signed
+ * assertion bytes and verifies them itself. The two together mean the
+ * credential question is never asked and could not be answered yes if it
+ * were: a structural property, not a convention, and not something the
+ * model's own methods are doing.
  *
  * `retrieveById` is the identifier boundary, and it is strict in three
  * separate ways:
@@ -134,8 +134,26 @@ final class DelegatedActorProvider implements UserProvider
     }
 
     /**
-     * Always null: there is no remember-token column and no cookie a
-     * delegated session could be recalled from.
+     * Always null, for every input.
+     *
+     * THIS METHOD IS REACHABLE, and an earlier revision of this docblock
+     * was wrong to imply otherwise. `SessionGuard::user()` checks for a
+     * recaller cookie whenever the session carries no identifier, so a
+     * syntactically valid, correctly encrypted `remember_bfc-console_*`
+     * cookie — one left behind by an earlier deployment that used this
+     * guard name with a stock provider, for instance — is decrypted and
+     * arrives here. There is no "there is no remember-me path" to claim.
+     *
+     * What IS true is that the branch is FAIL-CLOSED: this method returns
+     * null unconditionally, so no principal is produced, the guard's
+     * `viaRemember` never becomes true, and no session is written back.
+     * The security result is correct; it is correct because of this
+     * return value, not because the path cannot be entered.
+     *
+     * Nothing in this package ever QUEUES such a cookie
+     * ({@see ConsoleGuard::redeem()} logs in with remembering off and
+     * there is no other login path), so the only recaller that can exist
+     * for this guard is one this package did not write.
      *
      * @param  mixed  $identifier
      */
@@ -145,9 +163,10 @@ final class DelegatedActorProvider implements UserProvider
     }
 
     /**
-     * A no-op: there is no remember-token column to write. Unreachable
-     * in practice — {@see ConsoleGuard} never remembers a login, so
-     * nothing generates a token to store.
+     * A no-op: there is no remember-token column to write. Reached only
+     * if something logs in with remembering ON, and nothing can —
+     * {@see ConsoleGuard} has no `$remember` parameter anywhere, so no
+     * token is ever generated to store.
      */
     public function updateRememberToken(Authenticatable $user, #[SensitiveParameter] $token): void
     {

@@ -313,7 +313,7 @@ it('resolves a subsequent non-console request normally after a delegated one', f
 // ─── AC24: nothing survives into the next request ───────────────────────────
 
 it('never returns a principal resolved in one request in the next one', function (): void {
-    $actor = consoleRedeem(consoleAssertionFor());
+    $actor = consoleRedeem();
 
     /** @var ConsoleGuard $guard */
     $guard = auth(ConsoleGuardConfiguration::GUARD);
@@ -332,7 +332,7 @@ it('never returns a principal resolved in one request in the next one', function
 });
 
 it('does not carry a resolved acting principal into the next request', function (): void {
-    $actor = consoleRedeem(consoleAssertionFor());
+    $actor = consoleRedeem();
 
     $resolver = app(ActingPrincipalResolver::class);
     $first = $resolver->resolve();
@@ -460,4 +460,43 @@ it('never carries a delegated attribution on a non-delegated resolution', functi
         ->and($local->onBehalfOf)->toBeNull()
         ->and($local->delegated)->toBeFalse()
         ->and($local->delegatedSessionPresent())->toBeFalse();
+});
+
+// ─── AC31: logout must not poison the cached guard for the next request ─────
+
+it('does not let a logout on one request reject a different delegated session on the next', function (): void {
+    $first = consoleActor(subject: 'operator_a', displayName: 'Operator A');
+
+    /** @var ConsoleGuard $guard */
+    $guard = auth(ConsoleGuardConfiguration::GUARD);
+
+    session()->put(consoleSessionState($first));
+
+    expect($guard->actor()?->getKey())->toBe($first->getKey());
+
+    // Request A ends with a delegated leave (PR5's flow will call this).
+    $guard->logout();
+
+    expect($guard->actor())->toBeNull();
+
+    // Request B, same process, SAME cached guard instance — the auth
+    // manager keeps them for the life of the application — carrying a
+    // different, perfectly valid delegated session.
+    $second = consoleActor(subject: 'operator_b', displayName: 'Operator B');
+
+    app()->instance('request', Request::create('/next'));
+
+    session()->flush();
+
+    foreach (consoleSessionState($second) as $key => $value) {
+        session()->put($key, $value);
+    }
+
+    // If logout left the inner SessionGuard's sticky `loggedOut` flag
+    // set, `SessionGuard::user()` returns immediately and B is wrongly
+    // rejected — a cross-request state leak in a guard, the same class
+    // of bug as the cached principal AC24 covers.
+    expect($guard->actor()?->getKey())->toBe($second->getKey())
+        ->and($guard->check())->toBeTrue()
+        ->and($guard->claims()?->displayName)->toBe('Operator B');
 });

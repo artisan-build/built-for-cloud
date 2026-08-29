@@ -7,7 +7,6 @@ use ArtisanBuild\BuiltForCloud\Console\Assertion;
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuard;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
-use ArtisanBuild\BuiltForCloud\Console\ConsoleHandoff;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKey;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyring;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleRole;
@@ -18,7 +17,6 @@ use ArtisanBuild\BuiltForCloud\Exceptions\AssertionRefused;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Tests\TestCase;
 use Carbon\CarbonImmutable;
-use Illuminate\Contracts\Session\Session;
 use ParagonIE\ConstantTime\Base64UrlSafe;
 use ParagonIE\Paseto\Builder;
 use ParagonIE\Paseto\Keys\Version4\AsymmetricSecretKey;
@@ -238,9 +236,15 @@ function consoleRefusal(string $token): AssertionRefused
 /**
  * Console delegated-session helpers (PR3). The enter endpoint that
  * starts one of these sessions is PR4's; `consoleRedeem()` drives the
- * package API that endpoint will call, and `consoleSessionState()` seeds
- * the same state directly for the cases a real redemption cannot produce
- * (a capped clock, a broken marker, a role that has since changed).
+ * package operation that endpoint will call — with REAL signed bytes,
+ * because the guard verifies inside it — and `consoleSessionState()`
+ * seeds the same state directly for the cases a real redemption cannot
+ * produce (a capped clock, a broken marker, a role that has since
+ * changed).
+ *
+ * `consoleAssertionFor()` builds an assertion OBJECT, which is now good
+ * for exactly one thing: recording a handoff row. Nothing accepts one as
+ * a way into a session.
  */
 function consoleAssertionFor(
     string $issuer = 'https://scalpels.test',
@@ -268,7 +272,8 @@ function consoleAssertionFor(
 /**
  * The actor a handoff would leave on file. Storage only — it does NOT
  * start a session and does NOT refuse a deactivated actor; that is
- * {@see consoleRedeem()}'s job, exactly as it is ConsoleHandoff's.
+ * {@see consoleRedeem()}'s job — and writing a row here grants nothing,
+ * because no session can be created from one.
  */
 function consoleActor(
     string $issuer = 'https://scalpels.test',
@@ -283,13 +288,88 @@ function consoleActor(
 }
 
 /**
- * A full redemption through the package API PR4 will use: record the
- * handoff, refuse a contained actor under the row lock, bind the claims
- * to the session, log in.
+ * The console guard, typed. Every helper below goes through it because
+ * it is the only thing that can create a delegated session.
  */
-function consoleRedeem(Assertion $assertion): DelegatedActor
+function consoleGuard(): ConsoleGuard
 {
-    return app(ConsoleHandoff::class)->redeem($assertion, app(Session::class));
+    /** @var ConsoleGuard */
+    return auth(ConsoleGuardConfiguration::GUARD);
+}
+
+/**
+ * The signing key this test's assertions are minted with, filed and
+ * activated on the ring the first time it is asked for.
+ *
+ * Memoised in the CONTAINER rather than a static, so it dies with the
+ * application at the end of each test — a static would outlive
+ * RefreshDatabase and hand the next test a key id that is no longer on
+ * the ring.
+ */
+function consoleTestSigningKey(): AsymmetricSecretKey
+{
+    if (app()->bound('bfc.testing.console-signing-key')) {
+        /** @var AsymmetricSecretKey */
+        return app('bfc.testing.console-signing-key');
+    }
+
+    $secret = consoleKeypair();
+
+    consoleFileKey('k1', $secret);
+
+    app()->instance('bfc.testing.console-signing-key', $secret);
+
+    return $secret;
+}
+
+/**
+ * A REAL signed assertion — the bytes the vendor would mint and PR4's
+ * enter endpoint would receive.
+ *
+ * The verifier's two required config keys are set here rather than in
+ * every caller, because a token that cannot be verified is not a stand-in
+ * for one that can: since the guard verifies inside `redeem()`, these
+ * helpers have to produce something that genuinely passes.
+ */
+function consoleSignedAssertion(
+    string $issuer = 'https://scalpels.test',
+    string $subject = 'operator_42',
+    string $displayName = 'Jane Operator',
+    ConsoleRole $role = ConsoleRole::Admin,
+    ?string $onBehalfOf = null,
+): string {
+    config([
+        'built-for-cloud.console.issuer' => $issuer,
+        'built-for-cloud.console.audience' => 'https://sink.test',
+    ]);
+
+    return consoleMint(consoleTestSigningKey(), consoleClaims([
+        'iss' => $issuer,
+        'sub' => $subject,
+        'display_name' => $displayName,
+        'role' => $role->value,
+        'on_behalf_of' => $onBehalfOf ?? consoleAbsent(),
+    ]));
+}
+
+/**
+ * A full redemption through the ONE operation PR4's enter endpoint will
+ * call: signed bytes in, verified inside the guard, a live delegated
+ * session out.
+ *
+ * There is deliberately no helper that redeems an {@see Assertion}
+ * object — no such operation exists any more, which is the point.
+ */
+function consoleRedeem(
+    string $issuer = 'https://scalpels.test',
+    string $subject = 'operator_42',
+    string $displayName = 'Jane Operator',
+    ConsoleRole $role = ConsoleRole::Admin,
+    ?string $onBehalfOf = null,
+): DelegatedActor {
+    return consoleGuard()->redeem(
+        consoleSignedAssertion($issuer, $subject, $displayName, $role, $onBehalfOf),
+    );
 }
 
 /**

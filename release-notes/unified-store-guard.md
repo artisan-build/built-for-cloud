@@ -173,6 +173,21 @@ A **refused** delegated session is terminal: `bfc.auth` answers 401,
 `bfc.admin` answers 403, and the personal-credentials surface throws — none
 of them falls back to the local user.
 
+**Starting and ending a delegated session.** `ConsoleGuard::redeem()` is
+the one operation that creates one, and it takes the **signed assertion
+bytes** and verifies them itself — there is no method that accepts an
+assertion object and none that logs a delegated actor in on request, so a
+delegated session cannot exist without a signature this deployment
+checked. It compensates on failure: if anything throws after the session
+write begins — a host application's `Login` listener, most plausibly —
+the session is destroyed before the failure propagates, because Laravel
+writes and regenerates the session *before* it dispatches that event.
+`ConsoleGuard::logout()` ends a session without calling the framework's
+`SessionGuard::logout()`, deliberately: that method sets a sticky
+`loggedOut` flag on a guard the auth manager caches for the life of the
+process, which would leave the guard dead for every later request in a
+long-lived worker.
+
 **Mounting a console route.** Put `bfc.console` IN FRONT of
 `auth:bfc-console`. The framework's middleware is what makes the console
 guard that route's guard; `bfc.console` is what turns an absent or refused

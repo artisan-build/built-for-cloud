@@ -1883,12 +1883,29 @@ one.
   delegated guard built on its user table. With the Console **disabled** that collision is
   ignored entirely — a deployment that never asked for the Console cannot be stopped from
   booting by it.
-- **There is exactly ONE way to create a delegated principal**: redeeming a verified assertion
-  through the package's handoff API. The guard is a plain `Guard`, deliberately not a
-  `StatefulGuard`: `attempt`, `once`, `loginUsingId`, `onceUsingId` and `viaRemember` do not
-  exist on it, its user provider answers null/false to every credential-shaped question for
-  every input, and there is no remember-me path. "No password, no login path" is a property of
-  the types, not a set of methods that refuse.
+- **There is exactly ONE operation that creates a delegated principal, and it takes the SIGNED
+  ASSERTION BYTES.** `ConsoleGuard::redeem()` verifies the token itself — signature, issuer,
+  audience, TTL bound and clocks — inside the same call that writes the session. No public
+  method accepts an already-built assertion OBJECT, and none logs a delegated actor in on
+  request; `Assertion::fromVerifiedClaims()` is public and is documented as not being proof of
+  provenance, so an operation taking one would have accepted a forged claim set. The guard is
+  also a plain `Guard`, deliberately not a `StatefulGuard`: `attempt`, `once`, `loginUsingId`,
+  `onceUsingId` and `viaRemember` do not exist on it, and its user provider answers null/false
+  to every credential-shaped question for every input. "No password, no login path" is a
+  property of the types, not a set of methods that refuse.
+  The one public seam the `Guard` contract forces is `setUser()`, which Laravel's `actingAs()`
+  uses: it sets an in-memory principal for the current request and writes **nothing** to the
+  session, so a principal set that way still has to survive the guard's own claim and clock
+  checks and cannot mint a delegated session.
+  **A failed redemption leaves no session.** Laravel writes and regenerates the session before
+  it dispatches its `Login` event, so a host application's listener that throws would otherwise
+  leave a session already carrying the delegated identifier while the redemption reported
+  failure; the operation compensates — the session is destroyed on every throwable — before the
+  failure propagates.
+  **Remember-me:** this guard never queues a recaller cookie. Laravel still *checks* for one
+  when a session carries no identifier, so that branch is reachable; it is fail-closed because
+  the delegated-actor provider's `retrieveByToken()` returns null for every input, so no
+  principal is ever produced from a cookie.
 - **Table name `bfc_delegated_actors`** — the delegated-actor (shadow actor) table EXISTS. It
   is **not** a `users` table: no password column, no remember-token column, no login path, and
   no credential can resolve to one — the `bfc-console:` identifier namespace is RESERVED and is

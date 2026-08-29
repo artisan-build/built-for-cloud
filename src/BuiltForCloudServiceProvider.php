@@ -28,6 +28,7 @@ use ArtisanBuild\BuiltForCloud\Commands\TokenRotateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenUsageCommand;
 use ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
+use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuard;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActorProvider;
@@ -172,6 +173,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                     return new ConsoleGuard(
                         $auth->createSessionDriver($name, $config),
                         $app->make(Session::class),
+                        $app->make(AssertionVerifier::class),
                     );
                 },
             );
