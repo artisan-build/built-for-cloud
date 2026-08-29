@@ -325,31 +325,61 @@ final class ContractScan
     {
         $windows = self::releaseWindowsIn($doc);
 
-        return count($windows) === 1 && $windows[0]['visible'] ? [
+        return count($windows) === 1 && ! $windows[0]['commented'] ? [
             'pending' => $windows[0]['pending'],
             'tagged' => $windows[0]['tagged'],
         ] : null;
     }
 
     /**
-     * EVERY occurrence of the declaration sentence, each with whether a
-     * reader of the rendered document would see it.
+     * Every occurrence of the declaration sentence, each marked
+     * `commented` when it falls inside an HTML comment — opened with
+     * `<!--` and closed with `-->`, or opened and never closed, which
+     * comments out the rest of the file.
      *
-     * **Both halves of this were defects.** A declaration inside an HTML
-     * comment satisfied the parse while rendering to nothing, so the
-     * document could carry a licence to differ that no consumer could
-     * read — and a licence nobody can see is not a declaration. And two
-     * declarations satisfied it as well, with the first one found
-     * deciding: a document could name the real pair once and any other
-     * pair beside it.
+     * **THIS DOES NOT ASK WHAT A READER SEES, AND MUST NOT BE READ AS
+     * ASKING IT.** An earlier revision called the flag `visible` and
+     * the contract promised the declaration was carried "visibly". Both
+     * were claims about a rendered document enforced by a regex over
+     * Markdown, and each variant closed reveals the next: the unclosed
+     * comment below was found after the closed one was handled, and
+     * `0&#46;6&#46;0` renders as a version this parse does not read at
+     * all. **A regex over Markdown cannot own what a renderer displays**
+     * — the same wall PR5 met with `Location.assign` and PR8 with
+     * Composer's platform check, and the same answer: stop wording the
+     * claim and narrow it to what the machine checks.
      *
-     * Visibility is decided by whether the sentence falls inside an
-     * `<!-- … -->` span. That is the concealment Markdown offers here
-     * and the one that was tried; a sentence hidden some other way — a
-     * fenced code block, a `<details>` a reader must open, an HTML
-     * attribute — is reported as visible.
+     * So what is checked is a MACHINE GRAMMAR: the declaration is the
+     * exact sentence {@see RELEASE_WINDOW} matches, outside an HTML
+     * comment. **Anything else is not a declaration this scan
+     * recognises**, and the contract says so rather than promising
+     * visibility.
      *
-     * @return list<array{pending: string, tagged: string, visible: bool}>
+     * THE RECOGNISED-FORM RESIDUE, which is what that costs. Each of
+     * these is a document a reader may or may not see a declaration in,
+     * and this parse takes no position on any of them:
+     *
+     *  - **Entity-encoded or otherwise re-spelled text.** `RELEASE
+     *    WINDOW: … `bfc_version` 0&#46;6&#46;0` renders as a
+     *    declaration and is not one here. Two such lines render as two
+     *    and count as none, so the duplicate check is over the grammar
+     *    and not over the page.
+     *  - **A declaration inside a fenced code block**, which renders as
+     *    a sample rather than as a statement, and is counted here as a
+     *    declaration.
+     *  - **A declaration inside raw HTML** — a `<details>` a reader
+     *    must open, a `title=` attribute, a `hidden` div — which is
+     *    counted here as a declaration whatever the page does with it.
+     *  - **Whether the sentence renders at all**, on any renderer.
+     *
+     * The unclosed comment is recognised because it costs one pattern
+     * and needs no renderer: an unterminated `<!--` opens a comment
+     * that the HTML tokenizer runs to the end of input, so this parse
+     * treats what follows the same way rather than reading a
+     * declaration out of it. That is a rule about the bytes; it is
+     * still not a statement about what any particular reader sees.
+     *
+     * @return list<array{pending: string, tagged: string, commented: bool}>
      */
     public static function releaseWindowsIn(string $doc): array
     {
@@ -359,21 +389,27 @@ final class ContractScan
 
         $comments = [];
 
+        // Closed comments, then one unclosed opener, which runs to the
+        // end of the file.
         if (preg_match_all('/<!--.*?-->/s', $doc, $found, PREG_OFFSET_CAPTURE) !== false) {
             foreach ($found[0] as $comment) {
                 $comments[] = [$comment[1], $comment[1] + strlen($comment[0])];
             }
         }
 
+        if (preg_match('/<!--(?!.*?-->)/s', $doc, $unclosed, PREG_OFFSET_CAPTURE) === 1) {
+            $comments[] = [$unclosed[0][1], strlen($doc)];
+        }
+
         $windows = [];
 
         foreach ($matches as $match) {
             $offset = $match[0][1];
-            $hidden = false;
+            $commented = false;
 
             foreach ($comments as [$from, $to]) {
                 if ($offset >= $from && $offset < $to) {
-                    $hidden = true;
+                    $commented = true;
 
                     break;
                 }
@@ -382,7 +418,7 @@ final class ContractScan
             $windows[] = [
                 'pending' => $match[1][0],
                 'tagged' => $match[2][0],
-                'visible' => ! $hidden,
+                'commented' => $commented,
             ];
         }
 
@@ -427,9 +463,10 @@ final class ContractScan
      * in the vitals example is the consuming application's release and
      * has no reason to match anything here.
      *
-     * **Reading this list is the only thing that catches a release
-     * spelled under a key nobody expected.** Nothing here decides
-     * whether a key OUGHT to have been compared:
+     * **Nothing in this class decides whether a key OUGHT to have been
+     * compared**, so a release spelled under an unexpected key is
+     * caught by somebody reading this list, or not at all by anything
+     * here:
      * `"scalpels_version": "0.7.0"` lands here exactly as `app_version`
      * does, and the check that the set is what it should be is an
      * assertion in `tests/HttpContractDocTest.php`, not a rule in this
@@ -454,12 +491,16 @@ final class ContractScan
      * merge, which is not how this package releases.
      *
      * So the property is not "they agree" but **"a difference is
-     * declared"**: while they differ, the document must carry one
-     * VISIBLE line naming both halves, and it must name the right two.
-     * Changing either side alone makes the declaration wrong; removing
-     * it leaves the difference undeclared; landing the tag so the two
-     * agree makes it stale; writing a second one makes the pair
-     * ambiguous; hiding it in an HTML comment is not writing one.
+     * declared IN THE RECOGNISED FORM"**: while they differ, the
+     * document must carry exactly one {@see RELEASE_WINDOW} sentence,
+     * outside an HTML comment, naming the right two halves. Changing
+     * either side alone makes the declaration wrong; removing it leaves
+     * the difference undeclared; landing the tag so the two agree makes
+     * it stale; writing a second one makes the pair ambiguous;
+     * commenting it out is not writing one.
+     *
+     * "In the recognised form" is doing real work in that sentence and
+     * {@see releaseWindowsIn()} says what it excludes.
      *
      * WHAT IT READS: this document and one string. **Not
      * `composer.json`, not a git tag, not the release notes** — and
@@ -479,13 +520,13 @@ final class ContractScan
         $breaks = [];
 
         if (count($declared) > 1) {
-            return ['the document carries '.count($declared).' release-window declarations, so which '
-                .'pair it declares has no answer'];
+            return ['the document carries '.count($declared).' release-window declarations in the '
+                .'recognised form, so which pair it declares has no answer'];
         }
 
-        if ($declared !== [] && ! $declared[0]['visible']) {
-            return ['the release-window declaration is inside an HTML comment, where a reader of this '
-                .'document cannot see it'];
+        if ($declared !== [] && $declared[0]['commented']) {
+            return ['the release-window declaration is inside an HTML comment, so no consumer of this '
+                .'file is handed it'];
         }
 
         if ($mentions === []) {

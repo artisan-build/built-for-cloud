@@ -551,11 +551,14 @@ final class HttpContractDocTest extends TestCase
      *
      * So what is required is that a difference be DECLARED. While the
      * two differ the document carries a line naming both halves, and it
-     * has to name the right two. That leaves silent drift nowhere to
-     * happen: change either side alone and the declaration is wrong;
-     * remove the declaration and the difference is undeclared; land the
-     * tag so the two agree and the declaration is stale. All four are
-     * findings, and all four are driven in the test below this one.
+     * has to name the right two, in the form the scan recognises. Four
+     * things are then findings — either side changed alone, no
+     * declaration, a stale one once the tag lands, and more than one —
+     * and all four are driven in the test below this one. What that
+     * does NOT amount to is "drift cannot happen": the check reads a
+     * documented sentence in a documented form, and
+     * {@see ContractScan::releaseWindowsIn()} names the spellings that
+     * fall outside it.
      *
      * @see ContractScan::versionPairBreaksIn()
      */
@@ -688,36 +691,53 @@ final class HttpContractDocTest extends TestCase
     }
 
     /**
-     * D6 and D8: a declaration a reader cannot see, two of them at
-     * once, and one that points the wrong way.
+     * A declaration inside a comment, closed or unclosed, two of them
+     * at once, and one that points the wrong way.
      *
-     * The first two were accepted by the shipped parse. A declaration
-     * inside an HTML comment satisfied it while rendering to nothing —
-     * a licence to differ that no consumer of this contract could read
-     * — and a second declaration beside the first was ignored, so the
-     * document could name the real pair once and any other pair as
-     * well, with whichever came first deciding.
+     * **THESE ARE FACTS ABOUT THE FILE, NOT ABOUT A RENDERED PAGE**, and
+     * the distinction is the whole of what this round settled. The
+     * commented cases are recognised because text inside `<!-- … -->`,
+     * terminated or not, is inside a comment for every consumer of the
+     * bytes. Nothing here asks whether a reader would SEE a
+     * declaration: an entity-encoded one renders as a declaration and
+     * is not one in the grammar, and that is named as residue on
+     * {@see ContractScan::releaseWindowsIn()} rather than chased with a
+     * decoder — a claim about rendering enforced by a regex over
+     * Markdown is the defect this PR exists to stop, and each variant
+     * closed reveals the next.
      */
-    public function test_refuses_a_release_window_a_reader_cannot_see_a_duplicate_one_and_one_that_goes_backwards(): void
+    public function test_refuses_a_release_window_inside_a_comment_a_duplicate_one_and_one_that_goes_backwards(): void
     {
         $window = '**RELEASE WINDOW: this document describes `bfc_version` %s; '
             .'`BuiltForCloud::VERSION` is %s until the tag lands.**';
 
         $body = PHP_EOL.PHP_EOL.'{"bfc_version": "0.6.0"}'.PHP_EOL;
 
-        // Hidden: parsed, and refused as no declaration at all — so the
-        // difference below it is undeclared rather than licensed.
-        $hidden = '<!-- '.sprintf($window, '0.6.0', '0.5.0').' -->'.$body;
+        // Commented out: parsed, and refused as no declaration at all,
+        // so the difference below it is undeclared rather than licensed.
+        $commented = '<!-- '.sprintf($window, '0.6.0', '0.5.0').' -->'.$body;
 
-        $this->assertNull(ContractScan::releaseWindowIn($hidden));
+        $this->assertNull(ContractScan::releaseWindowIn($commented));
         $this->assertSame(
-            [['pending' => '0.6.0', 'tagged' => '0.5.0', 'visible' => false]],
-            ContractScan::releaseWindowsIn($hidden),
+            [['pending' => '0.6.0', 'tagged' => '0.5.0', 'commented' => true]],
+            ContractScan::releaseWindowsIn($commented),
         );
         $this->assertSame(
-            ['the release-window declaration is inside an HTML comment, where a reader of this '
-                .'document cannot see it'],
-            ContractScan::versionPairBreaksIn($hidden, '0.5.0'),
+            ['the release-window declaration is inside an HTML comment, so no consumer of this file '
+                .'is handed it'],
+            ContractScan::versionPairBreaksIn($commented, '0.5.0'),
+        );
+
+        // E1: AND THE OPENER WITHOUT A TERMINATOR, which comments out
+        // the rest of the file. The first revision required `-->` and
+        // so reported this one as a standing declaration.
+        $unclosed = '<!-- '.sprintf($window, '0.6.0', '0.5.0').$body;
+
+        $this->assertNull(ContractScan::releaseWindowIn($unclosed));
+        $this->assertSame(
+            ['the release-window declaration is inside an HTML comment, so no consumer of this file '
+                .'is handed it'],
+            ContractScan::versionPairBreaksIn($unclosed, '0.5.0'),
         );
 
         // Duplicated: the first names the true pair, so a parse that
@@ -728,9 +748,25 @@ final class HttpContractDocTest extends TestCase
         $this->assertNull(ContractScan::releaseWindowIn($duplicated));
         $this->assertCount(2, ContractScan::releaseWindowsIn($duplicated));
         $this->assertSame(
-            ['the document carries 2 release-window declarations, so which pair it declares has no answer'],
+            ['the document carries 2 release-window declarations in the recognised form, so which '
+                .'pair it declares has no answer'],
             ContractScan::versionPairBreaksIn($duplicated, '0.5.0'),
         );
+
+        // E2: AND THE BOUND ON THAT, ASSERTED RATHER THAN DESCRIBED. A
+        // second declaration spelled `0&#46;6&#46;0` renders as a
+        // second declaration and is not one in this grammar, so the
+        // document below reads as having exactly one. Deliberate: the
+        // alternative is a Markdown renderer in a test suite, and every
+        // encoding closed would reveal another. What stands behind the
+        // check is the documented form, and the contract now says that
+        // instead of promising visibility.
+        $encoded = sprintf($window, '0.6.0', '0.5.0').PHP_EOL.PHP_EOL
+            .'**RELEASE WINDOW: this document describes `bfc_version` 0&#46;9&#46;9; '
+            .'`BuiltForCloud::VERSION` is 0&#46;1&#46;0 until the tag lands.**'.$body;
+
+        $this->assertCount(1, ContractScan::releaseWindowsIn($encoded));
+        $this->assertSame([], ContractScan::versionPairBreaksIn($encoded, '0.5.0'));
 
         // Backwards: internally consistent and honest about both
         // halves, and tagging it would move the package down a version.

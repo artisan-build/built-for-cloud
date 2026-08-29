@@ -66,14 +66,21 @@ until the tag lands.** This document is written with the release it is part of, 
 bumped when that release is tagged — so during the window a deployment reports the lower number
 while this document describes the higher one. Branch on `capabilities` rather than on the version
 if you are integrating against a deployment inside one. The line above is machine-read: while the
-two differ exactly one such line must stand here, visibly, naming both halves correctly and with
-the pending version ahead of the tagged one; once the tag lands and the two agree it has to go.
-What is compared is this document's own `bfc_version`, spelled bare or under that exact key —
-a version this document gives under any other key is not compared to anything, and neither is a
-version spelled in a release note.
+two differ, exactly one such line must stand in this section **in that exact form**, naming both
+halves correctly and with the pending version ahead of the tagged one; once the tag lands and the
+two agree it has to go.
+
+**What is checked is the form, not what a reader sees.** The check is a text scan over this file:
+it reads the sentence above spelled exactly that way and outside an HTML comment, and it takes no
+position on how any renderer displays it. A declaration written some other way — entity-encoded,
+inside a fenced block, inside raw HTML — is not one it recognises, in either direction. **If you
+are relying on knowing whether a release window is open, read this section rather than trusting
+that the check would have caught its absence.** What is compared against it is this document's own
+`bfc_version`, spelled bare or under that exact key; a version given under any other key is not
+compared to anything, and neither is a version spelled in a release note.
 *Pinned by* `tests/HttpContractDocTest.php` ("the documented release and the constant differ only
 where the document declares it", "names a version pair that drifted one that is undeclared and a
-declaration left behind" and "refuses a release window a reader cannot see a duplicate one and one
+declaration left behind" and "refuses a release window inside a comment a duplicate one and one
 that goes backwards").
 
 The rules a consumer may rely on:
