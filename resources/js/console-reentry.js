@@ -1,6 +1,33 @@
 /**
  * THE XHR RE-ENTRY INTERCEPTOR (Console PRD D7, as amended).
  *
+ * ============================================================
+ * WHAT IN THIS FILE HAS BEEN EXECUTED, AND WHAT HAS NOT
+ * ============================================================
+ *
+ * **EXECUTED.** `tests/ConsoleReentryInterceptorTest.php` runs THESE
+ * BYTES in node against a window stand-in, so every branch, comparison
+ * and ordering decision below is driven: which responses are acted on,
+ * what destination is built, which cause is announced, and in what
+ * order.
+ *
+ * **NOT EXECUTED — and every such statement below is marked "SPECIFIED,
+ * NOT OBSERVED".** Everything this script depends on the BROWSER to do
+ * is read from a standard and has never been watched happening:
+ * `response.url` and `responseURL` shapes, `window.origin` in a
+ * sandboxed frame, `Location.assign` throwing on a refused top
+ * navigation, `window.top` access throwing cross-origin, `Response`
+ * body-lock semantics, whether event listeners have finished before a
+ * navigation begins, and whether wrapping `window.fetch` intercepts
+ * Livewire's transport at all. **The harness supplies all of those; it
+ * does not verify any of them.** A stand-in that models a browser
+ * wrongly produces a suite that agrees with the mistake — which has
+ * already happened once in this file, to `pageOrigin()`.
+ *
+ * `~/Herd/brain/projects/built-for-cloud/pr5-browser-observable-claims.md`
+ * lists each one with the concrete check that would settle it, and the
+ * sink conversion is where a real browser exists to run them.
+ *
  * A capped or invalidated delegated session gets the same structured 401
  * on every transport: status 401, the header `BFC-Console-Reentry: 1`,
  * and a body of `{version, error, reason, reentry_url?, return_to}`. A
@@ -48,6 +75,11 @@
  * indistinguishable from the application: if an app forwards a third
  * party's bytes under its own origin, this check cannot see through it.
  * That is the boundary of what an origin comparison can say.
+ *   **SPECIFIED, NOT OBSERVED:** the first two — an empty `url` on an
+ *   opaque response, and the final url after a redirect — are read from
+ *   the Fetch standard, and the harness supplies both values rather than
+ *   producing them. The third is a statement about origins and holds
+ *   whatever a browser does.
  *
  * **AND IT NEVER FAILS SILENTLY. That is one rule, not three
  * exceptions.** Every path on which this script cannot complete a
@@ -55,16 +87,28 @@
  * `bfc:console-reentry-unavailable` dispatched with a `detail.cause`
  * naming which of three things went wrong:
  *
- *  - {@see CAUSE_ORIGIN_UNVERIFIABLE} — this document reports an opaque
- *    origin (a sandboxed iframe, `about:blank`), so no response can ever
- *    be verified as the application's. Said once at install time, and
- *    the interceptor then does not install. This is a limitation the
- *    same-origin check itself introduced, and it is disclosed rather
- *    than absorbed.
+ *  - {@see CAUSE_ORIGIN_UNVERIFIABLE} — this document has no readable
+ *    effective origin: a frame sandboxed with `allow-scripts` and
+ *    WITHOUT `allow-same-origin`, or a runtime not exposing
+ *    `window.origin`. No response can then be verified as the
+ *    application's. Said once at install time, and the interceptor then
+ *    does not install. This is a limitation the same-origin check itself
+ *    introduced, and it is disclosed rather than absorbed.
+ *    (`about:blank` is NOT in this set as a rule — a blank document
+ *    normally INHERITS its creator's origin. An earlier revision listed
+ *    it flatly and that was too broad.)
+ *      **SPECIFIED, NOT OBSERVED.**
  *  - {@see CAUSE_NO_DESTINATION} — re-entry is required and the payload
  *    names nowhere this script will go.
  *  - {@see CAUSE_NAVIGATION_REFUSED} — a destination was found and the
  *    BROWSER refused the navigation, throwing out of `Location.assign`.
+ *      **SPECIFIED, NOT OBSERVED, AND THIS ONE IS LOAD-BEARING.** The
+ *      whole path rests on the premise that a refused top navigation
+ *      RAISES. If a browser refuses silently instead, the `try` catches
+ *      nothing, no cause is announced, and the operator sits on a dead
+ *      page believing re-entry is under way — the exact defect the guard
+ *      was added to close. Nobody has watched a browser do either thing.
+ *      Read it as a guard whose premise is unverified, not a guarantee.
  *
  *   Pinned by `tests/ConsoleReentryInterceptorTest.php` — "announces
  *   every path on which it cannot complete a re-entry, naming the
@@ -72,10 +116,13 @@
  *
  * THE ONE REFUSAL THAT REMAINS INVISIBLE, and it is invisible in the
  * browser rather than here: a navigation the browser declines WITHOUT
- * throwing. Some refusals raise `SecurityError` and are caught above;
- * others are reported only to the developer console. In that case the
- * operator is left where the script found them, which is where they
- * would have been had the script never loaded.
+ * throwing. In that case the operator is left where the script found
+ * them, which is where they would have been had the script never loaded.
+ *   **SPECIFIED, NOT OBSERVED:** that some refusals raise and others are
+ *   reported only to the developer console is read from the standard and
+ *   from browser documentation. WHICH of the two happens for a given
+ *   sandbox or policy is exactly what nobody here has watched, and it
+ *   decides whether the case above is a caught error or a silent one.
  *
  * IT BRANCHES ON THE HEADER, NOT THE STATUS. A `401` without the header
  * is an ordinary application refusal and is left entirely alone.
@@ -89,6 +136,9 @@
  * `window.top` is unreachable — a cross-origin embed — this script does
  * NOT fall back to navigating its own frame; it takes the honest path
  * below instead.
+ *   **SPECIFIED, NOT OBSERVED:** that reaching `window.top`'s location
+ *   across origins throws, and that assigning to it navigates the top
+ *   document, are read from the standard. The harness models both.
  *   Pinned by `tests/ConsoleReentryInterceptorTest.php` — "navigates the
  *   top-level window through the issuer, preserving the return path" and
  *   "navigates the top window rather than the frame the capped request
@@ -100,7 +150,15 @@
  * silently: `bfc:console-reentry` is dispatched on `document`
  * IMMEDIATELY BEFORE the navigation, synchronously, so a listener can
  * persist a draft (a `localStorage` write completes; a network save does
- * not). It is deliberately NOT cancelable. The session is already dead
+ * not).
+ *   **PART EXECUTED, PART SPECIFIED.** That this script dispatches
+ *   before it calls `assign()` IS executed — the harness records both in
+ *   one ordered channel. That a browser runs every listener to
+ *   completion before the navigation takes effect, and that a
+ *   synchronous `localStorage` write survives it, are read from the
+ *   standard and have not been watched.
+ *
+ * It is deliberately NOT cancelable. The session is already dead
  * server-side, so suppressing the navigation grants nothing and only
  * strands the operator on a page whose every request fails — a
  * cancelable event would let an application turn D7's honest reload into
@@ -128,6 +186,14 @@
  * still run and still see the 401. A capped Livewire request that ends
  * in a re-entry must also end in whatever the component would have done
  * with a 401, because the navigation may not happen at all.
+ *   **PART EXECUTED, PART SPECIFIED.** That this script clones before
+ *   reading, and adds rather than replaces the XHR listener, IS
+ *   executed. That a real `Response` locks its body on first read and
+ *   that `clone()` yields an independently readable one are read from
+ *   the Fetch standard; the harness models them faithfully and is not a
+ *   browser. And **nothing here establishes that wrapping `window.fetch`
+ *   intercepts Livewire's transport at all** — that is script load order
+ *   in a real page, and no test loads two scripts.
  *   Pinned by `tests/ConsoleReentryInterceptorTest.php` — "hands the
  *   capped response back to its caller rather than swallowing it".
  *
@@ -204,9 +270,13 @@
      *
      * Deliberately a string comparison rather than a `URL` parse: both
      * sides of the comparison are values the BROWSER serialized
-     * (`location.origin` and `response.url`), so both already have their
+     * (`window.origin` and `response.url`), so both already have their
      * default ports dropped and their host normalised, and anything that
      * does not match this shape is refused rather than repaired.
+     *
+     * **SPECIFIED, NOT OBSERVED:** that a browser serializes those two
+     * values in that shape is read from the standard. No browser has
+     * been watched producing them here — the harness supplies them.
      */
     function originOf(url) {
         if (typeof url !== 'string' || url === '') {
@@ -219,19 +289,37 @@
     }
 
     /**
-     * This document's own origin, or null when it cannot be read — in
-     * which case nothing is same-origin and this script does nothing at
-     * all, which is the fail-closed direction.
+     * This document's EFFECTIVE origin, or null when it cannot be read —
+     * in which case nothing is same-origin and this script does not
+     * install at all, which is the fail-closed direction.
+     *
+     * **IT READS `window.origin`, NOT `location.origin`, AND THE
+     * DIFFERENCE IS THE WHOLE POINT.** `location.origin` is derived from
+     * the document's URL; `window.origin` is the document's effective
+     * origin, which is what actually decides what this script may do. A
+     * frame sandboxed with `allow-scripts` and WITHOUT
+     * `allow-same-origin` has an OPAQUE effective origin — `window.origin`
+     * is the string `"null"` — while `location.origin` still reports the
+     * URL's origin. An earlier revision read `location.origin`, so the
+     * install gate below could never fire in the exact case it was
+     * written for.
+     *
+     * There is deliberately NO fallback to `location.origin` or
+     * `location.href`: a fallback would restore that bug on the browsers
+     * it was reached on. A runtime that does not expose `window.origin`
+     * therefore gets no interceptor and is told so — the interceptor is
+     * a convenience, and being wrong about an origin is not a trade this
+     * script will make to keep it.
+     *
+     * **SPECIFIED, NOT OBSERVED:** that `window.origin` is `"null"` in a
+     * sandboxed frame, and equal to `location.origin` in an ordinary
+     * document, is read from the HTML standard. Neither has been watched
+     * in a browser. `docs/http-contract.md` carries the observation that
+     * would settle it.
      */
     function pageOrigin() {
         try {
-            var location = global.location;
-
-            if (!location) {
-                return null;
-            }
-
-            return originOf(location.origin) || originOf(location.href);
+            return originOf(global.origin);
         } catch (unreachable) {
             return null;
         }

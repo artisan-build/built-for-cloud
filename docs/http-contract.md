@@ -2158,6 +2158,20 @@ still be presented would un-spend a mint.
 
 ## The console chrome
 
+**READ THIS SECTION WITH ONE DISTINCTION IN MIND.** Everything here about the SERVER — the routes,
+the middleware, the rendered HTML, the escaping, the 401 shape — is executed by this package's test
+suite. Everything about the BROWSER is not. The interceptor's own logic is executed (in node,
+against a stand-in), but every behaviour it asks a browser for is **read from a standard and has
+never been watched happening**, and each such statement below is marked **"Specified, not
+observed."** That label is not a hedge and not a softening: it tells you which sentences someone
+has checked by running them and which are a careful reading of a specification.
+
+Why it is marked rather than fixed: a package with no application shell cannot execute a browser,
+so for these claims a citation is the ceiling. The list of every one of them, with the concrete
+check that would settle it, is at
+`~/Herd/brain/projects/built-for-cloud/pr5-browser-observable-claims.md`, and the first app
+conversion is where a real browser exists to run them.
+
 Console PRD D11 (one layout) and D7 (re-entry). This section describes what the PACKAGE serves;
 whether any page of a consuming application wears the chrome is that application's own decision,
 made by whichever of its templates extends the layout. `GET /bfc/meta` `capabilities` gains
@@ -2225,6 +2239,8 @@ list of exceptions.
 `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff` and a content `ETag`. The
 `no-store` is deliberate: a response whose availability depends on a session cookie must never
 enter a shared cache, and the cost is a re-fetch per page load of a few hundred static bytes.
+*The headers are executed — the assertion reads them off the real response. That a browser or an
+intermediary HONOURS `no-store` is specified, not observed.*
 
 **Refusals.** No delegated session — absent, capped or invalidated — answers with the same
 structured `401` every other console surface does: header `BFC-Console-Reentry: 1` and the body
@@ -2268,11 +2284,27 @@ on where it landed; and a same-origin PROXY the application itself operates is
 indistinguishable from the application — if an app forwards a third party's bytes under its own
 origin, an origin comparison cannot see through it.
 
-**And it introduced one new limitation, disclosed rather than absorbed.** A document with an
-OPAQUE origin — a sandboxed iframe, `about:blank`, anything reporting `location.origin` as the
-string `"null"` — can never verify any response, so the interceptor cannot function there at all.
-It says so at install time (see the causes below) and then does not install, rather than sitting
-quietly inert.
+*Specified, not observed:* that an opaque response carries an empty `url` and that a redirected
+one reports its final URL are read from the Fetch standard. The proxy statement is about origins
+and holds whatever a browser does.
+
+**And it introduced one new limitation, disclosed rather than absorbed.** A document with no
+readable EFFECTIVE origin can never verify any response, so the interceptor cannot function there
+at all. It says so at install time (see the causes below) and then does not install, rather than
+sitting quietly inert. That is a frame sandboxed with `allow-scripts` and **without**
+`allow-same-origin`, or a runtime that does not expose `window.origin`.
+
+The check reads **`window.origin`**, which is the document's effective origin — not
+`location.origin`, which is derived from the URL and still reports a perfectly good origin inside
+a sandboxed frame. An earlier revision of this package read `location.origin`, so this gate could
+never fire in the one case it was written for. There is deliberately no fallback: a runtime
+without `window.origin` gets no interceptor and is told so.
+
+`about:blank` is **not** in this set as a rule — a blank document normally inherits its creator's
+origin. An earlier revision of this sentence listed it flatly and that was too broad.
+
+*Specified, not observed:* that `window.origin` is `"null"` in a sandboxed frame while
+`location.origin` is not, and that the two agree in an ordinary document.
 
 Only then does it read the status and the header — **branching on the header, never on the
 status alone**, so an application's own `401` is left entirely alone.
@@ -2308,8 +2340,29 @@ On `origin_unverifiable` the operator's attribution is still TRUE — their sess
 the bar keeps saying who they are. Replacing D4's attribution with a warning about a capability
 this document lacks would trade a correct statement for a notice.
 
-The single case that stays invisible is a navigation the browser declines **without throwing**,
-which raises nothing the script can observe. See the CSP section for which policies produce it.
+*Specified, not observed:* what is executed is that the script announces each cause and which one
+it picks. WHEN a browser puts it in `origin_unverifiable` or `navigation_refused` — the sandbox
+and refusal behaviour — is read from a standard.
+
+### The `navigation_refused` guard rests on an unverified premise
+
+This one is called out on its own rather than left in the table, because it is the sharpest case
+in this section and because it concerns a guard added specifically to stop a silent failure.
+
+**The whole path assumes that a browser refusing a top-level navigation RAISES out of
+`Location.assign`.** That is what the `try` catches, and it is what produces the
+`navigation_refused` announcement. It is read from the specification. Nobody has watched a browser
+do it.
+
+**If a refusal is silent in practice, the `try` catches nothing** — no cause is announced, no
+event fires, and the operator sits on a dead page believing re-entry is under way. **That is
+precisely the defect the guard was added to close.** Read it as a guard whose premise is
+unverified, not as a guarantee that a refused re-entry is always reported.
+
+What settles it: load a console page inside `<iframe sandbox="allow-scripts allow-same-origin">`,
+let a request receive the capped 401, and observe whether
+`bfc:console-reentry-unavailable` fires with `cause: "navigation_refused"` or nothing happens at
+all. Until somebody does that, this paragraph is the honest statement of the guard's strength.
 
 ### Automatic re-entry is a full-page reload, and unsaved work goes with it
 
@@ -2337,6 +2390,11 @@ both be true: the departure event is dispatched, and only then is the navigation
 the browser refuses that navigation, an `unavailable` event follows the departure one — so a
 listener that saved a draft is also told the page is not going anywhere.
 
+*Executed:* that the script dispatches before it calls `assign()`, asserted as a sequence in one
+ordered channel. *Specified, not observed:* that a browser runs every listener to completion
+before the navigation takes effect, and that a synchronous `localStorage` write survives it. A
+listener that saves over the network has no such guarantee under either reading.
+
 **Neither event is cancelable, and `bfc:console-reentry` is deliberately not.** A listener runs
 synchronously, so a `localStorage` write completes before the page starts leaving; a network save
 does not. Cancelling was considered and rejected: the delegated session is already dead
@@ -2363,6 +2421,12 @@ re-entry").
 
 ### Content Security Policy
 
+**Every statement in this subsection about how a browser ENFORCES a policy is specified, not
+observed.** What is executed is what the package EMITS — the assertion below inspects the rendered
+response — and nothing more. No page has been served under a real `script-src` and watched. Three
+successive corrections to this subsection each replaced one confident spec claim with another, so
+what changed is the kind of claim it makes, not another attempt at a more careful sentence.
+
 **What the package emits is a single same-origin external `<script src>` with no nonce, no inline
 script and no inline style anywhere on the page.** It is served from a route rather than inlined
 precisely so that a consuming app never has to add `'unsafe-inline'` to `script-src` to make a
@@ -2382,7 +2446,7 @@ your policy also sets `script-src-elem`, THAT directive governs `<script src>` e
 `script-src` is not consulted for them at all — so `script-src 'self'; script-src-elem 'none'`,
 or any `script-src-elem` that does not cover this origin, blocks the interceptor however
 permissive `script-src` looks. Check the narrowest directive that applies to script ELEMENTS,
-not the fallback.
+not the fallback. *Specified, not observed.*
 
 **Nonce-only and `'strict-dynamic'` policies — `'self'` is NOT enough, and the tag will not load
 without help.** Two separate reasons, and an earlier revision of this section got both wrong:
@@ -2393,7 +2457,8 @@ without help.** Two separate reasons, and an earlier revision of this section go
   expressions — `'self'` included — **are ignored** for script loading, and only a nonce or hash
   admits a parser-inserted script. Adding `'self'` alongside `'strict-dynamic'` therefore does
   not help: the tag is still blocked, and the interceptor silently does not exist while capped
-  XHRs sit on a dead page.
+  XHRs sit on a dead page. *Specified, not observed* — as is the browser asymmetry immediately
+  below.
 
   Worse, this fails *asymmetrically across browsers*: a CSP2-era browser ignores the
   unrecognised `'strict-dynamic'` keyword and honours `'self'`, so a policy carrying both loads
@@ -2439,23 +2504,34 @@ never shipped in any browser, so it governs nothing today.
 An earlier revision of this paragraph asserted that no CSP directive stands between this script
 and the issuer, and that sandboxing "is not CSP". Both were wrong:
 
-- the **`sandbox` iframe attribute**, when this page is framed without `allow-top-navigation`
-  (or `allow-top-navigation-by-user-activation`); and
+- the **`sandbox` iframe attribute**, when this page is framed without `allow-top-navigation`; and
 - the **CSP `sandbox` directive**, which applies the same HTML sandboxing flags from a response
   header. `Content-Security-Policy: script-src 'self'; sandbox allow-scripts allow-same-origin`
   is a coherent policy under which the interceptor **loads and its navigation is denied** — the
   script runs, finds a destination, and the browser refuses the assignment.
 
-If you send a CSP `sandbox` directive, include `allow-top-navigation` (or the
-by-user-activation variant) or accept that automatic re-entry cannot happen on that page.
+If you send a CSP `sandbox` directive, include **`allow-top-navigation`** — the full token — or
+accept that automatic re-entry cannot happen on that page.
 
-**When the browser refuses, the interceptor says so rather than failing silently.**
-`Location.assign` is exposed across origins and THROWS on a refused top navigation, and that call
-is guarded: the script marks the chrome element and dispatches
-`bfc:console-reentry-unavailable` with `detail.cause` of `navigation_refused`.
+**`allow-top-navigation-by-user-activation` is NOT a substitute here, and an earlier revision of
+this sentence implied it was.** That token permits a top navigation only under transient user
+activation, and a re-entry triggered by a BACKGROUND Livewire or XHR response has none: the
+operator did not click anything to cause it. It may work when the capped request happens to follow
+a click closely enough to still be within an activation window, which makes it worse than useless
+as a recommendation — it would work in testing and fail in the case the feature exists for.
+*Specified, not observed.*
 
-**The residue, and it is now a narrow one:** a refusal the browser declines to raise — reported
-only to the developer console — cannot be caught, so that case remains invisible to the script.
+**When the browser refuses BY THROWING, the interceptor says so rather than failing silently.**
+The call is guarded, and the script marks the chrome element and dispatches
+`bfc:console-reentry-unavailable` with `detail.cause` of `navigation_refused`. That
+`Location.assign` throws on a refused top navigation is *specified, not observed* — see
+[the named entry above](#the-navigation_refused-guard-rests-on-an-unverified-premise), which
+states what follows if it does not.
+
+**The residue, and it is narrow only if the premise holds:** a refusal the browser declines to
+raise — reported only to the developer console — cannot be caught, so that case remains invisible
+to the script. *Specified, not observed:* which refusals raise and which do not. If none of them
+raise, this residue is the whole behaviour rather than an edge of it.
 The operator is then left on a page whose requests all fail, which is where they would have been
 had the script never loaded. Revocation is unaffected either way: it is enforced server-side, in
 the guard, on every route.

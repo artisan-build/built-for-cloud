@@ -16,11 +16,28 @@ use Illuminate\Support\Facades\Process;
  * {@see ConsoleChromeScript::SOURCE} — is run in node against a minimal
  * window stand-in, and these tests assert what it DID.
  *
- * WHAT THAT STILL IS NOT. It is `test-verified` and not `live-verified`:
- * a stand-in for `window` is not a browser, and nothing here exercises a
- * real `fetch`, a real Livewire request, a real cross-origin frame, or a
- * Content Security Policy. Those are named in the report rather than
- * implied to be covered.
+ * **WHAT IS EXECUTED HERE, AND WHAT IS ONLY MODELLED.** These tests
+ * drive the SCRIPT'S OWN LOGIC: which responses it acts on, what
+ * destination it builds, which cause it announces, and in what order.
+ * They do NOT verify a single thing the script asks the BROWSER to do —
+ * `response.url` shapes, `window.origin` in a sandboxed frame,
+ * `Location.assign` raising on a refused navigation, `Response`
+ * body-lock semantics, listener completion before unload. Every one of
+ * those is a value the harness SUPPLIES, read from a standard and never
+ * watched happening, and each is labelled "SPECIFIED, NOT OBSERVED"
+ * where the script states it.
+ *
+ * **THAT DISTINCTION IS NOT ACADEMIC AND THIS FILE HAS ALREADY PAID FOR
+ * IT.** An earlier revision had the interceptor read `location.origin`
+ * as the document's effective origin, and the harness modelled the same
+ * wrong property — so the suite reported that the code matched what its
+ * author believed, which is not the same as reporting that it was right.
+ * When a brief and its harness share an assumption, the harness cannot
+ * falsify the brief.
+ *
+ * The full list, with the concrete check that would settle each, is at
+ * `~/Herd/brain/projects/built-for-cloud/pr5-browser-observable-claims.md`;
+ * the sink conversion is where a real browser exists to run them.
  *
  * **SKIPPED IS ITS OWN STATE AND NOT A PASS, AND THAT IS ENFORCED
  * RATHER THAN ASSERTED.** An earlier revision of this docblock said "CI
@@ -287,7 +304,14 @@ it('announces every path on which it cannot complete a re-entry, naming the caus
     //
     // 1. THE BROWSER REFUSED THE NAVIGATION. `Location.assign` is
     //    exposed across origins and throws — a sandboxed frame without
-    //    top-navigation permission raises SecurityError. An earlier
+    //    top-navigation permission raises SecurityError.
+    //
+    //    **SPECIFIED, NOT OBSERVED, AND LOAD-BEARING.** What is driven
+    //    below is that the script CATCHES and announces when `assign()`
+    //    throws. That a browser throws at all is the premise, and it is
+    //    unverified: if a refusal is silent in practice, this guard
+    //    catches nothing and the operator sits on a dead page believing
+    //    re-entry is under way — the defect it was added to close. An earlier
     //    revision left that call outside every guard, so the script had
     //    already claimed the response and emitted its departure event
     //    and then threw, leaving the operator on a dead page believing
@@ -310,8 +334,15 @@ it('announces every path on which it cannot complete a re-entry, naming the caus
     //    same-origin check can then never pass, so the interceptor is
     //    inert; that is a NEW limitation the same-origin fix introduced
     //    and it is disclosed at install time rather than absorbed.
-    //    Two shapes of the same thing: `origin` reported as the string
-    //    "null", and a location object with no origin to read at all.
+    //    Two shapes of the same thing: `window.origin` reported as the
+    //    string "null" (a frame sandboxed without `allow-same-origin`),
+    //    and a runtime that does not expose `window.origin` at all.
+    //
+    //    THE FIRST OF THOSE IS MODELLED WITH `location.origin` STILL
+    //    REPORTING A GOOD ORIGIN, which is what a browser does — so this
+    //    now drives the property the script actually reads rather than
+    //    the one an earlier revision assumed. SPECIFIED, NOT OBSERVED:
+    //    that a browser reports the pair that way.
     foreach (['opaque-origin-document', 'fetch-origin-unreadable'] as $scenario) {
         $inert = bfcInterceptorScenario($scenario);
 

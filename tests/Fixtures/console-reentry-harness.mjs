@@ -6,6 +6,16 @@
 // node `vm` context carrying just enough of a window to drive it, and
 // prints what the script actually did as JSON.
 //
+// WHAT IT PROVES, EXACTLY: the script's own logic — which responses it
+// acts on, what destination it builds, which cause it announces, in what
+// order. WHAT IT CANNOT PROVE: any of the browser behaviour it feeds the
+// script. Every value below is a MODEL of something read from a
+// standard, never something a browser produced. A model that is wrong
+// yields a suite that agrees with the mistake, and that has already
+// happened here once: an earlier version modelled `location.origin` as
+// the document's effective origin, so the interceptor's install gate and
+// this harness were wrong together and the tests confirmed it.
+//
 // Everything here is a test double. Nothing in it is shipped.
 
 import { readFileSync } from 'node:fs';
@@ -134,7 +144,13 @@ function makeWindow(options) {
         this.detail = init && init.detail;
     }
 
-    const window = { document, CustomEvent, location: frameLocation };
+    // `origin` is the document's EFFECTIVE origin and is what the script
+    // reads; `location.origin` is derived from the URL and is
+    // deliberately kept SEPARATE here, because the two differ in exactly
+    // the case the install gate exists for.
+    //
+    // SPECIFIED, NOT OBSERVED: that a browser reports them as modelled.
+    const window = { document, CustomEvent, location: frameLocation, origin: PAGE_ORIGIN };
 
     if (options.topUnreachable) {
         Object.defineProperty(window, 'top', {
@@ -150,17 +166,24 @@ function makeWindow(options) {
     }
 
     if (options.originUnreadable) {
-        // A document that cannot report its own origin — the fail-closed
-        // case the script treats as "nothing is same-origin".
-        window.location = { assign: topLocation.assign };
+        // A runtime that does not expose `window.origin` at all — the
+        // fail-closed case. `location` still reports a perfectly good
+        // origin, and the script deliberately does not fall back to it.
+        delete window.origin;
         window.top = window;
     }
 
     if (options.opaqueOrigin) {
-        // A sandboxed iframe or `about:blank`: `location.origin` is the
-        // literal string "null" and `href` is `about:blank`, so no
-        // response can ever be verified as this application's.
-        window.location = { origin: 'null', href: 'about:blank', assign: topLocation.assign };
+        // THE CASE THE INSTALL GATE EXISTS FOR, modelled correctly this
+        // time: a frame sandboxed with `allow-scripts` and without
+        // `allow-same-origin` has an OPAQUE effective origin — so
+        // `window.origin` is the literal string "null" — WHILE
+        // `location.origin` still reports the page URL's origin. A
+        // harness that set only `location.origin` would let a script
+        // reading `location.origin` pass, which is how the earlier bug
+        // survived its own test.
+        window.origin = 'null';
+        window.location = { origin: PAGE_ORIGIN, href: SAME_ORIGIN_URL, assign: topLocation.assign };
         window.top = window;
     }
 
