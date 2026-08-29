@@ -20,6 +20,7 @@ use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\Tests\AppActionReadTransportScan;
 use ArtisanBuild\BuiltForCloud\Tests\AppActionRetentionScan;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ConsoleEventsDigest;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ConsoleEventsLedger;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ConsoleEventsReport;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ConsoleEventsSource;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ConsoleEventsTally;
@@ -1015,6 +1016,11 @@ it('names a route that reads the app-action stream under a name that mentions ne
     Route::get('/bfc/console/events', ConsoleEventsDigest::class);
     Route::get('/bfc/console/summary', ConsoleEventsReport::class);
     Route::get('/bfc/console/tally', ConsoleEventsTally::class);
+    // D4: PHP resolves class names case-insensitively and the first
+    // revision of the matcher did not, so this spelling reached the
+    // model and was reported as reaching nothing. The table name in it
+    // is folded too.
+    Route::get('/bfc/console/ledger', ConsoleEventsLedger::class);
 
     // The heuristic this replaces, run over the same routes, to show
     // that the fixtures genuinely defeat it rather than being caught by
@@ -1028,6 +1034,7 @@ it('names a route that reads the app-action stream under a name that mentions ne
 
     expect(AppActionReadTransportScan::readTransportsIn(Route::getRoutes()->getRoutes()))->toBe([
         'GET /bfc/console/events',
+        'GET /bfc/console/ledger',
         'GET /bfc/console/tally',
     ]);
 
@@ -1082,22 +1089,13 @@ it('follows a read one class past the route, and stops at the emission door', fu
         ))->toContain(AppActionEvent::class);
 });
 
-it('pins the emission door\'s public surface, so a read verb cannot join it unnoticed', function (): void {
-    // THE PREMISE THE WALK RESTS ON, asserted rather than assumed.
-    // Stopping at the recorder is only safe while the recorder is not
-    // itself a way to read: a `recent()` or a `for()` added to it
-    // tomorrow would make every emitter a read transport while the scan
-    // reported clean, because the scan deliberately does not look past
-    // the door.
-    //
-    // What is pinned is the SURFACE, not a property of the verbs. There
-    // is no check here that a method is a write — `record()` returns the
-    // `AppActionEvent` it has just inserted, which is a write result and
-    // not a query, and nothing mechanical here could tell those two
-    // apart. What this does is make an addition visible: a third public
-    // method, or either of these two returning a builder or a
-    // collection instead, reds this test and sends whoever added it to
-    // the walk that assumes the door is closed.
+it('pins the emission door\'s public surface, so a verb cannot be ADDED to it unnoticed', function (): void {
+    // WHAT THIS PIN CATCHES, SAID EXACTLY: an ADDITION. A third public
+    // method, or either of these two changing its return type, reds
+    // this. It says nothing about what the existing two DO — the bodies
+    // are not read here — so a `record()` that kept its name and
+    // signature and started returning a queried row would leave this
+    // green. That direction is the next test's, behaviourally.
     expect(PublicSurfaceScan::of(AppActionRecorder::class))
         ->toBe(['dedupKeyFor', 'record']);
 
@@ -1113,4 +1111,63 @@ it('pins the emission door\'s public surface, so a read verb cannot join it unno
         'dedupKeyFor' => 'string',
         'record' => AppActionEvent::class,
     ]);
+});
+
+it('runs no read against the stream on either of the emission door\'s verbs', function (): void {
+    // D5, AND IT IS THE PREMISE THE WHOLE WALK RESTS ON. The scan stops
+    // at AppActionRecorder, so if the recorder could be used to READ,
+    // every route that emits would be a read transport and the scan
+    // would report clean. The surface pin above cannot establish that:
+    // `record(...): AppActionEvent` can be rewritten to query and return
+    // an existing row without changing its name, its signature or its
+    // return type.
+    //
+    // So this reads what the verbs actually EXECUTE. Every statement
+    // each one issues is captured and the SELECTs against the two
+    // stream tables are counted; a `record()` that fetched a row before
+    // returning it would be named here.
+    $selects = static function (callable $call): array {
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+
+        try {
+            $call();
+        } finally {
+            DB::disableQueryLog();
+        }
+
+        return array_values(array_filter(
+            array_map(static fn (array $entry): string => (string) $entry['raw_query'], DB::getRawQueryLog()),
+            static fn (string $sql): bool => preg_match('/^\s*select\b/i', $sql) === 1
+                && preg_match('/\bbfc_app_action_(events|outbox)\b/i', $sql) === 1,
+        ));
+    };
+
+    // The actor is built OUTSIDE the measured call: recording a handoff
+    // writes and reads the delegated-actor table, and those statements
+    // belong to the fixture rather than to the verb under test.
+    $actor = AppActionActor::delegated(consoleActor(), 'Acme Agency');
+
+    expect($selects(static fn (): string => AppActionRecorder::dedupKeyFor(
+        SinkAppAction::InvoiceVoided,
+        'invoice-1',
+    )))->toBe([]);
+
+    expect($selects(static fn (): AppActionEvent => DB::transaction(
+        static fn (): AppActionEvent => app(AppActionRecorder::class)->record(
+            action: SinkAppAction::InvoiceVoided,
+            actor: $actor,
+            reason: AppActionReason::Requested,
+            naturalKey: 'invoice-2',
+        ),
+    )))->toBe([]);
+
+    // THE CONTROL, because a query log that captured nothing would
+    // satisfy both assertions above whatever the verbs did. A read of
+    // the same tables through the same harness IS reported.
+    expect($selects(static fn (): int => AppActionEvent::query()->count()))
+        ->toHaveCount(1);
+
+    expect($selects(static fn (): int => AppActionOutboxEntry::query()->count()))
+        ->toHaveCount(1);
 });

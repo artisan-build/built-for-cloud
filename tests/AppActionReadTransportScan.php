@@ -38,9 +38,12 @@ use Throwable;
  * from a route's action class, through the package classes that class
  * names in code, transitively, to the stream itself.
  *
- * **IT CLASSIFIES, IT DOES NOT FILTER.** Every registered route is
- * visited and lands in exactly one bucket, so the counts reconcile and
- * a route cannot leave the scan by being unrecognised:
+ * **IT CLASSIFIES, IT DOES NOT FILTER**, and that is a statement about
+ * this method rather than about routes in general: {@see classify()} is
+ * handed an iterable of routes and returns one bucket for each of them,
+ * instead of selecting a subset by name or prefix first. What it is
+ * handed is the caller's business, and what a bucket MEANS is bounded
+ * by the walk:
  *
  *  - {@see READS} — the walk reaches {@see AppActionEvent},
  *    {@see AppActionOutboxEntry}, either of their builders, or either
@@ -54,13 +57,31 @@ use Throwable;
  *    to exempt it by name — and an exemption on the one route that
  *    legitimately touches the stream is exactly the blind spot this
  *    exists to prevent.
- *  - {@see UNRELATED} — neither. Enumerated anyway.
+ *  - {@see UNRELATED} — the walk reached neither. It is also where a
+ *    route lands when the walk could not follow it: a closure action,
+ *    an unloadable class, or a read through a collaborator outside
+ *    `src/`. **A route here has not been shown to be unrelated to the
+ *    stream; it has been shown not to reach it by a path this walk
+ *    follows.**
  *
- * What licenses stopping at the recorder is that the recorder exposes
- * no read verb, which is a separate fact and is asserted separately —
- * `tests/AppActionAuditTest.php`, "the emission door exposes no verb
- * that returns stream rows". Without that assertion this walk would be
- * resting on an unchecked premise.
+ * What licenses stopping at the recorder is that its verbs do not read
+ * the stream, and that is a separate fact asserted two ways in
+ * `tests/AppActionAuditTest.php`, because one of them is not enough:
+ *
+ *  - "pins the emission door's public surface, so a verb cannot be
+ *    ADDED to it unnoticed" pins the method names and the return types.
+ *    It detects an ADDITION and nothing more — the bodies are not read,
+ *    so a `record()` keeping its name, signature and return type while
+ *    querying and returning an existing row leaves it green.
+ *  - "runs no read against the stream on either of the emission door's
+ *    verbs" is the behavioural half that covers that: each verb is
+ *    executed with the query log on and its SELECTs against the two
+ *    tables are counted, with a real read through the same harness as
+ *    the control.
+ *
+ * Both speak of the verbs that exist today. Neither says anything about
+ * a verb somebody adds, which is what the surface pin is for; the two
+ * are meant to be read together.
  *
  * **THE RESIDUE, named rather than implied.** This is a textual walk
  * over class names and table names, so:
@@ -264,6 +285,19 @@ final class AppActionReadTransportScan
      * hint and a `new` all count alike and a fully qualified name and an
      * imported one are one thing.
      *
+     * **CASE-INSENSITIVELY, BECAUSE PHP CLASS NAMES ARE.** The first
+     * revision matched case-sensitively, so
+     * `\artisanbuild\builtforcloud\audit\appactionevent::query()->get()`
+     * — a spelling PHP resolves to the model and executes — reached the
+     * stream and was reported as reaching nothing. Table names are
+     * matched the same way, since the identifier case a database folds
+     * is the database's business and not something to decide here.
+     *
+     * The cost is over-matching: a short name that also occurs as an
+     * ordinary identifier in some other casing is counted as a
+     * reference. That direction fails loud — it reports a route as
+     * reading when it does not — which is the side to be wrong on.
+     *
      * @param  array<string, string>|null  $classes  short name => fully qualified; the package's own when null
      * @return list<string>
      */
@@ -272,13 +306,13 @@ final class AppActionReadTransportScan
         $found = [];
 
         foreach ($classes ?? self::packageClasses() as $short => $fullyQualified) {
-            if (preg_match('/\b'.preg_quote($short, '/').'\b/', $code) === 1) {
+            if (preg_match('/\b'.preg_quote($short, '/').'\b/i', $code) === 1) {
                 $found[$fullyQualified] = true;
             }
         }
 
         foreach (self::STREAM as $target) {
-            if (! str_contains($target, '\\') && str_contains($code, $target)) {
+            if (! str_contains($target, '\\') && stripos($code, $target) !== false) {
                 $found[$target] = true;
             }
         }
