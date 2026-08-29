@@ -142,9 +142,12 @@ final readonly class AppActionActor
      *
      * A consuming app calling this factory gets none of that and owns
      * the truth of what it passes. What IS enforced, exactly: only a
-     * delegated actor has a parameter to put an agency in, and
-     * {@see AppActionEvent} refuses a stored row that carries one on any
-     * other actor type.
+     * delegated actor has a parameter to put an agency in, so an
+     * {@see AppActionRecorder} emission can carry one no other way, and
+     * {@see AppActionEvent}'s `creating` hook refuses the other
+     * combinations on the writes that fire it. The TABLE constrains
+     * neither column against the other — a raw insert can pair them
+     * however it likes.
      *
      * **Untrusted display text on either path. Escape at every sink.**
      */

@@ -36,8 +36,9 @@ use LogicException;
  * three review rounds making.** Every guarantee this stream makes — a
  * bounded action from a compile-time vocabulary, a type-qualified actor,
  * an agency only on a delegated actor, a package-generated id, a
- * transactional emission, one event per action, a digest dedup key — is
- * a property of **what the package writes through the recorder**. None
+ * transactional emission, one event per caller-identified action, a
+ * digest dedup key — is a property of **what the package writes through
+ * the recorder**. None
  * of them is a property of what a row in this table can contain.
  *
  * **THE RESIDUE, and it is the load-bearing sentence: an app holding
@@ -81,24 +82,34 @@ use LogicException;
  * reader would otherwise assume closed: a write that satisfies every
  * check above still gets **no ledger row**, because a row cannot write
  * its own ledger entry from `creating` — the event id it would reference
- * is not inserted yet. "Exactly one event per action" is therefore a
- * property of the recorder and of nothing else.
+ * is not inserted yet. One event per caller-identified action is
+ * therefore a property of the recorder and of nothing else — and, on the
+ * recorder itself, only of calls that supply a natural key.
+ * {@see AppActionRecorder::record()} states the condition in full.
  *   Pinned by `tests/AppActionAuditTest.php` — "persists a well-formed
  *   direct model write with no ledger row, which is the residue the
  *   recorder names".
  *
  * **NO FREE TEXT (D15) — in what the recorder writes.** The credential
- * stream carries a bounded `note`; this schema has no column of that
- * kind at all, which is the part that IS structural: there is nowhere in
- * this table for prose to go except the two columns below. `action` is a
- * compile-time enum case on the recorder path; `reason` is a closed
- * package enum ({@see AppActionReason}).
+ * stream carries a bounded `note`; this schema designates no column of
+ * that kind at all, and THAT absence is structural. Recorder emissions
+ * are bounded enums and identifiers throughout, except the delegated
+ * agency display string below: `action` is a compile-time enum case on
+ * that path, `reason` is a closed package enum
+ * ({@see AppActionReason}). The TABLE is not what holds that line — its
+ * string columns can physically take prose through the direct writes
+ * named above.
  *
  * THE ONE STRING THAT IS NOT AN IDENTIFIER: `on_behalf_of`. D4 requires
  * the agency a delegated operator acts for, and it is **caller-supplied
- * on every path, this package's included**. What the schema constrains
- * is that it accompanies a delegated actor; what it says is the caller's
- * to be right about. The package has two paths and both are legitimate:
+ * on every path, this package's included**. {@see AppActionRecorder}
+ * can carry an agency only through a delegated {@see AppActionActor} —
+ * the private constructor and its factories are what enforce that — and
+ * the `creating` hook also refuses other combinations when it runs.
+ * **The schema itself does not constrain the relationship**: a raw or
+ * event-free insert can store `actor_type=local_user` beside a non-null
+ * `on_behalf_of`. What the value SAYS is the caller's to be right about
+ * on every path. The package has two paths and both are legitimate:
  * `POST /bfc/console/enter` calls {@see AppActionActor::delegated()}
  * directly with the claims of the session it has just opened, because
  * the request-scoped acting principal was resolved before that session

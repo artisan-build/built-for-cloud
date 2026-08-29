@@ -126,8 +126,8 @@ abstract class AppendOnlyBuilder extends Builder
      *    `insertGetId`, `insertUsing`, and the three `fillAndInsert*`
      *    helpers that forward to them) fire no model events either. The
      *    `insertOrIgnore` family is the sharpest: it would SWALLOW the
-     *    unique-index violation that "exactly one event per action"
-     *    rests on. `updateFrom` is PostgreSQL's `UPDATE ... FROM` and
+     *    unique-index violation that one event per caller-identified
+     *    action rests on. `updateFrom` is PostgreSQL's `UPDATE ... FROM` and
      *    belongs to the first family; it sits with these because, like
      *    them, it is reached ONLY through `__call()` forwarding — which
      *    is how all three arrived on this list, after a reviewer wrote

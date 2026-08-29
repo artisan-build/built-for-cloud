@@ -13,8 +13,12 @@ use Illuminate\Database\Query\Builder;
 use LogicException;
 
 /**
- * **AN IMMUTABLE DEDUP LEDGER**, one row per app-action event, written in
- * the SAME database transaction as the event and the action it records.
+ * **THE DEDUP LEDGER.** For each successful {@see AppActionRecorder}
+ * emission, one event row and one row here are inserted in the SAME
+ * database transaction as the action they record. The package never
+ * updates or prunes either of them; app-owned direct writes and
+ * deletions can still make the pair incomplete, which the residue below
+ * states in full.
  *
  * The table is named for the outbox PATTERN D17 names, and the pattern is
  * what the WRITE side does — same-transaction insert, consumed later. But
@@ -24,10 +28,14 @@ use LogicException;
  * of the schema is not told there is machinery behind it.
  *
  * **WHY IT IS A ROW AND NOT A COLUMN.** `dedup_key` is UNIQUE, and that
- * index is what makes "exactly one event per action" hold of what
- * {@see AppActionRecorder} writes: a second emission of the same logical
- * action fails this insert and takes the whole transaction with it — the
- * action and its first event included. `event_id` is unique too, so one
+ * index is what makes one event per CALLER-IDENTIFIED action hold of
+ * what {@see AppActionRecorder} writes: a second emission of the same
+ * logical action fails this insert and takes the whole transaction with
+ * it — the action and its first event included. **Caller-identified is
+ * the condition and not decoration**: a `record()` call that supplies no
+ * natural key is keyed to the new event's own id, so it collides with
+ * nothing, and two such calls for one logical action both succeed.
+ * {@see AppActionRecorder::record()} states it in full. `event_id` is unique too, so one
  * recorder call cannot leave two ledger rows behind. Both are database
  * properties of the ROWS THAT EXIST; neither makes an event that was
  * written without going through the recorder acquire a ledger row, and
@@ -86,17 +94,22 @@ use LogicException;
  *
  * **WHAT THIS LEDGER IS NOT, corrected from an earlier revision of this
  * docblock that claimed both.** It is not the replayable history — the
- * EVENT table is append-only and complete, so a future consumer can be
- * built against it without this table existing at all, and "a migration
+ * EVENT table is the one a future consumer would be built against,
+ * without this table existing at all: it carries every emission the
+ * recorder makes and the package prunes none of them, which is as much
+ * as any table in a consuming app's own database can be said to hold.
+ * And "a migration
  * over history nobody can replay" was never the argument for keeping
  * this one. And it is not an ORDERED hand-off: the only ordering it
  * carries is a `created_at` at one-second resolution, which is nullable,
  * so it cannot sequence two rows written in the same second. The honest
  * statement of what it gives is dedup, durably, and nothing else.
  *
- * **STORAGE IS UNBOUNDED.** One row per app-action event, forever,
- * pruned by nothing — the same declared retention the event table
- * carries, and the cost is named here rather than discovered later.
+ * **STORAGE IS UNBOUNDED.** One row per recorder emission, and **nothing
+ * in this package ever prunes one** — the same declared retention the
+ * event table carries, and the cost is named here rather than discovered
+ * later. "Forever" is the package's half of it only: an app can delete
+ * its own rows, as the residue above says.
  *
  * @property string $id
  * @property string $event_id
@@ -109,7 +122,12 @@ final class AppActionOutboxEntry extends Model
 
     public const UPDATED_AT = null;
 
-    /** sha256, hex — the shape {@see AppActionRecorder} produces and the only shape this table stores. */
+    /**
+     * sha256, hex — the shape {@see AppActionRecorder} produces, and the
+     * shape `creating` additionally requires of the writes that fire it.
+     * **The TABLE enforces only 64 characters and uniqueness**, so an
+     * event-free insert can store sixty-four `z`s.
+     */
     public const string DEDUP_KEY_PATTERN = '/^[0-9a-f]{64}$/D';
 
     protected $table = 'bfc_app_action_outbox';

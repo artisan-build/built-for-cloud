@@ -2558,28 +2558,38 @@ detail and never said to be unreadable reads exactly like one you can query.
 
 ### Storage
 
-One row per action in `bfc_app_action_events`, plus one row in `bfc_app_action_outbox`, written
-in the **same database transaction** as the action itself. An action that rolls back takes both
-rows with it: the stream is transactional, or it is fiction. An emission attempted outside a
+For each successful emission, one row in `bfc_app_action_events` and one row in
+`bfc_app_action_outbox`, written in the **same database transaction** as the action itself. An
+action that rolls back takes both rows with it: the stream is transactional, or it is fiction. An emission attempted outside a
 transaction is refused rather than opening one of its own.
 
-**`bfc_app_action_outbox` is an immutable dedup ledger, not an operational outbox.** The table is
+**`bfc_app_action_outbox` is a dedup ledger, not an operational outbox.** The table is
 named for the outbox PATTERN D17 names, and the pattern is what the write side does; the delivery
 half does not exist. **No drainer ships for this stream in this release**, because no consumer
 exists to deliver to — nothing drains it, nothing marks it, nothing reads it — and the
 delivery-bookkeeping columns the credential outbox carries (`attempts`, `claimed_at`,
 `claim_token`, `delivered_at`, `delivered_recipients`, `last_error`) are deliberately absent
-rather than present and unwritten. It is also not the replayable history: the EVENT table is
-append-only and complete, and a future consumer can be built against that. And it is not an
+rather than present and unwritten. It is also not the replayable history: the EVENT table is the
+one a future consumer would be built against — it carries every emission the package makes, and the
+package prunes none of them. And it is not an
 ORDERED hand-off — the only ordering it carries is a nullable `created_at` at one-second
 resolution, which cannot sequence two rows written in the same second.
 
-What it does give is dedup, durably. `dedup_key` is UNIQUE, and that index is what makes
-**exactly one event per action** a database property of what the emission point writes: a second emission
-of the same logical action fails the insert and takes the transaction — the action included —
-with it. `event_id` is unique too, so "one ledger row per event" is a database property as well.
+What it does give is dedup, durably. `dedup_key` is UNIQUE, and that index is what makes **one
+event per CALLER-IDENTIFIED action** a database property of what the emission point writes: a
+second emission of the same logical action fails the insert and takes the transaction — the action
+included — with it. `event_id` is unique too, so "one ledger row per event" is a database property
+as well.
 
-**`dedup_key` stores a sha256 digest, never a caller's string.** It is a hash over a
+**Caller-identified is a condition, and it is the whole of the difference.** The emission point
+hashes a natural key the CALLER supplies — its own name for this action: an invoice id, a mint
+digest — into `dedup_key`. **An emission that supplies none is keyed to the new event's own id, so
+it collides with nothing.** For such a call the package still guarantees one event row and one
+ledger row, and guarantees nothing across calls. An app that wants a duplicate refused has to name
+the action.
+
+**The emission point stores a sha256 digest in `dedup_key`, never a caller's string.** It is a
+hash over a
 length-delimited encoding of the action's vocabulary, the action's name and the caller's own
 natural key. Two reasons, and both matter to a consumer reading this schema later: a caller's
 string written verbatim into a wide column would be an **app-content channel** into a stream
@@ -2588,14 +2598,21 @@ straight in; and namespacing by vocabulary and action removes the global collisi
 which two unrelated apps choosing the same natural key would silently suppress each other's
 events.
 
+The model additionally requires lowercase-hex digest SHAPE on the writes that fire `creating`. **The
+column itself enforces only 64 characters and uniqueness**, so a direct write can store sixty-four
+`z`s — and no check anywhere can tell a real digest from any other 64 hex characters, because the
+natural key it would need to recompute one is deliberately not stored.
+
 **And the ledger is append-only exactly as strongly as the event it dedupes** — model guards, the
 enumerated bulk-operation refusals, and the same database triggers. That is not symmetry for its
 own sake: a unique index only rejects a duplicate while the row it collides with still EXISTS, so
 a deletable ledger row would let the duplicate this stream promises to refuse be re-admitted by
 deleting the evidence of the first one.
 
-**Storage is unbounded.** One event row and one ledger row per app action, forever, pruned by
-nothing — see [Retention](#retention) — and the cost is stated here rather than discovered later.
+**Storage is unbounded.** One event row and one ledger row per emission, and **nothing in this
+package ever prunes either** — see [Retention](#retention) — and the cost is stated here rather
+than discovered later. An app deleting its own rows is outside what the package can see, so
+"complete" is not a property this contract claims of either table.
 
 The event columns, all of them:
 
@@ -2610,9 +2627,11 @@ The event columns, all of them:
 | `on_behalf_of` | the agency a delegated operator acts for (D4), or null; never present for the other two actor types |
 | `occurred_at`, `created_at` | timestamps |
 
-**There is no free-text column.** The schema carries no `note` and nothing of that kind, and that
-part is structural: there is nowhere in this table for prose to go. The one string that is not
-identifier-shaped is `on_behalf_of`, and D4 requires it.
+**No column is designated for arbitrary app content.** The schema carries no `note` and nothing of
+that kind, and THAT absence is structural. It is not the same as prose being impossible: the
+emission point writes bounded enums and identifiers throughout, except the delegated agency display
+string — `on_behalf_of`, which D4 requires and which intentionally IS display text — while the
+VARCHAR columns above can physically hold prose through the direct writes described below.
 
 **WHAT THESE COLUMNS CONTAIN IS A GUARANTEE ABOUT WHAT THE PACKAGE WRITES, NOT ABOUT THE TABLE.**
 Read the table above as a description of the rows the package's emission point produces, because
@@ -2631,16 +2650,18 @@ vocabulary, a `delegated_actor` named by a bare id, an `on_behalf_of` on any oth
 a write with no transaction open; the models' shared Eloquent builder refuses an enumerated set of
 bulk mutation spellings. **Neither is a boundary and no guarantee here depends on either being
 complete.** A write that satisfies both still gets **no ledger row** — one cannot be written from
-`creating`, because the event id it would reference is not inserted yet — so "exactly one event per
-action" is likewise a property of the emission point and of nothing else.
+`creating`, because the event id it would reference is not inserted yet — so one event per
+caller-identified action is likewise a property of the emission point and of nothing else.
 
 **And `on_behalf_of` is caller-supplied on every path, this package's included.** On the package's
 own two paths it originates as an issuer-minted claim, bounded to 120 characters and rejected for
 control characters by the assertion verifier: `POST /bfc/console/enter` passes the claims of the
 session its redemption has just begun, and every other emission passes the request's one resolved
 acting principal. Nothing downstream of those re-checks it, and a consuming app calling the actor
-factory itself supplies whatever it likes. What IS enforced is that the column accompanies a
-delegated actor and no other. **Escape it at every sink.**
+factory itself supplies whatever it likes. What IS enforced: the emission point can carry an agency
+only through a delegated actor, and the model's `creating` hook refuses the other combinations on
+the writes that fire it. **The table constrains neither column against the other** — a raw insert
+can store an agency beside a `local_user`. **Escape it at every sink.**
 
 ### The actor vocabulary
 

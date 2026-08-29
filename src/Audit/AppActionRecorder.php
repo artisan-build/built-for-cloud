@@ -17,8 +17,10 @@ use LogicException;
  * **THIS CLASS IS THE BOUNDARY THE STREAM'S GUARANTEES ARE ABOUT.**
  * Every one of them — a bounded action from a compile-time vocabulary, a
  * type-qualified actor, an agency only on a delegated actor, a
- * package-generated id, a transactional emission, exactly one event per
- * action, a digest dedup key — holds of **what is written through
+ * package-generated id, a transactional emission, one event per
+ * CALLER-IDENTIFIED action (the condition is stated in full under
+ * `$naturalKey` below), a digest dedup key — holds of **what is written
+ * through
  * `record()`**. Read as a claim about the TABLE, every one of them is
  * false, and two earlier revisions of this docblock read that way: the
  * first called this "the single emission point", the second moved the
@@ -100,10 +102,16 @@ final class AppActionRecorder
      * caller's transaction.
      *
      * `$naturalKey` is the caller's own name for THIS action — an
-     * invoice id, a mint digest — and it is what makes "exactly one
-     * event per action" mean anything: it is hashed into the ledger's
-     * unique `dedup_key`, so a second emission of the same logical
-     * action fails the insert and takes the transaction with it.
+     * invoice id, a mint digest — and it is the CONDITION on the only
+     * thing this stream guarantees about duplicates. Stated here in
+     * full, because every other mention of it in this package is a
+     * reference back to this sentence: **the recorder writes exactly one
+     * event per caller-identified action when the caller supplies a
+     * stable natural key; without one it guarantees one event row and
+     * one ledger row per CALL, and no cross-call deduplication at all.**
+     * The key is hashed into the ledger's unique `dedup_key`, so a
+     * second emission of the same logical action fails the insert and
+     * takes the transaction with it.
      *
      * **IT IS HASHED, NOT STORED.** A caller's string written verbatim
      * into a 255-character column would be an app-content channel into a
@@ -167,6 +175,24 @@ final class AppActionRecorder
     /**
      * The ledger key: sha256 over a LENGTH-DELIMITED encoding of the
      * vocabulary, the action and the caller's natural key.
+     *
+     * **THIS IS INTENDED PUBLIC API, and it is documented as such rather
+     * than left as a test's convenience.** It was promoted from a
+     * private helper to serve a test, which is a reason to ask the
+     * question and not an answer to it. The answer: a consuming app that
+     * wants to know whether an action has already been recorded — before
+     * emitting, or from a reconciliation job — needs the key the ledger
+     * is indexed by, and the alternative to exposing it is every such
+     * app RESTATING the derivation. A restated hash is a second
+     * definition that can drift from this one silently, and the failure
+     * it produces is a SUPPRESSED event rather than a wrong answer. So
+     * it is public, it is a pure function of its arguments, it touches
+     * nothing, and it is covered by the compatibility rule the rest of
+     * this package's public surface is: changing what it returns is a
+     * breaking change. It is pinned by the public-surface enumeration in
+     * `tests/AppActionAuditTest.php` — "has exactly the public surface
+     * it is meant to have on the emission point" — so this class cannot
+     * grow another public method without the diff saying so.
      *
      * **PUBLIC so that a caller's keying can be PINNED rather than
      * restated.** A test asserting only that the stored key is 64 hex

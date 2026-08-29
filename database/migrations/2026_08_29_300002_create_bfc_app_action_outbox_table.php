@@ -8,9 +8,12 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
- * The app-action stream's IMMUTABLE DEDUP LEDGER (Console PRD D17): one
- * row per event, inserted in the SAME transaction as the event and the
- * action it records.
+ * The app-action stream's DEDUP LEDGER (Console PRD D17): for each
+ * successful `AppActionRecorder` emission, one row here and one event
+ * row, inserted in the SAME transaction as the action they record.
+ * Nothing in the package updates or prunes either; an app writing or
+ * deleting its own rows can still make the pair incomplete, which the
+ * limits below state in full.
  *
  * The table is named for the outbox PATTERN D17 names, and the pattern is
  * what the write side does. The delivery half does not exist — nothing
@@ -26,10 +29,12 @@ use Illuminate\Support\Facades\Schema;
  *
  * TWO UNIQUE INDEXES, and both are load-bearing:
  *
- *  - `dedup_key` is the whole of "exactly one event per action" — for
- *    what `AppActionRecorder` writes, which is where that guarantee
- *    lives. A second emission of the same logical action fails this
- *    insert and takes the transaction with it. It stores a sha256 digest
+ *  - `dedup_key` is the whole of "one event per caller-identified
+ *    action" — for what `AppActionRecorder` writes, which is where that
+ *    guarantee lives, and only for calls that supply a natural key: a
+ *    call that supplies none is keyed to the new event's own id and
+ *    collides with nothing. A second emission of the same logical action
+ *    fails this insert and takes the transaction with it. It stores a sha256 digest
  *    of the action's vocabulary, its name and the caller's natural key —
  *    never the caller's own string, which in a wide column would have
  *    been an app-content channel into a stream whose premise (D15) is
@@ -67,7 +72,9 @@ use Illuminate\Support\Facades\Schema;
  * mutable, that consumer will have to decide where they can live given
  * this table is append-only.
  *
- * STORAGE IS UNBOUNDED: one row per event, forever, pruned by nothing.
+ * STORAGE IS UNBOUNDED: one row per recorder emission, pruned by nothing
+ * in this package. An app deleting its own rows is outside what the
+ * package can see.
  */
 return new class extends Migration
 {
@@ -77,9 +84,11 @@ return new class extends Migration
             $table->uuid('id')->primary();
             $table->uuid('event_id')->unique();
             // 64 hex characters: the sha256 the recorder produces, and
-            // the only shape the model will store. Sized to the digest
-            // rather than left at 255 so the column cannot hold prose
-            // even if something bypassed the model.
+            // the shape the model additionally requires on the writes
+            // that fire `creating`. The column itself enforces only
+            // width and uniqueness. Sized to the digest rather than left
+            // at 255 so it cannot hold prose even when something
+            // bypasses the model.
             $table->string('dedup_key', 64)->unique();
             $table->timestamp('created_at')->nullable();
         });
