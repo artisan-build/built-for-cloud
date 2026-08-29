@@ -31,9 +31,9 @@
  *    of 1 and the documented `error` string — so a body that is merely
  *    401-shaped names nowhere.
  *
- * A response whose URL cannot be read is NOT a pass and NOT a failure to
- * report: it is ignored entirely, silently, because this script cannot
- * establish that it is even looking at its own application's answer.
+ * A response whose URL cannot be read is NOT a pass: it is ignored,
+ * because this script cannot establish that it is even looking at its
+ * own application's answer.
  *   Pinned by `tests/ConsoleReentryInterceptorTest.php` — "ignores a
  *   cross-origin response carrying the re-entry header" and "ignores a
  *   response whose own url it cannot read".
@@ -48,6 +48,34 @@
  * indistinguishable from the application: if an app forwards a third
  * party's bytes under its own origin, this check cannot see through it.
  * That is the boundary of what an origin comparison can say.
+ *
+ * **AND IT NEVER FAILS SILENTLY. That is one rule, not three
+ * exceptions.** Every path on which this script cannot complete a
+ * re-entry ends in {@see announce()} — the chrome element marked, and
+ * `bfc:console-reentry-unavailable` dispatched with a `detail.cause`
+ * naming which of three things went wrong:
+ *
+ *  - {@see CAUSE_ORIGIN_UNVERIFIABLE} — this document reports an opaque
+ *    origin (a sandboxed iframe, `about:blank`), so no response can ever
+ *    be verified as the application's. Said once at install time, and
+ *    the interceptor then does not install. This is a limitation the
+ *    same-origin check itself introduced, and it is disclosed rather
+ *    than absorbed.
+ *  - {@see CAUSE_NO_DESTINATION} — re-entry is required and the payload
+ *    names nowhere this script will go.
+ *  - {@see CAUSE_NAVIGATION_REFUSED} — a destination was found and the
+ *    BROWSER refused the navigation, throwing out of `Location.assign`.
+ *
+ *   Pinned by `tests/ConsoleReentryInterceptorTest.php` — "announces
+ *   every path on which it cannot complete a re-entry, naming the
+ *   cause".
+ *
+ * THE ONE REFUSAL THAT REMAINS INVISIBLE, and it is invisible in the
+ * browser rather than here: a navigation the browser declines WITHOUT
+ * throwing. Some refusals raise `SecurityError` and are caught above;
+ * others are reported only to the developer console. In that case the
+ * operator is left where the script found them, which is where they
+ * would have been had the script never loaded.
  *
  * IT BRANCHES ON THE HEADER, NOT THE STATUS. A `401` without the header
  * is an ordinary application refusal and is left entirely alone.
@@ -126,11 +154,29 @@
     var LEAVING_EVENT = 'bfc:console-reentry';
     var UNAVAILABLE_EVENT = 'bfc:console-reentry-unavailable';
     var CHROME_ELEMENT_ID = 'bfc-console-chrome';
+
+    /**
+     * WHY re-entry could not be performed, carried on the unavailable
+     * event's `detail.cause`. Three values and they are a closed set,
+     * for the same reason every other vocabulary in this package is:
+     * a listener branches on them.
+     */
+    // This document cannot establish its own origin, so it can never
+    // verify that a response is its application's. The interceptor does
+    // not install at all — and says so rather than going quietly inert.
+    var CAUSE_ORIGIN_UNVERIFIABLE = 'origin_unverifiable';
+    // Re-entry is required and the payload names nowhere to go: no
+    // `reentry_url`, a scheme this script refuses, an envelope it does
+    // not recognise, or a top window it cannot reach.
+    var CAUSE_NO_DESTINATION = 'no_destination';
+    // A destination was found and the browser REFUSED the navigation —
+    // a sandboxed frame without top-navigation permission, or any other
+    // `SecurityError` out of `Location.assign`.
+    var CAUSE_NAVIGATION_REFUSED = 'navigation_refused';
+
     // Deliberately says only what is known: the session is over and
     // this script could not send the operator anywhere. It does not
-    // guess WHY — an unconfigured issuer, a scheme this script refuses,
-    // an envelope it does not recognise, and a top window it cannot
-    // reach are four different causes with one honest answer.
+    // guess WHY — that is what `detail.cause` is for.
     var NOTICE = 'This delegated session has ended and could not be renewed automatically. '
         + 'Return to the console that sent you here and enter again.';
 
@@ -238,8 +284,9 @@
     /**
      * @param {string} type
      * @param {object|null} payload
+     * @param {string|null} cause
      */
-    function dispatch(type, payload) {
+    function dispatch(type, payload, cause) {
         var doc = global.document;
 
         if (!doc || typeof doc.dispatchEvent !== 'function' || typeof global.CustomEvent !== 'function') {
@@ -249,17 +296,26 @@
         doc.dispatchEvent(new global.CustomEvent(type, {
             detail: {
                 reason: stringOr(payload, 'reason'),
-                return_to: stringOr(payload, 'return_to')
+                return_to: stringOr(payload, 'return_to'),
+                cause: cause === undefined ? null : cause
             }
         }));
     }
 
     /**
-     * Say, in the page and in an event, that a re-entry is required and
-     * could not be performed. This is the honest-degradation path: no
-     * navigation, nothing invented, and nothing silently dropped.
+     * Say, in the page and in an event, that re-entry could not be
+     * performed. **This is the ONE thing that happens on every path
+     * where the interceptor cannot finish the job** — there is no path
+     * that gives up quietly.
+     *
+     * The chrome's TEXT is replaced only when the delegated session is
+     * actually over. On {@see CAUSE_ORIGIN_UNVERIFIABLE} the session is
+     * alive and the operator's attribution is still true, so the bar
+     * keeps saying who they are and only gains the attribute — wiping
+     * D4's attribution to report a capability this document lacks would
+     * trade a correct statement for a warning.
      */
-    function announce(payload) {
+    function announce(payload, cause) {
         var doc = global.document;
 
         if (doc && typeof doc.getElementById === 'function') {
@@ -267,11 +323,14 @@
 
             if (element) {
                 element.setAttribute('data-bfc-console-reentry', 'unavailable');
-                element.textContent = NOTICE;
+
+                if (cause !== CAUSE_ORIGIN_UNVERIFIABLE) {
+                    element.textContent = NOTICE;
+                }
             }
         }
 
-        dispatch(UNAVAILABLE_EVENT, payload);
+        dispatch(UNAVAILABLE_EVENT, payload, cause);
     }
 
     /**
@@ -297,7 +356,7 @@
         }
 
         if (location === null) {
-            announce(payload);
+            announce(payload, CAUSE_NO_DESTINATION);
 
             return;
         }
@@ -305,9 +364,37 @@
         // Announced synchronously, immediately before the navigation, so
         // a listener that persists a draft has actually run by the time
         // the page starts leaving. Not cancelable — see the docblock.
-        dispatch(LEAVING_EVENT, payload);
+        dispatch(LEAVING_EVENT, payload, null);
 
-        location.assign(destination);
+        try {
+            location.assign(destination);
+        } catch (refused) {
+            // `Location.assign` is exposed across origins and THROWS —
+            // a sandboxed frame without top-navigation permission
+            // raises `SecurityError`, and the HTML navigation algorithm
+            // is specified to navigate with exceptions enabled. An
+            // earlier revision left this call outside every guard, so a
+            // refusal happened AFTER the response had been claimed and
+            // the departure event emitted: the operator sat on a dead
+            // page believing a re-entry was under way. It is the last
+            // silent failure in this file and it is closed here.
+            announce(payload, CAUSE_NAVIGATION_REFUSED);
+        }
+    }
+
+    // A DOCUMENT THAT CANNOT NAME ITS OWN ORIGIN CANNOT VERIFY ANY
+    // RESPONSE. A sandboxed iframe and `about:blank` both report an
+    // opaque origin — the literal string `"null"` — so the same-origin
+    // gate can never pass and every response would be ignored. That is
+    // the right answer and it is a NEW limitation this check introduced;
+    // going quietly inert about it is not. The interceptor says so, once,
+    // at install time — where nothing an attacker controls has reached
+    // it yet — and then does not install at all, so there is no path
+    // left on which it could act on a response it cannot attribute.
+    if (pageOrigin() === null) {
+        announce(null, CAUSE_ORIGIN_UNVERIFIABLE);
+
+        return;
     }
 
     var nativeFetch = global.fetch;

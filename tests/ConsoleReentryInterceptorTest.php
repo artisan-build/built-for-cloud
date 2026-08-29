@@ -44,16 +44,24 @@ function bfcNodeAvailable(): bool
 /**
  * Whether this run is one where node is REQUIRED rather than optional.
  *
- * `CI` is set by GitHub Actions and by every other runner worth naming;
+ * **PRESENCE, not truthiness.** An earlier revision treated `CI=0`,
+ * `CI=false` and `CI=` as "not CI" while the docblock promised the run
+ * was mandatory wherever `CI` is set — the same claim-wider-than-the-code
+ * shape this file has already corrected once. A variable that is present
+ * at all means a runner set it, and the safe reading of an ambiguous
+ * value is the strict one: a lane that runs these tests when it did not
+ * have to costs a second, and a lane that skips them when it should not
+ * costs the only coverage the interceptor has.
+ *
  * `GITHUB_ACTIONS` is checked as well so the intent survives someone
  * unsetting the generic one.
+ *   Pinned by `tests/ConsoleReentryInterceptorTest.php` — "treats a CI
+ *   variable that is present at all as making node mandatory".
  */
 function bfcNodeRequired(): bool
 {
     foreach (['CI', 'GITHUB_ACTIONS'] as $variable) {
-        $value = getenv($variable);
-
-        if (is_string($value) && ! in_array(strtolower($value), ['', '0', 'false'], true)) {
+        if (getenv($variable) !== false) {
             return true;
         }
     }
@@ -126,17 +134,19 @@ it('ignores a cross-origin response carrying the re-entry header', function (): 
 });
 
 it('ignores a response whose own url it cannot read', function (): void {
-    // An opaque response reports an empty `url`, and a document that
-    // cannot report its own origin can never establish that anything is
-    // same-origin. Neither is a pass and neither is a failure to
-    // report: both are ignored, which is the fail-closed direction.
-    foreach (['fetch-unreadable-url', 'fetch-origin-unreadable'] as $scenario) {
-        $observed = bfcInterceptorScenario($scenario);
+    // An opaque response reports an empty `url`, so it cannot be
+    // established as this application's. It is ignored — not acted on,
+    // and not reported either, because announcing would let any
+    // third-party response tell the operator their session had died.
+    //
+    // (The OTHER unverifiable case — a document that cannot name its own
+    // origin — is not silent, because nothing an attacker controls is
+    // involved in noticing it. It is driven below, with its cause.)
+    $observed = bfcInterceptorScenario('fetch-unreadable-url');
 
-        expect($observed['topAssigned'])->toBeNull($scenario)
-            ->and($observed['frameAssigned'])->toBeNull($scenario)
-            ->and($observed['events'])->toBe([], $scenario);
-    }
+    expect($observed['topAssigned'])->toBeNull()
+        ->and($observed['frameAssigned'])->toBeNull()
+        ->and($observed['events'])->toBe([]);
 });
 
 it('refuses to navigate on a body that is not this contract envelope', function (): void {
@@ -190,7 +200,7 @@ it('degrades honestly when the deployment has configured no re-entry url', funct
         ->and($observed['frameAssigned'])->toBeNull()
         ->and($observed['events'])->toBe([[
             'type' => 'bfc:console-reentry-unavailable',
-            'detail' => ['reason' => 'session_invalidated', 'return_to' => '/orders'],
+            'detail' => ['reason' => 'session_invalidated', 'return_to' => '/orders', 'cause' => 'no_destination'],
         ]])
         ->and($observed['chromeElement']['attributes'])
         ->toBe(['data-bfc-console-reentry' => 'unavailable'])
@@ -231,6 +241,12 @@ it('hands the capped response back to its caller rather than swallowing it', fun
         // The body was still readable by the caller: the interceptor
         // read a clone.
         ->and($viaFetch['callerSawBody'])->toContain('console_reentry_required')
+        // AND THE LOCK IS REAL. The double refuses a second read the way
+        // a browser's `Response` does, so this assertion means something:
+        // against a stand-in with no body semantics, an interceptor that
+        // read the ORIGINAL body would have passed the line above while
+        // leaving the caller nothing to read.
+        ->and($viaFetch['callerSawBodyTwice'])->toBeFalse()
         ->and($viaXhr['callerLoadFired'])->toBeTrue()
         ->and($viaXhr['callerSawStatus'])->toBe(401);
 });
@@ -254,11 +270,103 @@ it('announces the navigation before performing it, so an app can persist unsaved
 
     expect($observed['events'])->toBe([[
         'type' => 'bfc:console-reentry',
-        'detail' => ['reason' => 'assertion_age_cap', 'return_to' => '/orders?page=2'],
+        'detail' => ['reason' => 'assertion_age_cap', 'return_to' => '/orders?page=2', 'cause' => null],
     ]])
-        // Dispatched BEFORE the navigation: the harness records both in
-        // order, and the navigation is the last thing that happened.
+        // THE ORDERING, ASSERTED RATHER THAN ASSUMED. The harness records
+        // the events and the navigation in ONE ordered channel, so this
+        // is a claim about sequence and not two independent facts that
+        // happen to both be true. A promise about ordering that no test
+        // orders is exactly the pattern this build keeps paying for.
+        ->and($observed['timeline'])->toBe(['event:bfc:console-reentry', 'navigate:top'])
         ->and($observed['topAssigned'])->not->toBeNull();
+});
+
+it('announces every path on which it cannot complete a re-entry, naming the cause', function (): void {
+    // ONE RULE, THREE PATHS. The interceptor must never give up quietly,
+    // and each way it can fail says which one it was.
+    //
+    // 1. THE BROWSER REFUSED THE NAVIGATION. `Location.assign` is
+    //    exposed across origins and throws — a sandboxed frame without
+    //    top-navigation permission raises SecurityError. An earlier
+    //    revision left that call outside every guard, so the script had
+    //    already claimed the response and emitted its departure event
+    //    and then threw, leaving the operator on a dead page believing
+    //    a re-entry was under way. The harness makes `assign()` itself
+    //    throw, which is the operation that actually fails — making the
+    //    `window.top` GETTER throw, as the older scenario does,
+    //    exercises a different one.
+    $refused = bfcInterceptorScenario('fetch-navigation-refused');
+
+    expect($refused['timeline'])->toBe([
+        'event:bfc:console-reentry',
+        'navigate:top',
+        'event:bfc:console-reentry-unavailable',
+    ])
+        ->and($refused['events'][1]['detail']['cause'])->toBe('navigation_refused')
+        ->and($refused['chromeElement']['textContent'])->toContain('could not be renewed automatically');
+
+    // 2. THIS DOCUMENT CANNOT NAME ITS OWN ORIGIN — a sandboxed iframe or
+    //    `about:blank`, where `location.origin` is the string "null". The
+    //    same-origin check can then never pass, so the interceptor is
+    //    inert; that is a NEW limitation the same-origin fix introduced
+    //    and it is disclosed at install time rather than absorbed.
+    //    Two shapes of the same thing: `origin` reported as the string
+    //    "null", and a location object with no origin to read at all.
+    foreach (['opaque-origin-document', 'fetch-origin-unreadable'] as $scenario) {
+        $inert = bfcInterceptorScenario($scenario);
+
+        expect($inert['topAssigned'])->toBeNull($scenario)
+            ->and($inert['frameAssigned'])->toBeNull($scenario)
+            ->and($inert['events'][0]['detail']['cause'])->toBe('origin_unverifiable', $scenario);
+    }
+
+    $opaque = bfcInterceptorScenario('opaque-origin-document');
+
+    expect($opaque['timeline'])->toBe(['event:bfc:console-reentry-unavailable'])
+        ->and($opaque['chromeElement']['attributes'])->toBe(['data-bfc-console-reentry' => 'unavailable'])
+        // AND THE ATTRIBUTION SURVIVES. This session is alive and the
+        // operator's identity is still true, so the bar is marked but
+        // its text is not replaced — trading a correct D4 statement for
+        // a warning about a capability this document lacks would be the
+        // wrong swap.
+        ->and($opaque['chromeElement']['textContent'])->toBe('');
+
+    // 3. NOWHERE TO GO. Already driven above; asserted here as the third
+    //    member of the set so the rule is enumerated rather than implied.
+    $nowhere = bfcInterceptorScenario('fetch-no-reentry-url');
+
+    expect($nowhere['events'][0]['detail']['cause'])->toBe('no_destination');
+});
+
+it('treats a CI variable that is present at all as making node mandatory', function (): void {
+    // The predicate has to match the sentence above it. `CI=0` is still
+    // a runner saying it is a runner, and the safe reading of an
+    // ambiguous value is the strict one — a lane that skips these tests
+    // loses the only coverage the interceptor has.
+    $original = ['CI' => getenv('CI'), 'GITHUB_ACTIONS' => getenv('GITHUB_ACTIONS')];
+
+    try {
+        putenv('GITHUB_ACTIONS');
+
+        foreach (['1', 'true', '0', 'false', ''] as $value) {
+            putenv('CI='.$value);
+
+            expect(bfcNodeRequired())->toBeTrue("CI={$value} must still make node mandatory");
+        }
+
+        putenv('CI');
+
+        expect(bfcNodeRequired())->toBeFalse('neither variable is present, so node is optional');
+
+        // Either variable on its own is enough.
+        putenv('GITHUB_ACTIONS=false');
+
+        expect(bfcNodeRequired())->toBeTrue();
+    } finally {
+        foreach ($original as $variable => $value) {
+            $value === false ? putenv($variable) : putenv($variable.'='.$value);
+        }
+    }
 });
 
 it('requires node in every CI lane rather than inheriting it from the runner image', function (): void {

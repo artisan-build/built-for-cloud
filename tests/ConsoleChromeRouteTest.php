@@ -141,12 +141,15 @@ it('names a route whose throttle hoists the guard scoping in front of the re-ent
         ->toBe(['GET /probe-chrome-hoisted: the guard scoping runs before the re-entry answer']);
 });
 
-it('accounts for every file in src that names a package view', function (): void {
+it('accounts for every file in src containing the literal bfc:: substring in code', function (): void {
     $src = dirname(__DIR__).'/src';
 
-    // The second leg, and it is a LITERAL substring search — see
-    // ConsoleChromeRouteScan's docblock for what that does and does not
-    // cover. The marker interface is a convention, so a controller that
+    // The second leg, and the title says what it checks rather than what
+    // one would like it to mean: a comment-stripped LITERAL `bfc::`
+    // substring search. A controller doing `view(config('layout'))`,
+    // where that config value resolves to `bfc::layout`, names and
+    // renders the package view and passes this — see
+    // ConsoleChromeRouteScan's docblock for the full residue. The marker interface is a convention, so a controller that
     // renders the chrome without implementing it is classified as
     // unrelated and passes the route rule above; this catches the
     // ORDINARY spelling of that mistake and does not claim to catch a

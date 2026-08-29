@@ -31,22 +31,58 @@ const observed = {
     topAssigned: null,
     frameAssigned: null,
     events: [],
+    // ONE ORDERED CHANNEL carrying the DOM events AND the navigation,
+    // interleaved in the order they actually happened. `events` alone
+    // could never show that `bfc:console-reentry` precedes the
+    // navigation, and that ordering is the whole promise behind "unsaved
+    // work is lost, but you can persist first".
+    timeline: [],
     chromeElement: null,
     callerSawStatus: null,
     callerSawBody: null,
     callerGotSameResponse: null,
+    callerSawBodyTwice: null,
     callerLoadFired: false,
 };
 
+/**
+ * A `Response` stand-in with REAL body-lock semantics: the body may be
+ * read once, a second read throws the way a browser's does, and
+ * `clone()` refuses once the body is used. Without that, the harness
+ * would pass just as happily if the interceptor read the ORIGINAL body
+ * instead of a clone — which is precisely the thing that would break
+ * the caller.
+ */
 function makeResponse(status, headers, body, url) {
-    const build = () => ({
-        url,
-        status,
-        headers: { get: (name) => (name in headers ? headers[name] : null) },
-        clone: () => build(),
-        json: async () => JSON.parse(body),
-        text: async () => body,
-    });
+    const build = () => {
+        let bodyUsed = false;
+
+        const consume = () => {
+            if (bodyUsed) {
+                throw new TypeError('Failed to execute \'text\' on \'Response\': body stream already read');
+            }
+
+            bodyUsed = true;
+
+            return body;
+        };
+
+        return {
+            url,
+            status,
+            headers: { get: (name) => (name in headers ? headers[name] : null) },
+            get bodyUsed() { return bodyUsed; },
+            clone() {
+                if (bodyUsed) {
+                    throw new TypeError('Failed to execute \'clone\' on \'Response\': body stream already read');
+                }
+
+                return build();
+            },
+            json: async () => JSON.parse(consume()),
+            text: async () => consume(),
+        };
+    };
 
     return build();
 }
@@ -59,18 +95,35 @@ function makeWindow(options) {
     const frameLocation = {
         origin: PAGE_ORIGIN,
         href: PAGE_ORIGIN + '/orders',
-        assign: (url) => { observed.frameAssigned = url; },
+        assign: (url) => {
+            observed.frameAssigned = url;
+            observed.timeline.push('navigate:frame');
+        },
     };
     const topLocation = {
         origin: PAGE_ORIGIN,
         href: PAGE_ORIGIN + '/orders',
-        assign: (url) => { observed.topAssigned = url; },
+        assign: (url) => {
+            observed.timeline.push('navigate:top');
+
+            if (options.navigationRefused) {
+                // What a real browser does when a sandboxed frame has no
+                // top-navigation permission: `Location.assign` is exposed
+                // across origins and THROWS. The property access the
+                // script guards is a different operation and would not
+                // have caught this.
+                throw new Error('SecurityError: The operation is insecure.');
+            }
+
+            observed.topAssigned = url;
+        },
     };
 
     const document = {
         getElementById: (id) => (id === CHROME_ELEMENT_ID ? chromeElement : null),
         dispatchEvent: (event) => {
             observed.events.push({ type: event.type, detail: event.detail });
+            observed.timeline.push('event:' + event.type);
 
             return true;
         },
@@ -100,6 +153,14 @@ function makeWindow(options) {
         // A document that cannot report its own origin — the fail-closed
         // case the script treats as "nothing is same-origin".
         window.location = { assign: topLocation.assign };
+        window.top = window;
+    }
+
+    if (options.opaqueOrigin) {
+        // A sandboxed iframe or `about:blank`: `location.origin` is the
+        // literal string "null" and `href` is `about:blank`, so no
+        // response can ever be verified as this application's.
+        window.location = { origin: 'null', href: 'about:blank', assign: topLocation.assign };
         window.top = window;
     }
 
@@ -253,6 +314,24 @@ const scenarios = {
         body: reentryBody({ error: 'something_else' }),
         withChromeElement: true,
     },
+    // The browser REFUSES the navigation: `Location.assign` throws.
+    'fetch-navigation-refused': {
+        navigationRefused: true,
+        status: 401,
+        headers: REENTRY_HEADERS,
+        body: reentryBody(),
+        withChromeElement: true,
+    },
+    // A document with an opaque origin. Nothing is fetched at all: the
+    // script reports its own inertness at install time.
+    'opaque-origin-document': {
+        opaqueOrigin: true,
+        status: 401,
+        headers: REENTRY_HEADERS,
+        body: reentryBody(),
+        withChromeElement: true,
+        transport: 'none',
+    },
     'xhr-redirect': {
         status: 401,
         headers: REENTRY_HEADERS,
@@ -291,12 +370,26 @@ if (options.transport === 'xhr') {
 
     request.open('POST', '/livewire/update');
     request.send();
-} else {
+} else if (options.transport !== 'none') {
     const response = await window.fetch('/livewire/update');
 
     observed.callerSawStatus = response.status;
     observed.callerGotSameResponse = typeof response.json === 'function';
+
+    // The caller reads the body it was handed. This only works if the
+    // interceptor read a CLONE — a real Response locks its body on first
+    // read, and so does this double.
     observed.callerSawBody = await response.text();
+
+    // And the lock is real: a second read throws, exactly as a browser's
+    // does. Without this the "never swallows" test would pass against a
+    // stand-in with no body semantics at all.
+    try {
+        await response.text();
+        observed.callerSawBodyTwice = true;
+    } catch (locked) {
+        observed.callerSawBodyTwice = false;
+    }
 }
 
 await settle();

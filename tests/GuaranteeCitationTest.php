@@ -112,7 +112,7 @@ $expectedCitations = [
     'src/Http/Controllers/ConsoleChromeScript.php' => 1,
     'resources/views/chrome.blade.php' => 2,
     'resources/views/layout.blade.php' => 2,
-    'resources/js/console-reentry.js' => 8,
+    'resources/js/console-reentry.js' => 9,
     'src/Http/Controllers/ConsoleEnter.php' => 24,
 ];
 
