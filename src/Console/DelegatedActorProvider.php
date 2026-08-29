@@ -29,6 +29,14 @@ use SensitiveParameter;
  * credential question is never asked and could not be answered yes if it
  * were: a structural property, not a convention, and not something the
  * model's own methods are doing.
+ *   Pinned by `tests/ConsoleDelegatedActorTest.php` — "refuses every
+ *   credential lookup unconditionally, not merely the ones that do not
+ *   match" (which hands `validateCredentials()` the ACTUAL principal and
+ *   still gets false), "has no credential-shaped entry point on the
+ *   guard at all", "answers false to the one credential-shaped method
+ *   the Guard contract demands, for every input", and "carries password
+ *   and remember-token values nothing can turn into a match"; and by
+ *   `tests/ConsoleRememberMeTest.php` for the recaller branch below.
  *
  * `retrieveById` is the identifier boundary, and it is strict in three
  * separate ways:

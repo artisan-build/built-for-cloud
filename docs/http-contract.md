@@ -1883,7 +1883,7 @@ one.
   delegated guard built on its user table. With the Console **disabled** that collision is
   ignored entirely — a deployment that never asked for the Console cannot be stopped from
   booting by it.
-- **There is exactly ONE operation that creates a delegated principal, and it takes the SIGNED
+- **Only `redeem()` mints a delegated session through this package, and it takes the SIGNED
   ASSERTION BYTES.** `ConsoleGuard::redeem()` verifies the token itself — signature, issuer,
   audience, TTL bound and clocks — inside the same call that writes the session. No public
   method accepts an already-built assertion OBJECT, and none logs a delegated actor in on
@@ -1893,6 +1893,10 @@ one.
   `onceUsingId` and `viaRemember` do not exist on it, and its user provider answers null/false
   to every credential-shaped question for every input. "No password, no login path" is a
   property of the types, not a set of methods that refuse.
+  *Pinned by* `tests/ConsoleRedemptionTest.php` ("exposes no way to log a delegated actor in
+  without signed bytes"; "refuses a token whose claims were rewritten to claim the admin role")
+  and `tests/ConsoleDelegatedActorTest.php` ("refuses every credential lookup unconditionally";
+  "has no credential-shaped entry point on the guard at all").
   The one public seam the `Guard` contract forces is `setUser()`, which Laravel's `actingAs()`
   uses. It sets an in-memory principal for the current request and writes **nothing** to the
   session, and the guard additionally requires that the session itself names the principal —
@@ -1908,13 +1912,24 @@ one.
   path, which is what §4.3 governs. The guarantee that is made and held is narrower and exact:
   **no package API assembles a delegated session without verified assertion bytes.**
 
-  **A failed redemption leaves no session.** Laravel writes and regenerates the session before
-  it dispatches its `Login` event, so a host application's listener that throws would otherwise
-  leave a session already carrying the delegated identifier while the redemption reported
-  failure; the operation compensates — the session is destroyed on every throwable — before the
-  failure propagates. If the compensation *itself* fails (the session store is unreachable), the
-  **original** failure is still what surfaces, and the compensation failure is reported to the
-  application's exception handler rather than replacing it or being dropped.
+  **A failed redemption leaves no usable delegated session for any later request.** Laravel
+  writes and regenerates the session before it dispatches its `Login` event, so a host
+  application's listener that throws would otherwise leave a session already carrying the
+  delegated identifier while the redemption reported failure; the operation compensates — the
+  session is destroyed — before the failure propagates. If the compensation *itself* fails (the
+  session store is unreachable), the **original** failure is still what surfaces, and the
+  compensation failure is reported to the application's exception handler rather than replacing
+  it or being dropped.
+  Even in that double-failure case a later request finds no delegated identity: the
+  compensation's in-memory flush precedes the store I/O that failed, and the session id the
+  browser is handed was regenerated before the failure, naming a record that was never written.
+  What is *not* guaranteed there is that a record predating the request is destroyed — it
+  survives under its own id, carrying whatever it carried before, which is not a delegated
+  identity.
+  *Pinned by* `tests/ConsoleRedemptionTest.php` ("leaves no usable session when a Login listener
+  throws during redemption"; "surfaces the original failure, not the compensation failure, when
+  the session store is unreachable"; "leaves a later request unauthenticated when the store
+  recovers before the response is saved" and "…when the store is still down at save time").
   **Remember-me:** this guard never queues a recaller cookie. Laravel still *checks* for one
   when a session carries no identifier, so that branch is reachable; it is fail-closed because
   the delegated-actor provider's `retrieveByToken()` returns null for every input, so no
@@ -1968,6 +1983,12 @@ one.
   its principal through the delegated guard. That is the condition under which this becomes a
   real privilege leak; it is a property of the host runtime and cannot be prevented from inside
   a guard.
+  *Pinned by* `tests/ConsoleGuardScopingTest.php`, which models the property rather than
+  invoking Octane (no dependency here): "would resolve a non-console route through the delegated
+  guard on a runtime that never sandboxes config" — asserting the resolved PRINCIPAL, since a
+  refusal reports the same guard name — plus "does not leak into the next request when the
+  config repository is cloned per request" and "leaves auth.defaults.guard pointed at the
+  console guard, and forgetting guards does not put it back".
   A **REFUSED** delegated session (capped, unreadable claims, contained actor) is TERMINAL on
   every route: the request resolves no principal at all and no package surface falls back to
   the local user, whose session the guard has invalidated anyway.

@@ -16,6 +16,7 @@ use Illuminate\Auth\Events\Login;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Session\Session;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Session\Store;
 use Illuminate\Support\Facades\Auth;
@@ -453,4 +454,129 @@ it('refuses a principal whose identifier is not the one this session names', fun
 
     expect($guard->actor())->toBeNull()
         ->and($guard->check())->toBeFalse();
+});
+
+// ─── What a LATER request sees when the teardown itself failed ──────────────
+//
+// The dual failure, followed through to its actual consequence rather
+// than reasoned about. These are the tests the guarantee sentences in
+// docs/http-contract.md and release-notes/unified-store-guard.md cite,
+// and they exist because four rounds of this PR have shipped prose that
+// outran the code.
+
+/**
+ * Put a session store the test controls behind the guard, and hand back
+ * both halves so the test can inspect what was actually persisted.
+ *
+ * @return array{Store, ThrowingSessionHandler}
+ */
+function dualFailureStore(): array
+{
+    ThrowingSessionHandler::reset();
+    RecordingExceptionHandler::reset();
+
+    app()->instance(ExceptionHandler::class, new RecordingExceptionHandler);
+
+    $handler = new ThrowingSessionHandler;
+    $store = new Store('bfc-dual-failure', $handler);
+
+    app()->instance('session.store', $store);
+    Auth::forgetGuards();
+
+    // The store fails only from inside the Login listener onward, so the
+    // redemption's own writes succeed and the compensation is the thing
+    // that cannot complete.
+    Event::listen(Login::class, function (): void {
+        ThrowingSessionHandler::$failOnDestroy = true;
+
+        throw new RuntimeException('the audit backend is unavailable');
+    });
+
+    return [$store, $handler];
+}
+
+it('leaves a later request unauthenticated when the store recovers before the response is saved', function (): void {
+    [$store, $handler] = dualFailureStore();
+
+    expect(fn (): DelegatedActor => consoleRedeem())
+        ->toThrow(RuntimeException::class, 'audit backend');
+
+    // The id the browser is handed. It is NOT the one the request
+    // arrived with: SessionGuard::login() regenerated it before the
+    // listener threw, so this id names a record that has never been
+    // written.
+    $survivingId = $store->getId();
+
+    // End of request: StartSession saves whatever is in memory. The
+    // compensation's flush() ran before its migrate() failed, so what is
+    // in memory is nothing.
+    ThrowingSessionHandler::$failOnDestroy = false;
+    $store->save();
+
+    // Not "byte-empty" — Laravel's own `_flash` bookkeeping rides along
+    // — but carrying nothing delegated: no login key, no console state.
+    $persisted = unserialize($handler->stored($survivingId)) ?: [];
+
+    expect(array_key_exists(consoleGuardSessionKey(), $persisted))->toBeFalse();
+
+    foreach (ConsoleSession::keys() as $key) {
+        expect(array_key_exists($key, $persisted))->toBeFalse();
+    }
+
+    // A LATER request carrying exactly that session id.
+    $next = new Store('bfc-dual-failure', $handler, $survivingId);
+    $next->start();
+
+    app()->instance('session.store', $next);
+    app()->instance('request', Request::create('/next'));
+    Auth::forgetGuards();
+
+    /** @var ConsoleGuard $guard */
+    $guard = auth(ConsoleGuardConfiguration::GUARD);
+
+    expect($guard->actor())->toBeNull()
+        ->and($guard->check())->toBeFalse()
+        ->and($next->get(consoleGuardSessionKey()))->toBeNull()
+        ->and(ConsoleSession::hasState($next))->toBeFalse();
+});
+
+it('leaves a later request unauthenticated when the store is still down at save time', function (): void {
+    [$store, $handler] = dualFailureStore();
+
+    expect(fn (): DelegatedActor => consoleRedeem())
+        ->toThrow(RuntimeException::class, 'audit backend');
+
+    $survivingId = $store->getId();
+
+    // The store never recovers, so nothing is written back at all.
+    ThrowingSessionHandler::$failOnWrite = true;
+
+    try {
+        $store->save();
+    } catch (RuntimeException) {
+        // Exactly the state under test: the response could not persist.
+    }
+
+    // Nothing was ever written under the regenerated id, so there is no
+    // record for a later request to rehydrate — which is why the
+    // delegated identity cannot survive this path even though the
+    // teardown could not complete.
+    expect($handler->stored($survivingId))->toBe('');
+
+    ThrowingSessionHandler::$failOnWrite = false;
+
+    $next = new Store('bfc-dual-failure', $handler, $survivingId);
+    $next->start();
+
+    app()->instance('session.store', $next);
+    app()->instance('request', Request::create('/next'));
+    Auth::forgetGuards();
+
+    /** @var ConsoleGuard $guard */
+    $guard = auth(ConsoleGuardConfiguration::GUARD);
+
+    expect($guard->actor())->toBeNull()
+        ->and($guard->check())->toBeFalse()
+        ->and($next->get(consoleGuardSessionKey()))->toBeNull()
+        ->and(ConsoleSession::hasState($next))->toBeFalse();
 });

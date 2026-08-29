@@ -24,12 +24,16 @@ final class ThrowingSessionHandler implements SessionHandlerInterface
     /** Whether `destroy()` should throw on its next call. */
     public static bool $failOnDestroy = false;
 
+    /** Whether `write()` should throw — the store still down at save time. */
+    public static bool $failOnWrite = false;
+
     /** @var array<string, string> */
     private array $sessions = [];
 
     public static function reset(): void
     {
         self::$failOnDestroy = false;
+        self::$failOnWrite = false;
     }
 
     public function open($path, $name): bool
@@ -49,9 +53,19 @@ final class ThrowingSessionHandler implements SessionHandlerInterface
 
     public function write($id, $data): bool
     {
+        if (self::$failOnWrite) {
+            throw new RuntimeException('the session store is unreachable');
+        }
+
         $this->sessions[$id] = $data;
 
         return true;
+    }
+
+    /** What the store actually holds for an id, for a test to inspect. */
+    public function stored(string $id): string
+    {
+        return $this->sessions[$id] ?? '';
     }
 
     public function destroy($id): bool

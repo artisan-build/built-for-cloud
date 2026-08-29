@@ -201,17 +201,31 @@ A **refused** delegated session is terminal: `bfc.auth` answers 401,
 of them falls back to the local user.
 
 **Starting and ending a delegated session.** `ConsoleGuard::redeem()` is
-the one operation that creates one, and it takes the **signed assertion
-bytes** and verifies them itself — there is no method that accepts an
-assertion object and none that logs a delegated actor in on request, so a
-delegated session cannot exist without a signature this deployment
-checked. It compensates on failure: if anything throws after the session
+the one operation that mints one **through this package**, and it takes
+the **signed assertion bytes** and verifies them itself — there is no
+method that accepts an assertion object and none that logs a delegated
+actor in on request. `setUser()` supplies an unverified in-request
+principal and directly persists nothing; note that the inner guard
+dispatches `Authenticated` synchronously from it, so a host listener
+could persist something of its own, which reduces to the session-writer
+boundary named below. It compensates on failure: if anything throws after the session
 write begins — a host application's `Login` listener, most plausibly —
 the session is destroyed before the failure propagates, because Laravel
 writes and regenerates the session *before* it dispatches that event.
 If the compensation itself fails (an unreachable session store), the
 ORIGINAL failure is still what the caller sees; the compensation failure
-goes to the application's exception handler rather than replacing it.
+goes to the application's exception handler rather than replacing it. A
+later request finds no delegated identity even then — the compensation's
+in-memory flush precedes the store I/O that failed, and the session id
+the browser is handed was regenerated before the failure, naming a record
+that was never written. What is not guaranteed in that case is that a
+record predating the request is destroyed; it survives under its own id
+carrying what it carried before, which is not a delegated identity.
+*Pinned by* `tests/ConsoleRedemptionTest.php` — "surfaces the original
+failure, not the compensation failure, when the session store is
+unreachable", "leaves a later request unauthenticated when the store
+recovers before the response is saved", and "…when the store is still
+down at save time".
 
 The residue, stated rather than glossed: code that can write the session
 store directly can assemble a delegated session, because that is what
@@ -221,6 +235,10 @@ delegated session without verified assertion bytes** — and the guard
 additionally requires the session to name the principal, so the public
 `setUser()` seam the `Guard` contract forces cannot be combined with
 hand-written claims to act as a delegated admin.
+*Pinned by* `tests/ConsoleRedemptionTest.php` — "offers no public way to
+write a delegated session's claims" and "does not authenticate a
+principal handed to setUser, even alongside hand-written claims", whose
+positive control pins the residue itself.
 `ConsoleGuard::logout()` ends a session without calling the framework's
 `SessionGuard::logout()`, deliberately: that method sets a sticky
 `loggedOut` flag on a guard the auth manager caches for the life of the

@@ -23,13 +23,23 @@ use Illuminate\Support\Facades\DB;
  * It is not a `users` row, and §4.3's "no password, no login path" holds
  * STRUCTURALLY rather than by anything this class does: the only guard
  * that resolves this type is {@see ConsoleGuard}, which has no
- * `attempt()`, no `loginUsingId()` and no remember-me path, and the only
- * user provider behind it is {@see DelegatedActorProvider}, which answers
- * null/false to every credential-shaped question for every input. There
- * is therefore no caller anywhere that asks this object for a password,
- * and the password-shaped methods the {@see Authenticatable} contract
- * demands are inert — see {@see getAuthPassword()} for exactly why they
- * return what they do and why they are not the enforcement.
+ * `attempt()`, no `loginUsingId()` and never remembers a login, and the
+ * only user provider behind it is {@see DelegatedActorProvider}, which
+ * answers null/false to every credential-shaped question for every
+ * input. There is therefore no caller anywhere that asks this object for
+ * a password, and the password-shaped methods the {@see Authenticatable}
+ * contract demands are inert — see {@see getAuthPassword()} for exactly
+ * why they return what they do and why they are not the enforcement.
+ * (Laravel's remember-me BRANCH is nonetheless reachable on any session
+ * guard; it is fail-closed here, and {@see getRememberToken()} says
+ * where that is driven.)
+ *   Pinned by `tests/ConsoleDelegatedActorTest.php` — "has no password
+ *   or remember-token column", "refuses every credential lookup
+ *   unconditionally, not merely the ones that do not match", "has no
+ *   credential-shaped entry point on the guard at all" and
+ *   "type-qualifies the delegated identity so it can never equal a users
+ *   id"; and by `tests/ConsoleCredentialNamespaceTest.php` for the
+ *   credential half — no credential resolves one, on any driver.
  *
  * It is also not the live claim store. `last_handoff_display_name`,
  * `last_handoff_role` and `last_handoff_on_behalf_of` are what their
@@ -42,6 +52,11 @@ use Illuminate\Support\Facades\DB;
  * session-bound — {@see ConsoleSession} and {@see DelegatedClaims} — and
  * this class deliberately offers no `attribution()` or `role()` accessor
  * that could be mistaken for the live one.
+ *   Pinned by `tests/ConsoleActingPrincipalTest.php` — "holds two
+ *   concurrent sessions for one subject at the roles they each entered
+ *   with" and "does not let a concurrent admin session promote a member
+ *   session past the admin gate", which drive two live sessions
+ *   interleaved rather than one session re-read after a row write.
  *
  * IDENTITY IS A DIGEST. {@see identityHash()} is the unique key: sha256
  * over a length-delimited encoding of issuer and subject, computed in PHP

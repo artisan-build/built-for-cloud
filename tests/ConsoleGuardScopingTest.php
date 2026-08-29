@@ -95,11 +95,21 @@ beforeEach(function (): void {
             'principal' => app(ActingPrincipalResolver::class)->resolve()->identifier(),
         ]);
 
-    Route::middleware([StartSession::class])->get('/scoping-app', fn (): array => [
-        'principal' => app(ActingPrincipalResolver::class)->resolve()->identifier(),
-        'guard' => app(ActingPrincipalResolver::class)->resolve()->guard,
-        'default_guard' => config('auth.defaults.guard'),
-    ]);
+    Route::middleware([StartSession::class])->get('/scoping-app', function (): array {
+        $acting = app(ActingPrincipalResolver::class)->resolve();
+
+        return [
+            'principal' => $acting->identifier(),
+            'guard' => $acting->guard,
+            // `guard` alone cannot tell "the delegated actor resolved"
+            // from "a delegated session was refused" — a refusal reports
+            // the same guard name — so the leak assertion below reads
+            // these two as well.
+            'delegated' => $acting->delegated,
+            'refused' => $acting->wasRefused(),
+            'default_guard' => config('auth.defaults.guard'),
+        ];
+    });
 });
 
 function scopingUser(): User
@@ -157,10 +167,20 @@ it('would resolve a non-console route through the delegated guard on a runtime t
 
     $this->withSession(consoleSessionState($actor));
 
+    // The assertion has to distinguish a LEAK from a refusal:
+    // `ActingPrincipal::refused()` reports the console guard's name too,
+    // so `guard === 'bfc-console'` alone would pass on a request where
+    // nobody resolved at all — and this is the test that makes the whole
+    // scoping guarantee falsifiable. So it asserts the resolved
+    // PRINCIPAL: the delegated actor really is what this non-console
+    // route acts as.
     $this->getJson('/scoping-app')
         ->assertOk()
         ->assertJsonPath('default_guard', ConsoleGuardConfiguration::GUARD)
-        ->assertJsonPath('guard', ConsoleGuardConfiguration::GUARD);
+        ->assertJsonPath('guard', ConsoleGuardConfiguration::GUARD)
+        ->assertJsonPath('delegated', true)
+        ->assertJsonPath('refused', false)
+        ->assertJsonPath('principal', $actor->getAuthIdentifier());
 });
 
 // ─── The config sandbox is what closes it ───────────────────────────────────
@@ -204,6 +224,8 @@ it('does not leak into the next request when the config repository is cloned per
         ->assertOk()
         ->assertJsonPath('default_guard', 'web')
         ->assertJsonPath('guard', 'web')
+        ->assertJsonPath('delegated', false)
+        ->assertJsonPath('refused', false)
         ->assertJsonPath('principal', $user->getKey());
 });
 

@@ -45,10 +45,32 @@ use Throwable;
  * documented as NOT being proof of provenance — so consuming code could
  * assemble an assertion carrying `role=admin` and hand it over, and a
  * delegated admin session existed with no signature ever checked.
- * Console PRD §4.3's "no password, no login path" now holds by
- * construction on both halves: no guard would accept credentials for
- * this principal type, and no reachable seam mints a session without a
- * verified signature.
+ * WHAT IS CLAIMED, EXACTLY, and where it is pinned. **Only
+ * {@see redeem()} mints a delegated session through this package**;
+ * {@see setUser()} supplies an unverified in-request principal and
+ * directly persists nothing. That is not the same as "a delegated
+ * session cannot exist without a signature" — anything that can write
+ * the session store can write the five keys one consists of, which
+ * {@see ConsoleSession} states as the boundary and which this package's
+ * own tests rely on. Console PRD §4.3's "no password, no login path"
+ * holds on both halves: no guard would accept credentials for this
+ * principal type, and no package API mints a session without verified
+ * bytes.
+ *   Pinned by `tests/ConsoleRedemptionTest.php` — "exposes no way to log
+ *   a delegated actor in without signed bytes", "refuses a token whose
+ *   claims were rewritten to claim the admin role", "does not
+ *   authenticate a principal handed to setUser, even alongside
+ *   hand-written claims" (whose positive control also pins the
+ *   boundary), and "offers no public way to write a delegated session's
+ *   claims"; and by `tests/ConsoleDelegatedActorTest.php` — "refuses
+ *   every credential lookup unconditionally" and "has no
+ *   credential-shaped entry point on the guard at all".
+ *
+ * ONE MORE THING `setUser()` DOES, said rather than left implied: the
+ * inner guard dispatches `Authenticated` synchronously from it, so a
+ * host listener could persist something of its own. That reduces to the
+ * same host session-writer boundary named above; it is not a path this
+ * package opens.
  *
  * THE ONE PUBLIC SEAM LEFT IS {@see setUser()}, which the {@see Guard}
  * contract requires and which Laravel's own `actingAs()` uses. It is
@@ -95,9 +117,16 @@ use Throwable;
  * pointed here for every later request in that process, and a route that
  * never mentioned the Console would resolve its principal through this
  * guard. That is a property of the host runtime and cannot be detected
- * from inside a guard. Both halves — that the leak is real without a
- * sandbox, and that the clone is what closes it — are asserted in
- * `tests/ConsoleGuardScopingTest.php`.
+ * from inside a guard.
+ *   Pinned by `tests/ConsoleGuardScopingTest.php` — "would resolve a
+ *   non-console route through the delegated guard on a runtime that
+ *   never sandboxes config" (the leak is real, asserted on the resolved
+ *   PRINCIPAL rather than the guard name, which a refusal shares), "does
+ *   not leak into the next request when the config repository is cloned
+ *   per request", and "leaves auth.defaults.guard pointed at the console
+ *   guard, and forgetting guards does not put it back". Those model the
+ *   property a runtime must provide; they do not invoke Octane, which is
+ *   not a dependency here.
  *
  * WHY THE CAP LIVES IN THE GUARD AND NOT IN A MIDDLEWARE. A cap applied
  * only in middleware is a cap a route can omit: `auth('bfc-console')
@@ -131,6 +160,13 @@ use Throwable;
  * THE CLOCK IS EVALUATED FIRST, before the inner guard is asked, so a
  * capped session reports `assertion_age_cap` rather than the
  * `session_invalidated` a vanished principal would produce.
+ *   Pinned by `tests/ConsoleSessionCapTest.php` — the four "…when X is
+ *   the FIRST thing anything reads" tests drive `id()`, `hasUser()`,
+ *   `check()` and `user()` each as the genuinely first read, because
+ *   once anything has called {@see actor()} the refusal is cached and a
+ *   wrapper forwarding an entry point blindly would pass; plus "refuses
+ *   and destroys a capped session on a route carrying no console
+ *   middleware" and "sits exactly on the cap boundary".
  *
  * REFUSAL DOES NOT CALL `logout()`. It forgets the in-memory principal
  * and INVALIDATES the session (flushed, id regenerated), which does
@@ -380,6 +416,22 @@ final class ConsoleGuard implements Guard
      *     window leaves a live delegated session behind a row that says
      *     contained.
      *
+     * ORDERING, AND THE ONE STEP THAT MUST FOLLOW THE PERSIST. Everything
+     * that can throw AND that this package controls happens before any
+     * session write: verification, the handoff record, the locked
+     * deactivation check. The session writes themselves cannot fail —
+     * `Store::put()` is memory.
+     *   What must follow them is not this package's to move:
+     *   `SessionGuard::login()` writes and regenerates the session and
+     *   THEN dispatches `Login` and `Authenticated`, so a host
+     *   application's listener runs after the session already exists.
+     *   Reordering that would mean not calling `login()` and
+     *   reimplementing what it does — mirroring framework internals that
+     *   have gained parameters within a single major, which is the
+     *   mistake the composition note above exists to avoid. The
+     *   transaction COMMIT is the other step that follows.
+     *   {@see compensate()} states what that leaves and what it does not.
+     *
      * The session is never remembered. There is no `$remember` anywhere
      * on this class: a delegated session's life is bounded by D7's clocks
      * and by nothing else, and a cookie that outlived them would be the
@@ -465,8 +517,14 @@ final class ConsoleGuard implements Guard
      * had verified, sitting next to a `redeem()` built so that could not
      * happen. Here it is reachable only from {@see redeem()}, which has
      * already verified the signature and is holding the actor's row
-     * lock. The four pieces are written together, so a session can never
-     * carry an age without claims or claims without an age.
+     * lock. The four pieces are written together by the only code that
+     * writes them, so THIS operation cannot leave a session carrying an
+     * age without claims or claims without an age. It is not a claim
+     * about what else could put those keys there — see
+     * {@see ConsoleSession} for that boundary — and the guard refuses
+     * either half on its own anyway, which
+     * `tests/ConsoleActingPrincipalTest.php` drives in "refuses a
+     * delegated session whose claims cannot be read".
      */
     private function beginSession(Assertion $assertion): void
     {
@@ -558,11 +616,24 @@ final class ConsoleGuard implements Guard
      * the way refusal is done: forget the principal and destroy the
      * session, and never set the flag.
      *
-     * Nothing this package writes is lost by skipping the framework's
-     * version. The only thing `SessionGuard::logout()` does beyond this
-     * is clear a RECALLER cookie, and this guard never queues one; a
-     * stale recaller left by something else cannot authenticate anybody
-     * here (see the class docblock) and is not this method's to forget.
+     * TWO THINGS `SessionGuard::logout()` DOES THAT THIS DOES NOT, and
+     * both are deliberate rather than overlooked:
+     *
+     *  - it clears a RECALLER cookie. This guard never queues one, and a
+     *    stale recaller left by something else cannot authenticate
+     *    anybody here (see the class docblock), so there is nothing of
+     *    this package's to clear.
+     *  - it dispatches the `Logout` event. A host listening for `Logout`
+     *    on this guard will not hear one, and that is a REAL gap rather
+     *    than a non-event: the alternative is calling the framework's
+     *    method and taking the sticky flag with it, which breaks the
+     *    next request. PR4/PR5's leave endpoint is where a delegated
+     *    leave event belongs, dispatched by the endpoint that owns the
+     *    flow rather than smuggled out of a guard.
+     *
+     * Pinned by `tests/ConsoleActingPrincipalTest.php` — "does not let a
+     * logout on one request reject a different delegated session on the
+     * next".
      */
     public function logout(): void
     {
@@ -587,16 +658,6 @@ final class ConsoleGuard implements Guard
     }
 
     /**
-     * Forget the principal and destroy the session — the one storage
-     * effect refusal, leaving and redemption's compensation all share.
-     *
-     * `$session->invalidate()` flushes the whole session and regenerates
-     * its id, which is everything `SessionGuard::logout()` would have
-     * done to storage. What it deliberately does NOT do is set the inner
-     * guard's sticky `loggedOut` flag; {@see logout()} says why that
-     * matters, and it matters identically here.
-     */
-    /**
      * Destroy the session a failed redemption had already begun, and
      * NEVER become the failure the caller sees.
      *
@@ -613,20 +674,32 @@ final class ConsoleGuard implements Guard
      * application's exception handler when one is bound — visible, but
      * never thrown — and the ORIGINAL propagates untouched.
      *
-     * WHAT IS STILL TRUE WHEN THIS PATH IS TAKEN, and it is not nothing:
-     * {@see destroySession()} does three things in order, and only the
-     * last can fail. `forget()` and the inner guard's `forgetUser()` are
-     * pure memory. `Session::invalidate()` is `flush()` — which empties
-     * the session's attributes in memory and cannot fail — followed by
-     * `migrate(true)`, whose `handler->destroy()` is the I/O that can.
-     * So even a throwing compensation has already cleared the in-memory
-     * principal and emptied the session, and anything later written back
-     * writes an empty session.
+     * WHAT A LATER REQUEST SEES WHEN THIS PATH IS TAKEN — the question
+     * that actually matters, and it is answered by test rather than by
+     * argument. {@see destroySession()} does three things in order and
+     * only the last can fail: `forget()` and the inner guard's
+     * `forgetUser()` are memory, and `Session::invalidate()` is
+     * `flush()` — memory, cannot fail — followed by `migrate(true)`,
+     * whose `handler->destroy()` is the I/O that can. So by the time a
+     * compensation failure is caught, the session's attributes are
+     * already empty. And the id the browser is handed was regenerated by
+     * `SessionGuard::login()` before the failure, naming a record that
+     * has never been written — nothing is persisted mid-request; the
+     * store is written once, at the end.
+     *   So a later request carrying that session finds no delegated
+     *   identity, whether the store recovered in time to save an empty
+     *   session or stayed down and saved nothing at all. Both are driven
+     *   in `tests/ConsoleRedemptionTest.php` — "leaves a later request
+     *   unauthenticated when the store recovers before the response is
+     *   saved" and "…when the store is still down at save time".
      *
-     * WHAT IS NOT GUARANTEED, stated plainly: the session ID is not
-     * regenerated and the old record is not destroyed in the store,
-     * because the store is what failed. Nothing inside a guard can fix
-     * that.
+     * WHAT IS NOT GUARANTEED, stated plainly: the session id is not
+     * regenerated a second time and no record is destroyed in the store,
+     * because the store is what failed — so a record that existed BEFORE
+     * this request may survive under its own id. It carries whatever it
+     * carried before, which is not a delegated identity: this request is
+     * the only thing that would have put one there. Nothing inside a
+     * guard can do better than that.
      */
     private function compensate(): void
     {
@@ -657,6 +730,19 @@ final class ConsoleGuard implements Guard
         }
     }
 
+    /**
+     * Forget the principal and destroy the session — the one storage
+     * effect refusal, leaving and redemption's compensation all share.
+     *
+     * `$session->invalidate()` flushes the whole session and regenerates
+     * its id, which is everything `SessionGuard::logout()` would have
+     * done to storage. What it deliberately does NOT do is set the inner
+     * guard's sticky `loggedOut` flag; {@see logout()} says why that
+     * matters, and it matters identically here.
+     *
+     * Only the last of the three steps can fail — see {@see compensate()},
+     * which is the one caller that has to survive that.
+     */
     private function destroySession(): void
     {
         $this->forget();
