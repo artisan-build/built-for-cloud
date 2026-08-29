@@ -20,7 +20,15 @@ final class MetaController
             'api_version' => BuiltForCloud::API_VERSION,
             // Additive per the compatibility rule (docs/http-contract.md):
             // consumers feature-detect on membership, never on position.
-            'capabilities' => ['tokens', 'ownership', 'onboarding', 'webhooks', 'credentials'],
+            //
+            // `console-keys` is deliberately NOT `console`: what this
+            // release serves is countersigning-key custody (the
+            // claim-time exchange and the re-key verb, Console PRD D12),
+            // not the Console itself — no delegated guard, no enter
+            // endpoint, no delegated-actor table. A control plane that
+            // read `console` as "this deployment can be entered" would
+            // be reading a promise nothing here keeps.
+            'capabilities' => ['tokens', 'ownership', 'onboarding', 'webhooks', 'credentials', 'console-keys'],
             'claimed' => $ownership !== null && $ownership->owner_token_id !== null,
         ]);
     }

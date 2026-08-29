@@ -4,9 +4,13 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
+use ArtisanBuild\BuiltForCloud\Actions\FileConsoleKey;
 use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\AuditActor;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyDelivery;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
+use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
 use ArtisanBuild\BuiltForCloud\OwnershipClaimMinter;
@@ -23,8 +27,29 @@ final class ManageOwnership
         private readonly TokenGenerator $generator,
         private readonly TokenRegistry $tokens,
         private readonly OwnershipClaimMinter $claims,
+        private readonly FileConsoleKey $fileConsoleKey,
     ) {}
 
+    /**
+     * Claim ownership of this instance, OPTIONALLY countersigning it in
+     * the same act (Console PRD D12 — the claim-time key exchange the
+     * contract reserved).
+     *
+     * The `console_key` field is additive and optional: a claim that
+     * omits it behaves in every respect as it did before this release,
+     * down to the response keys. A claim that carries it files and
+     * activates the vendor's per-deployment PUBLIC key on this app's
+     * keyring, and the response names the filed key id.
+     *
+     * Delivery and claim succeed or fail TOGETHER. The filing happens
+     * inside the claim's own transaction, so a refused key rolls the
+     * whole claim back: no owner token is minted, the claim code stays
+     * unconsumed and presentable, and no keyring row is created. The
+     * alternative — claiming anyway and reporting the key failure —
+     * would burn a single-use claim code on a deployment that ended up
+     * unkeyed, with no way back except re-onboarding, which is the exact
+     * outcome the re-key verb exists to avoid.
+     */
     public function claim(Request $request): JsonResponse
     {
         /** @var array{token: string, notify_callback?: string|null} $validated */
@@ -33,69 +58,122 @@ final class ManageOwnership
             'notify_callback' => ['nullable', 'url'],
         ]);
 
-        return DB::transaction(function () use ($validated): JsonResponse {
-            $claim = $this->lockClaim($validated['token']);
+        // Parsed BEFORE the transaction: it is pure (a charset check and
+        // an Ed25519 point check, no reads, no writes), so malformed
+        // material refuses without ever locking a claim row.
+        try {
+            $delivery = ConsoleKeyDelivery::optionalFrom($request);
+        } catch (ConsoleKeyRefused $refused) {
+            $this->fileConsoleKey->recordRefusal($refused, null, null);
 
-            if ($claim === null) {
-                abort(401);
-            }
+            return response()->json(['message' => $refused->getMessage()], $refused->reason->status());
+        }
 
-            $ownership = Ownership::query()->lockForUpdate()->first();
-            $isPendingTransfer = $ownership !== null && $ownership->pending_claim_id === $claim->getKey();
+        // Carried OUT of the rolled-back transaction so a refusal can
+        // still be audited against the party that presented the code.
+        $presentedClaimId = null;
 
-            if ($ownership !== null && $ownership->owner_token_id !== null && ! $isPendingTransfer) {
-                return response()->json(['message' => 'already claimed'], 409);
-            }
+        try {
+            return DB::transaction(function () use ($validated, $delivery, &$presentedClaimId): JsonResponse {
+                return $this->performClaim($validated, $delivery, $presentedClaimId);
+            });
+        } catch (ConsoleKeyRefused $refused) {
+            $this->fileConsoleKey->recordRefusal(
+                $refused,
+                is_string($presentedClaimId) ? AuditActor::credentialHolder($presentedClaimId) : null,
+                $delivery?->keyId,
+            );
 
-            $generated = $this->generator->generate();
-            $ownerToken = $this->tokens->store('owner', $generated->hash, abilities: [Scope::Admin->value]);
-            $webhookSecret = bin2hex(random_bytes(32));
-            $now = now();
-            $oldCallbackUrl = $ownership?->notify_callback;
-            $oldWebhookSecret = $ownership?->webhook_secret;
+            return response()->json(['message' => $refused->getMessage()], $refused->reason->status());
+        }
+    }
 
-            if ($ownership === null) {
-                $ownership = Ownership::query()->create([
-                    'owner_token_id' => $ownerToken->getKey(),
-                    'notify_callback' => $validated['notify_callback'] ?? null,
-                    'webhook_secret' => $webhookSecret,
-                    'pending_claim_id' => null,
-                ]);
-            } else {
-                if ($isPendingTransfer && $ownership->owner_token_id !== null) {
-                    ApiToken::query()->whereKey($ownership->owner_token_id)->update([
-                        'expires_at' => $now,
-                        'revoked_at' => $now,
-                    ]);
-                }
+    /**
+     * The claim itself, inside the caller's transaction.
+     *
+     * @param  array{token: string, notify_callback?: string|null}  $validated
+     * @param  string|null  $presentedClaimId  written with the presenting claim's id, so a refusal that rolls this transaction back can still be audited against it
+     *
+     * @param-out string $presentedClaimId
+     *
+     * @throws ConsoleKeyRefused when a delivered key cannot be filed — rolling the whole claim back
+     */
+    private function performClaim(array $validated, ?ConsoleKeyDelivery $delivery, ?string &$presentedClaimId): JsonResponse
+    {
+        $claim = $this->lockClaim($validated['token']);
 
-                $ownership->forceFill([
-                    'owner_token_id' => $ownerToken->getKey(),
-                    'notify_callback' => array_key_exists('notify_callback', $validated)
-                        ? $validated['notify_callback']
-                        : $ownership->notify_callback,
-                    'webhook_secret' => $webhookSecret,
-                    'pending_claim_id' => null,
-                ])->save();
+        if ($claim === null) {
+            abort(401);
+        }
 
-                if ($isPendingTransfer && $oldWebhookSecret !== null) {
-                    event(new OwnershipTransferred(
-                        callbackUrl: $oldCallbackUrl,
-                        secret: $oldWebhookSecret,
-                        event: 'ownership.transferred',
-                        payload: ['product' => config('built-for-cloud.product')],
-                    ));
-                }
-            }
+        $presentedClaimId = (string) $claim->getKey();
 
-            $claim->forceFill(['consumed_at' => $now])->save();
+        $ownership = Ownership::query()->lockForUpdate()->first();
+        $isPendingTransfer = $ownership !== null && $ownership->pending_claim_id === $claim->getKey();
 
-            return response()->json([
-                'owner_token' => $generated->plaintext,
+        if ($ownership !== null && $ownership->owner_token_id !== null && ! $isPendingTransfer) {
+            return response()->json(['message' => 'already claimed'], 409);
+        }
+
+        $generated = $this->generator->generate();
+        $ownerToken = $this->tokens->store('owner', $generated->hash, abilities: [Scope::Admin->value]);
+        $webhookSecret = bin2hex(random_bytes(32));
+        $now = now();
+        $oldCallbackUrl = $ownership?->notify_callback;
+        $oldWebhookSecret = $ownership?->webhook_secret;
+
+        if ($ownership === null) {
+            $ownership = Ownership::query()->create([
+                'owner_token_id' => $ownerToken->getKey(),
+                'notify_callback' => $validated['notify_callback'] ?? null,
                 'webhook_secret' => $webhookSecret,
-                'product' => config('built-for-cloud.product'),
-            ], 201);
-        });
+                'pending_claim_id' => null,
+            ]);
+        } else {
+            if ($isPendingTransfer && $ownership->owner_token_id !== null) {
+                ApiToken::query()->whereKey($ownership->owner_token_id)->update([
+                    'expires_at' => $now,
+                    'revoked_at' => $now,
+                ]);
+            }
+
+            $ownership->forceFill([
+                'owner_token_id' => $ownerToken->getKey(),
+                'notify_callback' => array_key_exists('notify_callback', $validated)
+                    ? $validated['notify_callback']
+                    : $ownership->notify_callback,
+                'webhook_secret' => $webhookSecret,
+                'pending_claim_id' => null,
+            ])->save();
+
+            if ($isPendingTransfer && $oldWebhookSecret !== null) {
+                event(new OwnershipTransferred(
+                    callbackUrl: $oldCallbackUrl,
+                    secret: $oldWebhookSecret,
+                    event: 'ownership.transferred',
+                    payload: ['product' => config('built-for-cloud.product')],
+                ));
+            }
+        }
+
+        $claim->forceFill(['consumed_at' => $now])->save();
+
+        // Additive, and ABSENT rather than null when no key was
+        // delivered: a consumer pinned to the pre-console response
+        // sees byte-identical keys.
+        $consoleKey = $delivery === null
+            ? []
+            : [ConsoleKeyDelivery::FIELD => ($this->fileConsoleKey)(
+                $delivery,
+                AuditActor::credentialHolder((string) $claim->getKey()),
+            )->toArray()];
+
+        return response()->json([
+            'owner_token' => $generated->plaintext,
+            'webhook_secret' => $webhookSecret,
+            'product' => config('built-for-cloud.product'),
+            ...$consoleKey,
+        ], 201);
     }
 
     public function release(Request $request): JsonResponse

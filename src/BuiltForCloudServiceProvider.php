@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud;
 
 use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
+use ArtisanBuild\BuiltForCloud\Commands\ConsoleReKeyCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CreateAdminCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialActivateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialListCommand;
@@ -33,6 +34,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageInvitations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
@@ -261,6 +263,17 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $router->post('/bfc/invitations', [ManageInvitations::class, 'store'])
             ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::CredentialMint->value]);
 
+        // The console re-key verb (Console PRD D12): the retrofit path
+        // that files a countersigning key onto an ALREADY-CLAIMED
+        // deployment without re-onboarding it. Fixed path under the
+        // `/bfc/console/*` namespace the contract reserved for exactly
+        // this, in the routes family like every other package surface,
+        // throttled FIRST and then gated on the `credential:rotate`
+        // family — a re-key IS a rotation, and this vocabulary is per
+        // verb family (the hmac activate cutover rides the same one).
+        $router->post('/bfc/console/re-key', [ManageConsoleKeys::class, 'reKey'])
+            ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::CredentialRotate->value]);
+
         // The offboard verb (PRD 1.15, SEC-V3-04): full account
         // containment behind its OWN verb-family ability — the widest
         // verb, so a stolen mint- or revoke-scoped credential cannot
@@ -329,6 +342,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     private function registerCommands(): void
     {
         $this->commands([
+            ConsoleReKeyCommand::class,
             CreateAdminCommand::class,
             CredentialActivateCommand::class,
             CredentialListCommand::class,

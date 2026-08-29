@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
+use ArtisanBuild\BuiltForCloud\Actions\FileConsoleKey;
 use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActor;
@@ -11,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\BurnMode;
 use ArtisanBuild\BuiltForCloud\ClaimError;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyDelivery;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresBurnMode;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresDurableStore;
@@ -20,6 +22,7 @@ use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
 use ArtisanBuild\BuiltForCloud\DurableStore;
+use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
@@ -57,6 +60,7 @@ final class ManageOnboarding
     public function __construct(
         private readonly TokenRegistry $tokens,
         private readonly LifecycleEventRecorder $recorder,
+        private readonly FileConsoleKey $fileConsoleKey,
     ) {}
 
     /**
@@ -185,6 +189,26 @@ final class ManageOnboarding
         }
     }
 
+    /**
+     * The onboarding exchange, OPTIONALLY carrying the claim-time
+     * countersigning-key exchange the contract reserved (Console PRD
+     * D12).
+     *
+     * `console_key` is additive and optional. Without it this surface
+     * behaves exactly as it did before this release, response keys
+     * included; with it, the vendor's per-deployment PUBLIC key is filed
+     * and activated on this app's keyring inside the exchange's own
+     * transaction, and the response names the filed key id.
+     *
+     * A refused key rolls the WHOLE exchange back — no durable minted,
+     * no signing key delivered, and (under `at_exchange`) the code
+     * unburned and still presentable. Half-succeeding would spend a
+     * single-use code on a deployment that ended up unkeyed.
+     *
+     * The hitch claim face ({@see claim()}) deliberately does NOT read
+     * this field: `/bfc/claim` speaks a wire contract published by
+     * another project, and console key custody is not part of it.
+     */
     public function exchange(Request $request): JsonResponse
     {
         /** @var array{token: string, version?: int|null} $validated */
@@ -203,6 +227,17 @@ final class ManageOnboarding
             return ClaimError::InvalidCode->respond('That code is not in the expected format. Check it for typos and try again.');
         }
 
+        // Parsed before anything is locked or burned: the check is pure
+        // (charset plus an Ed25519 point test), so malformed material
+        // refuses without touching the code.
+        try {
+            $delivery = ConsoleKeyDelivery::optionalFrom($request);
+        } catch (ConsoleKeyRefused $refused) {
+            $this->fileConsoleKey->recordRefusal($refused, null, null);
+
+            return response()->json(['message' => $refused->getMessage()], $refused->reason->status());
+        }
+
         try {
             // A code that delivers an hmac signing key runs its WHOLE
             // exchange under the shared rewrap lock (check-through-commit
@@ -214,14 +249,26 @@ final class ManageOnboarding
             // retryable server_error.
             if ($this->presentedDeliversSigningKey($presented)) {
                 return app(HmacWriterBarrier::class)->locked(
-                    write: fn (): JsonResponse => $this->performExchange($presented),
+                    write: fn (): JsonResponse => $this->performExchange($presented, delivery: $delivery),
                     onBusy: static fn (): JsonResponse => ClaimError::ServerError->respond(
                         'A signing-key storage cutover is running on this server, so signing-key deliveries are briefly paused. It is safe to retry shortly.',
                     ),
                 );
             }
 
-            return $this->performExchange($presented);
+            return $this->performExchange($presented, delivery: $delivery);
+        } catch (ConsoleKeyRefused $refused) {
+            // The `kid` was already on file. The transaction rolled
+            // back: no durable, no burn, no keyring row, and the
+            // material behind the existing key id is untouched.
+            // The presenter is re-read rather than carried out of the
+            // rolled-back transaction: the code row survives the
+            // rollback (it is what refused to change), and reading it
+            // here keeps the barrier path's arrow closures free of
+            // by-reference plumbing.
+            $this->fileConsoleKey->recordRefusal($refused, $this->codeHolderActor($presented), $delivery?->keyId);
+
+            return response()->json(['message' => $refused->getMessage()], $refused->reason->status());
         } catch (Throwable $exception) {
             // The claim contract's server_error: clients print `message`
             // verbatim and treat the failure as retryable. Laravel's
@@ -257,9 +304,14 @@ final class ManageOnboarding
             ->exists();
     }
 
-    private function performExchange(string $presented, bool $hitchShape = false): JsonResponse
+    /**
+     * @param  ConsoleKeyDelivery|null  $delivery  the OPTIONAL claim-time countersigning key; always null on the hitch face
+     *
+     * @throws ConsoleKeyRefused when a delivered key cannot be filed — rolling the whole exchange back
+     */
+    private function performExchange(string $presented, bool $hitchShape = false, ?ConsoleKeyDelivery $delivery = null): JsonResponse
     {
-        return DB::transaction(function () use ($presented, $hitchShape): JsonResponse {
+        return DB::transaction(function () use ($presented, $hitchShape, $delivery): JsonResponse {
             /** @var OnboardingToken|null $code */
             $code = OnboardingToken::query()
                 ->where('token_hash', OnboardingToken::hashToken($presented))
@@ -310,7 +362,12 @@ final class ManageOnboarding
             $hmacDelivery = $this->deliverPendingSigningKey($code);
 
             if ($hmacDelivery !== null) {
-                return $hmacDelivery;
+                // A REFUSED signing-key delivery files no console key:
+                // the exchange did not succeed, and a key filed against
+                // a failed exchange is custody nobody was told arrived.
+                return $hmacDelivery->isSuccessful()
+                    ? $this->withConsoleKey($hmacDelivery, $delivery, $code)
+                    : $hmacDelivery;
             }
 
             // A re-claim before first use lands here too (make-before-break):
@@ -401,11 +458,51 @@ final class ManageOnboarding
                 ]);
             }
 
-            return response()->json([
+            return $this->withConsoleKey(response()->json([
                 'durable_token' => $minted->secret->reveal(),
                 'name' => $name,
-            ], 201);
+            ], 201), $delivery, $code);
         });
+    }
+
+    /**
+     * File a delivered countersigning key and add the additive
+     * `console_key` field to a SUCCESSFUL exchange response.
+     *
+     * With no delivery the response is returned untouched — byte for
+     * byte the shape this surface answered with before this release,
+     * which is the whole promise of an additive slot.
+     *
+     * @throws ConsoleKeyRefused when the `kid` is already on file — rolling the exchange back
+     */
+    private function withConsoleKey(JsonResponse $response, ?ConsoleKeyDelivery $delivery, OnboardingToken $code): JsonResponse
+    {
+        if ($delivery === null) {
+            return $response;
+        }
+
+        $filed = ($this->fileConsoleKey)($delivery, AuditActor::credentialHolder($code->id));
+
+        /** @var array<string, mixed> $data */
+        $data = $response->getData(true);
+        $data[ConsoleKeyDelivery::FIELD] = $filed->toArray();
+
+        return $response->setData($data);
+    }
+
+    /**
+     * The party that presented a code, for a refusal audit written after
+     * the exchange rolled back. Null when no code matches — the actor is
+     * then genuinely unknown and is never guessed.
+     */
+    private function codeHolderActor(string $presented): ?AuditActor
+    {
+        /** @var OnboardingToken|null $code */
+        $code = OnboardingToken::query()
+            ->where('token_hash', OnboardingToken::hashToken($presented))
+            ->first(['id']);
+
+        return $code === null ? null : AuditActor::credentialHolder($code->id);
     }
 
     /**
