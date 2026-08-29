@@ -93,12 +93,101 @@ The guard ships explicit, tested precedence semantics:
 - **Session routes never consume a bearer implicitly.** A session-guarded
   route authenticates by session; a bearer riding along is ignored and its
   `last_used_at` is not stamped.
-- **RESERVED (Console fast-follow, unimplemented):** a future `bfc-console`
-  delegated-session guard adds one more row — on a request carrying both a
-  local `web` session and a delegated session, **the delegated guard wins**,
-  for the acting principal and for any UI/attribution branching, never a
-  union of the two. Recorded now so the Console lands without reopening this
-  matrix; no such guard exists in this release.
+
+### The session-vs-session row: an AMENDMENT to SEC-V3-10
+
+The reserved Console row is now **implemented**, and this is an **amendment
+to the v3.1 matrix invariant SEC-V3-10, not an additive slot-in**. SEC-V3-10
+shipped as a token-vs-session rule with a **singular**
+`built-for-cloud.credentials.session_guard` key whose whole job is rejecting
+mismatched principals. The Console makes the matrix **session-vs-session**
+as well, and that is a change to the invariant's shape — a reader of the old
+statement would conclude the matrix has one session guard in it, and after
+this release it has two.
+
+- **On a request carrying both a local `web` session and a delegated
+  `bfc-console` session, the delegated guard wins** — for the acting
+  principal AND for all UI/attribution branching, never a union, never
+  decided by the order two middlewares were listed in.
+- That row is **not** decided by the `bfc` credential guard, and it is not
+  decided by a package-owned repoint either. It is decided by **the route's
+  own guard**: a delegated route carries Laravel's `auth:bfc-console`, which
+  makes the console guard the guard of that request, so `$request->user()`,
+  `Auth::user()`, `Gate` and `ArtisanBuild\BuiltForCloud\Console\
+  ActingPrincipalResolver` all end at the same guard and return the same
+  object. The package writes no process-global auth state: it never calls
+  `AuthManager::shouldUse()` and never sets `auth.defaults.guard`.
+- **A delegated actor is never the other half of a mismatch.** The
+  credential guard compares a credential's `user_id` — a stringified
+  host-app user id — against the session principal. A delegated actor's
+  identifier is type-qualified (`bfc-console:{id}`) precisely so it can
+  never equal one, so comparing them could only ever produce a FALSE
+  mismatch. An app that points `credentials.session_guard` at `bfc-console`
+  therefore gets "no comparable local principal", not a 401 on every token
+  route.
+- **No credential resolves a delegated actor.** The `bfc-console:` identifier
+  namespace is RESERVED: a credential whose `user_id` sits inside it is
+  refused **before any user provider is asked**, because what an ordinary
+  Eloquent provider does with `bfc-console:1` over an integer key is
+  driver-defined (MySQL coerces toward `0`, PostgreSQL raises), not a lookup
+  that safely fails. A returned delegated actor is rejected as well, and the
+  resolved principal must emit exactly the identifier the credential stored.
+- **Every previously shipped cell is unchanged**, and its tests are
+  unchanged: `tests/CredentialPrecedenceTest.php` runs the whole matrix with
+  both session guards configured.
+
+### What this changes for a consuming app
+
+**Nothing, unless you enable the Console.** `built-for-cloud.console.enabled`
+defaults to `false` and gates the whole feature: the delegated guard is not
+registered, the reserved provider name is not claimed, `GET /bfc/meta` does
+not advertise `console-guard`, and the gates below behave exactly as they did
+before. Upgrading the package cannot change how an app authenticates, and
+cannot stop it booting.
+
+With the Console ENABLED, two package gates behave differently once a
+delegated session can exist. Both follow from D14's one resolved value, both
+are tested, and the two directions are deliberately asymmetric —
+**admission is exact, refusal may be broad**:
+
+- **`bfc.admin` now admits a delegated operator whose handoff carried
+  `role=admin`** — but only on a route the console guard actually governs
+  (one carrying `auth:bfc-console`), so the principal the gate authorizes is
+  the principal `$request->user()` returns behind it. Admitting on one
+  identity while the request acts as another is the confused deputy, and it
+  is the one outcome that must never happen. A delegated `member` is refused;
+  a delegated session on a route the console guard does NOT govern is
+  refused too, rather than falling back to a local admin's standing. Local
+  users are unaffected: the `is_admin` attribute check and the offboarding
+  containment check are unchanged.
+- **`bfc.auth` now REFUSES a delegated session with a 403** instead of
+  falling through to the local session user, whichever guard the route
+  names — and so does `PersonalCredentialSurface` itself (it is public API
+  an app's own screen may call without the middleware). A delegated actor
+  has no personal credentials in this app, and minting or revoking a local
+  human's credentials while somebody else is acting is the bug that refusal
+  exists to prevent. Refusing more broadly than strictly necessary costs
+  only convenience, which is why this direction is allowed to be blunt.
+
+A **refused** delegated session is terminal: `bfc.auth` answers 401,
+`bfc.admin` answers 403, and the personal-credentials surface throws — none
+of them falls back to the local user.
+
+**Mounting a console route.** Put `bfc.console` IN FRONT of
+`auth:bfc-console`. The framework's middleware is what makes the console
+guard that route's guard; `bfc.console` is what turns an absent or refused
+session into the structured re-entry 401 (`BFC-Console-Reentry: 1`) that a
+chrome interceptor can branch on, rather than a generic `401`. The absolute
+assertion-age cap does not depend on either: it lives in the guard, so it
+holds on every route that reads it, including ones with no console
+middleware at all.
+
+An app that wants its own delegated-guard arrangement can define
+`auth.guards.bfc-console` itself; the package then injects nothing. The
+provider name `bfc-console-actors` is reserved, and — when the Console is
+enabled — an app that has taken it for something else without defining its own
+guard fails boot with an explanatory exception rather than getting a delegated
+guard backed by its `users` table.
 
 ## Abilities middleware
 

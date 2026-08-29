@@ -170,6 +170,21 @@ Additive unless marked otherwise:
   metadata endpoints only**; a general, app-extensible instrument was prototyped in this release
   and withdrawn — see the note under [Endpoint classification](#endpoint-classification).
 
+- **The Console's delegated-session guard ships (Console PRD §4.3 / D7 / D8 / D14).** All
+  additive, and `api_version` stays 2: no documented request or response shape changes. It is
+  OFF by default behind `built-for-cloud.console.enabled`, and `GET /bfc/meta` `capabilities`
+  gains `console-guard` only while that flag is on. What lands is the `bfc-console` guard (a
+  real custom guard the package registers itself, scoped per route with Laravel's own
+  `auth:bfc-console`), the `bfc_delegated_actors` shadow-actor table, a session-bound claim
+  contract, D7's absolute 120-minute assertion-age cap enforced inside the guard by server-side
+  session invalidation, and the structured re-entry `401` the new `bfc.console` middleware
+  emits. Two package gates change behaviour ONLY for apps that enable the Console: `bfc.admin`
+  admits a delegated `admin` on a route the console guard governs, and `bfc.auth` (plus the
+  personal-credentials surface) refuses a delegated session rather than acting as the local
+  session user. This AMENDS the v3.1 matrix invariant SEC-V3-10 from a token-vs-session rule to
+  a session-vs-session one — see `release-notes/unified-store-guard.md`. Full detail under
+  [Console — what has landed](#console--what-has-landed-and-what-is-still-reserved).
+
 **api_version 1** — the 0.3.x baseline: `/bfc/meta`, `/bfc/ownership/*`, the pre-0.4 credential
 API listing shape.
 
@@ -417,6 +432,14 @@ deployment can be entered" would be reading a promise nothing here keeps.
 `console-vitals` means this instance serves [`GET /bfc/console/vitals`](#get-bfcconsolevitals).
 It is named for the one surface it serves, not for the dashboard that reads it: the fleet
 dashboard is the vendor's, and nothing in this release renders anything.
+
+`console-guard` means this deployment has the Console ENABLED and therefore carries the
+delegated-session machinery: the `bfc-console` guard, the `bfc_delegated_actors` table and the
+re-entry `401`. It is absent when `built-for-cloud.console.enabled` is off, which is the
+default, because the capability describes this deployment and not the package. It deliberately
+does not say `console-enter`: no enter endpoint exists yet, so a control plane that read this as
+"an operator can be handed to this deployment" would be reading a promise nothing here keeps.
+See [Console — what has landed](#console--what-has-landed-and-what-is-still-reserved).
 
 ---
 
@@ -1833,31 +1856,98 @@ mutating request).
 
 ---
 
-## RESERVED — Console fast-follow (not implemented)
+## Console — what has landed, and what is still RESERVED
 
-The vendor-side Console is a decided fast-follow. So that it can land without reopening this
-shipped contract, the following names are RESERVED here now. **Except where a bullet says
-otherwise, none of this exists in this release: no guard, no table, no ability issuance.** Two
-reservations have since been drawn on and have left this section: the `/bfc/console/*`
-namespace now has live members, documented above rather than here, and the `metadata:read`
-ability family is now ENFORCED — see [Authentication](#authentication) and
-[`GET /bfc/console/vitals`](#get-bfcconsolevitals). This section
-deliberately contains no `### METHOD /path` route headings — the mechanical route-completeness
-check covers live routes only, and nothing here is one.
+The vendor-side Console lands in stages. This section says exactly which of its reserved names
+are now real and which are still only names, so a consumer never has to guess. **Nothing in the
+"Landed" list changes any documented request or response shape, so `api_version` does not
+move**: what it adds is a guard, a table and a middleware — server-side machinery whose only
+wire face is one ERROR body. This section deliberately contains no `### METHOD /path` route
+headings; the mechanical route-completeness check covers live routes only, and nothing here is
+one.
 
-- **Guard name `bfc-console`** — reserved for the Console's delegated-session guard. No guard
-  by this name is registered.
-- **Endpoint namespace `/bfc/console/*`** — reserved for Console endpoints. Two members are
-  live: [`POST /bfc/console/re-key`](#post-bfcconsolere-key), the key-custody verb, and
-  [`GET /bfc/console/vitals`](#get-bfcconsolevitals), the ops-vitals read — both documented
-  above. `/bfc/console/enter` remains reserved and unimplemented.
-- **Table name `bfc_delegated_actors`** — reserved for the Console's delegated-actor records.
-  No such table or migration exists.
-- **Dual-session precedence (reserved matrix row).** The session/token precedence matrix (the
-  `bfc` guard's docblock and `release-notes/unified-store-guard.md`) reserves a row for the
-  future `bfc-console` delegated-session guard, recording the decided rule now: on a request
-  carrying both a local `web` session and a delegated session, **the delegated guard wins —
-  for the acting principal and for any UI/attribution branching — never a union of the two.**
-  Nothing enforces this in this release.
-Everything else Console-related remains held behind the Console PRD's decision D6; this
-section reserves exactly these names and nothing more.
+### Landed
+
+- **The Console is OFF unless a deployment enables it.** `built-for-cloud.console.enabled`
+  gates everything below and defaults to `false`. Installing or upgrading the package changes
+  nothing for an app that has not opted in — no new guard, and no change to how the package's
+  session gates behave. `GET /bfc/meta` `capabilities` gains `console-guard` **only while that
+  flag is on**, because the capability describes this deployment rather than the package.
+- **Guard name `bfc-console`** — with the Console enabled, the delegated-session guard EXISTS
+  and is registered **by the package itself**: a consuming app adds nothing to its `auth.php`.
+  It is a session guard over the delegated-actor provider, and it is a SECOND guard alongside
+  the `bfc` credential driver, which is unchanged. An app that has already defined a
+  `bfc-console` guard of its own keeps it; the package never overwrites one. The provider name
+  `bfc-console-actors` is RESERVED: with the Console **enabled**, an app that has defined it as
+  something else, without defining its own guard, fails boot loudly rather than having the
+  delegated guard built on its user table. With the Console **disabled** that collision is
+  ignored entirely — a deployment that never asked for the Console cannot be stopped from
+  booting by it.
+- **There is exactly ONE way to create a delegated principal**: redeeming a verified assertion
+  through the package's handoff API. The guard is a plain `Guard`, deliberately not a
+  `StatefulGuard`: `attempt`, `once`, `loginUsingId`, `onceUsingId` and `viaRemember` do not
+  exist on it, its user provider answers null/false to every credential-shaped question for
+  every input, and there is no remember-me path. "No password, no login path" is a property of
+  the types, not a set of methods that refuse.
+- **Table name `bfc_delegated_actors`** — the delegated-actor (shadow actor) table EXISTS. It
+  is **not** a `users` table: no password column, no remember-token column, no login path, and
+  no credential can resolve to one — the `bfc-console:` identifier namespace is RESERVED and is
+  refused before any credential's bound `user_id` reaches a user provider. A delegated
+  principal's identity is **type-qualified** (`bfc-console:{id}`) so it can never collide with a
+  `users` id, and the identifier suffix must be a canonical positive decimal. Actor identity is
+  the **digest of a length-delimited issuer+subject encoding**, not a collated comparison of two
+  text columns, so two subjects differing only in case are two humans on every database.
+  Rows are never pruned — they are the referent of delegated audit attribution.
+- **Per-mint claims are SESSION-bound.** The role, display name and `on_behalf_of` a request
+  acts under are the ones that request's own handoff wrote into its session. The actor row
+  keeps a `last_handoff_*` copy for operator listings and audit context only: a second handoff
+  for the same human never changes the role of an already-live session.
+- **Dual-session precedence.** ENFORCED, and enforced by the framework's own scoping rather
+  than by a package-owned repoint. A delegated route carries Laravel's `auth:bfc-console`, so
+  the console guard is the guard OF THAT REQUEST: `$request->user()`, `Auth::user()`,
+  `Auth::id()`, `Gate` and every policy return the delegated actor, and the package's resolver
+  returns the same object. On such a route, with a local `web` session simultaneously live,
+  **the delegated guard wins — for the acting principal and for all UI/attribution branching —
+  never a union of the two.** The package writes no global auth state of its own: it never
+  calls `shouldUse()` and never sets `auth.defaults.guard`.
+  A **REFUSED** delegated session (capped, unreadable claims, contained actor) is TERMINAL on
+  every route: the request resolves no principal at all and no package surface falls back to
+  the local user, whose session the guard has invalidated anyway.
+  The package's own gates read one resolved value, and the two directions are deliberately
+  asymmetric — **admission is exact, refusal may be broad**:
+  - `bfc.admin` ADMITS a delegated operator whose own handoff carried `role=admin`, but only
+    on a route the console guard actually governs, so the principal it authorizes is the
+    principal everything behind it acts as. A delegated `member` does not pass; a delegated
+    session on a route the console guard does NOT govern is refused rather than resolved to
+    the local user's `is_admin`; a local user still passes on that attribute as before.
+  - `bfc.auth` and the personal-credentials surface (`/bfc/me/credentials`) REFUSE a delegated
+    session with a `403`, whichever guard the route names, rather than falling through to the
+    local session user. A delegated actor has no personal credentials in this app. On a
+    REFUSED console session they answer `401` and `403` respectively, and never resolve the
+    local user.
+  - The token gates (`bfc.token.admin`, `bfc.credential.admin`, `bfc.ability`) are unchanged:
+    they never consult a session principal.
+  See `release-notes/unified-store-guard.md`, which records this as an amendment to SEC-V3-10.
+- **Delegated session clocks.** A delegated session is bounded by Laravel's own sliding idle
+  window AND by an absolute assertion-age cap of 120 minutes, measured from the assertion's
+  issued-at. The cap is enforced **inside the guard**, so it holds on every route including
+  ones that mount no Console middleware: a capped, orphaned or unreadable delegated session is
+  invalidated server-side the first time anything reads the guard. A route carrying the
+  package's `bfc.console` middleware answers such a request with a `401` carrying the header
+  `BFC-Console-Reentry: 1` and a body of
+  `{"version": 1, "error": "console_reentry_required", "reason": "<enum>", "reentry_url":
+  "<absolute>", "return_to": "<relative path>"}`, where `reason` is one of `assertion_age_cap`,
+  `session_invalidated`, `not_authenticated`, and `reentry_url` is **omitted entirely** when the
+  app has configured none. `return_to` is validated as a same-origin relative path in every
+  percent-decoded form. This is an ERROR body; the metadata/content classification does not
+  apply to it.
+
+### Still RESERVED (not implemented)
+
+- **`/bfc/console/enter`** — reserved inside the live `/bfc/console/*` namespace, whose other
+  members ([`POST /bfc/console/re-key`](#post-bfcconsolere-key) and
+  [`GET /bfc/console/vitals`](#get-bfcconsolevitals)) are documented above. **No enter endpoint
+  exists**, so nothing in this release can start a delegated session over HTTP; the guard above
+  is the machinery such a session will run on.
+
+Everything else Console-related remains held behind the Console PRD's decision D6.
