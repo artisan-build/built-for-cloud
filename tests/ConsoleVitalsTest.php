@@ -226,8 +226,12 @@ it('refuses every credential but metadata:read, break-glass and legacy admin tok
         $this->getJson('/bfc/console/vitals', ['Authorization' => $bare->bearerHeader()])->assertForbidden();
     }
 
-    // And the deprecated env pseudo-credential, which the unified-store
-    // guard has no code path to.
+    // And the deprecated env pseudo-credential. Two things refuse it and
+    // only one of them is load-bearing: the `bfc` guard has no code path
+    // to the fallback store, AND the gate refuses a bearer colliding
+    // with the configured fallback before anything resolves. These bytes
+    // are not a credential either way, so this case is the weak one; the
+    // aliasing tests below are the case that matters.
     config(['built-for-cloud.fallback_token' => 'fallback-secret-bytes']);
 
     $this->getJson('/bfc/console/vitals', ['Authorization' => 'Bearer fallback-secret-bytes'])
@@ -710,7 +714,7 @@ it('renders honestly for a caller stating a previous contract version', function
 
 // ---------------------------------------------------------------- AC9 --
 
-it('audits every vitals read with the actor typed, and carries exactly the declared columns', function (): void {
+it('audits every vitals read with the actor typed, and accounts for every column on the row', function (): void {
     // The earlier revision claimed this row was "ids only". It is not:
     // the stream's standard provenance columns carry this instance's
     // operator-authored product name, its cloud application name and its
@@ -754,6 +758,33 @@ it('audits every vitals read with the actor typed, and carries exactly the decla
         ->and($row->credential_expires_at)->toBeNull()
         ->and($row->reason_code)->toBeNull();
 
+    // EVERY column is accounted for, and the roll-call is DERIVED from
+    // the schema rather than hand-written — a hand-written list of 14 of
+    // 17 columns would not have noticed a fifteenth arriving, which is
+    // exactly the gap that made the old test name ("exactly the declared
+    // columns") wider than what it drove. A new column on
+    // `credential_audit_events` now reds this until someone decides
+    // which list it belongs in.
+    $asserted = [
+        // Populated above.
+        'actor_type', 'actor_ref', 'credential_id', 'provider', 'deployment',
+        'environment', 'note', 'occurred_at',
+        // Empty above.
+        'code_id', 'superseded_by_credential_id', 'recipient', 'code_ttl_seconds',
+        'credential_expires_at', 'reason_code',
+        // Structural, and asserted by the query and the count above
+        // rather than by a value: the row's identity, the event name the
+        // query filters on, and the insert stamp.
+        'id', 'event', 'created_at',
+    ];
+
+    $columns = Schema::getColumnListing('credential_audit_events');
+
+    sort($asserted);
+    sort($columns);
+
+    expect($asserted)->toBe($columns);
+
     // The narrowed claim, driven: no presented secret and no credential
     // material anywhere on the row.
     expect(json_encode($row->getAttributes()))->not->toContain($reader->plaintext())
@@ -772,7 +803,7 @@ it('audits every vitals read with the actor typed, and carries exactly the decla
 
 // --------------------------------------------------------------- AC10 --
 
-it('rate-limits the vitals route per credential and per ip', function (): void {
+it('rate-limits the vitals route per credential', function (): void {
     $reader = vitalsReader();
 
     foreach (range(1, 60) as $ignored) {
@@ -796,6 +827,38 @@ it('rate-limits the vitals route per credential and per ip', function (): void {
     // buckets are independent, not one compound key.
     $this->withServerVariables(['REMOTE_ADDR' => '10.9.0.3'])
         ->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
+        ->assertOk();
+});
+
+it('rate-limits the vitals route per ip across credentials', function (): void {
+    // The per-IP bound is 300/minute, five times the per-credential 60,
+    // so exhausting it takes five saturated readers. Driven rather than
+    // named: an earlier revision's test title said "per credential and
+    // per ip" while only the credential bound and bucket independence
+    // were behavioural, and the IP number lived solely in the unit test
+    // below.
+    foreach (range(1, 5) as $ignored) {
+        $reader = vitalsReader();
+
+        foreach (range(1, 60) as $ignored2) {
+            $this->withServerVariables(['REMOTE_ADDR' => '10.7.0.1'])
+                ->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
+                ->assertOk();
+        }
+    }
+
+    // A SIXTH credential, with an untouched bucket of its own, is
+    // throttled from that address: the 300 are spent.
+    $fresh = vitalsReader();
+
+    $this->withServerVariables(['REMOTE_ADDR' => '10.7.0.1'])
+        ->getJson('/bfc/console/vitals', ['Authorization' => $fresh->bearerHeader()])
+        ->assertStatus(429);
+
+    // …and reads immediately from a different address, which is what
+    // makes the 429 above the IP bound rather than its own.
+    $this->withServerVariables(['REMOTE_ADDR' => '10.7.0.2'])
+        ->getJson('/bfc/console/vitals', ['Authorization' => $fresh->bearerHeader()])
         ->assertOk();
 });
 
