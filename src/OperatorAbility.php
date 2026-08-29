@@ -16,9 +16,11 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
  *
  * The one admin-equivalent name is {@see self::ADMIN} (`credential:admin`,
  * shipped in PRD 1.20 as {@see EnsureCredentialAdmin::ABILITY}): on the
- * operator surfaces it satisfies every ability in
- * {@see self::adminEquivalent} — that set, exactly, is the documented
- * mapping. It is the explicit break-glass marking: a credential holding
+ * operator surfaces it satisfies every ability those routes name, and
+ * {@see self::adminEquivalent} is the declared inventory of what that
+ * is today — an inventory the gate does not read, not a bound it
+ * enforces (that method's docblock says exactly what follows from the
+ * difference). It is the explicit break-glass marking: a credential holding
  * `credential:admin` in its abilities list IS the break-glass credential,
  * deliberately minted with that literal name (the installer's operator
  * credential is one); nothing acquires the equivalence implicitly, and
@@ -116,8 +118,10 @@ enum OperatorAbility: string
     /**
      * The admin-equivalent break-glass ability
      * ({@see EnsureCredentialAdmin::ABILITY} — one name, asserted equal in
-     * the test suite). Holding it satisfies {@see self::adminEquivalent}
-     * on the operator surfaces.
+     * the test suite). On the operator surfaces, holding it satisfies
+     * whatever ability the route names — see {@see self::adminEquivalent}
+     * for what that is today, and for why the method is an inventory
+     * rather than the bound.
      */
     public const string ADMIN = 'credential:admin';
 
@@ -128,9 +132,29 @@ enum OperatorAbility: string
     public const string RESERVED_METADATA_READ = 'metadata:read';
 
     /**
-     * The documented mapping of `credential:admin`: the exact set the
-     * break-glass ability expands to on the operator surfaces. The MCP
-     * abilities are deliberately absent.
+     * The DECLARED inventory of what `credential:admin` reaches on the
+     * operator surfaces — every ability those routes ask for today.
+     *
+     * Read the next sentence before relying on it, because the method's
+     * name promises more than the code delivers: **nothing consults
+     * this.** {@see EnsureCredentialAdmin} grants a `credential:admin`
+     * credential whatever ability the route names, and this method
+     * appears nowhere in `src/` outside docblocks. The list is accurate
+     * because every operator route happens to name an ability on it, not
+     * because it is enforced — so a future route naming an ability
+     * deliberately left off would still be satisfied by break-glass, and
+     * this list would quietly become a description of the past.
+     *
+     * What IS enforced: the MCP abilities' absence, though by a
+     * different mechanism — {@see EnsureCredentialAbility} checks
+     * exact-match, so no operator ability satisfies an MCP gate.
+     *
+     * The contract doc's admin-equivalent sentence is pinned to this
+     * method by `HttpContractDocTest`, so the two cannot disagree; that
+     * test's docblock names what the pinning does and does not cover.
+     * Making the gate consult this method would turn the inventory into
+     * the bound the name implies. It is not done here, and is tracked as
+     * mutation debt rather than left to be rediscovered.
      *
      * @return list<self>
      */

@@ -29,8 +29,11 @@ use Throwable;
  * verb-family ability as the middleware parameter
  * (`bfc.credential.admin:credential:read`), and the admin-equivalent
  * {@see self::ABILITY} — what the installer mints (PRD 1.20) — satisfies
- * every one ({@see OperatorAbility::adminEquivalent}, the documented
- * break-glass mapping). Without the operator branch the install-time
+ * ANY ability a route names. Note the shape of that grant precisely: it
+ * is unconditional, not a lookup. This gate never reads
+ * {@see OperatorAbility::adminEquivalent}, which is a declared inventory
+ * of the abilities these routes ask for today rather than a set the
+ * break-glass is confined to. Without the operator branch the install-time
  * credential would be 401 on the one surface it exists to manage; without
  * the per-verb parameter a stolen read-only credential would be
  * fleet-admin (SEC-V3-06).

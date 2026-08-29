@@ -187,9 +187,22 @@ API listing shape.
   `credential:rotate`, `credential:revoke`, `subject:offboard`, `audit:read` and
   `console:key:write` (never the MCP pair); it is what
   `bfc:install:operator-credential` mints, and holding that literal name in the abilities
-  list is how a break-glass credential is marked. **This mapping is asserted against
-  `OperatorAbility::adminEquivalent()` by the package's own test suite**, so it cannot drift
-  from the code without a red build.
+  list is how a break-glass credential is marked.
+
+  Two precise things about that list, because "exactly" is doing more work in the sentence
+  above than the code does:
+
+  - **It is a declared inventory, not the enforcement path.** The operator gate grants a
+    credential holding `credential:admin` *whatever* ability the route asks for; it does not
+    consult the list. The list is therefore an accurate statement of what the operator routes
+    ask for TODAY — every one of them names an ability on it — rather than a ceiling the gate
+    would enforce if a future route named an ability deliberately left off. Read it as "these
+    are the abilities break-glass currently reaches", not as "break-glass is confined to
+    these". (The `never the MCP pair` half IS enforced, but by a different middleware: the
+    per-tool MCP gate checks exact-match and no operator ability satisfies it.)
+  - **A package test pins this sentence to `OperatorAbility::adminEquivalent()`** — the names,
+    their order, and the spelled count — so the document and that method cannot disagree. It
+    pins nothing else; see that test's own docblock for what it deliberately does not cover.
 
   **A legacy admin `api_tokens` row remains admin-equivalent on these routes, console key
   custody included — deliberately.** That set is not only the deprecated legacy credential

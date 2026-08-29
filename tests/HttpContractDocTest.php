@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\BuiltForCloud;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Route;
@@ -74,8 +75,41 @@ final class HttpContractDocTest extends TestCase
      *
      * The route-completeness checks above cannot catch that: they read
      * headings, not prose. This is the smallest extension of the same
-     * idea that would have caught it — pin the prose to the enum, in
-     * both directions and including the count word.
+     * idea that would have caught it.
+     *
+     * WHAT IT PINS, exactly: the ability names the contract's
+     * admin-equivalent sentence lists, their ORDER, the spelled count
+     * word beside them, and the absence of the MCP pair from both the
+     * sentence and the method. That is all.
+     *
+     * WHAT IT DOES NOT PIN — named because an unlisted gap reads as a
+     * covered one, which is the failure this whole check exists to
+     * answer:
+     *
+     * 1. **That `adminEquivalent()` is what the gate enforces. It is
+     *    not.** {@see EnsureCredentialAdmin}
+     *    grants a `credential:admin` credential whatever ability the
+     *    route names, without consulting this method — which appears
+     *    nowhere in `src/` outside docblocks. So a future ability
+     *    deliberately left OFF the list would still be satisfied by
+     *    break-glass at runtime, and this test would stay green while
+     *    the contract's "exactly" quietly stopped being true. Closing
+     *    it means either having the gate consult the method or adding a
+     *    behavioural test per ability; neither is done.
+     * 2. **The ability a ROUTE requires.**
+     *    {@see self::test_every_registered_package_route_is_documented}
+     *    compares `METHOD /uri` and nothing else, so swapping a route's
+     *    middleware — `console:key:write` back to `credential:rotate`,
+     *    say — leaves every check in this class green. Today that swap
+     *    is caught, but by ConsoleKeyCustodyTest's behavioural
+     *    assertions, not here; nothing mechanically ties the doc's
+     *    stated ability for a route to that route's middleware.
+     * 3. **WHERE in the document an ability appears.**
+     *    {@see self::test_every_operator_ability_appears_in_the_contract}
+     *    searches the whole file, and `console:key:write` occurs a dozen
+     *    times across the changelog, the authority table and the route
+     *    section — so deleting it from the vocabulary paragraph, the one
+     *    place an operator looks up what abilities exist, still passes.
      */
     public function test_the_documented_admin_equivalent_mapping_matches_the_code(): void
     {
@@ -136,9 +170,15 @@ final class HttpContractDocTest extends TestCase
     }
 
     /**
-     * Every ability the vocabulary defines is named somewhere in the
+     * Every ability the vocabulary defines is named SOMEWHERE in the
      * contract. A name the code enforces and the document never mentions
      * is a gate nobody can discover from the contract.
+     *
+     * Somewhere is the whole of the claim: this is an occurrence check
+     * over the entire file, not a check that the ability is documented
+     * in the vocabulary list, or on the route that requires it, or with
+     * any description at all. An ability mentioned only in a changelog
+     * line passes.
      */
     public function test_every_operator_ability_appears_in_the_contract(): void
     {
