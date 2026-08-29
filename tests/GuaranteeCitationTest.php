@@ -28,16 +28,25 @@ use ArtisanBuild\BuiltForCloud\Tests\CitationScan;
  * new document making uncited claims is not enforcing anything about new
  * work, which is the only work that needs enforcing.
  *
- * The floor is therefore PER FILE. Every surface expected to carry
- * guarantees is named with the number of citations it must carry, so a
- * document that drops its citations reds, and a new guarantee-bearing
- * file that cites nothing reds the moment it is added to the list.
+ * The floor is therefore PER FILE. **And the file list is built from
+ * what EXISTS, not from what already cites something** — which is the
+ * second thing that had to be fixed, because the first attempt at this
+ * tripwire was built on `CitationScan::scan()`, and `scan()` omits
+ * files with zero citations. A check that can only see files with
+ * citations cannot see a file that has none, so the new-file tripwire
+ * was claimed and did not exist: the fixture that "proved" it failed
+ * only because it had been listed by hand.
  *
- * THE RESIDUE, named because an enumeration always has one: a brand-new
- * guarantee-bearing file that nobody adds to `$citedSurfaces` is
- * invisible here. Adding it is the human step; everything after that is
- * mechanical. This is a tripwire against the ordinary omission, not a
- * proof about every file that could exist.
+ * So every candidate file under the scanned surfaces must be
+ * CLASSIFIED — given a citation floor, or listed as exempt with a
+ * reason. A new file in `src/Console` reds this suite until somebody
+ * says which it is, in the diff. That is deliberate friction and it is
+ * the whole property: absence has to be detectable.
+ *
+ * THE RESIDUE, now small and named: a guarantee-bearing file OUTSIDE
+ * the scanned surfaces entirely — a new top-level document nobody adds
+ * to `$citedSurfaces`. Adding a surface is the human step; everything
+ * inside one is mechanical.
  */
 $citedSurfaces = [
     'src/Console',
@@ -71,6 +80,33 @@ $expectedCitations = [
     'src/Http/Controllers/ConsoleEnter.php' => 16,
 ];
 
+/**
+ * Candidate files that make no guarantee of their own and therefore
+ * cite nothing. Each carries the reason, because an exemption without
+ * one is indistinguishable from an oversight — which is what this whole
+ * mechanism exists to tell apart.
+ *
+ * Adding a file to `src/Console` reds the suite until it appears here
+ * or in the floor above.
+ */
+$exemptFromCitation = [
+    'src/Console/ActingPrincipal.php' => 'a readonly value object: the resolved principal, carrying no rule of its own',
+    'src/Console/ActingPrincipalResolver.php' => 'D14 precedence, whose guarantees are stated and cited on ConsoleGuard',
+    'src/Console/Assertion.php' => 'the verified claim set; every property rule is the verifier\'s and is cited there',
+    'src/Console/AssertionRefusalReason.php' => 'a bounded enum of audit reasons',
+    'src/Console/ConsoleEntryRefusalReason.php' => 'a bounded enum of audit reasons',
+    'src/Console/ConsoleGuardConfiguration.php' => 'guard/provider injection; its rules are driven by ConsoleGuardRegistrationTest and stated in the contract',
+    'src/Console/ConsoleKey.php' => 'a keyring row; the custody claim lives on ConsoleKeyring and points elsewhere for its enforcement',
+    'src/Console/ConsoleKeyDelivery.php' => 'parses the delivered pair; the authority rules are FileConsoleKey\'s',
+    'src/Console/ConsoleKeyFiled.php' => 'a readonly result object',
+    'src/Console/ConsoleKeyRefusal.php' => 'a bounded enum of refusal reasons',
+    'src/Console/ConsoleKeyring.php' => 'make-before-break rotation; PR2 surface, whose claims are carried in the contract document',
+    'src/Console/ConsoleReentryReason.php' => 'a bounded enum the structured 401 carries',
+    'src/Console/ConsoleRole.php' => 'the two-value contract vocabulary (D8)',
+    'src/Console/ConsoleSessionClock.php' => 'D7\'s cap constant and its fail-closed read; cited from ConsoleGuard, which is where the cap is enforced',
+    'src/Console/DelegatedClaims.php' => 'a readonly value object carrying one session\'s claims',
+];
+
 it('resolves every test title quoted by a guarantee citation', function () use ($citedSurfaces): void {
     $root = dirname(__DIR__);
 
@@ -87,6 +123,70 @@ it('holds every guarantee-bearing surface to its own citation floor', function (
 
     expect(CitationScan::shortfallsIn($root, $citedSurfaces, $expectedCitations))->toBe([])
         ->and(CitationScan::unexpectedIn($root, $citedSurfaces, $expectedCitations))->toBe([]);
+});
+
+it('classifies every candidate file, so a new one that cites nothing cannot hide', function () use ($citedSurfaces, $expectedCitations, $exemptFromCitation): void {
+    // THE CHECK THAT DID NOT EXIST. It is built on the files that EXIST
+    // under the scanned surfaces, not on the files that already cite
+    // something — which is what CitationScan::scan() returns, and why a
+    // tripwire built on scan() could never see a document with no
+    // citations at all.
+    $root = dirname(__DIR__);
+
+    expect(CitationScan::unclassifiedIn($root, $citedSurfaces, $expectedCitations, $exemptFromCitation))
+        ->toBe([]);
+
+    // Every exemption carries a reason, because an exemption without
+    // one is indistinguishable from an oversight.
+    foreach ($exemptFromCitation as $path => $reason) {
+        expect($reason)->toBeString()->not->toBe('');
+    }
+
+    // The two maps are disjoint: a file is expected to cite, or exempt,
+    // never quietly both.
+    expect(array_intersect_key($expectedCitations, $exemptFromCitation))->toBe([]);
+});
+
+it('names a candidate file that nobody classified', function (): void {
+    // Proven able to fail on the exact shape the old tripwire could not
+    // see: a NEW file, carrying no citation, that nobody listed. Under
+    // the previous mechanism this was invisible — the fixture that
+    // stood in for it passed only because it had been added to the
+    // expectation by hand.
+    $root = sys_get_temp_dir().'/bfc-citation-new-'.bin2hex(random_bytes(6));
+
+    mkdir($root.'/src', 0700, true);
+
+    file_put_contents($root.'/src/Listed.php', '<?php
+
+/**
+ * A claim.
+ *   Pinned by `tests/T.php` — "one".
+ */
+');
+    file_put_contents($root.'/src/Exempt.php', '<?php
+
+/** A value object. */
+');
+    file_put_contents($root.'/src/BrandNew.php', '<?php
+
+/** Something is guaranteed, and nothing says what pins it. */
+');
+
+    try {
+        expect(CitationScan::candidatesIn($root, ['src']))
+            ->toBe(['src/BrandNew.php', 'src/Exempt.php', 'src/Listed.php'])
+            ->and(CitationScan::unclassifiedIn(
+                $root,
+                ['src'],
+                ['src/Listed.php' => 1],
+                ['src/Exempt.php' => 'a value object'],
+            ))->toBe(['src/BrandNew.php']);
+    } finally {
+        array_map(unlink(...), [$root.'/src/Listed.php', $root.'/src/Exempt.php', $root.'/src/BrandNew.php']);
+        rmdir($root.'/src');
+        rmdir($root);
+    }
 });
 
 it('names a file that cites less than it is expected to, and one nobody expected at all', function (): void {

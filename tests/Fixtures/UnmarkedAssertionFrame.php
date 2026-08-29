@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Tests\Fixtures;
 
 use ArtisanBuild\BuiltForCloud\Tests\AssertionParameterScan;
+use Illuminate\Http\Request;
 use SensitiveParameter;
 
 /**
@@ -24,4 +25,14 @@ final class UnmarkedAssertionFrame
 
     /** An identifier, not a secret — and it does not end in `token`. */
     public function audit(string $tokenId): void {}
+
+    /**
+     * The shape a name rule cannot see: a request object, holding
+     * whatever the client presented, under a parameter name that says
+     * nothing about it.
+     */
+    public function handle(Request $request): void {}
+
+    /** The same shape, marked. */
+    public function guarded(#[SensitiveParameter] Request $request): void {}
 }

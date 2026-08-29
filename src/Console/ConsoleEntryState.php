@@ -38,7 +38,8 @@ use Throwable;
  *    additionally be a safe same-origin relative path in every
  *    percent-decoded form ({@see ConsoleReturnTo}) — traversal
  *    segments included — and inside the deployment's own allowlist,
- *    matched against the DECODED path. Substituting it invalidates the
+ *    matched against the CANONICAL path, with the configured prefixes
+ *    canonicalized the same way. Substituting it invalidates the
  *    digest; supplying an absolute, protocol-relative or traversing one
  *    is refused even when the vendor signed it.
  *      Pinned by `tests/ConsoleEnterTest.php` — "refuses a return path
@@ -183,11 +184,12 @@ final readonly class ConsoleEntryState
         $raw = $state[self::RETURN_TO] ?? null;
 
         $candidate = ConsoleReturnTo::relative($raw);
-        // The allowlist decides about the path that will be REQUESTED,
-        // which is the decoded one; the redirect emits the raw one.
-        $decoded = ConsoleReturnTo::decoded($raw);
+        // The allowlist decides about the path that will be REQUESTED —
+        // the canonical one, query and fragment already split off the
+        // RAW value and gone. The redirect emits what the issuer signed.
+        $canonical = ConsoleReturnTo::canonicalPath($raw);
 
-        if ($candidate === null || $decoded === null || ! self::allowed($decoded)) {
+        if ($candidate === null || $canonical === null || ! self::allowed($canonical)) {
             throw ConsoleEntryRefused::because(ConsoleEntryRefusalReason::ReturnPathRefused, $assertion->id);
         }
 
@@ -205,29 +207,45 @@ final readonly class ConsoleEntryState
      * opt-in NARROWING for a deployment that wants entry confined to
      * the few paths its console links to.
      *
-     * **IT IS GIVEN THE DECODED PATH, AND THAT IS THE WHOLE OF THE
-     * RULE.** An earlier revision prefix-matched the raw string, which
-     * a signed `/admin/../billing` walked straight through: it is a
-     * legitimately relative path, so every syntactic check passed, it
-     * matched the `/admin` prefix, and the BROWSER then resolved it to
-     * `/billing` — the configured landing restriction bypassed with a
-     * value nothing had rejected. `/admin/%2e%2e/billing` and
-     * `/admin/%252e%252e/billing` were the same defect one and two
-     * layers down. {@see ConsoleReturnTo} now refuses a `.` or `..`
-     * segment in every decoded form outright, and hands this method the
-     * settled form, so the string being matched and the path that will
-     * be requested are the same string.
+     * **IT IS GIVEN THE CANONICAL PATH, AND SO IS EVERY PREFIX IT
+     * COMPARES.** That is the whole of the rule, and it took two rounds
+     * to get right. An early revision prefix-matched the raw string,
+     * which a signed `/admin/../billing` walked straight through: every
+     * syntactic check passed, it matched `/admin`, and the BROWSER
+     * resolved it to `/billing`. The next revision matched the decoded
+     * string but split query and fragment off EACH DECODED FORM — so
+     * `/admin%3F/%2e%2e/billing`, which carries no literal `?`, decoded
+     * to `/admin?/../billing`, the split threw away everything after the
+     * invented `?`, and the comparison saw `/admin` while the browser
+     * saw a traversal. `%23` did the same with a fragment.
+     *
+     * {@see ConsoleReturnTo::canonicalPath()} now establishes the path
+     * ONCE — split off the raw value, decoded to a fixed point, and
+     * refused outright if any form carries a dot segment — so the
+     * string being matched IS the path that will be requested. This
+     * method does no splitting, no decoding and no normalizing of its
+     * own; there is one canonical value and every check shares it.
+     *
+     * THE CONFIGURED PREFIXES GO THROUGH THE SAME DOOR. A prefix is
+     * canonicalized before it is compared, so `/adm%69n` and `/admin/`
+     * mean what they look like — and a prefix that is not a safe in-app
+     * path matches NOTHING rather than being trimmed into something. An
+     * earlier revision reached the wildcard branch by `rtrim`-ing to the
+     * empty string, which `//` and `///` also do: a configured `//`
+     * silently allowed every path. Only a literal `/` is the wildcard
+     * now, and it is the one prefix that survives canonicalization to
+     * the root.
      *   Pinned by `tests/ConsoleEnterTest.php` — "refuses a return path
      *   carrying a traversal segment in any decoded form, allowlist or
-     *   no allowlist" and "matches the allowlist against the fully
-     *   decoded path, not the raw one".
+     *   no allowlist", "matches the allowlist against the fully decoded
+     *   path, not the raw one" and "refuses an allowlist prefix that is
+     *   not itself a safe in-app path, rather than widening on it".
      *
-     * Matching is on the PATH ONLY — everything before the first `?` or
-     * `#` — and at a SEGMENT BOUNDARY, so `/admin` covers `/admin` and
-     * `/admin/users` and never `/admin-secrets`. A prefix of `/` covers
-     * everything, which is the same as configuring nothing.
+     * AN EMPTY ALLOWLIST IS THE DEFAULT AND MEANS "any path in this
+     * app". Matching is at a SEGMENT BOUNDARY, so `/admin` covers
+     * `/admin` and `/admin/users` and never `/admin-secrets`.
      */
-    private static function allowed(string $path): bool
+    private static function allowed(string $canonicalPath): bool
     {
         $configured = config('built-for-cloud.console.return_path_allowlist', []);
 
@@ -235,19 +253,21 @@ final readonly class ConsoleEntryState
             return true;
         }
 
-        $pathOnly = explode('#', explode('?', $path, 2)[0], 2)[0];
-
         foreach ($configured as $prefix) {
-            if (! is_string($prefix) || ! str_starts_with($prefix, '/')) {
-                // A prefix that is not an in-app path matches nothing.
-                // It is skipped rather than treated as a wildcard: a
-                // typo in an allowlist must never widen it.
+            // A prefix that is not itself a safe in-app path matches
+            // nothing. It is skipped rather than trimmed or guessed at:
+            // a typo in an allowlist must never widen it.
+            $canonicalPrefix = ConsoleReturnTo::canonicalPath($prefix);
+
+            if ($canonicalPrefix === null) {
                 continue;
             }
 
-            $normalized = rtrim($prefix, '/');
+            $normalized = rtrim($canonicalPrefix, '/');
 
-            if ($normalized === '' || $pathOnly === $normalized || str_starts_with($pathOnly, $normalized.'/')) {
+            // Only the root survives canonicalization to the empty
+            // string, and the root is the deliberate wildcard.
+            if ($normalized === '' || $canonicalPath === $normalized || str_starts_with($canonicalPath, $normalized.'/')) {
                 return true;
             }
         }

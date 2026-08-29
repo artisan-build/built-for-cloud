@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleEnter;
 use FilesystemIterator;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
@@ -14,6 +15,7 @@ use ReflectionNamedType;
 use ReflectionParameter;
 use SensitiveParameter;
 use SplFileInfo;
+use Symfony\Component\HttpFoundation\Request as SymfonyRequest;
 
 /**
  * **A console assertion is a live admin-minting credential, and every
@@ -30,25 +32,47 @@ use SplFileInfo;
  * Marking the three the reviewer named would leave the fourth caller
  * to be found the same way, so the rule is enumerated instead.
  *
- * THE RULE, exactly: within the scanned roots, a parameter typed
- * `string` (or `?string`) whose NAME ENDS IN `token`, case-insensitively,
- * holds assertion bytes and must carry the attribute. That name rule is
- * narrow on purpose — `$tokenId` and `$tokenHash` are identifiers and
- * digests, not secrets, and neither ends in `token`.
+ * AND THEN IT MISSED THE FRAME THE FIX ITSELF MADE REACHABLE. The first
+ * revision of this scan matched only STRING parameters named for a
+ * token, which is a name rule wearing an enumeration's clothes:
+ * `ConsoleEnter::__invoke(Request $request)` holds the submitted
+ * assertion just as completely, `input('assertion')` returns it, and
+ * the fail-closed audit added in the same round made that frame an
+ * exception path. A rule that cannot say "this frame can hold the
+ * credential" without being told the parameter's name is the same
+ * fixed-list-versus-enumeration mistake PR3 spent rounds on.
+ *
+ * THE RULE, exactly. Within the scanned roots, a parameter must carry
+ * `#[SensitiveParameter]` when it is either:
+ *
+ *  - typed `string` (or `?string`) with a NAME ENDING IN `token`,
+ *    case-insensitively — narrow on purpose, since `$tokenId` and
+ *    `$tokenHash` are identifiers and digests, not secrets, and neither
+ *    ends in `token`; or
+ *  - typed as an HTTP **request** — anything that is-a
+ *    `Symfony\Component\HttpFoundation\Request`. A request object
+ *    carries whatever credential the client presented, which on these
+ *    routes is a console assertion or an operator bearer token. This
+ *    half needs no name at all, which is the point of adding it.
  *
  * WHAT IT DOES NOT COVER, said here rather than left to be discovered:
  *
  *  - **Anything outside the scanned roots.** The rest of `src/` carries
  *    other credential-shaped parameters with their own history; this
- *    scan is about the console assertion path and says nothing about
- *    them.
- *  - **A parameter named something else.** `string $bytes` holding the
- *    same token matches no rule here. This is a tripwire against the
- *    ordinary reintroduction, not a proof about every possible name.
- *  - **VENDOR frames.** `ParagonIE\Paseto\Parser::parse()` receives the
- *    same bytes and cannot be annotated by this package at all — see
- *    {@see AssertionVerifier}, which
- *    states that residue.
+ *    scan is about the console surfaces and says nothing about them.
+ *  - **A credential held in a shape neither rule names.** `string
+ *    $bytes`, an array, a DTO. A scanner cannot know what a string
+ *    holds, so this stays a tripwire against the ordinary
+ *    reintroduction rather than a proof about every possible shape —
+ *    and the claim in the code that cites it is worded to match.
+ *  - **Union and intersection types**, which are skipped rather than
+ *    guessed at.
+ *  - **VENDOR frames**, which are the large residue and cannot be
+ *    closed from here at all: `ParagonIE\Paseto\Parser::parse()`
+ *    receives the token, and the whole framework pipeline holds the
+ *    `Request`. See {@see AssertionVerifier} and
+ *    {@see ConsoleEnter},
+ *    which state that residue and what is done about it instead.
  *  - **Local variables and closure `use` bindings**, which PHP does not
  *    put in a stack trace in the first place.
  */
@@ -158,11 +182,20 @@ final class AssertionParameterScan
     {
         $type = $parameter->getType();
 
-        if (! $type instanceof ReflectionNamedType || $type->getName() !== 'string') {
+        if (! $type instanceof ReflectionNamedType) {
             return false;
         }
 
-        return str_ends_with(strtolower($parameter->getName()), 'token');
+        $name = $type->getName();
+
+        if ($name === 'string') {
+            return str_ends_with(strtolower($parameter->getName()), 'token');
+        }
+
+        // A request object carries whatever the client presented. No
+        // parameter name is consulted, deliberately: the frame this
+        // rule exists for was called `$request`.
+        return is_a($name, SymfonyRequest::class, true);
     }
 
     /**

@@ -2,8 +2,15 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleEnter;
 use ArtisanBuild\BuiltForCloud\Tests\AssertionParameterScan;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnmarkedAssertionFrame;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
+use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Support\Facades\Route;
+
+uses(RefreshDatabase::class);
 
 /**
  * A CONSOLE ASSERTION IS A LIVE CREDENTIAL, AND NO FRAME MAY LEAK ONE
@@ -38,18 +45,65 @@ it('marks every frame in this package that holds console assertion bytes', funct
     expect(AssertionParameterScan::framesIn($classes))->toBe([
         'AssertionVerifier::keyIdOf($token)',
         'AssertionVerifier::verify($token)',
+        // The three the name rule could never have seen. `__invoke` is
+        // the one that mattered: it holds the submitted form, and the
+        // fail-closed audit made it an exception path in the same round
+        // that the name-matching scan was introduced.
+        'ConsoleEnter::__invoke($request)',
+        'ConsoleEnter::assertionToken($request)',
+        'ConsoleEnter::forgetPresentedAssertion($request)',
         'ConsoleEnter::spendAndRedeem($token)',
         'ConsoleGuard::redeem($assertionToken)',
+        // Not an assertion, but the same rule and the same reason: this
+        // request carries a live operator bearer token.
+        'ConsoleKeyDelivery::optionalFrom($request)',
     ]);
 });
 
 it('names an unmarked assertion frame when the walk meets one', function (): void {
-    // Proven able to fail, on the exact scenario: a new frame taking the
-    // token without the attribute, beside a marked one and beside an
-    // identifier that is not a secret at all.
+    // Proven able to fail, on both scenarios: a new frame taking the
+    // token without the attribute, and a frame holding the REQUEST —
+    // the shape the first revision of this scan could not see at all,
+    // because it matched parameter names and a request is called
+    // `$request`.
     expect(AssertionParameterScan::unprotectedIn([UnmarkedAssertionFrame::class]))
-        ->toBe(['UnmarkedAssertionFrame::verify($token)']);
+        ->toBe([
+            'UnmarkedAssertionFrame::handle($request)',
+            'UnmarkedAssertionFrame::verify($token)',
+        ]);
 
     expect(AssertionParameterScan::framesIn([UnmarkedAssertionFrame::class]))
-        ->toBe(['UnmarkedAssertionFrame::redeem($assertionToken)', 'UnmarkedAssertionFrame::verify($token)']);
+        ->toBe([
+            'UnmarkedAssertionFrame::guarded($request)',
+            'UnmarkedAssertionFrame::handle($request)',
+            'UnmarkedAssertionFrame::redeem($assertionToken)',
+            'UnmarkedAssertionFrame::verify($token)',
+        ]);
+});
+
+it('takes the presented assertion out of the request before anything can throw', function (): void {
+    // The wide exposure is not the stack frame — PHP prints an object
+    // argument as `Object(Illuminate\Http\Request)` and none of its
+    // contents. It is a rich error reporter serializing request INPUT
+    // alongside the trace, which no attribute touches. So the
+    // credential is removed from the request object as soon as it is
+    // read, and every failure path unwinds without it.
+    $seen = [];
+
+    Route::middleware([StartSession::class])->post('/console-enter-probe', function (Request $request) use (&$seen): array {
+        $seen['before'] = $request->input('assertion');
+
+        app(ConsoleEnter::class)($request);
+
+        $seen['after'] = $request->input('assertion');
+
+        return ['ok' => true];
+    });
+
+    $handoff = consoleHandoff('/orders');
+
+    $this->post('/console-enter-probe', $handoff)->assertOk();
+
+    expect($seen['before'])->toBe($handoff['assertion'])
+        ->and($seen['after'])->toBeNull();
 });

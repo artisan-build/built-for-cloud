@@ -45,13 +45,28 @@ use Throwable;
  *   Pinned by `tests/ConsoleEnterTest.php` — "does not route GET at the
  *   enter path, so an assertion can never ride a query string".
  *
- * **THE BYTES ARE MARKED.** Every frame on this path that holds the
- * presented token carries `#[SensitiveParameter]`, so a throw below it
- * cannot put an admin-minting credential into the customer's own logged
- * stack trace. That is enumerated rather than remembered.
+ * **THE BYTES ARE MARKED, AND THEN THEY ARE REMOVED.** Every frame in
+ * this package that can hold the presented token — a `string` named for
+ * one, and the `Request` that carries the submitted form — is marked
+ * `#[SensitiveParameter]`, enumerated rather than remembered. And the
+ * credential is taken OUT of the request object as soon as it has been
+ * read, before anything that can throw runs, because a rich error
+ * reporter serializes request INPUT regardless of which frames hold
+ * what. {@see forgetPresentedAssertion()} states what that reaches and
+ * what it does not.
+ *
+ * THE CLAIM IS NARROWER THAN "NO FRAME LEAKS THE CREDENTIAL", and it
+ * has to be: the `Request` object travels through the whole framework
+ * pipeline — routing, the middleware stack, the controller dispatcher —
+ * and every one of those frames holds it. They are vendor frames and
+ * this package cannot annotate them, which is equally true of every
+ * bearer token a Laravel application receives. What IS enforced: no
+ * frame THIS PACKAGE declares carries the credential unmarked, and the
+ * object those vendor frames hold no longer carries it either.
  *   Pinned by `tests/AssertionSecrecyTest.php` — "marks every frame in
- *   this package that holds console assertion bytes" and "names an
- *   unmarked assertion frame when the walk meets one".
+ *   this package that holds console assertion bytes", "names an
+ *   unmarked assertion frame when the walk meets one" and "takes the
+ *   presented assertion out of the request before anything can throw".
  *
  * **THE MINTING PATH IS {@see ConsoleGuard::redeem()}, AND ONLY THAT.**
  * This controller writes no session state of its own. It hands the
@@ -203,17 +218,25 @@ final class ConsoleEnter
         private readonly LifecycleEventRecorder $recorder,
     ) {}
 
-    public function __invoke(Request $request): Response
+    public function __invoke(#[SensitiveParameter] Request $request): Response
     {
         $now = CarbonImmutable::now();
         $mintId = null;
 
         try {
             $token = $this->assertionToken($request);
+            $state = $request->input(ConsoleEntryState::FIELD);
+
+            // Both fields are in hand, so the credential comes OUT of the
+            // request object before anything that can throw runs. See
+            // forgetPresentedAssertion() for why that matters more than
+            // the attribute above does.
+            $this->forgetPresentedAssertion($request);
+
             $assertion = $this->verifier->verify($token);
             $mintId = $assertion->id;
 
-            $entry = ConsoleEntryState::bind($assertion, $request->input(ConsoleEntryState::FIELD));
+            $entry = ConsoleEntryState::bind($assertion, $state);
 
             // PR3 records the handoff on its OWN commit, before the
             // decision, precisely so a refusal cannot roll the record
@@ -319,7 +342,7 @@ final class ConsoleEnter
      *
      * @throws ConsoleEntryRefused
      */
-    private function assertionToken(Request $request): string
+    private function assertionToken(#[SensitiveParameter] Request $request): string
     {
         $token = $request->input(self::ASSERTION_FIELD);
 
@@ -328,6 +351,49 @@ final class ConsoleEnter
         }
 
         return $token;
+    }
+
+    /**
+     * Take the presented assertion out of the request object, the
+     * moment it has been read.
+     *
+     * **THIS MATTERS MORE THAN THE ATTRIBUTES DO, and the reason is
+     * worth being precise about.** PHP's own stack trace renders an
+     * object argument as `Object(Illuminate\Http\Request)` and prints
+     * none of its contents, so the frame-level exposure is real but
+     * narrow. The wide exposure is a rich error reporter — the kind
+     * most applications install — which serializes the request's INPUT
+     * alongside the trace, independently of which frames hold what. A
+     * `#[SensitiveParameter]` does nothing about that; removing the
+     * value does.
+     *
+     * It runs as soon as both fields have been read and before anything
+     * that can throw, so every failure path below — the verifier's, the
+     * burn's, and the fail-closed audit's, which is the one that made
+     * this reachable — unwinds with the credential already gone from
+     * the object.
+     *
+     * WHAT IT DOES NOT REACH, named rather than left to be found:
+     *
+     *  - **the raw request body**, if something has already caused
+     *    Symfony to buffer it. The documented carrier is a form POST,
+     *    where nothing does; a JSON-carrier caller whose body was read
+     *    leaves the bytes there, and no PHP API clears that buffer.
+     *  - **anything that copied the input earlier in the stack.** No
+     *    package middleware does, but a host's might.
+     *  - **the framework's own frames**, which hold this same `Request`
+     *    object all the way down the pipeline and cannot be annotated
+     *    by this package. What this method does is make the object they
+     *    hold no longer carry the credential.
+     */
+    private function forgetPresentedAssertion(#[SensitiveParameter] Request $request): void
+    {
+        $request->request->remove(self::ASSERTION_FIELD);
+        $request->query->remove(self::ASSERTION_FIELD);
+
+        if ($request->isJson()) {
+            $request->json()->remove(self::ASSERTION_FIELD);
+        }
     }
 
     /**

@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Console\AssertionRefusalReason;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleEntryRefusalReason;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleEntryState;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleReturnTo;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleRole;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
@@ -375,6 +376,14 @@ it('refuses a return path carrying a traversal segment in any decoded form, allo
     'a single dot segment' => ['/admin/./billing'],
     'traversal above the root' => ['/../billing'],
     'a trailing traversal' => ['/admin/..'],
+    // The delimiter is INVENTED by decoding. There is no literal `?` in
+    // the value, so the browser treats `%3F` as an ordinary path
+    // character and resolves the `%2e%2e` — while a check that split the
+    // query off each decoded form saw only `/admin`.
+    'a traversal hidden behind an encoded question mark' => ['/admin%3F/%2e%2e/billing'],
+    'a traversal hidden behind an encoded hash' => ['/admin%23/%2e%2e/billing'],
+    'the same, double-encoded' => ['/admin%253F/%252e%252e/billing'],
+    'a raw traversal behind an encoded question mark' => ['/admin%3F/../billing'],
 ]);
 
 it('leaves a dot inside a segment alone, because that is an ordinary path', function (string $returnTo): void {
@@ -401,10 +410,56 @@ it('matches the allowlist against the fully decoded path, not the raw one', func
         ->assertHeader('Location', '/%61dmin/users');
 });
 
-it('treats an allowlist entry that is not an in-app path as matching nothing', function (): void {
-    // A typo must never widen an allowlist.
-    config(['built-for-cloud.console.return_path_allowlist' => ['https://evil.example', 'orders']]);
+it('establishes the path once, so a query string cannot appear out of a decoding round', function (): void {
+    // The canonical path is split off the RAW value. A `?` that only
+    // exists after decoding is an ordinary path character — which is
+    // what a browser thinks it is too — so it can neither shorten the
+    // path a decision is made about nor hide anything behind itself.
+    expect(ConsoleReturnTo::canonicalPath('/orders?sort=..'))->toBe('/orders')
+        ->and(ConsoleReturnTo::canonicalPath('/orders#..'))->toBe('/orders')
+        ->and(ConsoleReturnTo::canonicalPath('/%61dmin/users'))->toBe('/admin/users')
+        // No literal delimiter: the whole string is the path, and the
+        // traversal inside it is seen.
+        ->and(ConsoleReturnTo::canonicalPath('/admin%3F/%2e%2e/billing'))->toBeNull()
+        ->and(ConsoleReturnTo::canonicalPath('/admin%23/%2e%2e/billing'))->toBeNull()
+        // A decoded `?` inside the path is kept, not treated as a cut.
+        ->and(ConsoleReturnTo::canonicalPath('/admin%3Fx'))->toBe('/admin?x')
+        ->and(ConsoleReturnTo::relative('/admin%3F/%2e%2e/billing'))->toBeNull();
+});
 
+it('refuses an allowlist prefix that is not itself a safe in-app path, rather than widening on it', function (array $allowlist): void {
+    // A typo must never widen an allowlist. `//` is the one that
+    // mattered: it used to `rtrim()` to the empty string, which was the
+    // WILDCARD branch, so a configured `//` silently allowed every
+    // path. Only a literal `/` reaches that branch now.
+    config(['built-for-cloud.console.return_path_allowlist' => $allowlist]);
+
+    consoleEnter(consoleHandoff('/orders'))->assertStatus(ConsoleEnter::REFUSAL_STATUS);
+})->with([
+    'an absolute url' => [['https://evil.example']],
+    'not rooted' => [['orders']],
+    'a protocol-relative prefix' => [['//']],
+    'a longer protocol-relative prefix' => [['//evil.example']],
+    'several slashes' => [['///']],
+    'a traversing prefix' => [['/..']],
+    'not a string at all' => [[42]],
+]);
+
+it('treats a literal root prefix as the wildcard it looks like', function (): void {
+    // The one prefix that legitimately covers everything, and now the
+    // only one that can.
+    config(['built-for-cloud.console.return_path_allowlist' => ['/']]);
+
+    consoleEnter(consoleHandoff('/orders'))->assertStatus(303)->assertHeader('Location', '/orders');
+});
+
+it('canonicalizes the configured prefixes the same way it canonicalizes the path', function (): void {
+    // One door for both sides of the comparison: a prefix spelled with
+    // a percent-encoded character or a trailing slash means what it
+    // looks like.
+    config(['built-for-cloud.console.return_path_allowlist' => ['/adm%69n/']]);
+
+    consoleEnter(consoleHandoff('/admin/users'))->assertStatus(303);
     consoleEnter(consoleHandoff('/orders'))->assertStatus(ConsoleEnter::REFUSAL_STATUS);
 });
 

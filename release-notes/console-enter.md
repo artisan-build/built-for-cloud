@@ -33,16 +33,22 @@ Not "GET is refused" — not routed at all, so the answer is `405`. A GET assert
 credential in the customer's own server and CDN logs, in browser history, and in the `Referer`
 of the very next request the entered page makes. A verb that does not exist cannot leak one.
 
-The same reasoning marks the bytes themselves: every frame in the package that holds a console
-assertion carries `#[SensitiveParameter]`, so a failure below it cannot write a live credential
-into a logged stack trace. The vendor `ParagonIE\Paseto` frames are the residue and cannot be
-annotated by this package — a refusal decided inside the library still carries the token in the
-*previous* exception's trace, which never reaches a response.
+The same reasoning follows the bytes once they are inside. Every frame in the package that can
+hold a console assertion — a string named for a token, and the `Request` carrying the submitted
+form — declares `#[SensitiveParameter]`; and the assertion is **removed from the request object**
+as soon as it is read, before anything that can throw, because a rich error reporter serializes
+request input alongside a trace whatever the frames say.
+
+The claim is deliberately narrower than "no frame leaks the credential". The `Request` travels
+the whole framework pipeline and every vendor frame holds it — as it does for every bearer token
+a Laravel app receives — and `ParagonIE\Paseto` receives the token itself. What is enforced: no
+frame this package declares carries it unmarked, and the object those vendor frames hold no
+longer carries it.
 
 *Pinned by* `tests/ConsoleEnterTest.php` ("does not route GET at the enter path, so an assertion
 can never ride a query string") and `tests/AssertionSecrecyTest.php` ("marks every frame in this
-package that holds console assertion bytes" and "names an unmarked assertion frame when the walk
-meets one").
+package that holds console assertion bytes", "names an unmarked assertion frame when the walk
+meets one" and "takes the presented assertion out of the request before anything can throw").
 
 ### 2. The signed state, and what it is not
 
@@ -68,11 +74,19 @@ resolves it to `/billing` before the app sees it. `/admin/%2e%2e/billing` and
 `/admin/%252e%252e/billing` are the same defect one and two layers down. A dot *inside* a
 segment is untouched; `/reports..csv` is an ordinary path.
 
+The path is established ONCE, before anything is decoded: query and fragment are split off the
+*raw* value, so a delimiter that only appears after a decoding round cannot hide a traversal
+behind it (`/admin%3F/%2e%2e/billing` was the bypass). The configured prefixes are canonicalized
+through the same door, and one that is not itself a safe in-app path matches nothing — a
+configured `//` used to trim to the empty string and act as a wildcard.
+
 *Pinned by* `tests/ConsoleEnterTest.php` ("refuses a return path that is not a safe same-origin
 relative path, whatever the mint signed", "refuses a return path carrying a traversal segment in
 any decoded form, allowlist or no allowlist", "leaves a dot inside a segment alone, because that
-is an ordinary path" and "matches the allowlist against the fully decoded path, not the raw
-one").
+is an ordinary path", "matches the allowlist against the fully decoded path, not the raw one",
+"establishes the path once, so a query string cannot appear out of a decoding round", "refuses an
+allowlist prefix that is not itself a safe in-app path, rather than widening on it" and "treats a
+literal root prefix as the wildcard it looks like").
 
 **It does not close forced login**, and the contract says so plainly. An attacker holding a
 legitimately-minted assertion for their **own** issuer identity can auto-submit it in a victim's

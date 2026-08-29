@@ -62,12 +62,22 @@ use SplFileInfo;
  * test actually pins the claim beside it; that is a reader's job, and
  * the citation exists to make it possible.
  *
- * And the per-file expectation is an ENUMERATION, with an enumeration's
- * residue: a brand-new guarantee-bearing document that nobody adds to
- * the scanned surfaces is invisible to it. Adding the file is the
- * human step, and the moment it is added a zero-citation file reds the
- * suite. This is a tripwire against the ordinary omission, not a proof
- * about every file that could exist.
+ * THE NEW-FILE TRIPWIRE IS {@see unclassifiedIn()}, AND IT IS NOT
+ * BUILT ON {@see scan()}. That distinction is the fix: `scan()` returns
+ * only files that cite something, so a check built on its output can
+ * never see a new document that cites nothing — which is exactly how a
+ * release note shipped with a page of uncited guarantees while this
+ * suite stayed green. {@see candidatesIn()} enumerates the files that
+ * EXIST under the scanned surfaces, and every one of them must be
+ * classified: listed with a citation floor, or listed as exempt with a
+ * reason. Absence is then detectable, which is the whole property.
+ *
+ * THE RESIDUE, and it is now a small one: a guarantee-bearing file
+ * outside the scanned surfaces entirely. `src/Console`, the contract
+ * document and the console release notes are enumerated; a guarantee
+ * written into, say, a new top-level document nobody adds is still
+ * invisible. Adding a surface is the human step; everything inside one
+ * is mechanical.
  */
 final class CitationScan
 {
@@ -190,6 +200,70 @@ final class CitationScan
         }
 
         return $orphans;
+    }
+
+    /**
+     * Every file the scanned surfaces contain — the CANDIDATES, whether
+     * or not they cite anything.
+     *
+     * This is the half {@see scan()} cannot supply and the reason the
+     * new-file tripwire did not exist for a round: `scan()` omits files
+     * with zero cited titles, so a check built on its output can only
+     * ever see files that already cite something. A new document that
+     * makes a page of guarantees and cites nothing is, to `scan()`,
+     * indistinguishable from a file that is not there.
+     *
+     * A directory surface contributes every `.php` file under it; a
+     * file surface contributes itself.
+     *
+     * @param  list<string>  $paths
+     * @return list<string>
+     */
+    public static function candidatesIn(string $root, array $paths): array
+    {
+        $candidates = [];
+
+        foreach ($paths as $path) {
+            $target = $root.'/'.$path;
+
+            foreach (is_dir($target) ? array_keys(iterator_to_array(self::phpFiles($target, $path))) : [$path] as $relative) {
+                $candidates[] = $relative;
+            }
+        }
+
+        sort($candidates);
+
+        return array_values(array_unique($candidates));
+    }
+
+    /**
+     * Candidate files that are neither expected to carry citations nor
+     * explicitly exempt — the new guarantee-bearing file nobody
+     * classified.
+     *
+     * ABSENCE IS THE PROPERTY. Every other check in this class reasons
+     * about files that cite something; this one reasons about files
+     * that exist. A new file reds the suite until somebody says, in the
+     * diff, either how many citations it must carry or why it needs
+     * none.
+     *
+     * @param  list<string>  $paths
+     * @param  array<string, int>  $expected
+     * @param  array<string, string>  $exempt  path => the reason it needs no citation
+     * @return list<string>
+     */
+    public static function unclassifiedIn(string $root, array $paths, array $expected, array $exempt): array
+    {
+        $classified = $expected + $exempt;
+
+        $unclassified = array_values(array_filter(
+            self::candidatesIn($root, $paths),
+            static fn (string $candidate): bool => ! array_key_exists($candidate, $classified),
+        ));
+
+        sort($unclassified);
+
+        return $unclassified;
     }
 
     /**

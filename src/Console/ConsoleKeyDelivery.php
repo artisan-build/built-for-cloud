@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud\Console;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
 use Illuminate\Http\Request;
 use InvalidArgumentException;
+use SensitiveParameter;
 
 /**
  * One countersigning-key delivery, parsed and validated (Console PRD
@@ -84,7 +85,7 @@ final readonly class ConsoleKeyDelivery
      *
      * @throws ConsoleKeyRefused
      */
-    public static function optionalFrom(Request $request): ?self
+    public static function optionalFrom(#[SensitiveParameter] Request $request): ?self
     {
         if (! $request->has(self::FIELD) || $request->input(self::FIELD) === null) {
             return null;

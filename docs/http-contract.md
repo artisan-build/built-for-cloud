@@ -2030,12 +2030,28 @@ an operator gets in.
   against the fully **decoded** path, so `/%61dmin/users` and `/admin/users` cannot be answered
   differently; the redirect still emits what the issuer signed, verbatim.
 
+  **The path is established ONCE, before anything is decoded**, and that ordering is what makes
+  the rule hold. Query and fragment are split off the *raw* value; everything before the first
+  literal `?` or `#` is the path, for good. A revision that split them off each *decoded* form
+  was bypassed by `/admin%3F/%2e%2e/billing`: it carries no literal `?`, so the raw path is the
+  whole string and looks clean, and decoding invents a `?` behind which the traversal hid — the
+  check saw `/admin` while the browser, which treats `%3F` as an ordinary path character,
+  resolved the `%2e%2e` and landed on `/billing`. `%23` did the same with a fragment.
+
+  **The configured prefixes go through the same door.** A prefix is canonicalized before it is
+  compared, and one that is not itself a safe in-app path matches *nothing* rather than being
+  trimmed into something: a configured `//` used to `rtrim()` to the empty string, which was the
+  wildcard branch, so it silently allowed every path. Only a literal `/` is the wildcard now.
+
   *Pinned by* `tests/ConsoleEnterTest.php` ("refuses a return path that is not a safe
   same-origin relative path, whatever the mint signed", "refuses a return path carrying a
   traversal segment in any decoded form, allowlist or no allowlist", "leaves a dot inside a
   segment alone, because that is an ordinary path", "matches the allowlist against the fully
-  decoded path, not the raw one", "honours a configured return-path allowlist, at a segment
-  boundary" and "treats an allowlist entry that is not an in-app path as matching nothing").
+  decoded path, not the raw one", "establishes the path once, so a query string cannot appear
+  out of a decoding round", "honours a configured return-path allowlist, at a segment boundary",
+  "refuses an allowlist prefix that is not itself a safe in-app path, rather than widening on
+  it", "treats a literal root prefix as the wildcard it looks like" and "canonicalizes the
+  configured prefixes the same way it canonicalizes the path").
 - **No CSRF token, and that is not an oversight.** The handoff is a cross-site POST from the
   issuer's page, and a `SameSite=Lax` session cookie — Laravel's default — is not sent with one,
   so the app has no session with that browser and no token it could have planted. The signed
@@ -2045,17 +2061,28 @@ an operator gets in.
   without csrf validation" and "only the personal surface and the console door ride the session
   stack").
 
-- **The presented bytes are marked sensitive.** Every frame in the package that holds a console
-  assertion carries PHP's `#[SensitiveParameter]`, so with `zend.exception_ignore_args=0` — an
-  ordinary setting — a failure below it cannot write a complete `v4.public…` credential into the
-  customer's own logged stack trace. The residue is named rather than glossed: the
-  `ParagonIE\Paseto` frames this package calls receive the same bytes and are vendor code, so a
-  refusal decided inside the library still carries the token in the *previous* exception's trace,
-  which is kept as the only operator diagnostic for a cryptographic failure and never reaches a
-  response.
+- **The presented credential is marked sensitive, and then removed.** Every frame in the package
+  that can hold a console assertion — a string named for a token, and the `Request` that carries
+  the submitted form — declares PHP's `#[SensitiveParameter]`. More importantly, the assertion is
+  **taken out of the request object** as soon as it has been read and before anything that can
+  throw runs, because a rich error reporter serializes request *input* alongside a trace
+  regardless of which frames hold what, and no attribute touches that.
+
+  **The claim is narrower than "no frame leaks the credential", deliberately.** The `Request`
+  travels through the entire framework pipeline — routing, middleware, the controller dispatcher
+  — and every one of those frames holds it; they are vendor frames and this package cannot
+  annotate them, which is equally true of every bearer token a Laravel application receives. So
+  does `ParagonIE\Paseto`, which receives the token itself and carries it in the *previous*
+  exception's trace on a cryptographic refusal — kept as the only operator diagnostic for one,
+  and never reaching a response. What **is** enforced: no frame this package declares carries the
+  credential unmarked, and the object those vendor frames hold no longer carries it. What is
+  **not** reachable: the raw request body if something has already buffered it (the documented
+  carrier is a form POST, where nothing does), and any credential held in a shape the scan's two
+  rules do not name.
 
   *Pinned by* `tests/AssertionSecrecyTest.php` ("marks every frame in this package that holds
-  console assertion bytes" and "names an unmarked assertion frame when the walk meets one").
+  console assertion bytes", "names an unmarked assertion frame when the walk meets one" and
+  "takes the presented assertion out of the request before anything can throw").
 
 **What it does NOT guarantee, stated rather than implied.** The signed state closes open
 redirect and stops a state being moved between mints. It does **not** close forced login: an
