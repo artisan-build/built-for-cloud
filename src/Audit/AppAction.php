@@ -27,15 +27,18 @@ use BackedEnum;
  * **WHERE THAT TYPE IS THE ENFORCEMENT, EXACTLY.** It is enforcement on
  * the recorder's signature: {@see AppActionRecorder::record()} takes an
  * `AppAction`, so a caller on that path had an enum case in hand and a
- * string will not compile through it. It is NOT enforcement on the
- * TABLE — {@see AppActionEvent} is an ordinary Eloquent model, an app
- * can write a row directly, and what a row stores is a `string` column
- * naming a vocabulary rather than an enum instance. That path is
- * covered instead by the row validating itself on `creating`: the
- * vocabulary it names must be a real enum implementing this interface,
- * and the action must be one of that enum's cases. Two different
- * mechanisms for two different paths, and an earlier revision of this
- * paragraph claimed the first covered both.
+ * string will not compile through it. That is the boundary the stream's
+ * guarantee is about.
+ *
+ * It is NOT enforcement on the TABLE. {@see AppActionEvent} is a public
+ * Eloquent model in the app's own database, and what a row stores is a
+ * `string` column naming a vocabulary, not an enum instance. The row's
+ * `creating` hook re-checks that the named vocabulary is a real enum
+ * implementing this interface and that the action is one of its cases —
+ * defence in depth on the writes that fire model events, not a
+ * boundary, and any write that skips those events skips it. An earlier
+ * revision of this paragraph claimed the signature covered both paths;
+ * the one after it claimed the hook did. Neither could.
  *   Pinned by `tests/AppActionAuditTest.php` — "refuses a direct model
  *   write that carries runtime prose as its action" and "refuses a
  *   direct model write whose action is not a case of the vocabulary it
@@ -50,11 +53,11 @@ use BackedEnum;
  *
  * THE RESIDUAL LATITUDE, stated because an unstated one reads as
  * covered: an enum type stops runtime data; it does not stop an app
- * writing prose INTO a case. {@see AppActionEvent} answers that on
- * every path through the model, by refusing any action whose stored
- * value is not a bounded identifier
- * ({@see MetadataShape::TOKEN}) — and refusing the whole write rather
- * than storing a trimmed version of it. What remains — whether the vocabulary is a GOOD one, whether its
+ * writing prose INTO a case. {@see AppActionRecorder} therefore emits
+ * only actions whose backing value is a bounded identifier
+ * ({@see MetadataShape::TOKEN}), refusing the whole write rather than
+ * storing a trimmed version of it, and {@see AppActionEvent} re-checks
+ * the same thing on `creating`. What remains — whether the vocabulary is a GOOD one, whether its
  * case NAMES read as prose — is the app's code review, and nothing in a
  * package can decide it.
  *   Pinned by `tests/AppActionAuditTest.php` — "refuses an action whose

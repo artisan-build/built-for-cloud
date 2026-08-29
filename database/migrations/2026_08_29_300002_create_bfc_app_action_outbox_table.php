@@ -26,28 +26,37 @@ use Illuminate\Support\Facades\Schema;
  *
  * TWO UNIQUE INDEXES, and both are load-bearing:
  *
- *  - `dedup_key` is the whole of "exactly one event per action": a
- *    second emission of the same logical action fails this insert and
- *    takes the transaction with it. It stores a sha256 digest of the
- *    action's vocabulary, its name and the caller's natural key — never
- *    the caller's own string, which in a 255-character column would have
+ *  - `dedup_key` is the whole of "exactly one event per action" — for
+ *    what `AppActionRecorder` writes, which is where that guarantee
+ *    lives. A second emission of the same logical action fails this
+ *    insert and takes the transaction with it. It stores a sha256 digest
+ *    of the action's vocabulary, its name and the caller's natural key —
+ *    never the caller's own string, which in a wide column would have
  *    been an app-content channel into a stream whose premise (D15) is
- *    that no app content enters it.
+ *    that no app content enters it. An event written without going
+ *    through the recorder has no row here at all, and is deduped by
+ *    nothing.
  *  - `event_id` makes "one ledger row per event" a database property
- *    too, so neither half of the pair can be quietly doubled.
+ *    too, so one recorder call cannot leave two rows behind.
  *
- * AND IT IS APPEND-ONLY, exactly as strongly as the event it dedupes.
- * That is not symmetry for its own sake: a unique index only rejects a
- * duplicate while the row it collides with still EXISTS, so a deletable
- * ledger row means the duplicate this stream promises to refuse can be
- * re-admitted by deleting the evidence of the first one. The model
- * throws on update and delete, the shared builder refuses the enumerated
- * bulk spellings, and — where the driver permits — the triggers below
- * abort raw row-level UPDATE and DELETE. The honest limits are the
- * event table's: TRUNCATE is DDL and no row trigger sees it, a raw
- * INSERT fires no model events, an unknown driver (sqlsrv) gets
- * model-level enforcement only, and a connection with schema access can
- * DROP any of it. Append-only is by construction, not cryptographic.
+ * AND IT IS APPEND-ONLY, as strongly as the event it dedupes. That is
+ * not symmetry for its own sake: a unique index only rejects a duplicate
+ * while the row it collides with still EXISTS, so a deletable ledger row
+ * would let the duplicate this stream refuses be re-admitted by deleting
+ * the evidence of the first one. The model throws on update and delete,
+ * the shared builder refuses an enumerated set of bulk spellings, and —
+ * where the driver permits — the triggers below abort raw row-level
+ * UPDATE and DELETE.
+ *
+ * As strongly INCLUDING THE LIMITS, which are the event table's and are
+ * not footnotes: TRUNCATE is DDL and no row trigger sees it; a raw
+ * INSERT and the quiet model methods fire no model events; the builder's
+ * list is a fixed enumeration of names and a spelling not on it forwards
+ * straight through; an unknown driver (sqlsrv) gets model-level
+ * enforcement only; and a connection with schema access can DROP any of
+ * it. An app can delete its own rows and the package will neither
+ * prevent nor notice it. Append-only here is a strong convention with
+ * tripwires under it, not a cryptographic property.
  *
  * WHAT IS NOT HERE, and why. The credential outbox carries `attempts`,
  * `claimed_at`, `claim_token`, `delivered_at`, `delivered_recipients`

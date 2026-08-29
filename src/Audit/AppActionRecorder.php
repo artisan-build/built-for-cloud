@@ -7,40 +7,41 @@ namespace ArtisanBuild\BuiltForCloud\Audit;
 use ArtisanBuild\BuiltForCloud\Console\AssertionBurn;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
-use Illuminate\Support\Str;
 use LogicException;
 
 /**
- * The only VALIDATED-AND-LEDGERED path into the app-action audit stream
- * (Console PRD D17): one call appends the event row AND its dedup ledger
- * row, in the caller's own transaction.
+ * The package's emission point for the app-action audit stream (Console
+ * PRD D17): one call appends the event row AND its dedup ledger row, in
+ * the caller's own transaction.
  *
- * **IT IS NOT "THE SINGLE EMISSION POINT", AND AN EARLIER REVISION OF
- * THIS SENTENCE SAID IT WAS.** {@see AppActionEvent} is an ordinary
- * Eloquent model; an app can call `AppActionEvent::query()->create([...])`
- * and reach the same table without ever touching this class, and PHP
- * offers no way to close that which is not a mutable flag some other
- * object sets — which is a by-convention gate wearing by-construction
- * clothes, and this codebase has already rejected that trade once.
+ * **THIS CLASS IS THE BOUNDARY THE STREAM'S GUARANTEES ARE ABOUT.**
+ * Every one of them — a bounded action from a compile-time vocabulary, a
+ * type-qualified actor, an agency only on a delegated actor, a
+ * package-generated id, a transactional emission, exactly one event per
+ * action, a digest dedup key — holds of **what is written through
+ * `record()`**. Read as a claim about the TABLE, every one of them is
+ * false, and two earlier revisions of this docblock read that way: the
+ * first called this "the single emission point", the second moved the
+ * claim onto the model's `creating` hook and said it held "for every
+ * path that goes through the model".
  *
- * So the guarantee was moved to where it can actually hold: **the row
- * validates itself on `creating`**, for every path that goes through the
- * model. What is left over, exactly, and it is the whole of the
- * difference between this class and a direct write:
+ * **Neither was true, and the second could not be made true.**
+ * {@see AppActionEvent} is a public Eloquent model in the consuming
+ * app's own database. `insert()`, `saveQuietly()`,
+ * `Model::withoutEvents()`, `toBase()`, a raw `DB::table(...)` write,
+ * and any builder spelling that forwards through `Builder::__call()` all
+ * reach the table without firing a model event — and every review round
+ * that chased that list found a spelling the previous round had missed.
+ * An enumeration of a framework's surface does not terminate, and while
+ * it is being chased the claim beside it is false.
  *
- *  - a direct write gets NO DEDUP LEDGER ROW, so "exactly one event per
- *    action" does not apply to it — the ledger row cannot be written
- *    from `creating`, because the event id it references is not
- *    inserted yet;
- *  - a direct write chooses its own `action_vocabulary` string, so the
- *    compile-time enum is a check on what that string NAMES rather than
- *    on the caller having had an enum case in hand;
- *  - a raw `DB::table(...)` or `->insert([...])` write fires no model
- *    events and skips the validation entirely.
- *
- * The package never takes any of those. An app that does is writing its
- * own rows into its own database, which no package can prevent and this
- * one does not claim to.
+ * So the claim is narrowed rather than the test escalated: **an app
+ * holding the model can write its own database directly, and the package
+ * neither prevents nor detects that. What the package guarantees is what
+ * the package writes.** The model's `creating` hook and
+ * {@see AppendOnlyBuilder}'s refusal list are kept as defence in depth —
+ * they catch the ordinary mistake, which is worth catching — and no
+ * claim depends on either being complete.
  *
  * **THE STREAM IS TRANSACTIONAL OR IT IS FICTION** — the same ruling
  * {@see LifecycleEventRecorder} already carries, and for the same
@@ -48,8 +49,9 @@ use LogicException;
  * with it, so nothing is ever recorded about something that did not
  * happen; an event written outside the action's transaction is a record
  * that can outlive the thing it records. The check lives on the MODEL
- * rather than here, so it holds for a direct write too, and this class
- * opens no transaction of its own: one it opened would commit
+ * rather than here, so it also catches a direct `create()` — defence in
+ * depth, on the writes that fire model events, and not a boundary. This
+ * class opens no transaction of its own: one it opened would commit
  * independently of the caller's, which is precisely the failure the
  * requirement exists to prevent.
  *   Pinned by `tests/RecorderTransactionGuardTest.php` — "refuses to
@@ -66,8 +68,10 @@ use LogicException;
  * `BackedEnum`, so a string cannot be passed at all — a `list<string>`
  * of permitted names would have been convention, and an app could have
  * supplied it from `Tag::pluck('slug')`. That is a statement about THIS
- * method's signature; the model's own refusal is what covers a direct
- * write, and it checks the stored value rather than the caller's type.
+ * method's signature, and the signature is the enforcement for this
+ * path. The model's own refusal checks the stored value rather than the
+ * caller's type, which catches a direct `create()` and nothing that
+ * bypasses model events.
  *   Pinned by `tests/AppActionAuditTest.php` — "refuses an action whose
  *   case is backed by prose rather than a bounded identifier", "refuses
  *   an action backed by an integer rather than an identifier" and
@@ -125,11 +129,16 @@ final class AppActionRecorder
         AppActionReason $reason,
         ?string $naturalKey = null,
     ): AppActionEvent {
-        // The event refuses itself if any of this is wrong — including
-        // the transaction — so there is deliberately no second copy of
-        // those checks here to drift from them.
+        // No `id` is passed and `id` is not fillable on either model:
+        // HasUuids generates both, which is what makes "a
+        // package-generated event id" true of this path rather than a
+        // hope about what the caller supplied.
+        //
+        // The event's own `creating` hook re-checks the shape of what is
+        // written here. That is defence in depth, not a second gate, and
+        // there is deliberately no third copy of those checks in this
+        // method to drift from either of them.
         $event = AppActionEvent::query()->create([
-            'id' => (string) Str::uuid(),
             'action' => $action->value,
             // WHICH vocabulary the name came from. Two apps may both
             // declare `invoice-voided` and mean different things, and a
@@ -148,9 +157,8 @@ final class AppActionRecorder
         // the same logical action is never recorded twice, and a caller
         // that tried is told rather than left holding one of two.
         AppActionOutboxEntry::query()->create([
-            'id' => (string) Str::uuid(),
             'event_id' => $event->id,
-            'dedup_key' => self::dedupKey($action, $naturalKey ?? $event->id),
+            'dedup_key' => self::dedupKeyFor($action, $naturalKey ?? $event->id),
         ]);
 
         return $event;
@@ -159,6 +167,20 @@ final class AppActionRecorder
     /**
      * The ledger key: sha256 over a LENGTH-DELIMITED encoding of the
      * vocabulary, the action and the caller's natural key.
+     *
+     * **PUBLIC so that a caller's keying can be PINNED rather than
+     * restated.** A test asserting only that the stored key is 64 hex
+     * characters cannot tell a key derived from the caller's natural key
+     * from the default derived from the event id — which is exactly the
+     * hole that opened when the door's mint-keying assertion was
+     * weakened: deleting `naturalKey:` from `ConsoleEnter` still yielded
+     * a 64-hex digest and the whole suite stayed green. A test that
+     * recomputes the expected key from the MINT, through this method,
+     * reds on that deletion. It is a pure function of its arguments and
+     * touches nothing.
+     *   Pinned by `tests/ConsoleEnterAuditTest.php` — "keys a successful
+     *   entry's ledger row to the mint, so dropping the key falls back
+     *   to the event id".
      *
      * Length-delimited for the reason
      * {@see DelegatedActor::identityHash()}
@@ -169,7 +191,7 @@ final class AppActionRecorder
      * SUPPRESSES an event, because the second insert is refused as a
      * duplicate. A boundary that can be shifted is not a boundary.
      */
-    private static function dedupKey(AppAction $action, string $naturalKey): string
+    public static function dedupKeyFor(AppAction $action, string $naturalKey): string
     {
         $vocabulary = $action::class;
         $name = (string) $action->value;

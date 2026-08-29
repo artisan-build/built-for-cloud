@@ -24,37 +24,44 @@ use LogicException;
  * of the schema is not told there is machinery behind it.
  *
  * **WHY IT IS A ROW AND NOT A COLUMN.** `dedup_key` is UNIQUE, and that
- * index is what makes "exactly one event per action" a database property
- * rather than a convention: a second emission of the same logical action
- * fails this insert and takes the whole transaction with it — the action
- * and its first event included. `event_id` is unique too, so "one ledger
- * row per event" is a database property as well and neither half of the
- * pair can be quietly doubled.
+ * index is what makes "exactly one event per action" hold of what
+ * {@see AppActionRecorder} writes: a second emission of the same logical
+ * action fails this insert and takes the whole transaction with it — the
+ * action and its first event included. `event_id` is unique too, so one
+ * recorder call cannot leave two ledger rows behind. Both are database
+ * properties of the ROWS THAT EXIST; neither makes an event that was
+ * written without going through the recorder acquire a ledger row, and
+ * an event with no ledger row is deduped by nothing.
  *   Pinned by `tests/AppActionAuditTest.php` — "refuses a second
  *   emission of the same logical action, and takes the transaction with
- *   it", "refuses a second ledger row for one event" and "writes the
- *   event and its ledger row in the caller's own transaction".
+ *   it", "refuses a second ledger row for one event" and "persists a
+ *   well-formed direct model write with no ledger row, which is the
+ *   residue the recorder names".
  *
- * **IT IS PROTECTED EXACTLY AS STRONGLY AS THE EVENT IT DEDUPES, and it
- * has to be.** A dedup record that can be deleted is not a dedup record:
- * a unique index only rejects a duplicate while the row it collides with
- * still exists, so a deletable ledger row means the duplicate this
- * stream promises to refuse can be re-admitted by removing the evidence
- * of the first one. So the same three layers the event carries are here
- * too — model events on `updating` and `deleting`, the ten enumerated
- * bulk spellings refused by {@see AppendOnlyBuilder}, and database
- * triggers aborting raw row-level UPDATE and DELETE on the three drivers
- * this package writes them for — with the same residue
- * {@see AppActionEvent} names: raw TRUNCATE is DDL, a raw INSERT fires
- * no model events, an unknown driver has no triggers, and DDL privilege
- * defeats all of it.
+ * **IT IS PROTECTED AS STRONGLY AS THE EVENT IT DEDUPES, and it has to
+ * be.** A dedup record that can be deleted is not a dedup record: a
+ * unique index only rejects a duplicate while the row it collides with
+ * still exists, so a deletable ledger row would let the duplicate this
+ * stream refuses be re-admitted by removing the evidence of the first
+ * one. The same three layers the event carries are here — model events
+ * on `updating` and `deleting`, the enumerated bulk spellings refused by
+ * {@see AppendOnlyBuilder}, and database triggers aborting raw row-level
+ * UPDATE and DELETE on the three drivers this package writes them for.
+ *
+ * **AS STRONGLY, INCLUDING THE RESIDUE**, which {@see AppActionEvent}
+ * states in full and which is not a footnote: none of the three layers
+ * is a boundary. Raw TRUNCATE is DDL, a raw INSERT and the quiet model
+ * methods fire no model events, the builder's list is a fixed
+ * enumeration of names, an unknown driver has no triggers, and DDL
+ * privilege defeats all of it. An app can delete this row from its own
+ * database and the package will neither prevent nor notice it.
  *   Pinned by `tests/AppActionAuditTest.php` — "rejects update and
  *   delete on a ledger row at the model layer", "refuses every
  *   enumerated bulk mutation on the app-action stream, on both models"
  *   and "rejects raw update and delete on the ledger table at the
  *   database layer on sqlite".
  *
- * **`dedup_key` IS A DIGEST, NEVER A CALLER'S STRING.**
+ * **`dedup_key` IS A DIGEST OF THE CALLER'S KEY, NOT THE KEY.**
  * {@see AppActionRecorder} hashes the caller's natural key together with
  * the action's vocabulary and name, so nothing an app supplies is stored
  * verbatim — the column would otherwise be a 255-character content
@@ -65,7 +72,8 @@ use LogicException;
  *   Pinned by `tests/AppActionAuditTest.php` — "stores a digest rather
  *   than the caller's natural key", "namespaces the digest by vocabulary
  *   and action, so two vocabularies sharing a natural key do not
- *   collide" and "refuses a ledger row whose dedup key is not a digest".
+ *   collide" and "refuses a ledger row whose dedup key is not
+ *   digest-shaped, and accepts one that merely looks like a digest".
  *
  * **NO DRAINER SHIPS FOR THIS STREAM, and no columns pretend one does.**
  * {@see CredentialOutboxEntry} carries `attempts`, `claimed_at`,
@@ -114,16 +122,25 @@ final class AppActionOutboxEntry extends Model
      * @var list<string>
      */
     protected $fillable = [
-        'id',
         'event_id',
         'dedup_key',
     ];
 
     /**
-     * Refuse a ledger row that would break the ledger's own invariants,
-     * whoever is writing it — the same stance {@see AppActionEvent}
-     * takes, for the same reason: {@see AppActionRecorder} is the only
-     * path this package offers, and it is not a gate PHP can close.
+     * Refuse a ledger row that would break the ledger's own invariants —
+     * **defence in depth on the writes that fire `creating`, and not a
+     * boundary**, exactly as {@see AppActionEvent::assertWellFormed()}
+     * is.
+     *
+     * The dedup-key check is a good example of why no claim may rest on
+     * it: it verifies the SHAPE of a sha256 digest, so sixty-four
+     * literal `a` characters satisfy it. It cannot verify that a key IS
+     * the digest of anything, because the natural key it would need is
+     * the caller's and is not stored — deliberately, since storing it is
+     * the app-content channel this column exists to avoid. What makes a
+     * key a real digest is that {@see AppActionRecorder::dedupKeyFor()}
+     * computed it; this check catches a caller that put a slug there by
+     * hand.
      *
      * @param  array<string, mixed>  $attributes
      *
@@ -141,7 +158,7 @@ final class AppActionOutboxEntry extends Model
 
         if (! is_string($key) || preg_match(self::DEDUP_KEY_PATTERN, $key) !== 1) {
             throw new LogicException(
-                'A dedup key is a sha256 digest of the action and its natural key, never a caller\'s string.',
+                'A dedup key is the sha256 digest AppActionRecorder computes, not a caller\'s string.',
             );
         }
     }

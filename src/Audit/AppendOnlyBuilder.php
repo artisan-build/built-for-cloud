@@ -30,11 +30,24 @@ use LogicException;
  *   bulk mutation on the app-action stream, on both models" and "pins the
  *   exact set of operations the append-only builder refuses".
  *
- * **WHAT IT REFUSES IS ENUMERATED, AND THE ENUMERATION IS THE CLAIM.**
- * {@see REFUSED} is that list, and a test pins the class's public surface
- * against it, so removing an override — or a framework upgrade adding a
- * mutator this class has never heard of — is a change somebody has to
- * make deliberately rather than one that happens quietly.
+ * **IT IS DEFENCE IN DEPTH, NOT A BOUNDARY, and that framing is the
+ * whole of what changed in review round 2.** {@see REFUSED} is a FIXED
+ * LIST OF METHOD NAMES. `Illuminate\Database\Eloquent\Builder`
+ * forwards everything it does not declare to the query builder through
+ * `__call()`, so a spelling not on this list reaches the table
+ * untouched — and three consecutive review rounds each found spellings
+ * the previous round had missed (`createQuietly`, then `deleteQuietly`,
+ * then `insertOrIgnoreReturning`, `insertOrIgnoreUsing` and
+ * `updateFrom`). An enumeration of a framework's surface does not
+ * terminate.
+ *
+ * So **no claim in this package depends on this list being complete.**
+ * The stream's guarantees are properties of what
+ * {@see AppActionRecorder} writes; this class exists to make the
+ * ordinary mistake loud, which is worth doing and is all it does. A test
+ * pins the class's declared surface against {@see REFUSED} so that
+ * removing an override is a deliberate diff rather than a quiet one —
+ * that pin is about drift in THIS list, not about coverage of Laravel's.
  *
  * **WHAT IT DOES NOT REACH, named because an unlisted gap reads as a
  * covered one:**
@@ -59,17 +72,16 @@ use LogicException;
  *    for, and by nothing on a driver it does not; `deleteQuietly` is
  *    one of the spellings `tests/AppActionRetentionScan.php` enumerates
  *    for that reason.
- *  - **Anything not on the list.** {@see REFUSED} is what this class
- *    refuses DIRECTLY, and it is a fixed enumeration like every other
- *    tripwire in this package. A framework helper composed out of these
- *    — `incrementOrCreate()`, say — ends at whichever of them it calls
- *    and is refused there, but that is a property of the helper, not a
- *    claim this class makes about helpers it has never heard of. A NEW
- *    mutator arriving in a future Laravel is caught by the test that
- *    pins this class's declared surface only in the sense that the
- *    surface has not changed — the new method would simply be
- *    inherited, unrefused, and unnoticed. Reviewing a framework upgrade
- *    is the control for that, and it is a human one.
+ *  - **Anything not on the list**, which is the residue that matters
+ *    and cannot be closed by adding to it. {@see REFUSED} is what this
+ *    class refuses DIRECTLY. A framework helper composed out of these —
+ *    `incrementOrCreate()`, say — ends at whichever of them it calls and
+ *    is refused there, but that is a property of the helper, not a claim
+ *    this class makes about helpers it has never heard of. A NEW mutator
+ *    arriving in a future Laravel is simply inherited, unrefused, and
+ *    unnoticed: the surface pin cannot see it, because the surface did
+ *    not change. Reviewing a framework upgrade is the control, and it is
+ *    a human one.
  *  - **`toBase()`**, which hands back the query builder these overrides
  *    are not on. Anything that goes around the Eloquent builder is a raw
  *    write, and raw writes are the enforcement boundary the model states.
@@ -109,12 +121,17 @@ abstract class AppendOnlyBuilder extends Builder
      *    with it {@see AppActionEvent::assertWellFormed()} — a create
      *    that skips the row's own validation is exactly the write this
      *    stream must not accept;
-     *  - **event-free inserts** (`insertOrIgnore`, `insertGetId`,
-     *    `insertUsing`, and the three `fillAndInsert*` helpers that
-     *    forward to them) fire no model events either.
-     *    `insertOrIgnore` is the sharpest of them: it would SWALLOW the
+     *  - **event-free inserts** (`insertOrIgnore`,
+     *    `insertOrIgnoreReturning`, `insertOrIgnoreUsing`,
+     *    `insertGetId`, `insertUsing`, and the three `fillAndInsert*`
+     *    helpers that forward to them) fire no model events either. The
+     *    `insertOrIgnore` family is the sharpest: it would SWALLOW the
      *    unique-index violation that "exactly one event per action"
-     *    rests on.
+     *    rests on. `updateFrom` is PostgreSQL's `UPDATE ... FROM` and
+     *    belongs to the first family; it sits with these because, like
+     *    them, it is reached ONLY through `__call()` forwarding — which
+     *    is how all three arrived on this list, after a reviewer wrote
+     *    them and watched a forged row persist.
      *
      * @var list<string>
      */
@@ -132,10 +149,13 @@ abstract class AppendOnlyBuilder extends Builder
         'incrementEach',
         'insertGetId',
         'insertOrIgnore',
+        'insertOrIgnoreReturning',
+        'insertOrIgnoreUsing',
         'insertUsing',
         'touch',
         'truncate',
         'update',
+        'updateFrom',
         'updateOrInsert',
         'upsert',
     ];
@@ -256,11 +276,40 @@ abstract class AppendOnlyBuilder extends Builder
     }
 
     /**
+     * @param  array<int, array<string, mixed>>  $values
+     * @param  non-empty-array<non-empty-string>  $returning
+     * @param  non-empty-array<non-empty-string>|string|null  $uniqueBy
+     */
+    public function insertOrIgnoreReturning(array $values, array $returning = ['*'], array|string|null $uniqueBy = null): never
+    {
+        $this->refuse('inserted by a path that fires no model events');
+    }
+
+    /**
+     * @param  array<int, string>  $columns
+     */
+    public function insertOrIgnoreUsing(array $columns, mixed $query): never
+    {
+        $this->refuse('inserted by a path that fires no model events');
+    }
+
+    /**
      * @param  array<int, string>  $columns
      */
     public function insertUsing(array $columns, mixed $query): never
     {
         $this->refuse('inserted by a path that fires no model events');
+    }
+
+    /**
+     * PostgreSQL's `UPDATE ... FROM`, reached only through `__call()`
+     * forwarding.
+     *
+     * @param  array<string, mixed>  $values
+     */
+    public function updateFrom(array $values): never
+    {
+        $this->refuse('updated');
     }
 
     /**

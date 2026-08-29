@@ -5,6 +5,7 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\Audit\AppActionEvent;
 use ArtisanBuild\BuiltForCloud\Audit\AppActionOutboxEntry;
 use ArtisanBuild\BuiltForCloud\Audit\AppActionReason;
+use ArtisanBuild\BuiltForCloud\Audit\AppActionRecorder;
 use ArtisanBuild\BuiltForCloud\Audit\AppActorType;
 use ArtisanBuild\BuiltForCloud\Audit\ConsoleAction;
 use ArtisanBuild\BuiltForCloud\Console\AssertionBurn;
@@ -59,14 +60,38 @@ it('records one app-action event for a successful entry, through the real door',
         ->and($event->actor_ref)->toBe(DelegatedActor::IDENTIFIER_PREFIX.$actor->getKey())
         ->and($event->id)->toMatch('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/');
 
-    // Exactly one, with its dedup ledger row keyed on the MINT — hashed
-    // by the recorder, so what is stored is a digest and not the mint
-    // digest verbatim.
+    expect(AppActionOutboxEntry::query()->sole()->event_id)->toBe($event->id);
+});
+
+it('keys a successful entry\'s ledger row to the mint, so dropping the key falls back to the event id', function (): void {
+    // THE PIN THAT WAS WEAKENED, restored. A round-1 revision asserted
+    // the stored key equalled a prefix plus the mint hash; a later one
+    // relaxed it to "is 64 hex" and "is not the raw mint hash", which
+    // cannot fail: `AppActionRecorder` defaults the natural key to the
+    // EVENT ID, so deleting `naturalKey:` from ConsoleEnter still yields
+    // a 64-hex digest that is still not the mint hash, and the whole
+    // suite stayed green while "one mint, at most one entry event" went
+    // unpinned.
+    //
+    // Recomputed from the MINT — an input this test derives
+    // independently of the door — through the recorder's own function,
+    // so the algorithm is pinned rather than restated. Dropping the
+    // argument reds this.
+    enterTheDoor(consoleHandoff('/orders'))->assertStatus(303);
+
+    $mintHash = AssertionBurn::query()->sole()->mint_hash;
     $ledger = AppActionOutboxEntry::query()->sole();
 
-    expect($ledger->event_id)->toBe($event->id)
-        ->and($ledger->dedup_key)->toMatch('/^[0-9a-f]{64}$/')
-        ->and($ledger->dedup_key)->not->toBe(AssertionBurn::query()->sole()->mint_hash);
+    expect($ledger->dedup_key)
+        ->toBe(AppActionRecorder::dedupKeyFor(ConsoleAction::ConsoleEntered, $mintHash));
+
+    // …and the fallback really is a different value, so the assertion
+    // above is discriminating rather than accidentally satisfied.
+    expect(AppActionRecorder::dedupKeyFor(ConsoleAction::ConsoleEntered, AppActionEvent::query()->sole()->id))
+        ->not->toBe($ledger->dedup_key);
+
+    // The stored key is still a digest and never the mint hash itself.
+    expect($ledger->dedup_key)->toMatch('/^[0-9a-f]{64}$/')->not->toBe($mintHash);
 });
 
 it('records the agency the entering handoff named, and null when it named none', function (): void {

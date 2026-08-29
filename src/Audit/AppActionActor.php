@@ -29,29 +29,55 @@ use LogicException;
  *
  * WHAT NEITHER OF THOSE DECIDES is what the string SAYS.
  * {@see delegated()} passes its argument through verbatim, `null`
- * included, and a caller may pass whatever it likes.
- * {@see fromActingPrincipal()} is the path on which the agency is this
- * request's own resolved principal, and it is the path this package
- * takes; a caller that builds an actor with the raw factories owns the
+ * included, and any caller may pass anything.
+ *
+ * **THE PACKAGE HAS TWO PATHS AND BOTH ARE LEGITIMATE**, which an
+ * earlier revision of this paragraph got wrong by naming only one.
+ * `POST /bfc/console/enter` calls {@see delegated()} DIRECTLY, with the
+ * claims read out of the session its own redemption has just begun —
+ * because the request-scoped acting principal was resolved before that
+ * session existed, and reaching for it there would attribute the entry
+ * to whoever was on the request beforehand. Every other emission goes
+ * through {@see fromActingPrincipal()}, which reads the agency off the
+ * request's one resolved principal. On both, the value originates as an
+ * issuer claim the verifier bounded; on neither does anything in this
+ * class check that. A consuming app calling these factories owns the
  * truth of what it hands over. **Escape it at every sink.**
+ *
+ * The tests below establish the SHAPE — that the agency travels intact,
+ * that absence stays absence, and that the non-delegated factories have
+ * nowhere to put one. None of them establishes provenance, because
+ * provenance is not a property this class has.
  *   Pinned by `tests/AppActionAuditTest.php` — "carries the agency a
  *   delegated handoff named", "records a delegated event with no agency
- *   as null rather than inventing one", "cannot construct a local user
- *   or api token actor that carries an agency at all" and "refuses a
- *   direct model write that fabricates an agency for a local user".
+ *   as null rather than inventing one" and "cannot construct a local
+ *   user or api token actor that carries an agency at all".
  *
- * **THE DELEGATED REF IS TYPE-QUALIFIED.** It is
- * {@see DelegatedActor::getAuthIdentifier()} — `bfc-console:{id}` —
+ *   Pinned by `tests/ConsoleEnterAuditTest.php` — "records the agency
+ *   the entering handoff named, and null when it named none", which is
+ *   the door's direct-call path driven end to end.
+ *
+ * **THE DELEGATED REF IS TYPE-QUALIFIED ON THIS PATH**, because this
+ * factory does not take a ref at all: it takes the actor and asks it.
+ * It is {@see DelegatedActor::getAuthIdentifier()} — `bfc-console:{id}` —
  * never the bare key. `bfc_delegated_actors` is an ordinary
  * auto-increment table in the SAME id space `users` occupies, so actor 7
  * and user 7 both exist routinely, and an app-action row that said `7`
  * would read as user 7 having done it. The qualifier is applied by
  * going through the model's own accessor rather than by string
  * concatenation here, so there is one place that decides what a
- * delegated identity looks like.
+ * delegated identity looks like — and a caller of this factory cannot
+ * supply a ref of its own even if it wanted to.
+ *
+ * {@see AppActionEvent} additionally refuses a stored ref with no
+ * qualifier, which catches the bare-integer mistake on a direct write.
+ * That is a PREFIX check and nothing more: `bfc-console:not-an-id`
+ * satisfies it, and the cited test drives the bare-`7` case only. What
+ * makes a ref a real identity is having come through here.
  *   Pinned by `tests/AppActionAuditTest.php` — "names a delegated actor
  *   by its type-qualified identity, where a user with the same numeric
- *   id also exists".
+ *   id also exists" and "refuses a direct model write that names a
+ *   delegated actor by a bare id".
  *
  * **IDS ONLY.** Like {@see AuditActor}, this
  * carries identifiers and never PII the package chose to include. The
@@ -101,22 +127,24 @@ final readonly class AppActionActor
      * verbatim. Nothing here bounds it, and nothing here establishes
      * where it came from.
      *
-     * On the path this package takes it IS an issuer claim —
+     * On the package's own two paths it IS an issuer claim, and both
+     * take it from the SESSION's copy rather than the actor row's
+     * `last_handoff_on_behalf_of` — that column is shared by every live
+     * session for the same subject, so a later handoff naming a
+     * different agency would retroactively re-attribute this action to
+     * it. `POST /bfc/console/enter` calls this factory directly with the
+     * claims of the session it has just opened;
      * {@see fromActingPrincipal()} reads it off the request's one
      * resolved {@see ActingPrincipal}, which took it from
-     * {@see DelegatedClaims}, the session's own copy written from an
-     * assertion {@see AssertionVerifier} had bounded to 120 characters
-     * and rejected for control characters. That matters twice: the
-     * session's copy is used rather than the actor row's
-     * `last_handoff_on_behalf_of`, which is shared by every live session
-     * for the same subject and would let a later handoff naming a
-     * different agency retroactively re-attribute this action to it.
+     * {@see DelegatedClaims}. Either way it began as an assertion claim
+     * {@see AssertionVerifier} bounded to 120 characters and rejected
+     * for control characters.
      *
-     * A caller using this factory directly gets none of that, and owns
-     * the truth of what it passes. What the two layers DO enforce is
-     * narrower and worth stating exactly: only a delegated actor has a
-     * parameter to put an agency in, and {@see AppActionEvent} refuses a
-     * row that carries one on any other actor type.
+     * A consuming app calling this factory gets none of that and owns
+     * the truth of what it passes. What IS enforced, exactly: only a
+     * delegated actor has a parameter to put an agency in, and
+     * {@see AppActionEvent} refuses a stored row that carries one on any
+     * other actor type.
      *
      * **Untrusted display text on either path. Escape at every sink.**
      */

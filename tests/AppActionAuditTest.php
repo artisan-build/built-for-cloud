@@ -17,6 +17,7 @@ use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
 use ArtisanBuild\BuiltForCloud\Tests\AppActionRetentionScan;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\CountedAppAction;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SinkAppAction;
@@ -207,8 +208,9 @@ it('refuses a direct model write that names a delegated actor by a bare id', fun
 });
 
 it('refuses a direct model write that fabricates an agency for a local user', function (): void {
-    // AC5's structural half, held where it holds for every path: only a
-    // delegated actor acts for an agency.
+    // AC5's structural half. Defence in depth on the writes that fire
+    // model events, not a boundary: only a delegated actor acts for an
+    // agency.
     expect(fn (): mixed => DB::transaction(fn (): AppActionEvent => AppActionEvent::query()->create(
         wellFormedAppActionRow([
             'actor_type' => AppActorType::LocalUser->value,
@@ -220,13 +222,15 @@ it('refuses a direct model write that fabricates an agency for a local user', fu
     expect(AppActionEvent::query()->count())->toBe(0);
 });
 
-it('refuses a well-formed direct write no ledger row, which is the residue the recorder names', function (): void {
+it('persists a well-formed direct model write with no ledger row, which is the residue the recorder names', function (): void {
+    // RENAMED: the old title began "refuses", and this body asserts the
+    // opposite — the write SUCCEEDS, and that is the point.
+    //
     // THE RESIDUE, asserted rather than only described. A direct write
-    // that satisfies every row invariant still gets no ledger row —
-    // the event id it would reference does not exist when `creating`
-    // runs — so "exactly one event per action" does not apply to it.
-    // This is why the recorder is documented as the only
-    // VALIDATED-AND-LEDGERED path and not as the only path.
+    // that satisfies every row invariant still gets no ledger row — the
+    // event id it would reference does not exist when `creating` runs —
+    // so "exactly one event per action" is a property of the recorder
+    // and of nothing else.
     DB::transaction(fn (): AppActionEvent => AppActionEvent::query()->create(wellFormedAppActionRow()));
 
     expect(AppActionEvent::query()->count())->toBe(1)
@@ -308,17 +312,26 @@ it('refuses every enumerated bulk mutation on the app-action stream, on both mod
         'incrementEach' => fn (Builder $q): mixed => $q->incrementEach(['id' => 1]),
         'insertGetId' => fn (Builder $q): mixed => $q->insertGetId(['id' => 'x']),
         'insertOrIgnore' => fn (Builder $q): mixed => $q->insertOrIgnore([['id' => 'x']]),
+        // The three the round-2 reviewer wrote and watched persist a
+        // forged row: all reached the table through `Builder::__call()`
+        // forwarding, which is why no list of names can be complete.
+        'insertOrIgnoreReturning' => fn (Builder $q): mixed => $q->insertOrIgnoreReturning([['id' => 'x']]),
+        'insertOrIgnoreUsing' => fn (Builder $q): mixed => $q->insertOrIgnoreUsing(['id'], 'select 1'),
         'insertUsing' => fn (Builder $q): mixed => $q->insertUsing(['id'], 'select 1'),
         'touch' => fn (Builder $q): mixed => $q->touch(),
         'truncate' => fn (Builder $q): mixed => $q->truncate(),
         'update' => fn (Builder $q): mixed => $q->update(['action' => 'rewritten-history']),
+        'updateFrom' => fn (Builder $q): mixed => $q->updateFrom(['action' => 'rewritten-history']),
         'updateOrInsert' => fn (Builder $q): mixed => $q->updateOrInsert(['id' => 'x'], ['id' => 'x']),
         'upsert' => fn (Builder $q): mixed => $q->upsert([['id' => 'x']], ['id']),
     ];
 
     // The behavioural set and the declared enumeration are the same set:
     // a refusal added to the class without a test here, or a test here
-    // for something the class does not refuse, reds this.
+    // for something the class does not refuse, reds this. It says
+    // nothing about spellings NEITHER of them knows — that residue is
+    // named on AppendOnlyBuilder and is why no guarantee rests on this
+    // list being complete.
     expect(array_keys($mutations))->toBe(AppendOnlyBuilder::REFUSED);
 
     foreach ([AppActionEvent::class, AppActionOutboxEntry::class] as $model) {
@@ -328,10 +341,6 @@ it('refuses every enumerated bulk mutation on the app-action stream, on both mod
         }
     }
 
-    // `incrementOrCreate` is deliberately NOT on the enumerated list and
-    // is refused anyway, transitively: it ends at `increment()` for an
-    // existing row. Driven so the docblock's claim about transitive
-    // coverage is not just a sentence.
     // Nothing was mutated, removed or added by any of them.
     expect(AppActionEvent::query()->count())->toBe(1)
         ->and(AppActionOutboxEntry::query()->count())->toBe(1)
@@ -426,15 +435,40 @@ it('namespaces the digest by vocabulary and action, so two vocabularies sharing 
     expect(AppActionOutboxEntry::query()->distinct()->count('dedup_key'))->toBe(3);
 });
 
-it('refuses a ledger row whose dedup key is not a digest', function (): void {
+it('refuses a ledger row whose dedup key is not digest-shaped, and accepts one that merely looks like a digest', function (): void {
+    // RENAMED and extended. The old title said "is not a digest"; the
+    // check can only see the SHAPE of one, and the round-2 reviewer
+    // demonstrated the difference by storing sixty-four literal `a`
+    // characters. Both halves are driven here, so the limit is pinned
+    // rather than described.
+    //
+    // It cannot be otherwise: verifying that a key IS a digest needs the
+    // caller's natural key, which is deliberately not stored — storing
+    // it is the app-content channel this column exists to avoid. What
+    // makes a key real is that AppActionRecorder::dedupKeyFor() computed
+    // it, which is a property of the recorder path and not of the table.
     $event = recordAppAction(naturalKey: 'invoice-42-voided');
 
+    // A slug is refused…
     expect(fn (): mixed => DB::transaction(fn (): AppActionOutboxEntry => AppActionOutboxEntry::query()->create([
         'event_id' => $event->id,
         'dedup_key' => 'invoice 42 <script>alert(1)</script>',
-    ])))->toThrow(LogicException::class, 'never a caller\'s string');
+    ])))->toThrow(LogicException::class, 'not a caller\'s string');
 
     expect(AppActionOutboxEntry::query()->count())->toBe(1);
+
+    // …and sixty-four literal `a` characters are ACCEPTED, because they
+    // are digest-shaped. That is the residue, and it is why no guarantee
+    // rests on this check.
+    $orphan = DB::transaction(fn (): AppActionEvent => AppActionEvent::query()->create(wellFormedAppActionRow()));
+
+    DB::transaction(fn (): AppActionOutboxEntry => AppActionOutboxEntry::query()->create([
+        'event_id' => $orphan->id,
+        'dedup_key' => str_repeat('a', 64),
+    ]));
+
+    expect(AppActionOutboxEntry::query()->where('event_id', $orphan->id)->sole()->dedup_key)
+        ->toBe(str_repeat('a', 64));
 });
 
 // ─── AC3: a stable, package-generated event id ──────────────────────────────
@@ -649,12 +683,19 @@ it('records which vocabulary the action name came from', function (): void {
 
 // ─── AC10: transactionality ─────────────────────────────────────────────────
 
-it('writes the event and its ledger row in the caller\'s own transaction', function (): void {
+it('pairs each recorded event with exactly one ledger row carrying a digest key', function (): void {
+    // RENAMED from a title that said "in the caller's own transaction",
+    // which this body never asserted. The transactional half is driven
+    // where it can be — `tests/RecorderTransactionGuardTest.php`, which
+    // runs without RefreshDatabase — and by "leaves neither the event nor
+    // its ledger row behind when the action rolls back". What THIS pins
+    // is the pairing and the key's shape.
     $event = recordAppAction(naturalKey: 'invoice-42-voided');
 
     $ledger = AppActionOutboxEntry::query()->sole();
 
     expect($ledger->event_id)->toBe($event->id)
+        ->and(AppActionOutboxEntry::query()->count())->toBe(1)
         // A digest of the vocabulary, the action and the natural key —
         // never the natural key itself. See "stores a digest rather than
         // the caller's natural key" for why that matters.
@@ -841,12 +882,41 @@ it('names every enumerated deletion spelling when the walk meets one', function 
 it('advertises the app-action emit capability without promising a way to read the stream', function (): void {
     $capabilities = (array) $this->getJson('/bfc/meta')->assertOk()->json('capabilities');
 
-    expect($capabilities)->toContain('app-action-audit-emit')
-        // The name a control plane would read as "I can query this".
-        ->and($capabilities)->not->toContain('app-action-audit');
+    expect($capabilities)->toContain('app-action-audit-emit');
 
-    // And no route exists to read it, on any verb the contract uses.
-    foreach (['get', 'post'] as $verb) {
-        expect($this->{$verb.'Json'}('/bfc/console/audit')->status())->toBe(404);
-    }
+    // The previous revision asserted `not->toContain('app-action-audit')`,
+    // which is ELEMENT equality on an array: the shipped name is
+    // `app-action-audit-emit`, so it could never fail whatever the
+    // capability was called. And it probed ONE invented path for a 404,
+    // which says nothing about any other path. Both are replaced by an
+    // enumeration over what is actually registered — the only shape that
+    // can fail — and the enumeration is driven over a fixture route so
+    // it is proven able to.
+    $readingRoutes = static function (): array {
+        $found = [];
+
+        foreach (Route::getRoutes()->getRoutes() as $route) {
+            if (! str_starts_with($route->getActionName(), 'ArtisanBuild\\BuiltForCloud\\')) {
+                continue;
+            }
+
+            // Any package route whose URI names this stream would be a
+            // read transport for it, whatever it was called.
+            if (preg_match('/app.?action|audit/i', $route->uri()) === 1) {
+                $found[] = '/'.$route->uri();
+            }
+        }
+
+        sort($found);
+
+        return $found;
+    };
+
+    expect($readingRoutes())->toBe([]);
+
+    // Proven able to fail, through the SAME closure: a package route
+    // that would be a read transport is named by it.
+    Route::get('/bfc/console/app-actions', MetaController::class);
+
+    expect($readingRoutes())->toBe(['/bfc/console/app-actions']);
 });
