@@ -13,13 +13,31 @@ use ArtisanBuild\BuiltForCloud\Scope;
 use Illuminate\Foundation\Testing\TestCase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Testing\TestResponse;
 use PHPUnit\Framework\Assert;
+use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
 /**
  * @phpstan-require-extends TestCase
  */
 trait ContractAssertions
 {
+    /**
+     * A bounded identifier: lowercase alphanumeric runs joined by single
+     * `.`, `_`, `:` or `-` separators, at most 64 characters. Enum
+     * members (`ok`, `degraded`, `seconds`), ability names
+     * (`metadata:read`), capability names (`console-vitals`) and uuids
+     * all take this shape; a sentence, a name, a path and an email
+     * address do not.
+     */
+    public const string METADATA_TOKEN = '/^(?=.{1,64}$)[a-z0-9]+(?:[._:-][a-z0-9]+)*$/D';
+
+    /** Semver, with the optional pre-release and build metadata parts. */
+    public const string METADATA_SEMVER = '/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?(?:\+[0-9A-Za-z.]+)?$/D';
+
+    /** An ISO-8601 instant with an explicit offset or `Z`. */
+    public const string METADATA_TIMESTAMP = '/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/D';
+
     public function assertBuiltForCloudContract(): void
     {
         $this->assertBuiltForCloudMetaContract();
@@ -748,6 +766,116 @@ trait ContractAssertions
         sort($events);
 
         return $events;
+    }
+
+    /**
+     * The `metadata` CLASSIFICATION conformance instrument (Console PRD
+     * D15, docs/http-contract.md "Endpoint classification"). Point it at
+     * the 2xx body of ANY `metadata`-classified endpoint: it walks the
+     * whole structure and fails on the first string — value or key —
+     * that is not an enum member, a bounded identifier, a semver or a
+     * timestamp.
+     *
+     * WHAT IT ACTUALLY ENFORCES: the SHAPE of every string present.
+     * Numbers, booleans and nulls pass untouched; arrays recurse. A
+     * string passes if it matches one of exactly three patterns
+     * ({@see self::METADATA_TOKEN}, {@see self::METADATA_SEMVER},
+     * {@see self::METADATA_TIMESTAMP}) — lowercase bounded identifiers
+     * of at most 64 characters, semver, and ISO-8601 instants. That is
+     * enough to reject everything free text looks like in practice: any
+     * whitespace, any capital letter, any punctuation outside `._:-`,
+     * an empty string, and anything long.
+     *
+     * WHAT IT DOES NOT ENFORCE, named because an unlisted gap reads as a
+     * covered one:
+     *
+     * 1. **A field's declared DOMAIN.** A genuinely free-text field
+     *    whose value in the payload under test happens to be one
+     *    lowercase word — a credential named `staging`, a note reading
+     *    `pending` — passes. This checks the value in front of it, not
+     *    what the field is allowed to hold, so it bounds a payload and
+     *    cannot by itself certify a schema.
+     * 2. **That an identifier is an ENUM member.** It cannot know the
+     *    enum. `degraded` and `dgraded` both pass; only a test that
+     *    asserts the value catches the second.
+     * 3. **Absent fields.** A metadata endpoint that omits a field
+     *    entirely, or serves an empty body, passes trivially. Pair it
+     *    with a structure assertion.
+     *
+     * @param  mixed  $payload  a decoded response body
+     * @param  string  $context  what is being checked, for the message
+     */
+    public function assertBuiltForCloudMetadataShape(mixed $payload, string $context = 'metadata payload'): void
+    {
+        $this->assertBuiltForCloudMetadataValue($payload, $context, '$');
+    }
+
+    /**
+     * {@see self::assertBuiltForCloudMetadataShape} pointed at a response
+     * rather than a decoded body — the form most callers want, and the
+     * one that handles the empty `204` bodies several `metadata`
+     * endpoints answer with.
+     *
+     * A body that is not empty and not valid JSON fails: a metadata
+     * endpoint answering something else is outside the classification
+     * whatever the bytes say.
+     *
+     * @param  TestResponse<SymfonyResponse>  $response
+     */
+    public function assertBuiltForCloudMetadataResponse(TestResponse $response, string $context = 'metadata endpoint'): void
+    {
+        $body = (string) $response->getContent();
+
+        if (trim($body) === '') {
+            return;
+        }
+
+        $decoded = json_decode($body, true);
+
+        Assert::assertNotNull(
+            $decoded,
+            $context.': the response body is neither empty nor valid JSON, so its classification cannot be checked.',
+        );
+
+        $this->assertBuiltForCloudMetadataShape($decoded, $context);
+    }
+
+    private function assertBuiltForCloudMetadataValue(mixed $value, string $context, string $path): void
+    {
+        if ($value === null || is_int($value) || is_float($value) || is_bool($value)) {
+            return;
+        }
+
+        if (is_string($value)) {
+            Assert::assertTrue(
+                preg_match(self::METADATA_TOKEN, $value) === 1
+                    || preg_match(self::METADATA_SEMVER, $value) === 1
+                    || preg_match(self::METADATA_TIMESTAMP, $value) === 1,
+                $context.': '.$path.' carries a free-text string. A metadata-classified endpoint may return '
+                .'only bounded scalars and enums (Console PRD D15) — an enum member or bounded identifier, '
+                .'a semver, or an ISO-8601 timestamp. Got: '.var_export($value, true),
+            );
+
+            return;
+        }
+
+        Assert::assertIsArray(
+            $value,
+            $context.': '.$path.' is neither a scalar nor an array, so it cannot be a bounded metadata value.',
+        );
+
+        /** @var array<array-key, mixed> $value */
+        foreach ($value as $key => $member) {
+            if (is_string($key)) {
+                Assert::assertSame(
+                    1,
+                    preg_match(self::METADATA_TOKEN, $key),
+                    $context.': the key '.$path.'.'.$key.' is not a bounded identifier.',
+                );
+            }
+
+            $this->assertBuiltForCloudMetadataValue($member, $context, $path.'.'.$key);
+        }
     }
 
     public function mintBuiltForCloudAdminToken(string $name = 'contract-admin'): string
