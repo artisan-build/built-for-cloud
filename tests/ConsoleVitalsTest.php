@@ -58,6 +58,10 @@ beforeEach(function (): void {
     // registers it, so the test harness does too.
     config([
         'auth.guards.bfc' => ['driver' => 'bfc', 'provider' => 'users'],
+        // Without a stable deployment identifier the queue snapshot is
+        // not cached at all (a shared cache with no identity mixes
+        // deployments), so the harness names one.
+        'built-for-cloud.vitals.deployment_id' => 'deployment-under-test',
         'queue.default' => 'database',
         'queue.connections.database' => [
             'driver' => 'database',
@@ -289,6 +293,81 @@ it('refuses no credential, an unknown one and an expired or revoked one indistin
     $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
         ->assertOk()
         ->assertJsonPath('api_version', BuiltForCloud::API_VERSION);
+});
+
+// ---------------------------------------------------------------- AC19 --
+
+/**
+ * D16 requires the dashboard credential to be unable to touch mutating
+ * surfaces. A credential whose BYTES are also the fallback token, or are
+ * on file in the legacy `api_tokens` store, can touch them — the
+ * aliasing does it, not the credential's own abilities list. So the
+ * alias is refused, before anything resolves.
+ */
+it('refuses a bearer that is also the configured fallback token', function (): void {
+    $reader = vitalsReader();
+
+    // The positive control first: these exact bytes read fine.
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])->assertOk();
+
+    // Now the SAME bytes are also the fallback pseudo-credential, which
+    // is admin-equivalent on the legacy surfaces.
+    config(['built-for-cloud.fallback_token' => $reader->plaintext()]);
+
+    // Snapshot the row AFTER the control read, so what is compared is
+    // what the REFUSAL did, not what the control did.
+    $before = $reader->credential->refresh()->getAttributes();
+
+    $refused = $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()]);
+
+    $refused->assertUnauthorized();
+
+    // Indistinguishable from an unknown bearer: telling a caller "these
+    // bytes are also something else" is what an aliasing probe wants.
+    expect($refused->getContent())
+        ->toBe($this->getJson('/bfc/console/vitals', ['Authorization' => 'Bearer nope-'.bin2hex(random_bytes(16))])->getContent());
+
+    // And side-effect-free: the refusal resolved nothing, so it stamped
+    // no usage and touched no column on the credential it declined to
+    // authenticate.
+    expect($reader->credential->refresh()->getAttributes())->toBe($before);
+});
+
+it('refuses a bearer that is also a legacy api_tokens secret', function (): void {
+    $reader = vitalsReader();
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])->assertOk();
+
+    // The same bytes filed in the legacy store, where an admin-scoped
+    // row is admin-equivalent on every operator verb.
+    ApiToken::query()->create([
+        'name' => 'owner',
+        'token_hash' => hash('sha256', $reader->plaintext()),
+        'abilities' => [Scope::Admin->value],
+    ]);
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])->assertUnauthorized();
+});
+
+it('refuses an aliased bearer even when the legacy row is revoked', function (): void {
+    $reader = vitalsReader();
+
+    ApiToken::query()->create([
+        'name' => 'retired',
+        'token_hash' => hash('sha256', $reader->plaintext()),
+        'abilities' => [Scope::Admin->value],
+        'revoked_at' => now(),
+    ]);
+
+    // A revoked row cannot act today, but the question is not "can these
+    // bytes act elsewhere right now" — it is whether this deployment has
+    // ever filed them as something else. It has, and a row can be
+    // un-revoked by anyone who could revoke it.
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])->assertUnauthorized();
+
+    // A DIFFERENT credential is unaffected: the check is on the bytes,
+    // not a blanket refusal once any legacy row exists.
+    $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])->assertOk();
 });
 
 // --------------------------------------------------------- AC13/AC14 --
@@ -976,8 +1055,63 @@ it('never turns an unavailable cache into a 500', function (): void {
         ->assertJsonPath('health', 'ok');
 });
 
-it('namespaces the queue snapshot by deployment and by queue configuration', function (): void {
-    config(['built-for-cloud.cloud.application' => 'app-a']);
+it('namespaces the queue snapshot by deployment identity and by the whole queue identity', function (): void {
+    $reader = vitalsReader();
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('queue.pending', 0);
+
+    DB::table('jobs')->insert([
+        'queue' => 'default', 'payload' => '{}', 'attempts' => 0,
+        'reserved_at' => null, 'available_at' => now()->getTimestamp(), 'created_at' => now()->getTimestamp(),
+    ]);
+
+    // Same deployment, same queue, inside the window: the snapshot stands.
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('queue.pending', 0);
+
+    // A DIFFERENT deployment sharing this cache must not be served the
+    // first one's backlog. Two apps behind one Redis with one
+    // CACHE_PREFIX is an ordinary staging arrangement, and serving one
+    // app's backlog as another's honest local data is worse than a 500.
+    config(['built-for-cloud.vitals.deployment_id' => 'another-deployment']);
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('queue.pending', 1);
+
+    // The QUEUE NAME is part of the identity too. The previous key read
+    // only driver/connection/table, so on Redis and SQS — where the
+    // queue name is the thing that distinguishes one backlog from
+    // another — the queue was absent from the key entirely.
+    config(['built-for-cloud.vitals.deployment_id' => 'deployment-under-test', 'queue.connections.database.queue' => 'exports']);
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('queue.pending', 1);
+
+    // And so is the table.
+    config(['queue.connections.database.queue' => 'default', 'queue.connections.database.table' => 'other_jobs']);
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('queue.pending', null)
+        ->assertJsonPath('health', 'degraded');
+});
+
+it('shares no cache at all when the deployment cannot be identified', function (): void {
+    // The honest failure is slower vitals, not silently mixed ones: with
+    // no stable identifier the snapshot is not cached, so every poll
+    // reads directly and no two deployments can collide on a key.
+    config([
+        'built-for-cloud.vitals.deployment_id' => null,
+        'built-for-cloud.cloud.application' => null,
+        // Deliberately left at their defaults — `product` defaults to a
+        // shared literal and the environment is shared too, which is
+        // exactly why neither may stand in for an identity.
+    ]);
 
     $reader = vitalsReader();
 
@@ -990,28 +1124,49 @@ it('namespaces the queue snapshot by deployment and by queue configuration', fun
         'reserved_at' => null, 'available_at' => now()->getTimestamp(), 'created_at' => now()->getTimestamp(),
     ]);
 
-    // Same deployment, inside the window: the snapshot stands.
+    // No window to hide behind: the very next poll reads for real.
     $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
         ->assertOk()
-        ->assertJsonPath('queue.pending', 0);
+        ->assertJsonPath('queue.pending', 1);
 
-    // A DIFFERENT deployment sharing this cache must not be served
-    // app-a's backlog. Two deployments behind one Redis with one
-    // CACHE_PREFIX is an ordinary staging arrangement.
-    config(['built-for-cloud.cloud.application' => 'app-b']);
+    // `cloud.application` alone is enough to turn caching back on.
+    config(['built-for-cloud.cloud.application' => 'app-1234']);
 
     $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
         ->assertOk()
         ->assertJsonPath('queue.pending', 1);
 
-    // And changing which queue the app reads must not keep serving the
-    // previous queue's numbers.
-    config(['built-for-cloud.cloud.application' => 'app-a', 'queue.connections.database.table' => 'other_jobs']);
+    DB::table('jobs')->insert([
+        'queue' => 'default', 'payload' => '{}', 'attempts' => 0,
+        'reserved_at' => null, 'available_at' => now()->getTimestamp(), 'created_at' => now()->getTimestamp(),
+    ]);
 
     $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
         ->assertOk()
-        ->assertJsonPath('queue.pending', null)
-        ->assertJsonPath('health', 'degraded');
+        ->assertJsonPath('queue.pending', 1);
+});
+
+it('keeps the oldest-job age moving inside a cache window', function (): void {
+    DB::table('jobs')->insert([
+        'queue' => 'default', 'payload' => '{}', 'attempts' => 0,
+        'reserved_at' => null, 'available_at' => now()->getTimestamp(), 'created_at' => now()->subSeconds(30)->getTimestamp(),
+    ]);
+
+    $reader = vitalsReader();
+
+    expect($this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
+        ->assertOk()
+        ->json('queue.oldest_pending_age_seconds'))->toBeGreaterThanOrEqual(30);
+
+    // Still inside the window, so the COUNTS are the cached ones — but
+    // the age is derived per request from a cached timestamp, and this
+    // is the one number on the payload whose entire meaning is that it
+    // moves. Caching the computed delta froze it.
+    $this->travel(10)->seconds();
+
+    expect($this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
+        ->assertOk()
+        ->json('queue.oldest_pending_age_seconds'))->toBeGreaterThanOrEqual(40);
 });
 
 // ----------------------------------------------------- derived bounds --
