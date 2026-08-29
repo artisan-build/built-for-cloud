@@ -2,18 +2,22 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\Actions\FileConsoleKey;
 use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\BurnMode;
 use ArtisanBuild\BuiltForCloud\Commands\ConsoleReKeyCommand;
 use ArtisanBuild\BuiltForCloud\Console\AssertionRefusalReason;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKey;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyDelivery;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyFiled;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyring;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresBurnMode;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
@@ -25,9 +29,15 @@ use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\MintedTestCredential;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
+use Illuminate\Database\Events\QueryExecuted;
+use Illuminate\Database\QueryException;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use ParagonIE\Paseto\Keys\Version4\AsymmetricSecretKey;
 use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Output\BufferedOutput;
@@ -1312,14 +1322,174 @@ it('never reveals key material back out of any delivery surface (AC11, A7)', fun
         ->and($cliOutput)->not->toContain($cliPublic);
 
     // The shared result object carries no material to leak in the first
-    // place: three scalars and a list of key ids, with no ConsoleKey
-    // model on it whose `public_key` a dump or a log could reach
-    // (rework A7 — an earlier revision held the model and said it did
-    // not).
+    // place: a key id, an instant and a list of key ids, with no
+    // ConsoleKey model on it whose `public_key` a dump or a log could
+    // reach (rework A7 — an earlier revision held the model and said it
+    // did not).
     $properties = array_map(
         static fn (ReflectionProperty $property): string => $property->getName(),
         (new ReflectionClass(ConsoleKeyFiled::class))->getProperties(),
     );
 
     expect($properties)->toBe(['keyId', 'activatedAt', 'activeKeyIds']);
+});
+
+// ------------------- the legacy-admin boundary, decided rather than drifted
+
+it('lets the deployment OWNER re-key with the token its own claim minted (AC14)', function (): void {
+    // This is the case that decides whether legacy admin `api_tokens`
+    // rows should be excluded from `console:key:write`. They should not:
+    // the owner token IS such a row, minted by the current, entirely
+    // undeprecated ownership claim, and its holder is the party a
+    // console key names. Excluding it would lock the deployment owner
+    // out of keying their own deployment.
+    $ownerToken = keyCustodyClaimedDeployment();
+
+    $this->postJson('/bfc/console/re-key', [
+        'key_id' => 'owner-filed',
+        'public_key' => keyCustodyPublicKey(),
+    ], ['Authorization' => 'Bearer '.$ownerToken])->assertCreated();
+
+    expect(ConsoleKey::query()->sole()->key_id)->toBe('owner-filed');
+
+    // And the exclusion would be no boundary anyway: an admin
+    // `api_tokens` row can mint itself an operator credential carrying
+    // the ability, in one request, with no further authority.
+    $minted = $this->postJson('/bfc/credentials', [
+        'subject_type' => 'operator',
+        'subject_ref' => 'self-granted',
+        'abilities' => [OperatorAbility::ConsoleKeyWrite->value],
+    ], ['Authorization' => 'Bearer '.$ownerToken]);
+
+    $minted->assertCreated();
+
+    $this->postJson('/bfc/console/re-key', [
+        'key_id' => 'self-granted',
+        'public_key' => keyCustodyPublicKey(),
+    ], ['Authorization' => 'Bearer '.(string) $minted->json('delivery.secret')])->assertCreated();
+
+    expect(ConsoleKey::query()->count())->toBe(2);
+});
+
+// ------------------------------- Advisory 1 — the lost-race refusal shape
+
+/**
+ * Insert a row carrying `$publicKey` the Nth time a query reads the
+ * console keyring BY MATERIAL — which is how a concurrent delivery looks
+ * from inside this one.
+ *
+ * Reading position 1 is {@see FileConsoleKey}'s own pre-check, so racing
+ * it lands on {@see ConsoleKeyring::add()}'s re-check (an
+ * InvalidArgumentException); position 2 is that re-check, so racing it
+ * lands on the unique index itself (a UniqueConstraintViolationException).
+ * Both are real driver behaviour, not a stubbed keyring — which matters,
+ * because ConsoleKeyring is final and a stub would have been testing a
+ * different class.
+ */
+function keyCustodyRaceAfterMaterialRead(int $afterReads, string $publicKey): void
+{
+    $reads = 0;
+    $raced = false;
+
+    DB::listen(function (QueryExecuted $query) use (&$reads, &$raced, $afterReads, $publicKey): void {
+        if ($raced
+            || ! str_contains($query->sql, 'bfc_console_keys')
+            || ! str_contains($query->sql, 'public_key')
+            || ! str_starts_with(strtolower(ltrim($query->sql)), 'select')) {
+            return;
+        }
+
+        if (++$reads < $afterReads) {
+            return;
+        }
+
+        $raced = true;
+
+        DB::table('bfc_console_keys')->insert([
+            'id' => (string) Str::uuid(),
+            'key_id' => 'winner-'.bin2hex(random_bytes(4)),
+            'public_key' => $publicKey,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    });
+}
+
+/**
+ * Run one delivery through the action and hand back whatever escaped.
+ */
+function keyCustodyAttemptDelivery(string $keyId, string $publicKey): ?Throwable
+{
+    try {
+        DB::transaction(function () use ($keyId, $publicKey): void {
+            app(FileConsoleKey::class)(ConsoleKeyDelivery::fromParts($keyId, $publicKey), null);
+        });
+    } catch (Throwable $escaped) {
+        return $escaped;
+    }
+
+    return null;
+}
+
+it('answers a lost uniqueness race with one clean 409 and never a 500 (Advisory 1)', function (int $afterReads, string $expectedCause): void {
+    keyCustodyClaimedDeployment();
+
+    $public = keyCustodyPublicKey();
+
+    keyCustodyRaceAfterMaterialRead($afterReads, $public);
+
+    $escaped = keyCustodyAttemptDelivery('raced', $public);
+
+    expect($escaped)->toBeInstanceOf(ConsoleKeyRefused::class);
+
+    /** @var ConsoleKeyRefused $escaped */
+    expect($escaped->reason)->toBe(ConsoleKeyRefusal::ConcurrentDelivery)
+        ->and($escaped->reason->status())->toBe(409)
+        ->and($escaped->getMessage())->not->toBe('')
+        // The cause proves the two datasets drove two DIFFERENT branches
+        // rather than both landing on the same one — the ring's own
+        // re-check, and the unique index underneath it.
+        ->and($escaped->getPrevious())->toBeInstanceOf($expectedCause);
+
+    // The losing delivery wrote nothing of its own. (What the RACER
+    // wrote is rolled back with it here: sqlite gives the suite one
+    // connection, so the injected row shares this transaction. That is a
+    // property of the harness, not of the code — the assertion that
+    // matters is that this delivery's key id was never filed.)
+    expect(ConsoleKey::query()->where('key_id', 'raced')->exists())->toBeFalse();
+})->with([
+    // Racing the action's own pre-check lands on the ring's re-check…
+    'losing to the ring re-check' => [1, InvalidArgumentException::class],
+    // …and racing that lands on the unique index itself.
+    'losing to the unique index' => [2, UniqueConstraintViolationException::class],
+]);
+
+it('lets a real database fault travel as a fault, not as a refusal (Advisory 1)', function (): void {
+    keyCustodyClaimedDeployment();
+
+    // The catch is narrow on purpose. A connection drop, a permission
+    // failure or a full disk is NOT "that key id is taken", and
+    // reporting one that way would send an operator hunting a key that
+    // is not there. This provokes a genuine, NON-unique QueryException
+    // by taking the table out from under the insert.
+    $broken = false;
+
+    DB::listen(function (QueryExecuted $query) use (&$broken): void {
+        if ($broken
+            || ! str_contains($query->sql, 'bfc_console_keys')
+            || ! str_contains($query->sql, 'public_key')
+            || ! str_starts_with(strtolower(ltrim($query->sql)), 'select')) {
+            return;
+        }
+
+        $broken = true;
+
+        Schema::drop('bfc_console_keys');
+    });
+
+    $escaped = keyCustodyAttemptDelivery('fault', keyCustodyPublicKey());
+
+    expect($escaped)->toBeInstanceOf(QueryException::class)
+        ->and($escaped)->not->toBeInstanceOf(ConsoleKeyRefused::class)
+        ->and($escaped)->not->toBeInstanceOf(UniqueConstraintViolationException::class);
 });
