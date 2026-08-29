@@ -14,6 +14,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
+use ArtisanBuild\BuiltForCloud\Ownership;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
@@ -21,29 +22,51 @@ use Throwable;
 
 /**
  * The ONE place a delivered countersigning key becomes a trusted one
- * (Console PRD D12). Three transports reach it — the ownership claim,
- * the onboarding exchange, and the re-key verb over HTTP and CLI — and
- * they reach it with the same arguments, which is what makes the two
- * re-key transports produce identical outcomes rather than merely
- * similar ones.
+ * (Console PRD D12). Four transports reach it — the ownership claim, the
+ * onboarding exchange, the re-key route and the CLI verb — and they
+ * reach it with the same arguments, which is what makes their EFFECTS
+ * identical rather than merely similar. Their AUTHORITY is not identical
+ * and is not this class's business: each caller proves its own, above.
  *
- * **Make-before-break, and only the first half of it.** A delivery
- * files a NEW key id and activates it. It retires NOTHING — not the key
- * it replaces, not any other row — so from the moment it commits, both
- * the outgoing and incoming keys verify. Retirement is a separate,
- * later {@see ConsoleKeyring::retire()} call whose safe moment is
- * "after every assertion minted under the old key has expired", which
- * D12 bounds at `assertion_max_ttl_seconds`. This class has no code
- * path that retires, which is the property that makes a re-key against
- * a LIVE deployment safe to run at any moment.
+ * What is at stake, because it governs every rule below: a filed key is
+ * a standing authority to mint delegated-ADMIN entry into this
+ * deployment. Whoever holds the matching private half can enter as an
+ * admin, repeatedly, from anywhere, until the key is retired. Every
+ * write here is therefore a takeover path, and the refusals are gates
+ * rather than input validation.
+ *
+ * The rules, in the order they are checked:
+ *
+ * 1. **The deployment must be claimed.** A key names who may enter as
+ *    admin; a deployment with no owner has not decided who that is. The
+ *    ownership row is LOCKED for the check, and the ownership claim
+ *    satisfies it by establishing the owner earlier in the very same
+ *    transaction.
+ * 2. **The key id must be free.** Rebinding a live `kid` to different
+ *    bytes is key substitution — the one write that would let a
+ *    mis-delivered key inherit an already-trusted name.
+ * 3. **The material must not already be on file**, in ANY lifecycle
+ *    state including retired. Retirement is the only revocation this
+ *    design has, and a retired key whose bytes can be re-filed under a
+ *    fresh `kid` was never really retired.
+ *
+ * **Make-before-break, and only the first half of it.** A delivery files
+ * a NEW key id and activates it. It retires NOTHING — not the key it
+ * replaces, not any other row — so from the moment it commits, both the
+ * outgoing and incoming keys verify. Retirement is a separate, later
+ * {@see ConsoleKeyring::retire()} call whose safe moment is "after every
+ * assertion minted under the old key has expired", which D12 bounds at
+ * `assertion_max_ttl_seconds`. This class has no code path that retires,
+ * which is the property that makes a re-key against a LIVE deployment
+ * safe to run at any moment.
  *
  * **Both halves in one transaction.** Filing and activating are two
- * keyring operations on purpose (receiving material is not trusting
- * it), but a DELIVERY through this action is one atomic act: a caller
- * who is handed a `ConsoleKeyFiled` has a key that verifies, and a
- * caller who is handed a refusal has no row at all. A pending row left
- * behind by a half-applied delivery would be invisible custody — key
- * material on file that nobody knows arrived.
+ * keyring operations on purpose (receiving material is not trusting it),
+ * but a DELIVERY through this action is one atomic act: a caller who is
+ * handed a `ConsoleKeyFiled` has a key that verifies, and a caller who
+ * is handed a refusal has no row at all. A pending row left behind by a
+ * half-applied delivery would be invisible custody — key material on
+ * file that nobody knows arrived.
  *
  * Every call REQUIRES the caller's open transaction, exactly as
  * {@see LifecycleEventRecorder} does and for the same reason: on the
@@ -64,23 +87,35 @@ final readonly class FileConsoleKey
      * MUST be called inside the caller's transaction (the recorder
      * enforces this and throws otherwise).
      *
-     * @throws ConsoleKeyRefused when the `kid` is already on file
+     * @throws ConsoleKeyRefused when the deployment is unclaimed, the `kid` is taken, or the material is already on file
      */
     public function __invoke(ConsoleKeyDelivery $delivery, ?AuditActor $actor): ConsoleKeyFiled
     {
+        $this->requireClaimedDeployment();
+
         if ($this->keyring->find($delivery->keyId) instanceof ConsoleKey) {
             throw ConsoleKeyRefused::because(ConsoleKeyRefusal::KeyIdInUse);
+        }
+
+        if ($this->materialIsOnFile($delivery->publicKey)) {
+            throw ConsoleKeyRefused::because(ConsoleKeyRefusal::MaterialAlreadyFiled);
         }
 
         try {
             $this->keyring->add($delivery->keyId, $delivery->publicKey);
         } catch (InvalidArgumentException|QueryException $refused) {
             // The delivery already validated its `kid` and normalized
-            // its material, so the one refusal the ring has left is a
-            // `kid` filed between the check above and this line by a
-            // concurrent delivery — as the ring's own guard, or as the
-            // column's unique index.
-            throw ConsoleKeyRefused::because(ConsoleKeyRefusal::KeyIdInUse, $refused);
+            // its material, and both uniqueness checks above passed, so
+            // what is left is a concurrent delivery that won one of the
+            // two unique indexes between those checks and this line.
+            // Re-reading says which, and the answer is a refusal either
+            // way — never an integrity violation surfacing as a 500.
+            throw ConsoleKeyRefused::because(
+                $this->materialIsOnFile($delivery->publicKey)
+                    ? ConsoleKeyRefusal::MaterialAlreadyFiled
+                    : ConsoleKeyRefusal::KeyIdInUse,
+                $refused,
+            );
         }
 
         $key = $this->keyring->activate($delivery->keyId);
@@ -108,7 +143,7 @@ final readonly class FileConsoleKey
                 .'; keys now verifying: '.implode(', ', $activeKeyIds),
         );
 
-        return new ConsoleKeyFiled($key, $activeKeyIds);
+        return new ConsoleKeyFiled($key->key_id, $key->activated_at, $activeKeyIds);
     }
 
     /**
@@ -121,12 +156,12 @@ final readonly class FileConsoleKey
      * it and the refusal would go unrecorded.
      *
      * Best-effort, matching the operator gate's denial audit
-     * ({@see EnsureCredentialAdmin}):
-     * a refusal has no state transition to stay transactional with, and
-     * an unreachable audit store must not turn a clean 422 into a 500.
-     * The honest reading of that trade: this event lands whenever the
-     * database is writable, and a deployment whose audit store is down
-     * loses refusal records — the refusal itself never depends on it.
+     * ({@see EnsureCredentialAdmin}): a refusal has no state transition
+     * to stay transactional with, and an unreachable audit store must
+     * not turn a clean 422 into a 500. The honest reading of that trade:
+     * this event lands whenever the database is writable, and a
+     * deployment whose audit store is down loses refusal records — the
+     * refusal itself never depends on it.
      *
      * `$keyId` is written only when it is well-formed. A malformed one
      * is deliberately dropped rather than truncated into the note:
@@ -150,5 +185,52 @@ final readonly class FileConsoleKey
         } catch (Throwable) {
             // See the best-effort note above.
         }
+    }
+
+    /**
+     * Refuse to key a deployment nobody owns (rework A6).
+     *
+     * This was previously asserted in a docblock and enforced by nothing
+     * — the reasoning being that an unclaimed deployment has issued no
+     * operator credential. That reasoning was wrong:
+     * `bfc:install:operator-credential` mints one from the host, before
+     * and independently of any ownership claim, so the retrofit path
+     * could key a deployment with no owner at all.
+     *
+     * The row is LOCKED rather than merely read, so a claim committing
+     * concurrently cannot let this check pass against state the filing
+     * then contradicts.
+     *
+     * @throws ConsoleKeyRefused
+     */
+    private function requireClaimedDeployment(): void
+    {
+        $ownership = Ownership::query()->lockForUpdate()->first();
+
+        if ($ownership === null || $ownership->owner_token_id === null) {
+            throw ConsoleKeyRefused::because(ConsoleKeyRefusal::Unclaimed);
+        }
+    }
+
+    /**
+     * Whether these exact bytes are already filed, in ANY lifecycle
+     * state — retired included, which is the state that matters
+     * (rework B4).
+     *
+     * `$publicKey` is the delivery's normalized storage form, so this
+     * compares like for like: the same key delivered as hex and as
+     * base64url is the same row, not two.
+     *
+     * Marked impure because it genuinely is, and the second call in this
+     * class depends on that: it runs AFTER an insert failed, precisely
+     * to learn whether a concurrent delivery filed this material in
+     * between. A pure reading would let the analyser assume the first
+     * call's `false` still holds and collapse that branch.
+     *
+     * @phpstan-impure
+     */
+    private function materialIsOnFile(string $publicKey): bool
+    {
+        return ConsoleKey::query()->where('public_key', $publicKey)->exists();
     }
 }

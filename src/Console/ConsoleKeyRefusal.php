@@ -7,11 +7,12 @@ namespace ArtisanBuild\BuiltForCloud\Console;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
 
 /**
- * Why a countersigning-key delivery was refused (Console PRD D12). Two
- * reasons, because {@see ConsoleKeyring} enforces exactly two rules on a
- * delivery: the material must be a canonical 32-byte Ed25519 public key
- * under a well-formed `kid`, and a `kid` already on file is never
- * overwritten.
+ * Why a countersigning-key delivery was refused (Console PRD D12).
+ *
+ * The property every one of these defends is the same: **whoever
+ * controls a filed key controls who may enter this deployment as an
+ * admin.** Every path that writes a keyring row is a takeover path, so
+ * each reason below is a gate on that, not a validation nicety.
  *
  * Unlike {@see AssertionRefusalReason} — whose reasons are deliberately
  * invisible to the presenter, because there the presenter may be an
@@ -46,6 +47,42 @@ enum ConsoleKeyRefusal: string
     case KeyIdInUse = 'console_key_id_in_use';
 
     /**
+     * This exact key material is already on the ring under some key id
+     * (rework B4). Refused in EVERY lifecycle state of the existing row
+     * — pending, active, and above all RETIRED.
+     *
+     * Retirement is the only revocation this design has: a console key
+     * has no expiry, there is no revocation list, and nothing can reach
+     * back into assertions already minted. Without this rule a retired
+     * key's material could simply be re-filed under a fresh key id and
+     * would verify again, which would make retirement a suggestion.
+     */
+    case MaterialAlreadyFiled = 'console_key_material_already_filed';
+
+    /**
+     * The claim code presented carries no key-custody authority — it was
+     * never issued with it, or it has already spent it (rework B1).
+     *
+     * One reason covers both on purpose. A code that has spent its
+     * authority no longer has any, so there is nothing to distinguish,
+     * and answering differently would tell a code's holder whether some
+     * OTHER party had already used it.
+     */
+    case NotAuthorized = 'console_key_delivery_not_authorized';
+
+    /**
+     * Nobody owns this deployment yet (rework A6). A countersigning key
+     * names the vendor who may enter as admin, and a deployment with no
+     * owner has not yet decided who that is; filing one first would let
+     * whoever reached the box first install the trust root.
+     *
+     * The ownership claim is the one path exempt from this by
+     * construction: it establishes the owner and files the key in the
+     * same transaction, in that order.
+     */
+    case Unclaimed = 'deployment_not_claimed';
+
+    /**
      * The status the HTTP transports answer with. `409` for the taken
      * `kid` — a conflict with existing state, exactly as the ownership
      * claim answers a second claimant — and `422` for material this
@@ -55,7 +92,10 @@ enum ConsoleKeyRefusal: string
     {
         return match ($this) {
             self::InvalidMaterial => 422,
-            self::KeyIdInUse => 409,
+            self::KeyIdInUse, self::MaterialAlreadyFiled, self::Unclaimed => 409,
+            // Not 401: the caller authenticated fine. What it presented
+            // simply does not carry this authority.
+            self::NotAuthorized => 403,
         };
     }
 
@@ -69,6 +109,9 @@ enum ConsoleKeyRefusal: string
         return match ($this) {
             self::InvalidMaterial => 'A console countersigning key must be a canonical 32-byte Ed25519 public key (hex or unpadded base64url) under a key id of 1-64 characters of [A-Za-z0-9._-].',
             self::KeyIdInUse => 'That console key id is already on file. A key id names exactly one key for the life of this deployment; deliver the replacement under a new key id.',
+            self::MaterialAlreadyFiled => 'That console key is already on file under an existing key id. Key material is filed once per deployment, retired keys included — deliver a freshly generated key instead.',
+            self::NotAuthorized => 'This claim code does not carry console key-custody authority. Ask the operator to issue a code with console_key_authority, which files exactly one key.',
+            self::Unclaimed => 'This deployment has not been claimed, so there is no owner to countersign for. Claim ownership first; the ownership claim can deliver a console key in the same request.',
         };
     }
 }

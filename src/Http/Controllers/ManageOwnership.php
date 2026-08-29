@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\Actions\FileConsoleKey;
 use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyDelivery;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
@@ -49,6 +50,22 @@ final class ManageOwnership
      * would burn a single-use claim code on a deployment that ended up
      * unkeyed, with no way back except re-onboarding, which is the exact
      * outcome the re-key verb exists to avoid.
+     *
+     * **Why this surface needs no separate key-custody authority**, when
+     * the onboarding exchange does (rework B1): presenting a valid
+     * ownership claim code already yields an admin-ability owner token
+     * in this same response. The holder is becoming the deployment's
+     * owner; letting it also name the key that may enter as a delegated
+     * admin escalates nothing it does not already have. The onboarding
+     * exchange is the opposite case — a routine `scope=consume` code
+     * yields no admin at all — which is why authority is explicit there
+     * and implicit here.
+     *
+     * This is also the ONE path exempt from
+     * {@see ConsoleKeyRefusal::Unclaimed},
+     * and it is exempt by construction rather than by an exception:
+     * ownership is established earlier in this very transaction, so by
+     * the time the filing runs, the deployment IS claimed.
      */
     public function claim(Request $request): JsonResponse
     {
