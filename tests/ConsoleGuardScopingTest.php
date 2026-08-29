@@ -30,11 +30,22 @@ uses(RefreshDatabase::class);
  * does it too" is not a safety argument, so the conditions under which
  * it does and does not leak are asserted here rather than described.
  *
- * WHAT CLOSES IT, on the two runtimes this package ships on:
+ * WHAT CLOSES IT, on the two runtimes this package ships on, and they
+ * get there by different mechanisms:
  *
- *  - **PHP-FPM** — a fresh process per request. Nothing to leak into.
- *  - **Octane** — `Laravel\Octane\Listeners\CreateConfigurationSandbox`,
- *    which runs on every `RequestReceived` (it is in
+ *  - **PHP-FPM** — NOT "a fresh process per request", which is a common
+ *    and wrong shorthand: an FPM worker ordinarily serves many requests,
+ *    and `pm.max_requests` exists precisely to bound how many. What
+ *    closes it is PHP's shared-nothing execution model — at request
+ *    shutdown every piece of userland state is destroyed, the container
+ *    and the config repository included, and the next request
+ *    bootstraps the framework again and re-reads `auth.defaults.guard`
+ *    from the application's config. The OS process persists; nothing
+ *    written into PHP memory does.
+ *  - **Octane**, which DOES reuse userland state across requests and so
+ *    needs an explicit mechanism:
+ *    `Laravel\Octane\Listeners\CreateConfigurationSandbox`, which runs
+ *    on every `RequestReceived` (it is in
  *    `Octane::prepareApplicationForNextOperation()`) and does
  *    `$sandbox->instance('config', clone $sandbox['config'])`.
  *    `Illuminate\Config\Repository::$items` is a plain array and `set()`
@@ -49,8 +60,19 @@ uses(RefreshDatabase::class);
  * whose name says it handles this, it runs on the same event, and it does
  * `forgetInstance('auth.driver')`, `setApplication($sandbox)` and
  * `AuthManager::forgetGuards()` — which is literally `$this->guards = [];`.
- * **It never touches config.** The first test below asserts that directly,
- * so nobody re-derives the guarantee from the wrong listener.
+ * **It never touches config.**
+ *
+ * WHAT THESE TESTS DO AND DO NOT DO. **Octane is not a dependency of this
+ * package, and nothing here invokes either listener.** These tests MODEL
+ * the mechanism rather than exercising it: they show that a config
+ * repository reused across requests leaks the setting and that a cloned
+ * one does not, and they show that `AuthManager::forgetGuards()` — the
+ * whole of what the auth listener does to the auth stack — leaves the
+ * setting untouched. So what is pinned is the PROPERTY a runtime must
+ * provide, plus the fact that the auth flush is not it. That
+ * `CreateConfigurationSandbox` is what provides that property on Octane
+ * is a statement about Octane's source, read and cited, not something
+ * asserted here.
  *
  * THE RUNTIME ASSUMPTION, stated plainly because it is the condition
  * under which this becomes a real privilege leak: **any runtime that
@@ -103,11 +125,14 @@ it('leaves auth.defaults.guard pointed at the console guard, and forgetting guar
     // package did — ConsoleActingPrincipalTest scans src/ for that.
     expect(config('auth.defaults.guard'))->toBe(ConsoleGuardConfiguration::GUARD);
 
-    // THE WHOLE POINT OF THIS ASSERTION: this is the entirety of what
-    // Octane's FlushAuthenticationState does to the auth stack —
-    // AuthManager::forgetGuards() is `$this->guards = [];`. The config
-    // value survives it untouched. An auditor who checks that listener
-    // and concludes the leak is closed has checked the wrong one.
+    // THE WHOLE POINT OF THIS ASSERTION: forgetGuards() is the entirety
+    // of what Octane's FlushAuthenticationState does to the auth stack,
+    // and it is literally `$this->guards = [];`. The config value
+    // survives it untouched. This does not invoke that listener —
+    // Octane is not a dependency here — it pins the behaviour of the one
+    // call the listener makes, which is enough to show that an auditor
+    // who checks that listener and concludes the leak is closed has
+    // checked the wrong one.
     Auth::forgetGuards();
 
     expect(config('auth.defaults.guard'))->toBe(ConsoleGuardConfiguration::GUARD);
@@ -140,7 +165,7 @@ it('would resolve a non-console route through the delegated guard on a runtime t
 
 // ─── The config sandbox is what closes it ───────────────────────────────────
 
-it('does not leak into the next request when the config repository is cloned per request, as Octane clones it', function (): void {
+it('does not leak into the next request when the config repository is cloned per request, the way Octane clones it', function (): void {
     $user = scopingUser();
     $actor = consoleActor();
 
@@ -149,11 +174,12 @@ it('does not leak into the next request when the config repository is cloned per
 
     expect($pristine->get('auth.defaults.guard'))->toBe('web');
 
-    // Request A, inside a config sandbox — the same operation
-    // Laravel\Octane\Listeners\CreateConfigurationSandbox performs on
-    // every RequestReceived: the repository the request will mutate is a
-    // CLONE, and Repository::$items is a plain array, so the write
-    // cannot reach the original.
+    // Request A, inside a config sandbox. This performs the same
+    // operation Laravel\Octane\Listeners\CreateConfigurationSandbox
+    // performs on every RequestReceived — it does not invoke it, Octane
+    // being no dependency of this package — so the repository the
+    // request will mutate is a CLONE, and Repository::$items is a plain
+    // array, so the write cannot reach the original.
     app()->instance('config', clone $pristine);
 
     $this->withSession(consoleSessionState($actor));

@@ -36,6 +36,25 @@ use Illuminate\Contracts\Session\Session;
  *
  * Reads are ATOMIC and FAIL CLOSED: {@see claims()} returns a complete
  * {@see DelegatedClaims} or null, never a half-populated one.
+ *
+ * THIS CLASS ONLY READS. It used to carry a public static `begin()` that
+ * wrote all four keys from an {@see Assertion} — which meant the package
+ * handed out a public way to assemble a delegated session's claims from
+ * an assertion nothing had verified, next door to a `redeem()` built
+ * precisely so that could not happen. The write now lives inside
+ * {@see ConsoleGuard::redeem()}, private, after verification and inside
+ * the transaction holding the actor's row lock. The keys stay here
+ * because the CONTRACT is one thing, and PR4/PR5/PR7 read it.
+ *
+ * THE BOUNDARY, stated so the guarantee is not read as more than it is:
+ * anything that can write the session store can write these four keys
+ * and the guard's own login key, and a session assembled that way is
+ * indistinguishable from a redeemed one. That is irreducible — it is
+ * what this package's own tests do to reach states a real redemption
+ * cannot produce (a capped clock, a broken marker) — and it is not a
+ * hole in §4.3, which is about credentials and login paths. The claim
+ * that IS made and held: no package API assembles a delegated session
+ * without verified assertion bytes.
  */
 final class ConsoleSession
 {
@@ -52,22 +71,6 @@ final class ConsoleSession
 
     /** This session's agency (D4), or absent for a direct operator. */
     public const string ON_BEHALF_OF = 'bfc_console.on_behalf_of';
-
-    /**
-     * Write everything one redemption puts in the session. Called by
-     * {@see ConsoleGuard::redeem()}, which is the one operation that can
-     * create a delegated session at all — the pieces are written
-     * together, inside the transaction that holds the actor's row lock,
-     * so a session can never carry an age without claims or claims
-     * without an age.
-     */
-    public static function begin(Session $session, Assertion $assertion): void
-    {
-        $session->put(self::ASSERTION_ISSUED_AT, $assertion->issuedAt->getTimestamp());
-        $session->put(self::DISPLAY_NAME, $assertion->displayName);
-        $session->put(self::ROLE, $assertion->role->value);
-        $session->put(self::ON_BEHALF_OF, $assertion->onBehalfOf);
-    }
 
     /**
      * This session's claims, or null when ANY of them is missing or

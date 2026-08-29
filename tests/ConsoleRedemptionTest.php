@@ -4,17 +4,21 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuard;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
-use ArtisanBuild\BuiltForCloud\Console\ConsoleHandoff;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleRole;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleSession;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Exceptions\AssertionRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\DelegatedActorDeactivated;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RecordingExceptionHandler;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ThrowingSessionHandler;
 use Illuminate\Auth\Events\Authenticated;
 use Illuminate\Auth\Events\Login;
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Session\Session;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Session\Store;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
@@ -27,10 +31,10 @@ beforeEach(function (): void {
 });
 
 /**
- * REDEMPTION — the one way a verified assertion becomes a delegated
- * session, and the four things that have to happen together for it to be
- * safe. {@see ConsoleHandoff} carries
- * the reasoning; these drive it.
+ * REDEMPTION — the one operation that turns signed assertion bytes into
+ * a delegated session, and the things that have to happen together for
+ * it to be safe. {@see ConsoleGuard::redeem()} carries the reasoning;
+ * these drive it.
  */
 
 // ─── There is exactly ONE way in ────────────────────────────────────────────
@@ -295,4 +299,158 @@ it('does not touch a co-resident session when the refusal happens before any ses
 
     expect(session()->get('unrelated_state'))->toBe('still-here')
         ->and(session()->has(consoleGuardSessionKey()))->toBeFalse();
+});
+
+// ─── The compensation must never become the failure the caller sees ─────────
+
+it('surfaces the original failure, not the compensation failure, when the session store is unreachable', function (): void {
+    // The scenario: a host listener rejects the entry AND the session
+    // store is down, so the compensation that would destroy the session
+    // throws as well. An uncaught throw there would REPLACE the original
+    // — the caller would be told the session store is unreachable when
+    // what actually happened is that their audit backend refused the
+    // entry — and the wrong cause is the one that gets investigated.
+    ThrowingSessionHandler::reset();
+    RecordingExceptionHandler::reset();
+
+    app()->instance(ExceptionHandler::class, new RecordingExceptionHandler);
+
+    // A session store whose destroy() can be armed to fail, captured by
+    // the guard when it is rebuilt below.
+    app()->instance('session.store', new Store('bfc-compensation-test', new ThrowingSessionHandler));
+    Auth::forgetGuards();
+
+    // The store fails only from inside the Login listener onward, so the
+    // redemption's own session write and regeneration succeed and the
+    // ONLY thing left to fail is the compensation.
+    Event::listen(Login::class, function (): void {
+        ThrowingSessionHandler::$failOnDestroy = true;
+
+        throw new RuntimeException('the audit backend is unavailable');
+    });
+
+    expect(fn (): DelegatedActor => consoleRedeem())
+        ->toThrow(RuntimeException::class, 'audit backend');
+
+    // ...and the compensation failure was not silently dropped either:
+    // it went to the application's exception handler.
+    expect(RecordingExceptionHandler::$reported)->toHaveCount(1)
+        ->and(RecordingExceptionHandler::$reported[0]->getMessage())->toBe('the session store is unreachable');
+
+    // What still holds when that path is taken: Session::invalidate() is
+    // flush() — in memory, cannot fail — followed by the migrate() whose
+    // handler I/O did fail, so the delegated identity is gone from the
+    // session even though the store could not be told.
+    expect(app(Session::class)->all())->toBe([]);
+
+    ThrowingSessionHandler::reset();
+});
+
+it('reports nothing and swallows nothing when the compensation succeeds', function (): void {
+    // The ordinary failure, so "reported once" above cannot pass for the
+    // wrong reason — a compensation that always reported would look
+    // identical on that assertion alone.
+    RecordingExceptionHandler::reset();
+
+    app()->instance(ExceptionHandler::class, new RecordingExceptionHandler);
+
+    Event::listen(Login::class, function (): void {
+        throw new RuntimeException('the audit backend is unavailable');
+    });
+
+    expect(fn (): DelegatedActor => consoleRedeem())
+        ->toThrow(RuntimeException::class, 'audit backend');
+
+    expect(RecordingExceptionHandler::$reported)->toBe([])
+        ->and(session()->has(consoleGuardSessionKey()))->toBeFalse();
+});
+
+// ─── The session-building seams ─────────────────────────────────────────────
+
+it('offers no public way to write a delegated session\'s claims', function (): void {
+    // ConsoleSession used to carry a public static begin(Assertion),
+    // which meant the package handed out a way to assemble a delegated
+    // session's claims from an assertion nothing had verified — next
+    // door to a redeem() built precisely so that could not happen. The
+    // write now lives inside the guard, private, behind verification.
+    expect(method_exists(ConsoleSession::class, 'begin'))->toBeFalse();
+
+    $writers = array_filter(
+        get_class_methods(ConsoleSession::class),
+        static fn (string $method): bool => ! in_array($method, ['claims', 'hasState', 'keys'], true),
+    );
+
+    expect($writers)->toBe([]);
+});
+
+it('does not authenticate a principal handed to setUser, even alongside hand-written claims', function (): void {
+    // THE ORDERING THIS PINS. setUser() is public because the Guard
+    // contract requires it, and SessionGuard::user() returns whatever it
+    // was given WITHOUT consulting the session. So a caller that set a
+    // delegated actor and then wrote the four claim keys would, without
+    // the guard's session cross-check, have an authenticated delegated
+    // admin for the request — with no signature anywhere.
+    $actor = consoleActor(role: ConsoleRole::Admin);
+
+    $guard = consoleGuard();
+
+    // Everything a redemption writes EXCEPT the guard's own login key,
+    // which is the one thing only a real login produces.
+    session()->put(ConsoleSession::ASSERTION_ISSUED_AT, now()->getTimestamp());
+    session()->put(ConsoleSession::DISPLAY_NAME, 'Jane Forged');
+    session()->put(ConsoleSession::ROLE, ConsoleRole::Admin->value);
+    session()->put(ConsoleSession::ON_BEHALF_OF, null);
+
+    $guard->setUser($actor);
+
+    expect($guard->actor())->toBeNull()
+        ->and($guard->check())->toBeFalse()
+        ->and($guard->id())->toBeNull();
+
+    // THE POSITIVE CONTROL, in the same test, so the refusal above
+    // cannot pass because the claims or the clock were wrong: add the
+    // one thing only a login writes — the guard's own session key — and
+    // the very same principal resolves. The cross-check is what said no.
+    //
+    // It also pins the RESIDUE exactly. Anything that can write the
+    // session store can write these five keys, and the result is
+    // indistinguishable from a redeemed session. That is irreducible —
+    // it is what this suite's own consoleSessionState() does to reach
+    // states a real redemption cannot produce — and it is not a
+    // credential or login path, which is what §4.3 is about. The claim
+    // held is narrower and exact: no package API assembles a delegated
+    // session without verified assertion bytes.
+    // (The refusal above also destroyed the session, which is why the
+    // control re-seeds all five keys rather than adding one to what is
+    // left.)
+    foreach (consoleSessionState($actor) as $key => $value) {
+        session()->put($key, $value);
+    }
+
+    Auth::forgetGuards();
+
+    expect(consoleGuard()->actor()?->getKey())->toBe($actor->getKey());
+});
+
+it('refuses a principal whose identifier is not the one this session names', function (): void {
+    // The same cross-check from the other side: a live, valid session
+    // for actor A, with actor B handed to setUser. B must not act.
+    $first = consoleActor(subject: 'operator_a', displayName: 'Operator A');
+    $second = consoleActor(subject: 'operator_b', displayName: 'Operator B');
+
+    $guard = consoleGuard();
+
+    foreach (consoleSessionState($first) as $key => $value) {
+        session()->put($key, $value);
+    }
+
+    expect($guard->actor()?->getKey())->toBe($first->getKey());
+
+    // Same request, same guard: something hands it a DIFFERENT actor.
+    // The session still names A, so B does not act — and neither does A,
+    // because the session is invalidated on the refusal.
+    $guard->setUser($second);
+
+    expect($guard->actor())->toBeNull()
+        ->and($guard->check())->toBeFalse();
 });

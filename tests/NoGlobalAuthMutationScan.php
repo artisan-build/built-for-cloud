@@ -45,6 +45,18 @@ use SplFileInfo;
  * READS ARE NOT OFFENCES. `config('auth.defaults.guard')` is exactly what
  * {@see ActingPrincipalResolver} must do — that key IS the route's
  * applicable guard — so only the WRITE forms are matched.
+ *
+ * WHAT IT DOES NOT COVER, stated so the green result is not read as more
+ * than it is. **This is a NEEDLE SCAN over comment-stripped source, not
+ * a proof that `src/` cannot reach the setting.** It matches literal
+ * method names and two literal config-write spellings, so it would miss
+ * an indirect call — `$auth->{'should'.'Use'}()`, a method name held in
+ * a variable, `call_user_func([$auth, $method])` — and a config write
+ * spelled some third way, `Arr::set($config, 'auth.'.$suffix, …)` among
+ * them. It catches the way anyone would actually write it, which is what
+ * an anti-drift check is for: it exists to fail on the ordinary
+ * accidental reintroduction, not to defeat someone deliberately hiding
+ * one. Nothing else in this package's guarantees rests on it.
  */
 final class NoGlobalAuthMutationScan
 {

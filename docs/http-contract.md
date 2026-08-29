@@ -1894,14 +1894,27 @@ one.
   to every credential-shaped question for every input. "No password, no login path" is a
   property of the types, not a set of methods that refuse.
   The one public seam the `Guard` contract forces is `setUser()`, which Laravel's `actingAs()`
-  uses: it sets an in-memory principal for the current request and writes **nothing** to the
-  session, so a principal set that way still has to survive the guard's own claim and clock
-  checks and cannot mint a delegated session.
+  uses. It sets an in-memory principal for the current request and writes **nothing** to the
+  session, and the guard additionally requires that the session itself names the principal —
+  `SessionGuard::user()` returns whatever `setUser()` was given without consulting the session,
+  so without that cross-check a caller could combine `setUser()` with hand-written claims and
+  act as a delegated admin with no signature anywhere. Nothing else in the package writes
+  delegated session state: the write lives inside the verifying operation, privately.
+
+  **The residue, named rather than glossed.** Any code that can write the session store can
+  write the four claim keys and the guard's own login key, and the result is indistinguishable
+  from a redeemed session. That is irreducible — it is what this package's own test suite does
+  to reach states a real redemption cannot produce — and it is not a credential or a login
+  path, which is what §4.3 governs. The guarantee that is made and held is narrower and exact:
+  **no package API assembles a delegated session without verified assertion bytes.**
+
   **A failed redemption leaves no session.** Laravel writes and regenerates the session before
   it dispatches its `Login` event, so a host application's listener that throws would otherwise
   leave a session already carrying the delegated identifier while the redemption reported
   failure; the operation compensates — the session is destroyed on every throwable — before the
-  failure propagates.
+  failure propagates. If the compensation *itself* fails (the session store is unreachable), the
+  **original** failure is still what surfaces, and the compensation failure is reported to the
+  application's exception handler rather than replacing it or being dropped.
   **Remember-me:** this guard never queues a recaller cookie. Laravel still *checks* for one
   when a session carries no identifier, so that branch is reachable; it is fail-closed because
   the delegated-actor provider's `retrieveByToken()` returns null for every input, so no
@@ -1933,12 +1946,21 @@ one.
   every Laravel application. This package makes no such write itself (it never calls
   `shouldUse()` and never sets that key), but the write happens, and it is process-global for
   the life of the config repository. It does not leak between requests on either runtime this
-  package supports: **PHP-FPM** starts a fresh process per request, and **Octane** replaces the
-  config repository with a per-request clone via
-  `Laravel\Octane\Listeners\CreateConfigurationSandbox`, which runs on every
-  `RequestReceived`. Note explicitly that Octane's `FlushAuthenticationState` is **not** what
-  closes this — it forgets the resolved guards and the `auth.driver` instance and never touches
-  config — so do not re-derive the guarantee from that listener.
+  package supports, though they get there differently:
+
+  - **PHP-FPM** — *not* because each request gets a fresh process; an FPM worker ordinarily
+    serves many requests, which is what `pm.max_requests` bounds. It is PHP's shared-nothing
+    execution model: at request shutdown all userland state is destroyed — container and config
+    repository included — and the next request re-reads `auth.defaults.guard` from the
+    application's config. The OS process persists; nothing written into PHP memory does.
+  - **Octane**, which *does* reuse userland state and therefore needs an explicit mechanism: it
+    installs a per-request clone of the config repository via
+    `Laravel\Octane\Listeners\CreateConfigurationSandbox`, which runs on every
+    `RequestReceived`.
+
+  Note explicitly that Octane's `FlushAuthenticationState` is **not** what closes this — it
+  forgets the resolved guards and the `auth.driver` instance and never touches config — so do
+  not re-derive the guarantee from that listener.
 
   **The runtime assumption:** any runtime that reuses a container across requests **without
   sandboxing the config repository** leaves the default guard pointed at `bfc-console` for

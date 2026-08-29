@@ -13,6 +13,7 @@ use Illuminate\Auth\SessionGuard;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Contracts\Auth\Guard;
 use Illuminate\Contracts\Auth\StatefulGuard;
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Session\Session;
 use Illuminate\Support\Facades\DB;
 use SensitiveParameter;
@@ -68,15 +69,26 @@ use Throwable;
  * `setDefaultDriver()`, which writes `config('auth.defaults.guard')` —
  * exactly as `auth:web` and `auth:api` do in every Laravel application.
  * The write is real and it is process-global for the life of the config
- * repository. What makes it safe is the RUNTIME, not this class:
- * PHP-FPM starts a fresh process per request, and Octane replaces the
- * config repository with a per-request clone
- * (`Laravel\Octane\Listeners\CreateConfigurationSandbox`, on every
- * `RequestReceived`), so the write lands on a clone the next request
- * never sees. Note that Octane's `FlushAuthenticationState` does NOT
- * close it — it forgets guards and the `auth.driver` instance and never
- * touches config — so the guarantee must not be re-derived from that
- * listener.
+ * repository. What makes it safe is the RUNTIME, not this class, and the
+ * two runtimes get there differently:
+ *
+ *  - **PHP-FPM.** NOT because each request gets a fresh process — an FPM
+ *    worker ordinarily serves many requests, which is exactly what
+ *    `pm.max_requests` bounds. It is PHP's shared-nothing execution
+ *    model: at request shutdown all userland state is destroyed — the
+ *    container, the config repository and this guard included — and the
+ *    next request bootstraps the framework again, re-reading
+ *    `auth.defaults.guard` from the application's config. The OS process
+ *    persists; nothing written into PHP memory does.
+ *  - **Octane**, which DOES reuse userland state across requests and so
+ *    needs an explicit mechanism: it installs a per-request clone of the
+ *    config repository
+ *    (`Laravel\Octane\Listeners\CreateConfigurationSandbox`, on every
+ *    `RequestReceived`), so the write lands on a clone the next request
+ *    never sees. Note that Octane's `FlushAuthenticationState` does NOT
+ *    close it — it forgets guards and the `auth.driver` instance and
+ *    never touches config — so the guarantee must not be re-derived from
+ *    that listener.
  *
  * THE ASSUMPTION THIS DEPENDS ON: any runtime that reuses a container
  * across requests WITHOUT sandboxing config leaves the default guard
@@ -244,11 +256,12 @@ final class ConsoleGuard implements Guard
         $user = self::asDelegatedActor($principal);
         $claims = ConsoleSession::claims($this->session);
 
-        if ($user === null || ! $user->isActive() || ! $claims instanceof DelegatedClaims) {
+        if ($user === null || ! $user->isActive() || ! $claims instanceof DelegatedClaims || ! $this->sessionNames($user)) {
             // Either the session carries a principal this guard's own
             // provider could not have produced (a swapped provider, a
             // hand-built session), or the actor is contained, or the
-            // session's claims cannot be read. All three are refusals:
+            // session's claims cannot be read, or THIS SESSION is not
+            // the one that names this principal. All four are refusals:
             // a delegated session whose role cannot be established has
             // no role, and is never waved through with a default one.
             $this->refuse(ConsoleReentryReason::SessionInvalidated);
@@ -274,6 +287,29 @@ final class ConsoleGuard implements Guard
     private static function asDelegatedActor(Authenticatable $principal): ?DelegatedActor
     {
         return $principal instanceof DelegatedActor ? $principal : null;
+    }
+
+    /**
+     * Whether the SESSION is the thing that named this principal.
+     *
+     * `SessionGuard::user()` returns an in-memory principal set by
+     * {@see setUser()} WITHOUT consulting the session at all, and
+     * `setUser()` is public because the {@see Guard} contract requires
+     * it. So without this check, `setUser($actor)` combined with four
+     * hand-written claim keys would produce an authenticated delegated
+     * session for the request — a principal that was never rehydrated
+     * from a delegated session acting as one. Requiring the session to
+     * carry the guard's own login key, matching this principal exactly,
+     * is what closes that ordering.
+     *
+     * A real redemption satisfies it for free: `SessionGuard::login()`
+     * writes that key before anything reads it.
+     */
+    private function sessionNames(DelegatedActor $actor): bool
+    {
+        $identifier = $this->session->get($this->inner->getName());
+
+        return is_string($identifier) && hash_equals($identifier, $actor->getAuthIdentifier());
     }
 
     /**
@@ -382,7 +418,7 @@ final class ConsoleGuard implements Guard
 
                 $begun = true;
 
-                ConsoleSession::begin($this->session, $assertion);
+                $this->beginSession($assertion);
 
                 $this->forget();
                 $this->inner->login($locked, false);
@@ -410,11 +446,34 @@ final class ConsoleGuard implements Guard
             // undone by the rollback, and so that a failure at COMMIT is
             // compensated too.
             if ($begun) {
-                $this->destroySession();
+                $this->compensate();
             }
 
             throw $failure;
         }
+    }
+
+    /**
+     * Write everything one redemption puts in the session — the
+     * assertion's issued-at, which is what makes D7's cap an
+     * ASSERTION-age cap, and THIS handoff's claims, which is what makes
+     * D8's per-mint roles per-session.
+     *
+     * PRIVATE, and that is the point. It used to be a public static on
+     * {@see ConsoleSession} taking an {@see Assertion} — a public way to
+     * assemble a delegated session's claims from an assertion nothing
+     * had verified, sitting next to a `redeem()` built so that could not
+     * happen. Here it is reachable only from {@see redeem()}, which has
+     * already verified the signature and is holding the actor's row
+     * lock. The four pieces are written together, so a session can never
+     * carry an age without claims or claims without an age.
+     */
+    private function beginSession(Assertion $assertion): void
+    {
+        $this->session->put(ConsoleSession::ASSERTION_ISSUED_AT, $assertion->issuedAt->getTimestamp());
+        $this->session->put(ConsoleSession::DISPLAY_NAME, $assertion->displayName);
+        $this->session->put(ConsoleSession::ROLE, $assertion->role->value);
+        $this->session->put(ConsoleSession::ON_BEHALF_OF, $assertion->onBehalfOf);
     }
 
     public function check(): bool
@@ -537,6 +596,67 @@ final class ConsoleGuard implements Guard
      * guard's sticky `loggedOut` flag; {@see logout()} says why that
      * matters, and it matters identically here.
      */
+    /**
+     * Destroy the session a failed redemption had already begun, and
+     * NEVER become the failure the caller sees.
+     *
+     * The hazard this exists for is narrow and real: if the session
+     * store is unreachable, {@see destroySession()} throws — and an
+     * uncaught throw here would REPLACE the original failure, so the
+     * caller would be told the session store is down when what actually
+     * happened was, say, that their `Login` listener rejected the
+     * entry. Compensation that can hide the thing it is compensating
+     * for is worse than none, because the wrong cause is the one that
+     * gets investigated.
+     *
+     * So the compensation failure is caught, reported through the
+     * application's exception handler when one is bound — visible, but
+     * never thrown — and the ORIGINAL propagates untouched.
+     *
+     * WHAT IS STILL TRUE WHEN THIS PATH IS TAKEN, and it is not nothing:
+     * {@see destroySession()} does three things in order, and only the
+     * last can fail. `forget()` and the inner guard's `forgetUser()` are
+     * pure memory. `Session::invalidate()` is `flush()` — which empties
+     * the session's attributes in memory and cannot fail — followed by
+     * `migrate(true)`, whose `handler->destroy()` is the I/O that can.
+     * So even a throwing compensation has already cleared the in-memory
+     * principal and emptied the session, and anything later written back
+     * writes an empty session.
+     *
+     * WHAT IS NOT GUARANTEED, stated plainly: the session ID is not
+     * regenerated and the old record is not destroyed in the store,
+     * because the store is what failed. Nothing inside a guard can fix
+     * that.
+     */
+    private function compensate(): void
+    {
+        try {
+            $this->destroySession();
+        } catch (Throwable $compensationFailure) {
+            $this->reportQuietly($compensationFailure);
+        }
+    }
+
+    /**
+     * Hand a swallowed failure to the application's exception handler so
+     * it is not silent, without letting the report itself throw. A
+     * package cannot assume a handler is bound — an artisan-only or
+     * headless container may have none — so the binding is checked
+     * rather than resolved blind.
+     */
+    private function reportQuietly(Throwable $failure): void
+    {
+        try {
+            if (app()->bound(ExceptionHandler::class)) {
+                app(ExceptionHandler::class)->report($failure);
+            }
+        } catch (Throwable) {
+            // Reporting is best-effort by construction: there is nowhere
+            // left to escalate to, and the original failure is already
+            // on its way to the caller.
+        }
+    }
+
     private function destroySession(): void
     {
         $this->forget();

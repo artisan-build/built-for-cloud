@@ -277,8 +277,9 @@ it('resolves a subsequent non-console request normally after a delegated one', f
 
     // The framework's own `auth:bfc-console` set the default guard for
     // the request it ran in, exactly as `auth:api` would on any Laravel
-    // app. A real deployment gets a fresh process (PHP-FPM) or a fresh
-    // config clone (Octane) for the next request, so that boundary is
+    // app. A real deployment rebuilds all userland state at request
+    // shutdown (PHP-FPM — the worker persists, the PHP state does not)
+    // or installs a fresh config clone (Octane), so that boundary is
     // simulated here. The MECHANISM is not simulated away in
     // tests/ConsoleGuardScopingTest.php, which asserts both that the
     // leak is real without a config sandbox and that the clone is what

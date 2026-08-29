@@ -124,8 +124,13 @@ this release it has two.
   `shouldUse()` → `setDefaultDriver()` → a write to
   `config('auth.defaults.guard')`. The write is real and process-global
   for the life of the config repository. It does not survive the request
-  on either supported runtime: **PHP-FPM** is process-per-request, and
-  **Octane** installs a per-request clone of the config repository
+  on either supported runtime, by two different mechanisms. **PHP-FPM**
+  is not process-per-request — a worker serves many, bounded by
+  `pm.max_requests` — but PHP tears down all userland state at request
+  shutdown, so the container and the config repository are rebuilt and
+  `auth.defaults.guard` is re-read from config every time. **Octane**
+  does reuse userland state, and installs a per-request clone of the
+  config repository instead
   (`Laravel\Octane\Listeners\CreateConfigurationSandbox`, on every
   `RequestReceived`). Octane's `FlushAuthenticationState` is NOT what
   closes it — it only forgets resolved guards — so do not check that
@@ -204,6 +209,18 @@ checked. It compensates on failure: if anything throws after the session
 write begins — a host application's `Login` listener, most plausibly —
 the session is destroyed before the failure propagates, because Laravel
 writes and regenerates the session *before* it dispatches that event.
+If the compensation itself fails (an unreachable session store), the
+ORIGINAL failure is still what the caller sees; the compensation failure
+goes to the application's exception handler rather than replacing it.
+
+The residue, stated rather than glossed: code that can write the session
+store directly can assemble a delegated session, because that is what
+writing those keys means. That is not a credential or a login path. The
+claim held is narrower and exact — **no package API assembles a
+delegated session without verified assertion bytes** — and the guard
+additionally requires the session to name the principal, so the public
+`setUser()` seam the `Guard` contract forces cannot be combined with
+hand-written claims to act as a delegated admin.
 `ConsoleGuard::logout()` ends a session without calling the framework's
 `SessionGuard::logout()`, deliberately: that method sets a sticky
 `loggedOut` flag on a guard the auth manager caches for the life of the
