@@ -78,7 +78,8 @@ Additive unless marked otherwise:
   an application-declared self-service policy and never from the requesting user, and whose
   mutations are CSRF-protected browser routes. Additive: no existing route, request or response
   shape changes.
-- `GET /bfc/meta` `capabilities` gained `credentials`.
+- `GET /bfc/meta` `capabilities` gained `credentials`, and — with the console key surfaces
+  below — `console-keys`.
 - `POST /bfc/onboarding/issue` requires `ttl_seconds` (bounds below) and accepts nullable
   `email`; the claim surfaces speak the claim-contract error enum documented here.
 - New route `POST /bfc/invitations` — the machine-callable invite verb (PRD 1.13, SEC-V3-05):
@@ -123,6 +124,20 @@ Additive unless marked otherwise:
   MCP pair. Operator writes are rate-limited (`bfc-operator-write`); operator sensitive
   reads, denials, and token-auth failures are audited (`sensitive_read` / `denied_action`
   lifecycle events, ids only).
+
+- **Console countersigning-key custody ships (Console PRD D12).** All additive; both of the
+  previous release's RESERVED extension slots are now implemented, and `api_version` stays 2
+  because a new route and new optional fields are exactly the additive case rule 1 names.
+  `POST /bfc/ownership/claim` and `POST /bfc/onboarding/exchange` accept an optional
+  `console_key` object and answer with one when they were given one — an envelope carrying no
+  `console_key` is unchanged, response keys included. New route `POST /bfc/console/re-key`
+  (`credential:rotate` family, operator write limits) files and activates a key on an
+  already-claimed deployment without re-onboarding, with `bfc:console:re-key --local` as its
+  CLI transport. Filing is make-before-break: it activates the new key and retires nothing, so
+  both keys verify during the overlap; retirement stays a separate, later operation with no
+  HTTP verb in this release. The lifecycle stream's `delivered` / `activated` / `denied_action`
+  events now also carry console-key events (`credential_id` null, the key id in the note). No
+  private key material is accepted, returned or stored on any surface.
 
 **api_version 1** — the 0.3.x baseline: `/bfc/meta`, `/bfc/ownership/*`, the pre-0.4 credential
 API listing shape.
@@ -202,6 +217,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `GET /bfc/me/credentials` | `content` | the caller's own summary rows carry free-text names and subject refs, plus the declaration's field lists |
 | `POST /bfc/me/credentials` | `content` | the `delivery` single reveal, plus free-text name/subject fields |
 | `DELETE /bfc/me/credentials/{id}` | `metadata` | empty `204` body |
+| `POST /bfc/console/re-key` | `metadata` | key ids from a bounded charset, a fixed status enum and a timestamp — no free text, and never any key material |
 | `POST /bfc/subjects/offboard` | `metadata` | `{"offboarded": true, "fully_contained": bool}` / `{"accepted": true, "fully_contained": bool}` — bounded booleans only |
 
 Vendor-side reads of `metadata`-classified endpoints will be governed by the reserved
@@ -227,13 +243,19 @@ Public (`bfc-public` throttle). Identifies the instance.
   "product": "Sink",
   "bfc_version": "0.4.0",
   "api_version": 2,
-  "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials"],
+  "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials", "console-keys"],
   "claimed": true
 }
 ```
 
 `capabilities` is an open set — ignore unknown entries. `claimed` says whether an owner control
 plane holds this instance.
+
+`console-keys` means this instance serves the countersigning-key surfaces below: the optional
+claim-time key exchange and `POST /bfc/console/re-key`. It deliberately does **not** say
+`console` — key custody is not the Console. There is no delegated guard, no enter endpoint and
+no delegated-actor table in this release, and a control plane that read `console` as "this
+deployment can be entered" would be reading a promise nothing here keeps.
 
 ---
 
@@ -248,14 +270,27 @@ token: its plaintext is dropped, never logged (the D7 fix — a logged claim tok
 admin-yielding secret in the application log), so an unclaimed environment re-mints with the
 command.
 
-**Request** — `{"token": "<claim token>", "notify_callback": "https://..." | null}`
-(`notify_callback` optional: where ownership webhooks are delivered.)
+**Request** — `{"token": "<claim token>", "notify_callback": "https://..." | null,
+"console_key": {"key_id": "...", "public_key": "..."} | null}`
+(`notify_callback` optional: where ownership webhooks are delivered. `console_key` optional:
+the claim-time countersigning-key exchange — see
+[Console key custody](#console-key-custody).)
 
 - **201** — `{"owner_token": "...", "webhook_secret": "...", "product": "..."}` — the single
   reveal of both secrets. The owner token is an admin-ability `api_tokens` row with no expiry;
-  ownership transfer, not a clock, ends its life.
+  ownership transfer, not a clock, ends its life. A claim that carried `console_key`
+  additionally answers with the `console_key` object documented below; a claim that did not
+  carries no such field (absent, never null).
 - **401** — the claim token is unknown, expired, or already consumed.
 - **409** — `{"message": "already claimed"}` — a live owner exists and no transfer is pending.
+  Also `{"message": "..."}` when a delivered `console_key` names a key id already on file.
+- **422** — `{"message": "..."}` — the delivered `console_key` is not a canonical 32-byte
+  Ed25519 public key under a well-formed key id.
+
+**A refused key refuses the whole claim.** The key is filed inside the claim's own transaction,
+so a `409`/`422` above means no owner token was minted, no keyring row was created, and the
+claim code is **still unconsumed and presentable**. Claiming anyway and reporting the key
+failure separately would spend a single-use code on a deployment that ended up unkeyed.
 
 ### POST /bfc/ownership/release
 
@@ -348,10 +383,26 @@ shapes every failure on this surface). The onboarding exchange keeps its documen
 
 Public (`bfc-claim` throttle). Exchange a claim code for a durable credential.
 
-**Request** — `{"token": "<claim code>", "version": 1}` (`version` optional, default 1).
+**Request** — `{"token": "<claim code>", "version": 1,
+"console_key": {"key_id": "...", "public_key": "..."} | null}` (`version` optional, default 1;
+`console_key` optional — the claim-time countersigning-key exchange, see
+[Console key custody](#console-key-custody)).
 
 - **201** — `{"durable_token": "...", "name": "..."}` — the single reveal of the durable secret.
+  An exchange that carried `console_key` additionally answers with the `console_key` object
+  documented below — on the signing-key variant too. An exchange that did not carries no such
+  field (absent, never null).
 - Errors: the enum above. A re-exchange of a consumed code is `code_already_claimed`.
+- A delivered `console_key` that cannot be filed answers OUTSIDE the enum, with the ordinary
+  prose shape: **409** `{"message": "..."}` for a key id already on file, **422**
+  `{"message": "..."}` for material that is not a canonical 32-byte Ed25519 public key. These
+  are not claim-code failures and deliberately do not borrow the claim enum's vocabulary.
+  As on the ownership claim, the filing rides the exchange's own transaction: a refusal means
+  no durable was minted, no signing key delivered, no keyring row created, and — under
+  `at_exchange` — the code left unburned and still presentable.
+
+`POST /bfc/claim` (the hitch face) deliberately does **not** read `console_key`: it speaks a wire
+contract published by another project, and console key custody is not part of it.
 
 Semantics: exchange is **make-before-break** — it mints the fresh durable and, in the same
 transaction, revokes the durable a previous exchange of this code minted (and any live durable of
@@ -416,17 +467,19 @@ applies to these surfaces exactly as everywhere else: **the claim-surface respon
 the ownership claim's and the onboarding exchange's alike — may grow additive fields in any
 release without an `api_version` bump**, and consumers must ignore fields they do not recognize.
 
-Two extension slots are RESERVED by name — documented intent only, not implemented, carrying no
-fields and no routes in this release:
+Two extension slots were RESERVED by name in the previous release. **Both are IMPLEMENTED as of
+this one**, exactly as reserved — additively, without an `api_version` bump:
 
-- **A countersigning-key exchange at claim time.** A future revision may add additive
-  key-exchange fields to the claim/exchange envelopes so the two parties can countersign at
-  claim. No key material of any kind travels on these surfaces today.
-- **A re-key verb for already-claimed apps.** A future additive route letting an app that has
-  already claimed re-run the key exchange without re-onboarding. New routes are additive under
-  rule 1.
+- **A countersigning-key exchange at claim time — IMPLEMENTED.** The claim/exchange envelopes
+  (`POST /bfc/ownership/claim` and `POST /bfc/onboarding/exchange`) accept an OPTIONAL
+  `console_key` object and answer with an OPTIONAL `console_key` object. Key material now does
+  travel on these surfaces, and it is exclusively PUBLIC: a 32-byte Ed25519 verification key.
+  Nothing on any surface in this contract accepts, returns or stores a private key.
+- **A re-key verb for already-claimed apps — IMPLEMENTED** as
+  [`POST /bfc/console/re-key`](#post-bfcconsolere-key), a new route, additive under rule 1.
 
-Neither reservation changes any request or response shape in this release.
+An envelope carrying no `console_key` behaves in every respect as it did before, response keys
+included, which is what makes both slots additive rather than a version bump.
 
 ---
 
@@ -1227,18 +1280,116 @@ credential death with reason `offboarding`. A repeat offboard appends nothing.
 
 ---
 
+## Console key custody
+
+The Console (Console PRD D12) signs a short-lived delegated-entry assertion with the PRIVATE
+half of a **per-deployment** Ed25519 keypair. This deployment holds only the PUBLIC half, on a
+key ring addressed by key id (`kid`). Two surfaces put a key on that ring — the claim-time
+exchange documented on the claim envelopes above, and the re-key verb below.
+
+What the ring will hold, and what it will not:
+
+- **A key is a canonical 32-byte Ed25519 public key**, delivered as lower-case/upper-case hex or
+  unpadded base64url, under a key id of 1–64 characters of `[A-Za-z0-9._-]`. Anything else is
+  refused at delivery — a truncated key, a PEM blob, or the 128-hex-character 64-byte expanded
+  secret key.
+- **A key id names exactly one key, for the life of the deployment.** Delivering a key id
+  already on file is refused (`409`); the material behind an existing key id is never replaced.
+  A rotation or a retrofit delivers a NEW key id.
+- **HONEST LIMIT.** These checks do not, and cannot, prove the delivered bytes are a public key.
+  A 32-byte Ed25519 SEED — the private half in compact form — is the same size as a public key
+  and, when it happens to encode a usable curve point, is indistinguishable from one by
+  inspection. The custody property is held by the PROVISIONING PROTOCOL (the vendor hands over
+  the public half and never transports a private one) and by this package containing **no code
+  that signs anything**, not by the validation above. What the validation buys is that
+  mis-delivered or corrupt material fails loudly at delivery rather than silently refusing every
+  assertion later.
+- **No secret is ever revealed by these surfaces.** They are the only surfaces in this contract
+  that accept key material and the only ones that reveal nothing.
+
+**Make-before-break.** Filing a key ACTIVATES it and retires nothing. From the moment a delivery
+commits, the outgoing key and the incoming key both verify, so a re-key is safe to run against a
+deployment that is serving traffic — assertions already in flight under the outgoing key keep
+working. **Retirement is a separate, later operation** (there is no HTTP verb for it in this
+release; it is a keyring operation on the instance), performed once every assertion minted under
+the outgoing key has expired — which D12 bounds at the deployment's configured maximum assertion
+TTL, so the safe wait is short and known. Collapsing activation and retirement into one call is
+what turns a rotation into an outage.
+
+The success object, identical on all three surfaces (the two claim envelopes and the verb):
+
+```json
+{
+  "console_key": {
+    "key_id": "k2",
+    "status": "active",
+    "activated_at": "2026-08-29T12:00:00+00:00",
+    "active_key_ids": ["k1", "k2"]
+  }
+}
+```
+
+`active_key_ids` is every key id verifying at the moment the delivery committed, sorted — two of
+them for the duration of a make-before-break overlap. It is the signal an operator confirms
+before retiring the outgoing key.
+
+### POST /bfc/console/re-key
+
+*Admin token or operator credential carrying `credential:rotate`* — rate-limited as an operator
+write (`bfc-operator-write`). File and activate a countersigning key on an **already-claimed**
+deployment, without re-onboarding it. This is the retrofit path: the claim-time exchange only
+helps a deployment that has not claimed yet, and a fleet in service has already claimed.
+
+The ability is the `credential:rotate` **family**, not a name of its own: a re-key is a
+rotation, this vocabulary is per verb family (the hmac pending→active cutover rides the same
+family), and a `console:*` ability would be its first per-object name — one every already-issued
+rotate-scoped operator credential would silently lack.
+
+"Already claimed" is not re-checked: the gate is the check. An unclaimed deployment has issued
+neither an admin token nor an operator credential.
+
+**Request** — `{"key_id": "k2", "public_key": "<64 hex chars or unpadded base64url>"}`. The pair
+is flat here — it is the whole subject of this route — where the claim envelopes nest the same
+two fields under `console_key` because they carry other things too.
+
+- **201** — `{"console_key": {...}}`, the object above. The new key verifies; nothing was
+  retired.
+- **401 / 403** — the operator gate (indistinguishable refusals for no credential, a credential
+  without the ability, and an expired or revoked one).
+- **409** — `{"message": "..."}` — that key id is already on file. No row was written and the
+  material behind the existing key id is untouched. Re-delivering the SAME key id is this same
+  refusal: the surface does not special-case identical material.
+- **422** — `{"message": "..."}` — the material is not a canonical 32-byte Ed25519 public key,
+  or the key id is malformed.
+- **429** — beyond the operator write limits.
+
+Both outcomes are audited to the lifecycle stream, ids only, with the actor typed: a success
+appends `delivered` (the key was filed) and `activated` (it now verifies, and which key ids
+verify with it); a refusal appends `denied_action` naming the refusal reason. A malformed key id
+is never written into an audit note. Delivered key material never appears in either.
+
+**The CLI transport** is `bfc:console:re-key {key_id} {public_key} --local` — the same action,
+producing the same outcome. It takes the key on argv, which every other verb in this package
+refuses to do, and that is sound here and nowhere else: what it takes is a PUBLIC key. Nothing
+about its shape should be copied to a verb that handles a secret.
+
+---
+
 ## RESERVED — Console fast-follow (not implemented)
 
 The vendor-side Console is a decided fast-follow. So that it can land without reopening this
-shipped contract, the following names are RESERVED here now. **None of this exists in this
-release: no routes, no guard, no table, no ability issuance.** This section deliberately
-contains no `### METHOD /path` route headings — the mechanical route-completeness check covers
-live routes only, and nothing here is one.
+shipped contract, the following names are RESERVED here now. **Except where a bullet says
+otherwise, none of this exists in this release: no guard, no table, no ability issuance.** One
+reservation has since been drawn on — the `/bfc/console/*` namespace now has a live member,
+documented in [Console key custody](#console-key-custody) above, not here. This section
+deliberately contains no `### METHOD /path` route headings — the mechanical route-completeness
+check covers live routes only, and nothing here is one.
 
 - **Guard name `bfc-console`** — reserved for the Console's delegated-session guard. No guard
   by this name is registered.
-- **Endpoint namespace `/bfc/console/*`** — reserved for Console endpoints; the first known
-  member will be `/bfc/console/enter`. No route under this namespace exists.
+- **Endpoint namespace `/bfc/console/*`** — reserved for Console endpoints. Its first member is
+  live: [`POST /bfc/console/re-key`](#post-bfcconsolere-key), the key-custody verb documented
+  above. `/bfc/console/enter` remains reserved and unimplemented.
 - **Table name `bfc_delegated_actors`** — reserved for the Console's delegated-actor records.
   No such table or migration exists.
 - **Dual-session precedence (reserved matrix row).** The session/token precedence matrix (the
