@@ -151,20 +151,47 @@ it('stores the delivered public key as hex whichever encoding it arrived in', fu
     $public = $secret->getPublicKey();
 
     $keyring = new ConsoleKeyring;
-    $keyring->add('k-hex', $public->toHexString());
+
+    // Delivered as unpadded base64url — what PASETO's own encode() emits.
     $keyring->add('k-base64url', $public->encode());
 
-    /** @var stdClass $hexRow */
-    $hexRow = DB::table('bfc_console_keys')->where('key_id', 'k-hex')->first();
     /** @var stdClass $base64Row */
     $base64Row = DB::table('bfc_console_keys')->where('key_id', 'k-base64url')->first();
 
-    // One key delivered two ways is one key, not two: the stored form is
-    // identical, so no transport can smuggle in a second identity for
-    // material the app already trusts.
-    expect($hexRow->public_key)->toBe($public->toHexString())
-        ->and($base64Row->public_key)->toBe($public->toHexString())
-        ->and(strlen((string) $hexRow->public_key))->toBe(64);
+    expect($base64Row->public_key)->toBe($public->toHexString())
+        ->and(strlen((string) $base64Row->public_key))->toBe(64);
+
+    // One key delivered two ways is ONE key: normalizing to a single
+    // stored form is exactly what lets the material-uniqueness rule see
+    // the hex delivery as the same key, rather than as new bytes that
+    // could file a second identity for material the app already trusts.
+    // (Rework B4 — before the rule, this second add() succeeded.)
+    expect(fn (): ConsoleKey => $keyring->add('k-hex', $public->toHexString()))
+        ->toThrow(InvalidArgumentException::class);
+
+    expect(ConsoleKey::query()->count())->toBe(1);
+});
+
+it('refuses material already on file, in every lifecycle state including retired (rework B4)', function (): void {
+    $keyring = new ConsoleKeyring;
+    $public = AsymmetricSecretKey::generate(new Version4)->getPublicKey()->toHexString();
+
+    // Pending.
+    $keyring->add('k1', $public);
+    expect(fn (): ConsoleKey => $keyring->add('k1-again', $public))->toThrow(InvalidArgumentException::class);
+
+    // Active.
+    $keyring->activate('k1');
+    expect(fn (): ConsoleKey => $keyring->add('k1-again', $public))->toThrow(InvalidArgumentException::class);
+
+    // RETIRED — the state that matters. Retirement is the only
+    // revocation this design has, so material that could be re-filed
+    // under a fresh key id after retirement was never revoked.
+    $keyring->retire('k1');
+    expect(fn (): ConsoleKey => $keyring->add('k1-again', $public))->toThrow(InvalidArgumentException::class);
+
+    expect(ConsoleKey::query()->count())->toBe(1)
+        ->and($keyring->active())->toBe([]);
 });
 
 it('refuses a key id outside the bounded charset', function (): void {

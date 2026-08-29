@@ -43,7 +43,7 @@ it('returns unauthenticated bfc meta for unclaimed and claimed environments', fu
             'product' => 'Sink',
             'bfc_version' => BuiltForCloud::VERSION,
             'api_version' => BuiltForCloud::API_VERSION,
-            'capabilities' => ['tokens', 'ownership', 'onboarding', 'webhooks', 'credentials'],
+            'capabilities' => ['tokens', 'ownership', 'onboarding', 'webhooks', 'credentials', 'console-keys'],
             'claimed' => false,
         ]);
 

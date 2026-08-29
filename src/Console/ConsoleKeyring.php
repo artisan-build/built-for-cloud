@@ -52,8 +52,10 @@ use Throwable;
  *
  * Stored form is lower-case hex of the 32 raw bytes. Callers may hand in
  * hex or unpadded base64url (what PASETO's own `encode()` emits) — both
- * normalize to the same row, so the same key delivered through two
- * transports can never file as two different keys.
+ * normalize to the same value, so the same key delivered through two
+ * transports can never file as two different keys. That normalization is
+ * also what makes {@see add()}'s material-uniqueness refusal meaningful:
+ * without it, re-encoding a retired key would slip past as new bytes.
  */
 final class ConsoleKeyring
 {
@@ -75,10 +77,23 @@ final class ConsoleKeyring
     private const string KEY_ID_PATTERN = '/^[A-Za-z0-9._-]{1,64}\z/';
 
     /**
-     * File a key as PENDING. Deliberately refuses to overwrite an
-     * existing key id: silently replacing the material behind a live
-     * `kid` is key substitution — the one write that would let a
-     * mis-delivered key inherit an already-trusted name.
+     * File a key as PENDING. Two refusals, and both are uniqueness:
+     *
+     * - **the key id must be free.** Silently replacing the material
+     *   behind a live `kid` is key substitution — the one write that
+     *   would let a mis-delivered key inherit an already-trusted name;
+     * - **the MATERIAL must be free**, in every lifecycle state
+     *   including RETIRED. Retirement is the only revocation this design
+     *   has — a console key has no expiry, there is no revocation list,
+     *   and nothing reaches back into assertions already minted — so a
+     *   retired key whose bytes could be re-filed under a fresh `kid`
+     *   was never really retired. The comparison is on the NORMALIZED
+     *   form, so the same key delivered as hex and as base64url is
+     *   caught as the same key rather than filed twice.
+     *
+     * Both are backed by unique indexes, which is what actually holds
+     * under concurrency; these checks exist so the ordinary answer is a
+     * named refusal rather than an integrity violation.
      *
      * Refusals here are {@see InvalidArgumentException}, not
      * {@see AssertionRefused}: this is an operator/exchange path, and a
@@ -89,13 +104,19 @@ final class ConsoleKeyring
     {
         $this->assertValidKeyId($keyId);
 
+        $normalized = self::normalizePublicKey($publicKey);
+
         if ($this->find($keyId) instanceof ConsoleKey) {
             throw new InvalidArgumentException('A console key with that key id is already on file.');
         }
 
+        if (ConsoleKey::query()->where('public_key', $normalized)->exists()) {
+            throw new InvalidArgumentException('That console key material is already on file under an existing key id.');
+        }
+
         return ConsoleKey::query()->create([
             'key_id' => $keyId,
-            'public_key' => self::normalizePublicKey($publicKey),
+            'public_key' => $normalized,
         ]);
     }
 
@@ -133,11 +154,23 @@ final class ConsoleKeyring
 
     public function find(string $keyId): ?ConsoleKey
     {
-        if (preg_match(self::KEY_ID_PATTERN, $keyId) !== 1) {
+        if (! self::isValidKeyId($keyId)) {
             return null;
         }
 
         return ConsoleKey::query()->where('key_id', $keyId)->first();
+    }
+
+    /**
+     * Whether a string is a well-formed `kid`. Exposed so the delivery
+     * surfaces can refuse a malformed id BEFORE opening a transaction
+     * (and before echoing it into an audit note) against the same
+     * pattern this ring enforces — one regex, never a second copy that
+     * could drift from it.
+     */
+    public static function isValidKeyId(string $keyId): bool
+    {
+        return preg_match(self::KEY_ID_PATTERN, $keyId) === 1;
     }
 
     /**
@@ -292,7 +325,7 @@ final class ConsoleKeyring
 
     private function assertValidKeyId(string $keyId): void
     {
-        if (preg_match(self::KEY_ID_PATTERN, $keyId) !== 1) {
+        if (! self::isValidKeyId($keyId)) {
             throw new InvalidArgumentException('A console key id must be 1-64 characters of [A-Za-z0-9._-].');
         }
     }
