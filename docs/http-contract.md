@@ -176,7 +176,8 @@ API listing shape.
   `console:key:write` (file a console countersigning key —
   [`POST /bfc/console/re-key`](#post-bfcconsolere-key); its own name, and deliberately not the
   `credential:rotate` family, so no already-issued credential gained the power to install a
-  delegated-admin trust root on upgrade). The MCP
+  delegated-admin trust root on upgrade — **note the declared-mint-ceiling caveat below if your
+  app implements one**). The MCP
   pair `mcp:read` / `mcp:admin` is the per-tool vocabulary consuming apps wire in front of
   each MCP tool (read vs destructive administration — distinct grants, checked exact-match;
   no operator ability implies either). `metadata:read` remains RESERVED, unissued and
@@ -200,6 +201,40 @@ API listing shape.
   which already treats host access as sufficient for this verb. An operator who wants console
   key custody held by a narrower credential should not issue admin `api_tokens` rows; the
   unified store's per-verb-family abilities are the instrument for that.
+
+  **Caveat — an app with a declared mint ceiling cannot mint `console:key:write` until it
+  edits its own declaration.** This affects one specific kind of app: one whose credential
+  declaration implements `ConstrainsMintedCredentials` and returns a NON-NULL
+  `grantableAbilities()` list, written before this ability existed. Most apps are unaffected —
+  the interface is opt-in and not implementing it declares no ceiling — but where a ceiling IS
+  declared, it is exhaustive by design, so an ability the list does not name simply cannot be
+  granted. This is not a gap in the ceiling mechanism; it is the mechanism working, and it is
+  called out here because the new name arrives in a release the declaration predates.
+
+  What it looks like, and the second half is the awkward one:
+
+  - `POST /bfc/credentials` requesting `"abilities": ["console:key:write"]` answers **403**
+    with an ability-widening message that names the ability. Diagnostic, and it points at the
+    real fix. `bfc:credential:mint --local` refuses identically — the ceiling is enforced in
+    the one mint action, so no transport routes around it.
+  - `POST /bfc/console/re-key`, presented with whatever operator credential the app CAN mint,
+    answers the uniform **403** described above, whose body is constant and says nothing about
+    why. That opacity is deliberate on this route and it is not going to distinguish this case
+    from a stolen bearer, so an operator who has not read this paragraph will read it as "my
+    credential is wrong" rather than "my declaration is short a name".
+
+  **Two paths work meanwhile, neither of which needs a deploy:**
+
+  1. an admin token — the **owner token** from
+     [`POST /bfc/ownership/claim`](#post-bfcownershipclaim), or any admin `api_tokens` row —
+     which is admin-equivalent on this route (see the paragraph above); or
+  2. the CLI transport, `bfc:console:re-key --local`, whose authority is host access and which
+     consults no ability at all.
+
+  **The fix** is to add `console:key:write` to the declaration's `grantableAbilities()` for the
+  operator subject and redeploy. Do that deliberately: it is the grant of a
+  delegated-admin trust root, which is exactly what a declared ceiling exists to make someone
+  decide rather than inherit.
 - **Operator rate limits:** write and expensive operator verbs (mint, rotate, activate,
   revoke, invite, offboard) are limited per operator credential + IP (`bfc-operator-write`,
   60/min, keyed on the sha256 of the presented bearer so failed-auth hammering shares the
@@ -1376,7 +1411,7 @@ so each surface answers "who may do this" explicitly:
 |---|---|
 | `POST /bfc/ownership/claim` | the ownership claim code itself. Presenting it already yields an admin owner token in the same response, so naming the console key escalates nothing the holder is not already getting. |
 | `POST /bfc/onboarding/exchange` | the code must have been issued with `console_key_authority` (below), and must not have spent it. A routine `scope=consume` code carries none. |
-| `POST /bfc/console/re-key` | an operator credential holding **`console:key:write`**, or the `credential:admin` break-glass, or a legacy admin token. `credential:rotate` is **not** sufficient. |
+| `POST /bfc/console/re-key` | an operator credential holding **`console:key:write`**, or the `credential:admin` break-glass, or a legacy admin token. `credential:rotate` is **not** sufficient. An app with a declared mint ceiling cannot mint that ability until it names it — see the caveat under [Authentication](#authentication); the owner/admin token and the CLI verb both work meanwhile. |
 | `bfc:console:re-key --local` | **host access.** No credential check — see the CLI paragraph below. |
 
 `POST /bfc/onboarding/issue` accepts an optional boolean `console_key_authority` (default
