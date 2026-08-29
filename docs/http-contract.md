@@ -123,7 +123,9 @@ Additive unless marked otherwise:
   it, so nothing already issued loses access) and `mcp:read` / `mcp:admin` as the per-tool
   MCP pair. Operator writes are rate-limited (`bfc-operator-write`); operator sensitive
   reads, denials, and token-auth failures are audited (`sensitive_read` / `denied_action`
-  lifecycle events, ids only).
+  lifecycle events, ids only). *(The Console bullet below adds one more name in this same
+  release — `console:key:write`. The complete, current vocabulary is under
+  [Authentication](#authentication), which is the list the test suite pins.)*
 
 - **Console countersigning-key custody ships (Console PRD D12).** All additive; both of the
   previous release's RESERVED extension slots are now implemented, and `api_version` stays 2
@@ -131,7 +133,7 @@ Additive unless marked otherwise:
   `POST /bfc/ownership/claim` and `POST /bfc/onboarding/exchange` accept an optional
   `console_key` object and answer with one when they were given one — an envelope carrying no
   `console_key` is unchanged, response keys included. New route `POST /bfc/console/re-key`
-  (`credential:rotate` family, operator write limits) files and activates a key on an
+  (the new `console:key:write` ability, operator write limits) files and activates a key on an
   already-claimed deployment without re-onboarding, with `bfc:console:re-key --local` as its
   CLI transport. Filing is make-before-break: it activates the new key and retires nothing, so
   both keys verify during the overlap; retirement stays a separate, later operation with no
@@ -164,22 +166,40 @@ API listing shape.
   it is useful, because "wrong ability" and "bad token" need different fixes. The one exception
   is [`POST /bfc/console/re-key`](#post-bfcconsolere-key), where what the split would reveal is
   worth more to an attacker than the diagnostic is to an operator; it answers one uniform `403`
-  for all four.
+  to every pre-authorization failure alike.
 - **Operator routes** (the `/bfc/credentials`, `/bfc/invitations` and `/bfc/subjects` verbs)
   additionally accept a unified-store `operator` credential, authorized **per verb family**
   (GATE-3.7 least privilege). The ability vocabulary: `credential:read` (the listing — an
   audited sensitive read), `credential:mint` (mint + invitations), `credential:rotate`
   (rotate + the hmac activate cutover, same family), `credential:revoke`, `subject:offboard`,
-  and `audit:read` (vocabulary now; the first audit-read surface will enforce it). The MCP
+  `audit:read` (vocabulary now; the first audit-read surface will enforce it), and
+  `console:key:write` (file a console countersigning key —
+  [`POST /bfc/console/re-key`](#post-bfcconsolere-key); its own name, and deliberately not the
+  `credential:rotate` family, so no already-issued credential gained the power to install a
+  delegated-admin trust root on upgrade). The MCP
   pair `mcp:read` / `mcp:admin` is the per-tool vocabulary consuming apps wire in front of
   each MCP tool (read vs destructive administration — distinct grants, checked exact-match;
   no operator ability implies either). `metadata:read` remains RESERVED, unissued and
   unenforced. There is **no wildcard**; a credential with no abilities can do nothing. The
   one admin-equivalent name is **`credential:admin`** — the explicit break-glass, expanding
-  to exactly the six operator abilities above (never the MCP pair); it is what
+  to exactly the seven operator abilities `credential:read`, `credential:mint`,
+  `credential:rotate`, `credential:revoke`, `subject:offboard`, `audit:read` and
+  `console:key:write` (never the MCP pair); it is what
   `bfc:install:operator-credential` mints, and holding that literal name in the abilities
-  list is how a break-glass credential is marked. A legacy admin `api_tokens` row remains
-  admin-equivalent on these routes.
+  list is how a break-glass credential is marked. **This mapping is asserted against
+  `OperatorAbility::adminEquivalent()` by the package's own test suite**, so it cannot drift
+  from the code without a red build.
+
+  **A legacy admin `api_tokens` row remains admin-equivalent on these routes, console key
+  custody included — deliberately.** That set is not only the deprecated legacy credential
+  API's output: it is above all the **owner token** minted by
+  [`POST /bfc/ownership/claim`](#post-bfcownershipclaim), which is the deployment owner's root
+  authority and is exactly the party a console key names. Excluding it would also be no
+  boundary — an admin `api_tokens` row can mint itself an operator credential carrying
+  `console:key:write` in one request — and it would be incoherent with the CLI transport,
+  which already treats host access as sufficient for this verb. An operator who wants console
+  key custody held by a narrower credential should not issue admin `api_tokens` rows; the
+  unified store's per-verb-family abilities are the instrument for that.
 - **Operator rate limits:** write and expensive operator verbs (mint, rotate, activate,
   revoke, invite, offboard) are limited per operator credential + IP (`bfc-operator-write`,
   60/min, keyed on the sha256 of the presented bearer so failed-auth hammering shares the
