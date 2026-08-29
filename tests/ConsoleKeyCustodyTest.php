@@ -438,7 +438,19 @@ it('refuses a console key delivered on a code with no key-custody authority (AC1
 });
 
 it('spends key-custody authority on the first key and refuses a second (AC13)', function (): void {
-    keyCustodyBurnAtExchange();
+    // DELIBERATELY the default `first_use` burn mode, and an earlier
+    // revision of this test got that wrong in a way worth recording: it
+    // bound `at_exchange`, so the second exchange died on the code's own
+    // `consumed_at` check and answered `code_already_claimed` without
+    // ever reaching the authority check this test exists to drive. The
+    // assertion accepted either status, so it passed while proving
+    // nothing — and a mutant reading `console_key_authority` instead of
+    // `mayFileConsoleKey()` survived it.
+    //
+    // `first_use` is also the mode that makes the bug real: the code
+    // stays presentable until the durable it minted is first used, so
+    // without the spend stamp ONE authorized code files unlimited
+    // console keys, each an independent standing admin-entry authority.
     keyCustodyClaimedDeployment();
 
     $code = keyCustodyOnboardingCode('once@example.test', keyAuthority: true);
@@ -453,16 +465,24 @@ it('spends key-custody authority on the first key and refuses a second (AC13)', 
     expect($row->console_key_filed_at)->not->toBeNull()
         ->and($row->mayFileConsoleKey())->toBeFalse();
 
-    // Under `first_use` a code stays presentable, so without the spend
-    // stamp one authorized code could file a second standing
-    // admin-entry authority under a fresh key id. It cannot.
+    // The code is still presentable — nothing has burned it — so this
+    // reaches the authority check, which is the point.
+    expect($row->consumed_at)->toBeNull();
+
     $second = $this->postJson('/bfc/onboarding/exchange', [
         'token' => $code,
         'console_key' => ['key_id' => 'k2', 'public_key' => keyCustodyPublicKey()],
     ]);
 
-    expect($second->getStatusCode())->toBeIn([403, 409])
-        ->and(ConsoleKey::query()->count())->toBe(1);
+    // Exactly 403, and exactly the NotAuthorized prose: a 409 here would
+    // mean the code was refused for being spent as a CLAIM CODE rather
+    // than for having spent its KEY-CUSTODY AUTHORITY, which is a
+    // different rule and not the one under test.
+    $second->assertStatus(403)
+        ->assertJsonPath('message', ConsoleKeyRefusal::NotAuthorized->message());
+
+    expect(ConsoleKey::query()->count())->toBe(1)
+        ->and(ConsoleKey::query()->sole()->key_id)->toBe('k1');
 });
 
 it('cannot be granted key-custody authority through mass assignment (AC13)', function (): void {

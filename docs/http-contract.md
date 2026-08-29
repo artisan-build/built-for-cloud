@@ -1520,6 +1520,13 @@ two fields under `console_key` because they carry other things too.
 - **422** — `{"message": "..."}` — the material is not a canonical 32-byte Ed25519 public key,
   or the key id is malformed.
 - **429** — beyond the operator write limits.
+- **500** — `{"message": "..."}` — a database fault, and on this route most plausibly a
+  **deadlock or lock-wait timeout**: the filing transaction takes a row lock on the ownership
+  record to prove the deployment is claimed, so a concurrent writer holding that row can time
+  this one out. Nothing was written — the transaction rolled back — and retrying is safe.
+  Deliberately not a `409`: an earlier revision caught every database exception and reported it
+  as a key-state conflict, which sent operators looking for a key that was never filed. A lock
+  timeout is a fault, and says so.
 
 Both outcomes are audited to the lifecycle stream, ids only, with the actor typed: a success
 appends `delivered` (the key was filed) and `activated` (it now verifies, and which key ids
