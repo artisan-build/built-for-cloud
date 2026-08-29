@@ -1122,10 +1122,21 @@ it('runs no read against the stream on either of the emission door\'s verbs', fu
     // an existing row without changing its name, its signature or its
     // return type.
     //
-    // So this reads what the verbs actually EXECUTE. Every statement
-    // each one issues is captured and the SELECTs against the two
-    // stream tables are counted; a `record()` that fetched a row before
-    // returning it would be named here.
+    // So this reads what the verbs execute THROUGH THE CONNECTION'S
+    // QUERY LOG, and that is the whole of what it reads. A `record()`
+    // that fetched a row through the query builder, Eloquent or
+    // `DB::select()` before returning it would be named here.
+    //
+    // WHAT IT DOES NOT SEE, and this sentence exists because the
+    // sentence it replaces did not have it: a read issued directly on
+    // the PDO handle — `DB::connection()->getPdo()->query(...)` —
+    // returns the row and leaves the log empty, so a recorder written
+    // that way passes this test. The previous wording here said "every
+    // statement each one issues is captured", which was the SIXTH
+    // completeness sentence this PR has had to withdraw and the fourth
+    // round in which a correction wrote a new one. The log is a
+    // tripwire over the ordinary spelling, not a proof about every way
+    // a row can be read.
     $selects = static function (callable $call): array {
         DB::flushQueryLog();
         DB::enableQueryLog();

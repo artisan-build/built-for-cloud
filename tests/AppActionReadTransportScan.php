@@ -75,9 +75,12 @@ use Throwable;
  *    querying and returning an existing row leaves it green.
  *  - "runs no read against the stream on either of the emission door's
  *    verbs" is the behavioural half that covers that: each verb is
- *    executed with the query log on and its SELECTs against the two
- *    tables are counted, with a real read through the same harness as
- *    the control.
+ *    executed with the connection's query log on and its SELECTs
+ *    against the two tables are counted, with a real read through the
+ *    same harness as the control. **The query log is what it reads, so
+ *    a read issued directly on the PDO handle is outside it** — a
+ *    tripwire over the ordinary spelling, not a proof about every way a
+ *    row can be fetched.
  *
  * Both speak of the verbs that exist today. Neither says anything about
  * a verb somebody adds, which is what the surface pin is for; the two
@@ -105,9 +108,17 @@ use Throwable;
  *    the sentence being held, which is about what this release ships,
  *    and it is still a bound rather than a boundary.
  *  - **A route whose action is a CLOSURE** has no class to walk from
- *    and is classified {@see UNRELATED}. No package route uses one, and
- *    the same caveat is recorded for the contract-document scan and the
- *    chrome route scan.
+ *    and is classified {@see UNRELATED}. No package route uses one
+ *    today — read off the route group by hand, and **nothing checks
+ *    that it stays true**, which makes this a caveat resting on a fact
+ *    with no test behind it rather than on a property.
+ *  - **MIDDLEWARE AND BLADE VIEWS ARE NOT WALKED.** The walk starts at
+ *    a route's ACTION class, so the nine middleware classes every
+ *    package route carries, and any view a route renders, are not
+ *    considered as paths to the stream at all. A read placed in
+ *    middleware reaches the rows and is reported nowhere here. That is
+ *    a real gap and a bigger change than this scan; it is a debt row,
+ *    not a thing this class quietly covers.
  *  - **A HOST APPLICATION's own routes** are not this package's to
  *    enumerate. The contract's sentence is about what this release
  *    ships; an app that writes its own listing over its own tables has
