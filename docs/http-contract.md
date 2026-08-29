@@ -164,7 +164,10 @@ Additive unless marked otherwise:
   enforced rather than described. **Two source-breaking PHP changes ride this release** (no wire
   shape changes): `OperatorAbility::RESERVED_METADATA_READ` is removed in favour of the
   `MetadataRead` case, and `DeclaresHeadlineStat` declares its vocabulary as a class CONSTANT.
-  Both are documented with migrations in `release-notes/console-vitals.md`.
+  Both are documented with migrations in `release-notes/console-vitals.md`. The
+  metadata-classification conformance helper in `ContractAssertions` covers **this package's own
+  metadata endpoints only**; a general, app-extensible instrument was prototyped in this release
+  and withdrawn — see the note under [Endpoint classification](#endpoint-classification).
 
 **api_version 1** — the 0.3.x baseline: `/bfc/meta`, `/bfc/ownership/*`, the pre-0.4 credential
 API listing shape.
@@ -198,10 +201,11 @@ API listing shape.
   app implements one**). The MCP
   pair `mcp:read` / `mcp:admin` is the per-tool vocabulary consuming apps wire in front of
   each MCP tool (read vs destructive administration — distinct grants, checked exact-match;
-  no operator ability implies either), and `metadata:read` is checked by that same exact-match
-  primitive — it is the Console dashboard's read ability
-  ([`GET /bfc/console/vitals`](#get-bfcconsolevitals)), and the ONE name in this vocabulary
-  that the break-glass below cannot reach. There is **no wildcard**; a credential with no abilities can do nothing. The
+  no operator ability implies either). `metadata:read` is the Console dashboard's read ability
+  ([`GET /bfc/console/vitals`](#get-bfcconsolevitals)) and the ONE name in this vocabulary the
+  break-glass below cannot reach — enforced not by the MCP primitive but by that route's own
+  gate, which requires an operator subject and an abilities list EXACTLY equal to
+  `{metadata:read}`. There is **no wildcard**; a credential with no abilities can do nothing. The
   one admin-equivalent name is **`credential:admin`** — the explicit break-glass, expanding
   to exactly the seven operator abilities `credential:read`, `credential:mint`,
   `credential:rotate`, `credential:revoke`, `subject:offboard`, `audit:read` and
@@ -353,42 +357,27 @@ stated above: every surface shares prose `message` fields, and a `metadata` clas
 makes no claim about a `401`, `403`, `422` or `429` envelope. It is also not an access grant —
 see the paragraph above.
 
-The classification is verified against real 2xx responses rather than asserted here.
-`ArtisanBuild\BuiltForCloud\Testing\ContractAssertions::assertBuiltForCloudMetadataSchema()`
-is **fail-closed**: it takes a schema naming exactly the keys, types, enum members and numeric
-ranges an endpoint may return, and refuses anything outside it — an unknown key, a missing one,
-a wrong root structure, a near-miss enum member, an out-of-range or non-finite number.
-`assertBuiltForCloudMetadataEndpoint()` looks the schema up by route and **refuses to certify a
-route it has no schema for**, so "I do not recognise this shape" is a failure rather than a
-pass. The package ships a schema for every row in the table above and its own suite drives all
-of them.
+The classification is held for these endpoints by ENUMERATION, verified against real 2xx
+responses. `ArtisanBuild\BuiltForCloud\Testing\ContractAssertions` writes out the expected
+shape of every `metadata` row in the table above — exact keys, exact types, exact enum members,
+numeric ranges read from the producer's own constants — and
+`assertBuiltForCloudMetadataEndpoint($response, 'METHOD /uri')` checks one of them. Anything
+outside the enumerated shape fails: an unknown key, a missing one, a wrong root structure, a
+near-miss enum member, an out-of-range or non-finite number, a `health` value the producer
+cannot emit. A route name it has not enumerated fails too. The package's own suite drives every
+row, both `POST /bfc/subjects/offboard` shapes included.
 
-**The string types a schema may name are a closed, package-owned set** — `token`, `semver`,
-`timestamp` and `console_key_id`, each defined in
-`ArtisanBuild\BuiltForCloud\MetadataShape`, plus `enum` for literal members. A schema cannot
-supply a regular expression of its own. That is a deliberate loss of flexibility: an earlier
-revision accepted an arbitrary pattern per field, so a schema author could write `/^.*$/s` and
-certify `{"note": "arbitrary free text"}` — putting the definition of "bounded" in the hands of
-the party being checked. An app whose metadata endpoint carries a bounded shape this package
-does not name cannot certify that field; it can use the lexical check below as a supplement, or
-add the named type here, where it is reviewed once rather than never.
-
-`console_key_id` is the one named type that is bounded and NOT lowercase (`[A-Za-z0-9._-]`,
-1..64 — the keyring's own constant, not a copy of it), which is what
-`POST /bfc/console/re-key` returns. Numeric bounds are read from the producer's own constants
-rather than restated, so the schema and the endpoint cannot disagree about them.
-
-An endpoint with more than one documented 2xx shape uses `one_of`, where each alternative is
-itself an exact schema — `POST /bfc/subjects/offboard` answers `offboarded` on the direct path
-and `accepted` on the integration path, and both are certified. It is a choice between exact
-shapes, never a union of their keys.
-
-A second, lexical check (`assertBuiltForCloudMetadataShape()`) runs alongside the schema and
-fails on any string that is not a lowercase bounded identifier, a semver or an ISO-8601 instant
-(it stands aside only for the `console_key_id` paths the schema already certified). It is a
-supplement, not the instrument: on its own it passes a free-text field whose sampled value
-happens to look identifier-shaped, which is exactly what the schema closes. Both docblocks
-state their limits.
+**It certifies this package's endpoints and nothing else, and there is deliberately no way to
+hand it a shape of your own.** An earlier revision of this release shipped a general,
+app-extensible conformance instrument and claimed it certified "any metadata endpoint". It
+could not, and the reason is structural rather than a defect that could be patched: **if the
+consuming app supplies the schema, the app decides what counts as free text.** It picks the
+field names and the permitted `enum` members, so runtime prose can be declared a bounded
+identifier or a permitted member and pass. Four rounds of narrowing that schema language closed
+four escapes and left that one untouched, because closing a type-name set does not establish
+value *provenance*. The general instrument is withdrawn and deferred as its own decision; a
+consuming app converting its endpoints should write explicit expected-shape assertions for
+them, exactly as this package does for its own.
 
 Vendor-side (Console) reads will want the version-discovery endpoint, so a future BEHAVIORAL
 revision may constrain `product` to a bounded shape, letting `GET /bfc/meta` honestly become
@@ -1637,18 +1626,26 @@ content-classified or mutating surfaces**, and forbids using the ownership/admin
 any dashboard read path. That is EXCLUSIVITY, not membership, and this route enforces it as
 three separate conditions:
 
-1. **The credential holds `metadata:read`** — and the app's own declaration authorizes it for
+1. **The presented bytes are not ALSO something else.** Before anything resolves, the bearer is
+   compared against the configured `FALLBACK_TOKEN` and against the legacy `api_tokens` store;
+   a match is a `401`. This is not belt-and-braces: the `bfc` guard has no path to either store,
+   so neither can authenticate here — but set `FALLBACK_TOKEN` to the plaintext of a real
+   dashboard credential (or file the same bytes as a legacy admin token) and the dashboard read
+   succeeds while the same bytes stay admin-equivalent on the legacy surfaces, which is exactly
+   the "unable to touch mutating surfaces" clause failing. Every legacy row counts, revoked
+   included: the question is not whether those bytes can act elsewhere *today*.
+2. **The credential holds `metadata:read`** — and the app's own declaration authorizes it for
    that ability. Unlike every operator verb route, this one is not mounted behind the operator
    gate, because that gate grants a break-glass credential whatever ability a route names; a
    route mounted there could not have enforced D16 at all.
-2. **Its abilities are exactly `{metadata:read}` and nothing more.** A credential holding both
+3. **Its abilities are exactly `{metadata:read}` and nothing more.** A credential holding both
    `metadata:read` and `credential:admin` would read the dashboard AND mutate every operator
    surface; it is refused here. Inability has to be a property of the credential, because the
    credential is what the vendor holds and what an attacker steals.
-3. **Its subject is an `operator`.** The ability vocabulary is an operator vocabulary; an
+4. **Its subject is an `operator`.** The ability vocabulary is an operator vocabulary; an
    application- or user-subject credential carrying the ability is refused.
 
-All three are enforced by ONE gate. There is no `bfc.ability` layer in front of it: that
+All four are enforced by ONE gate. There is no `bfc.ability` layer in front of it: that
 middleware enforces a strict subset of the above, so it never changed an answer, while its own
 denial audit drained the delivery outbox — reintroducing on the refusal path the amplification
 this route is hardened against.
@@ -1700,10 +1697,12 @@ field.
   `null` with `health: "degraded"`. The value is operator-authored config, and this endpoint is
   `metadata`-classified: it forwards a bounded version or nothing. (This is precisely why
   `GET /bfc/meta`, whose `product` is unbounded, is classified `content`.)
-- `health` — `"ok"` | `"degraded"` | `"down"`. **This endpoint returns only the first two.**
-  `"down"` is in the vocabulary for the dashboard, which needs a value for an app that did not
-  answer at all; a served `200` is itself proof of reachability, so there is no state this
-  endpoint could observe that `"down"` would describe.
+- `health` — `"ok"` or `"degraded"`. `"down"` exists in the shared vocabulary
+  (`ArtisanBuild\BuiltForCloud\Vitals\Health`) for the dashboard, which needs a value for an
+  app that did not answer at all — and **this endpoint never returns it**: a served `200` is
+  itself proof of reachability, so there is no state it could observe that `"down"` would
+  describe. `Health::fromDegradation` takes a boolean, so the range is structurally the first
+  two, and this endpoint's enumerated expected shape admits only those two as well.
 - `deployed_at` / `deploy_age_seconds` — when this deployment last shipped, and its age in
   seconds, both `null` when the app declares no deploy time. The age is signed: a `deployed_at`
   in the future reports a negative age rather than a clamped zero, because clock skew between
@@ -1727,12 +1726,25 @@ field.
   reports `degraded`, and it is keyed by deployment and queue configuration so instances
   sharing a cache prefix cannot serve each other's backlogs.
 
-  Two limits, stated because an unstated one reads as covered. The cache is read-through, not a
-  lock: concurrent misses on a cold key each run the read, so the bound is on the steady state
-  rather than on every burst. And it bounds how OFTEN the read happens, not how long one read
-  may take — there is no portable wall-clock deadline across the queue drivers Laravel
-  supports, so a genuinely hung dependency hangs the requests that miss the cache rather than
-  every request.
+  **`oldest_pending_age_seconds` is not stale in the same way.** The snapshot caches the oldest
+  pending job's enqueue TIMESTAMP and the age is derived per request, so the one number here
+  whose entire meaning is that it moves keeps moving inside a window. The counts do not.
+
+  **Caching requires a stable deployment identifier** —
+  `built-for-cloud.vitals.deployment_id`, falling back to `built-for-cloud.cloud.application`.
+  With neither set the snapshot is **not cached at all** and every poll reads directly. That is
+  deliberate: the key is a digest of the deployment identifier plus the complete resolved queue
+  connection config, and without an identifier two apps sharing a cache prefix would compute the
+  same key and be served each other's backlog as honest local data — a silent cross-deployment
+  leak into a vendor dashboard, which is worse than slow vitals. A product name and an
+  environment are not identities and are not used as ones.
+
+  Two further limits, stated because an unstated one reads as covered. The cache is
+  read-through, not a lock: concurrent misses on a cold key each run the read, so the bound is
+  on the steady state rather than on every burst. And it bounds how OFTEN the read happens, not
+  how long one read may take — there is no portable wall-clock deadline across the queue drivers
+  Laravel supports, so a genuinely hung dependency hangs the requests that miss the cache rather
+  than every request.
 - `headline` — the app's ONE headline stat, or `null`. `value` is a number, `unit` is
   `count` | `seconds` | `bytes` | `percent` | `null`, and **`label` is a case from a BACKED ENUM
   the app declares** in its own repo (D15) — by implementing
@@ -1791,8 +1803,12 @@ the same transaction and is delivered by the next drain (`bfc:outbox:drain`, or 
 mutating request).
 
 - **401** — no credential, an unknown one, an expired or revoked one, an offboarded principal's,
-  a legacy `api_tokens` secret, or `FALLBACK_TOKEN`. All indistinguishable from one another;
-  the audit stream keeps what distinction there is.
+  a legacy `api_tokens` secret, `FALLBACK_TOKEN`, or a bearer whose bytes are ALSO the
+  configured fallback token or a row in the legacy `api_tokens` store. All indistinguishable
+  from one another, and **none of them is audited** — this route is reachable without a
+  credential, and auditing anonymous refusals would hand a stranger a database-write amplifier
+  on the one branch they can reach. (An earlier revision said the audit stream kept the
+  distinction. It does not; that claim was stronger than the code.)
 - **403** — a live unified-store credential that does not hold `metadata:read`, `credential:admin`
   included. Audited as `denied_action`.
 - **429** — beyond the `bfc-vitals` limits: 60/minute per presented credential and

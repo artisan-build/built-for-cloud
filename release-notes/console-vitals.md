@@ -73,6 +73,43 @@ from passing a string where a `HeadlineLabel` case belongs), never a silently wr
 
 ---
 
+## WITHDRAWN in this release: the general conformance instrument
+
+An app-extensible metadata-conformance instrument was prototyped here and **removed before
+release**. It is called out because it briefly existed in this branch's history and because the
+reason it went is worth carrying forward.
+
+It let a consuming app describe its own `metadata` endpoint with a schema and claimed to certify
+"no free text" for it. It could not. **If the app supplies the schema, the app decides what
+counts as free text** — it names the fields and the permitted `enum` members, so a runtime value
+like `note: pending` can be declared a bounded identifier or a permitted member and pass. Four
+rounds of narrowing the schema language closed four escapes and never touched that one, because
+closing a type-name set does not establish value *provenance*.
+
+What ships instead is enumeration: `ContractAssertions` writes out the expected 2xx shape of
+every `metadata`-classified route **this package** serves, and
+`assertBuiltForCloudMetadataEndpoint($response, 'METHOD /uri')` checks one of them. There is no
+parameter through which a caller supplies a shape, and a route name it has not enumerated fails.
+
+**If you are converting an app:** write explicit expected-shape assertions for your own metadata
+endpoints, the way this package does for its own. A general instrument is deferred as its own
+decision.
+
+---
+
+## Deployment identity is required for vitals caching
+
+`GET /bfc/console/vitals` caches its queue snapshot, and the cache key is a digest of a
+deployment identifier plus the complete resolved queue connection config. Set
+`BUILT_FOR_CLOUD_DEPLOYMENT_ID` (or rely on `built-for-cloud.cloud.application`).
+
+**With neither set the snapshot is not cached at all** — every poll reads the queue directly.
+That is the intended behaviour, not a regression: without an identifier, two apps sharing a
+cache prefix would compute the same key and be served each other's backlog as honest local data.
+Slower vitals is the honest failure; silently mixed vitals is not.
+
+---
+
 ## Apps that do nothing
 
 An app that upgrades and changes nothing gets the route mounted, refusing every request with
