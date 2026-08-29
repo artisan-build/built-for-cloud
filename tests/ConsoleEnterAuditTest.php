@@ -59,14 +59,14 @@ it('records one app-action event for a successful entry, through the real door',
         ->and($event->actor_ref)->toBe(DelegatedActor::IDENTIFIER_PREFIX.$actor->getKey())
         ->and($event->id)->toMatch('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/');
 
-    // Exactly one, with its outbox row keyed on the MINT.
-    $outbox = AppActionOutboxEntry::query()->sole();
+    // Exactly one, with its dedup ledger row keyed on the MINT — hashed
+    // by the recorder, so what is stored is a digest and not the mint
+    // digest verbatim.
+    $ledger = AppActionOutboxEntry::query()->sole();
 
-    expect($outbox->event_id)->toBe($event->id)
-        ->and($outbox->dedup_key)->toStartWith(ConsoleEnter::ENTRY_DEDUP_PREFIX)
-        ->and($outbox->dedup_key)->toBe(
-            ConsoleEnter::ENTRY_DEDUP_PREFIX.AssertionBurn::query()->sole()->mint_hash,
-        );
+    expect($ledger->event_id)->toBe($event->id)
+        ->and($ledger->dedup_key)->toMatch('/^[0-9a-f]{64}$/')
+        ->and($ledger->dedup_key)->not->toBe(AssertionBurn::query()->sole()->mint_hash);
 });
 
 it('records the agency the entering handoff named, and null when it named none', function (): void {

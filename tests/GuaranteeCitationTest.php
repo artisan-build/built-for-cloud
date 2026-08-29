@@ -80,13 +80,13 @@ $citedSurfaces = [
  * and a file that is expected to have them and has none at all.
  */
 $expectedCitations = [
-    'docs/http-contract.md' => 67,
-    'src/Audit/AppAction.php' => 3,
-    'src/Audit/AppActionActor.php' => 5,
-    'src/Audit/AppActionEvent.php' => 7,
-    'src/Audit/AppActionEventBuilder.php' => 1,
-    'src/Audit/AppActionOutboxEntry.php' => 2,
-    'src/Audit/AppActionRecorder.php' => 5,
+    'docs/http-contract.md' => 75,
+    'src/Audit/AppAction.php' => 5,
+    'src/Audit/AppActionActor.php' => 6,
+    'src/Audit/AppActionEvent.php' => 13,
+    'src/Audit/AppendOnlyBuilder.php' => 2,
+    'src/Audit/AppActionOutboxEntry.php' => 9,
+    'src/Audit/AppActionRecorder.php' => 6,
     'src/Audit/AppActorType.php' => 1,
     'release-notes/console-enter.md' => 18,
     'release-notes/unified-store-guard.md' => 8,
@@ -111,6 +111,8 @@ $expectedCitations = [
  * or in the floor above.
  */
 $exemptFromCitation = [
+    'src/Audit/AppActionEventBuilder.php' => 'a two-line binding of the shared AppendOnlyBuilder to one model; it adds and overrides nothing, and every claim is on the base',
+    'src/Audit/AppActionLedgerBuilder.php' => 'a two-line binding of the shared AppendOnlyBuilder to one model; it adds and overrides nothing, and every claim is on the base',
     'src/Audit/AppActionReason.php' => 'a bounded enum: the closed app-action reason vocabulary, whose doc-to-code check is HttpContractDocTest\'s',
     'src/Audit/ConsoleAction.php' => 'a bounded enum: the package\'s own action vocabulary, whose one case is driven by ConsoleEnterAuditTest',
     'src/Console/ActingPrincipal.php' => 'a readonly value object: the resolved principal, carrying no rule of its own',

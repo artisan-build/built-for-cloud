@@ -12,21 +12,31 @@ use RecursiveIteratorIterator;
 use SplFileInfo;
 
 /**
- * The RETENTION DECLARATION, made checkable: **no file under `src/` that
- * names the app-action stream also carries a pruning verb** (Console PRD
- * D17's "declared retention").
+ * The RETENTION DECLARATION, made checkable as far as an enumeration
+ * can: **no file under `src/` that names the app-action stream also uses
+ * one of the ENUMERATED deletion spellings** (Console PRD D17's
+ * "declared retention").
  *
  * WHY A SCAN AND NOT A SENTENCE. "App-action events are never pruned" is
  * a claim about ABSENCE, and this build has three separate findings from
  * instruments that could not see a missing thing. A behavioural test can
  * show that {@see AppActionEvent} refuses a delete today; it cannot show
- * that no OTHER file deletes rows some other way — a `DB::table(...)`
- * sweep, a scheduled command, a `truncate()` on a differently obtained
- * builder. An enumeration over `src/` can, and this is it.
+ * that no OTHER file deletes rows some other way — a scheduled command,
+ * a `Prunable` trait, a `destroy()` call. An enumeration over `src/`
+ * can, for the spellings it enumerates, and this is it.
  *
- * THE RULE: a file is a pruning path when it names the stream — the model
- * class or its table — AND uses one of {@see PRUNE_NEEDLES}. Either alone
- * is innocent: the package deletes plenty of other things, and the model
+ * **THE NAME OF THE CLAIM IS "THESE SPELLINGS", NOT "NO PRUNING PATH",
+ * and an earlier revision of the test that drives this said the wider
+ * thing.** {@see PRUNE_NEEDLES} is a fixed textual list; what the walk
+ * establishes is that none of those strings appears in a file that also
+ * names the stream. That is a tripwire against the ordinary
+ * reintroduction, which is what it is for. It is not a proof that no
+ * deletion path exists, and the test title, the citations and this
+ * docblock all now say the narrower thing.
+ *
+ * THE RULE: a file is reported when it names the stream — a model class
+ * or its table — AND uses one of {@see PRUNE_NEEDLES}. Either alone is
+ * innocent: the package deletes plenty of other things, and the model
  * and the doc name the stream constantly. Comments and docblocks are
  * stripped first, so the model's own prose about never deleting does not
  * make it a deleter.
@@ -34,36 +44,43 @@ use SplFileInfo;
  * WHAT IT DOES NOT COVER, named because an unlisted gap reads as a
  * covered one:
  *
- *  - **A pruning verb this list does not know.** It is a FIXED TEXTUAL
- *    LIST, so a raw `DB::statement('DELETE FROM ...')`, a `delete()`
- *    reached through a variable, or a driver-level sweep is not caught.
- *    Like the session-writer scan, this catches the ordinary
- *    reintroduction, not somebody deliberately hiding one.
- *  - **A table name assembled at runtime**, which matches no literal.
- *  - **Anything outside the scanned root.** The migration's own `down()`
- *    calls `Schema::dropIfExists()` on this table, and that is correct:
- *    dropping a table is schema management by an operator running
- *    migrations, not the package pruning history behind their back.
- *    `database/` is deliberately not scanned, and this is what that
- *    exclusion means rather than something the scan quietly skips.
+ *  - **A deletion spelling this list does not know.** `::destroy(`,
+ *    `->deleteQuietly(`, `->pruneAll(` and the `Prunable` traits were
+ *    all ABSENT from an earlier revision, which is the argument for
+ *    naming this limit rather than trusting the list: real deletion
+ *    paths sat outside a walk whose test claimed there were none. A raw
+ *    `DB::statement('DELETE FROM ...')`, a table name assembled at
+ *    runtime, and a `delete()` reached through a variable are still
+ *    outside it, and no addition to a textual list closes that class.
  *  - **Precision, in the other direction.** The rule is FILE-LEVEL
  *    co-occurrence, so a file that names this stream while pruning
- *    something else entirely is a FALSE POSITIVE, not a miss. That is
- *    the safe direction and it is not free: `ConsoleEnter` prunes
- *    expired assertion burns and is the one emitter, so it is kept off
- *    the stream's models — it reaches them only through
- *    {@see AppActionRecorder} — rather
- *    than being exempted, because an exemption on the emitter is
- *    exactly the hole this scan exists to watch.
+ *    something ELSE is a FALSE POSITIVE. That is not hypothetical: the
+ *    one emitter, `ConsoleEnter`, prunes expired assertion burns, and it
+ *    stays out of this walk only because it happens to reach the stream
+ *    through {@see AppActionRecorder}
+ *    and never names a model — a type hint added tomorrow would turn it
+ *    red for a deletion that has nothing to do with this stream. That is
+ *    a known cost of a textual walk, it is NOT enforced by anything, and
+ *    it is deliberately not answered with a file exemption: an exemption
+ *    on the sole emitter is precisely the blind spot this scan exists to
+ *    prevent. Whoever meets that red is meant to read this paragraph and
+ *    decide, not to add a name to an allowlist.
+ *  - **Anything outside the scanned root.** The migration's own `down()`
+ *    calls `Schema::dropIfExists()` on these tables, and that is
+ *    correct: dropping a table is schema management by an operator
+ *    running migrations, not the package pruning history behind their
+ *    back. `database/` is deliberately not scanned, and this is what
+ *    that exclusion means rather than something the scan quietly skips.
  *  - **The consuming APP**, which owns its own database and can delete
  *    whatever it likes. The declaration is about what THIS PACKAGE
  *    does, and it cannot be about anything else.
  *
- * It is driven over a fixture carrying the offence, so it is proven able
- * to fail rather than merely reporting clean.
- *   Pinned by `tests/AppActionAuditTest.php` — "ships no pruning path for
- *   the app-action stream anywhere in src" and "names a pruning path when
- *   the walk meets one".
+ * Every enumerated spelling is driven over a fixture carrying it, so the
+ * walk is proven able to fail on each one rather than merely reporting
+ * clean.
+ *   Pinned by `tests/AppActionAuditTest.php` — "finds no enumerated
+ *   deletion spelling against the app-action stream anywhere in src" and
+ *   "names every enumerated deletion spelling when the walk meets one".
  */
 final class AppActionRetentionScan
 {
@@ -81,26 +98,43 @@ final class AppActionRetentionScan
     ];
 
     /**
-     * Row-removal verbs. A file is a PRUNING PATH when it contains one of
-     * these AND names the stream.
+     * The deletion spellings this walk knows. A file is REPORTED when it
+     * contains one of these AND names the stream.
+     *
+     * It is a fixed textual list and the claim is worded to match: what
+     * the walk establishes is that none of THESE appears, not that no
+     * deletion path exists. `Prunable` and `MassPrunable` are trait
+     * names rather than call sites, because a model that uses either has
+     * a pruning path whether or not it spells `prune(` anywhere —
+     * `model:prune` calls it. Ordered so a reader can see the four
+     * families: ordinary deletes, quiet deletes (which fire no model
+     * events and so slip past the append-only guards), the Laravel
+     * pruning machinery, and schema drops.
      *
      * @var list<string>
      */
     public const array PRUNE_NEEDLES = [
         '->delete(',
+        '::destroy(',
+        '->deleteQuietly(',
         '->forceDelete(',
+        '->forceDeleteQuietly(',
         '->truncate(',
         '::truncate(',
         '->prune(',
         '::prune(',
+        '->pruneAll(',
+        '::pruneAll(',
+        'MassPrunable',
+        'Prunable',
         '->dropIfExists(',
         '::dropIfExists(',
         '::drop(',
     ];
 
     /**
-     * The pruning verbs a file uses, but only when it also names the
-     * stream — that combination is what makes it a pruning path.
+     * The enumerated deletion spellings a file uses, but only when it
+     * also names the stream — that combination is what the walk reports.
      *
      * @return list<string>
      */
@@ -116,8 +150,9 @@ final class AppActionRetentionScan
     }
 
     /**
-     * Every file under the root that can prune the app-action stream,
-     * keyed by relative path and NAMING the verbs it uses.
+     * Every file under the root that names the app-action stream AND
+     * uses an enumerated deletion spelling, keyed by relative path and
+     * NAMING the spellings it uses.
      *
      * @return array<string, list<string>>
      */

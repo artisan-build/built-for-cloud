@@ -202,6 +202,17 @@ use Throwable;
  * fails, the session is compensated, and no `303` is served. An
  * unrecorded entry is not served.
  *
+ * THAT PROPERTY RUNS ONE WAY, and the other direction is named rather
+ * than left to be inferred. The event attests that the REDEMPTION
+ * COMMITTED, not that the operator ended up with a usable session:
+ * {@see ConsoleGuard::redeem()} writes the session in memory and
+ * `StartSession` persists it after this controller returns, so a
+ * session-store failure in that window leaves a permanent event for an
+ * entry whose session never became durable. {@see auditEntry()} states
+ * it precisely; a mutation-debt row carries it. It is not reachable by
+ * a rollback test, because it happens after the commit those tests roll
+ * back.
+ *
  * **THE ACTOR IS THE ONE THAT WAS ADMITTED, and it is not asked for
  * twice.** {@see ConsoleGuard::redeem()} returns the actor it logged
  * in, and the agency comes from {@see ConsoleSession::claims()} — the
@@ -271,15 +282,6 @@ final class ConsoleEnter
      * attacker influenced.
      */
     public const string AUDIT_NOTE = 'console entry refused (POST /bfc/console/enter): ';
-
-    /**
-     * The dedup key prefix a successful entry's event carries. Keyed on
-     * the MINT — the same length-delimited issuer+`jti` digest the burn
-     * is keyed on — so one mint can produce at most one entry event, and
-     * a second attempt to record the same entry fails the insert and
-     * takes the whole entry with it.
-     */
-    public const string ENTRY_DEDUP_PREFIX = 'console-entry:';
 
     public function __construct(
         private readonly AssertionVerifier $verifier,
@@ -455,13 +457,33 @@ final class ConsoleEnter
      * that session on its very next request anyway; this refuses to have
      * served it at all.
      *
-     * The dedup key is the MINT, not the event: one mint, one entry
-     * event, enforced by the outbox's unique index. It is derived from
-     * the assertion this endpoint verified — the same value
+     * The natural key is the MINT, not the event: one mint, one entry
+     * event, enforced by the unique index on the dedup ledger. It is
+     * derived from the assertion this endpoint verified — the same value
      * {@see AssertionBurn::burn()} keys on, one statement earlier in
      * this transaction — because it is a KEY and not an identity, and
      * keying it on anything the session carries would let two mints for
-     * one operator collapse into one recorded entry.
+     * one operator collapse into one recorded entry. The recorder hashes
+     * it together with the action's vocabulary and name before storing
+     * it, so what lands in the ledger is a digest and this endpoint's
+     * keys share no space with any app's.
+     *
+     * **WHAT THE EVENT ATTESTS, EXACTLY, because the difference is a
+     * real one.** It says the redemption COMMITTED: the mint was spent
+     * and the delegated principal was written into this request's
+     * session, in one transaction with the event itself. It does NOT say
+     * the operator ended up with a usable session.
+     * {@see ConsoleGuard::redeem()} writes the session in MEMORY, and
+     * Laravel's `StartSession` persists it to the session store after
+     * this controller returns — after this transaction has committed. A
+     * session-store failure in that window leaves a permanent event for
+     * an entry whose session never became usable, and no rollback can
+     * reach back through a committed transaction to undo it. The
+     * fail-closed property runs one way only: an entry that could not be
+     * RECORDED is not served. An entry that was recorded and then failed
+     * to become durable is recorded anyway, and this is the sentence
+     * that says so rather than leaving a reader to infer the symmetry. A
+     * mutation-debt row carries it.
      */
     private function auditEntry(Assertion $assertion, DelegatedActor $actor, Session $session): void
     {
@@ -477,7 +499,7 @@ final class ConsoleEnter
             action: ConsoleAction::ConsoleEntered,
             actor: AppActionActor::delegated($actor, $claims->onBehalfOf),
             reason: AppActionReason::ConsoleEntry,
-            dedupKey: self::ENTRY_DEDUP_PREFIX.AssertionBurn::mintHash($assertion->issuer, $assertion->id),
+            naturalKey: AssertionBurn::mintHash($assertion->issuer, $assertion->id),
         );
     }
 

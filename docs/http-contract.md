@@ -2127,6 +2127,15 @@ transaction rolls back leaves no event. What a successful entry also leaves is t
 row's refreshed `last_handoff_*` copy and its `updated_at`. Verification FAILURES are audited in
 full on the credential stream, which is what D13 requires.
 
+**What that event attests, and what it does not.** It says the REDEMPTION COMMITTED: the mint was
+spent and the delegated principal was written into the request's session, in one transaction with
+the event. It does **not** say the operator ended up with a usable session. The guard writes the
+session in memory and Laravel's `StartSession` persists it to the session store after the
+controller returns — after this transaction has committed — so a session-store failure in that
+window leaves a permanent event for an entry whose session never became durable, and no rollback
+can reach back through a committed transaction to undo it. The fail-closed property runs one way
+only, and this is the sentence that says so rather than leaving a reader to infer the symmetry.
+
 *Pinned by* `tests/ConsoleEnterAuditTest.php` ("records one app-action event for a successful entry, through the real door", "records no entry event when the entry transaction rolls back" and "writes nothing to the credential audit stream on a successful entry").
 
 **Storage.** One row per redeemed mint in `bfc_console_assertion_burns`, keyed on a digest of
@@ -2160,17 +2169,44 @@ detail and never said to be unreadable reads exactly like one you can query.
 
 ### Storage
 
-One row per action in `bfc_app_action_events`, plus one row in the transactional outbox
-`bfc_app_action_outbox`, written in the **same database transaction** as the action itself. An
-action that rolls back takes both rows with it: the stream is transactional, or it is fiction. An
-emission attempted outside a transaction is refused rather than opening one of its own.
+One row per action in `bfc_app_action_events`, plus one row in `bfc_app_action_outbox`, written
+in the **same database transaction** as the action itself. An action that rolls back takes both
+rows with it: the stream is transactional, or it is fiction. An emission attempted outside a
+transaction is refused rather than opening one of its own.
 
-`bfc_app_action_outbox.dedup_key` is UNIQUE. That index is what makes **exactly one event per
-action** a database property rather than a convention: a second emission of the same logical
-action fails the insert and takes the transaction — the action included — with it. **No drainer
-ships for this stream in this release**, because no consumer exists to deliver to; the rows
-accumulate, and the delivery-bookkeeping columns the credential outbox carries are deliberately
-absent rather than present and unwritten.
+**`bfc_app_action_outbox` is an immutable dedup ledger, not an operational outbox.** The table is
+named for the outbox PATTERN D17 names, and the pattern is what the write side does; the delivery
+half does not exist. **No drainer ships for this stream in this release**, because no consumer
+exists to deliver to — nothing drains it, nothing marks it, nothing reads it — and the
+delivery-bookkeeping columns the credential outbox carries (`attempts`, `claimed_at`,
+`claim_token`, `delivered_at`, `delivered_recipients`, `last_error`) are deliberately absent
+rather than present and unwritten. It is also not the replayable history: the EVENT table is
+append-only and complete, and a future consumer can be built against that. And it is not an
+ORDERED hand-off — the only ordering it carries is a nullable `created_at` at one-second
+resolution, which cannot sequence two rows written in the same second.
+
+What it does give is dedup, durably. `dedup_key` is UNIQUE, and that index is what makes
+**exactly one event per action** a database property rather than a convention: a second emission
+of the same logical action fails the insert and takes the transaction — the action included —
+with it. `event_id` is unique too, so "one ledger row per event" is a database property as well.
+
+**`dedup_key` stores a sha256 digest, never a caller's string.** It is a hash over a
+length-delimited encoding of the action's vocabulary, the action's name and the caller's own
+natural key. Two reasons, and both matter to a consumer reading this schema later: a caller's
+string written verbatim into a wide column would be an **app-content channel** into a stream
+whose entire premise is that no app content enters it, and an app could pass a request value
+straight in; and namespacing by vocabulary and action removes the global collision domain in
+which two unrelated apps choosing the same natural key would silently suppress each other's
+events.
+
+**And the ledger is append-only exactly as strongly as the event it dedupes** — model guards, the
+enumerated bulk-operation refusals, and the same database triggers. That is not symmetry for its
+own sake: a unique index only rejects a duplicate while the row it collides with still EXISTS, so
+a deletable ledger row would let the duplicate this stream promises to refuse be re-admitted by
+deleting the evidence of the first one.
+
+**Storage is unbounded.** One event row and one ledger row per app action, forever, pruned by
+nothing — see [Retention](#retention) — and the cost is stated here rather than discovered later.
 
 The event columns, all of them:
 
@@ -2187,11 +2223,26 @@ The event columns, all of them:
 
 **There is no free-text column, and one string is not an identifier.** The schema carries no
 `note` and nothing of the kind — the action is an enum case, the reason is a closed enum. The one
-string that is not identifier-shaped is `on_behalf_of`: D4 requires the agency, and it is
-issuer-minted display text bounded to 120 characters and rejected for control characters by the
-assertion verifier. It reaches that column from a verified assertion and from nowhere else — no
-app-supplied and no request-supplied value can be written there — but it is display text, and
-saying "no free text anywhere" without naming it would be false. **Escape it at every sink.**
+string that is not identifier-shaped is `on_behalf_of`, and D4 requires it.
+
+**Who can write these values, precisely.** The package offers one emission point, and it is not a
+gate the language can close: `AppActionEvent` is an ordinary Eloquent model, and an app can reach
+the same table without going through it. So the invariants above are enforced **on the row**, at
+`creating`, for every path that goes through the model: an action that is not a case of a real
+compile-time vocabulary is refused, a `delegated_actor` named by a bare id is refused, an
+`on_behalf_of` on any other actor type is refused, and a write outside a transaction is refused.
+A raw `DB::table(...)->insert(...)` fires no model events and skips all of it — that is the same
+enforcement boundary the credential stream states, and the database triggers guard UPDATE and
+DELETE, not INSERT. A well-formed direct model write also gets **no ledger row**, so "exactly one
+event per action" does not apply to it; the package never takes that path.
+
+**What is NOT enforced about `on_behalf_of` is what it SAYS.** On the path this package takes it
+is an issuer-minted claim, bounded to 120 characters and rejected for control characters by the
+assertion verifier, carried from the request's one resolved acting principal. A consuming app
+calling the actor factory directly supplies its own string, and nothing in the package bounds or
+attributes it — an earlier revision of this paragraph claimed only verifier-originated text could
+reach the column, and that was false. What IS enforced is that the column accompanies a delegated
+actor and no other. **Escape it at every sink.**
 
 ### The actor vocabulary
 
@@ -2223,19 +2274,30 @@ vocabulary that grew a case whenever one did not quite fit would be free text wi
 
 **App-action events are never pruned by this package.** This is attribution history, the same
 decision already taken for the shadow-actor row: nothing here deletes a row, there is no prune
-command, no scheduled sweep and no retention setting, and the append-only guard would refuse a
-future one anyway. Updates and deletes throw at the model layer on both the static and the
-query-builder paths, and database triggers abort raw row-level UPDATE/DELETE where the driver
-permits.
+command, no scheduled sweep and no retention setting. The storage cost is therefore unbounded and
+grows with the app's activity forever.
 
-**The residue, named rather than claimed away.** Raw `TRUNCATE TABLE` is DDL and no row trigger
-sees it; a connection with schema access can DROP the triggers; direct file access to a SQLite
-database rewrites anything. TRUNCATE and DROP enforcement, where an operator wants it, is a
-**database-privilege** matter — revoke DDL from the app's connection — not something a model
-guard can give. Append-only here is by construction, not cryptographic: a compromised instance can
-tamper with its own history.
+**Append-only is three layers, and each covers a different path.** Model events on `updating` and
+`deleting` cover INSTANCE operations (`$row->update()`, `$row->delete()`). Bulk operations fire no
+model events at all, so they are refused by the models' shared Eloquent builder — an enumerated
+set covering `update`, `delete`, `truncate`, `upsert`, the increment/decrement family and the
+event-free insert spellings. Database triggers abort raw row-level UPDATE and DELETE on sqlite,
+mysql/mariadb and pgsql.
 
-*Pinned by* `tests/AppActionAuditTest.php` ("rejects update and delete at the model layer", "rejects truncate on both the static and the query-builder paths", "rejects raw query-builder update and delete at the database layer on sqlite", "ships no pruning path for the app-action stream anywhere in src", "keeps the two audit vocabularies disjoint, so neither stream can hand a reader the other's actor type", "refuses to record an app action outside a database transaction", "leaves neither the event nor its outbox row behind when the action rolls back", "refuses a second emission of the same logical action, and takes the transaction with it" and "leaves the credential stream's shape untouched").
+**The residue, named rather than claimed away**, because each layer has a real edge. Raw
+`TRUNCATE TABLE` is DDL and no row trigger sees it. A raw INSERT — `DB::table(...)` or
+`Model::query()->insert(...)`, which fires no model events — skips the model layer, and the
+triggers guard UPDATE and DELETE, not INSERT. `deleteQuietly()` and its siblings run with model
+events muted, so they too are caught by the triggers alone. A driver this package writes no
+triggers for (sqlsrv) has the model and builder layers and nothing beneath them. A connection with
+schema access can DROP the triggers; direct file access to a SQLite database rewrites anything.
+TRUNCATE and DROP enforcement, where an operator wants it, is a **database-privilege** matter —
+revoke DDL from the app's connection — not something a model guard can give. Append-only here is
+by construction, not cryptographic: a compromised instance can tamper with its own history.
+
+*Pinned by* `tests/AppActionAuditTest.php` ("rejects update and delete on an app-action event at the model layer", "rejects update and delete on a ledger row at the model layer", "refuses every enumerated bulk mutation on the app-action stream, on both models", "rejects truncate on the app-action stream, on both the static and the query-builder paths", "rejects raw update and delete on the app-action table at the database layer on sqlite", "rejects raw update and delete on the ledger table at the database layer on sqlite", "finds no enumerated deletion spelling against the app-action stream anywhere in src", "keeps the two audit vocabularies disjoint, so neither stream can hand a reader the other's actor type", "leaves neither the event nor its ledger row behind when the action rolls back", "refuses a second emission of the same logical action, and takes the transaction with it", "refuses a second ledger row for one event", "stores a digest rather than the caller's natural key", "refuses a direct model write that carries runtime prose as its action", "refuses a direct model write that names a delegated actor by a bare id", "refuses a direct model write that fabricates an agency for a local user" and "leaves the credential stream's shape untouched").
+
+*Pinned by* `tests/RecorderTransactionGuardTest.php` ("refuses to record an app action outside a database transaction").
 
 *Pinned by* `tests/HttpContractDocTest.php` ("the documented app action reason vocabulary matches the code").
 

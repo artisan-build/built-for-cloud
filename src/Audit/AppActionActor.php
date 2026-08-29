@@ -18,20 +18,27 @@ use LogicException;
  * {@see AppActorType} names, their identifier, and — for a delegated
  * actor only — the agency they acted for (D4).
  *
- * **THE CONSTRUCTOR IS PRIVATE, and that is what holds D4's shape.**
- * `on_behalf_of` belongs to a delegated session and to nothing else: a
- * local user acts for the deployment they log in to, and a credential
- * acts for itself. Rather than validating that after the fact, the two
- * non-delegated named constructors do not TAKE an `on_behalf_of` at all,
- * so a local-user or api-token actor cannot be constructed carrying one.
- * {@see delegated()} takes it and passes it through verbatim, `null`
- * included — a session whose handoff carried no agency records none, and
- * the issuer is never substituted for it. Fabricating an agency here
- * would put a customer's name on an action nobody said they authorised.
+ * **THE CONSTRUCTOR IS PRIVATE, and that is what holds the SHAPE of D4 —
+ * not the truth of it.** `on_behalf_of` belongs to a delegated session
+ * and to nothing else: a local user acts for the deployment they log in
+ * to, and a credential acts for itself. Rather than validating that
+ * after the fact, the two non-delegated named constructors do not TAKE
+ * an `on_behalf_of` at all, so a local-user or api-token actor cannot be
+ * constructed carrying one; {@see AppActionEvent} refuses the same
+ * combination at the row, for writes that never came through here.
+ *
+ * WHAT NEITHER OF THOSE DECIDES is what the string SAYS.
+ * {@see delegated()} passes its argument through verbatim, `null`
+ * included, and a caller may pass whatever it likes.
+ * {@see fromActingPrincipal()} is the path on which the agency is this
+ * request's own resolved principal, and it is the path this package
+ * takes; a caller that builds an actor with the raw factories owns the
+ * truth of what it hands over. **Escape it at every sink.**
  *   Pinned by `tests/AppActionAuditTest.php` — "carries the agency a
  *   delegated handoff named", "records a delegated event with no agency
- *   as null rather than inventing one" and "cannot construct a local
- *   user or api token actor that carries an agency at all".
+ *   as null rather than inventing one", "cannot construct a local user
+ *   or api token actor that carries an agency at all" and "refuses a
+ *   direct model write that fabricates an agency for a local user".
  *
  * **THE DELEGATED REF IS TYPE-QUALIFIED.** It is
  * {@see DelegatedActor::getAuthIdentifier()} — `bfc-console:{id}` —
@@ -87,19 +94,31 @@ final readonly class AppActionActor
      * A delegated operator, named by the type-qualified identity, acting
      * for the agency THIS session's handoff named — or for none.
      *
-     * The agency parameter is typed `?string` and is passed VERBATIM.
-     * Both callers take it from {@see DelegatedClaims}, the session's own
-     * copy, and never from the actor row's `last_handoff_on_behalf_of`:
-     * that column is shared by every live session for the same subject,
-     * so a later handoff naming a different agency would retroactively
-     * re-attribute this action to it. That is a rule about where the
-     * value comes from, which this signature cannot enforce and does not
-     * claim to — what it enforces is that only a DELEGATED actor has a
-     * parameter to put one in.
+     * **THE AGENCY IS CALLER-SUPPLIED, and an earlier revision of this
+     * paragraph said it was issuer-supplied.** That was false for any
+     * caller that passes its own string, which is every caller of this
+     * factory: the parameter is a plain `?string` and it is stored
+     * verbatim. Nothing here bounds it, and nothing here establishes
+     * where it came from.
      *
-     * **Issuer-supplied free text, bounded and control-character-free by
-     * {@see AssertionVerifier} and
-     * nothing more. Escape at every sink.**
+     * On the path this package takes it IS an issuer claim —
+     * {@see fromActingPrincipal()} reads it off the request's one
+     * resolved {@see ActingPrincipal}, which took it from
+     * {@see DelegatedClaims}, the session's own copy written from an
+     * assertion {@see AssertionVerifier} had bounded to 120 characters
+     * and rejected for control characters. That matters twice: the
+     * session's copy is used rather than the actor row's
+     * `last_handoff_on_behalf_of`, which is shared by every live session
+     * for the same subject and would let a later handoff naming a
+     * different agency retroactively re-attribute this action to it.
+     *
+     * A caller using this factory directly gets none of that, and owns
+     * the truth of what it passes. What the two layers DO enforce is
+     * narrower and worth stating exactly: only a delegated actor has a
+     * parameter to put an agency in, and {@see AppActionEvent} refuses a
+     * row that carries one on any other actor type.
+     *
+     * **Untrusted display text on either path. Escape at every sink.**
      */
     public static function delegated(DelegatedActor $actor, ?string $onBehalfOf): self
     {
