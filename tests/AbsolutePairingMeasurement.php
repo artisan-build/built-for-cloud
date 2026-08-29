@@ -40,10 +40,9 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
  * measurement says nothing about either.
  *
  * The reason the family was set aside is the second fixture here,
- * {@see CORRECTIONS} — five sentences, the ones the PR7 review required
- * PR8 to narrow, before and after. Each pair is a real correction of a
- * real false claim, and the check on them is whether an absolute-word
- * detector can tell the two apart.
+ * {@see CORRECTIONS} — five phrases the PR7 review required PR8 to
+ * narrow, with what replaced each. The check on them is what an
+ * absolute-word detector does with the two halves.
  *
  * THE RESIDUE. `RESIDUE` is a list of markers somebody thought of, and
  * a residue paragraph phrased some other way is counted as unpaired
@@ -51,7 +50,8 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
  * docblock stating four things is one block, and annotating it would
  * satisfy this count while leaving three of the four unaddressed. Five
  * corrections is what the PR7 list enumerated, not a sample of some
- * larger population.
+ * larger population, and each is represented by one CHOSEN phrase out
+ * of a rewritten paragraph — {@see CORRECTIONS} says what that costs.
  */
 final class AbsolutePairingMeasurement
 {
@@ -79,35 +79,79 @@ final class AbsolutePairingMeasurement
 
     /**
      * The five corrections the PR7 security review required, as the
-     * false sentence and the sentence that replaced it.
+     * false phrase and the phrase that replaced it AT ONE NAMED SITE.
      *
-     * Sources: the false halves are quoted in
+     * **EVERY HALF OF THIS WAS WRONG BEFORE, AND THAT MATTERS MORE
+     * THAN THE FIXTURE DOES.** The first version of this table was
+     * hand-authored from the review's *proposed* wording — the
+     * "smallest accepted wording" the PR7 list suggests — rather than
+     * from what `dc7afce` actually shipped. Not one of the five `after`
+     * halves occurred in the merged tree. A fixture standing in for a
+     * history that did not happen is a weaker control than it looks,
+     * which is this PR's own subject committed inside this PR for the
+     * second time.
+     *
+     * So both halves are now CHECKED, by
+     * `tests/ClaimSurfaceTest.php` — "shows what the vocabulary does
+     * with the five corrections this build had to make":
+     *
+     *  - the `after` phrase occurs verbatim in the named file as it
+     *    stands today, and
+     *  - the `before` phrase occurs nowhere in it, which is what makes
+     *    "this was corrected" a fact the suite holds rather than a
+     *    claim in a comment.
+     *
+     * WHAT IS STILL NOT CHECKED HERE, and it is the half a test in this
+     * repository cannot reach: that each `before` was the wording at
+     * that site BEFORE the correction. Those come from the enumerated
+     * review list in
      * `~/Herd/brain/projects/built-for-cloud/pr7-surviving-absolutes.md`
-     * items 1-5; the true halves are the wording that shipped in
-     * `dc7afce`.
+     * items 1-5, verified by hand against the tree at `a53deac`, and
+     * brain is not readable from here. A reader wanting that half has
+     * to run `git grep -F` at `a53deac`.
      *
-     * @var list<array{0: string, 1: string}>
+     * **THE SPAN IS A JUDGEMENT.** Each correction rewrote a paragraph;
+     * what is stored is one phrase from it, chosen to be the phrase the
+     * PR7 list itself quotes as the offence. A different span from the
+     * same paragraph would give different vocabulary counts, so the
+     * numbers below are a property of these five spans, not of the five
+     * corrections in the abstract.
+     *
+     * @var list<array{before: string, after: string, file: string}>
      */
     public const array CORRECTIONS = [
+        // Item 1. The dedup guarantee, unconditional while the recorder
+        // explicitly permits no deduplication without a natural key.
         [
-            'exactly one event per action',
-            'one event per caller-identified action, and only for calls that supply a natural key',
+            'before' => 'exactly one event per action',
+            'after' => 'one event per CALLER-IDENTIFIED action',
+            'file' => 'src/Audit/AppActionOutboxEntry.php',
         ],
+        // Item 2. Table-wide agency enforcement attributed to a schema
+        // that has no such constraint.
         [
-            'What the schema constrains is that it accompanies a delegated actor',
-            'AppActionRecorder can carry an agency only through a delegated AppActionActor',
+            'before' => 'What the schema constrains',
+            'after' => 'can carry an agency only through a delegated',
+            'file' => 'src/Audit/AppActionEvent.php',
         ],
+        // Item 3. The absolute history claim.
         [
-            'an immutable dedup ledger, append-only and complete: one row per app-action event, forever',
-            'for each successful emission both rows are inserted transactionally, and the package never prunes them',
+            'before' => 'append-only and complete',
+            'after' => 'the package prunes none of them',
+            'file' => 'src/Audit/AppActionOutboxEntry.php',
         ],
+        // Item 4. The digest shape, claimed of the table.
         [
-            'the only shape this table stores',
-            'the column itself enforces only 64 characters and uniqueness',
+            'before' => 'the only shape this table stores',
+            'after' => 'The TABLE enforces only 64 characters and uniqueness',
+            'file' => 'src/Audit/AppActionOutboxEntry.php',
         ],
+        // Item 5. The structural no-free-text claim — the one that
+        // survived three narrowing rounds at three sites.
         [
-            'there is nowhere in this table for prose to go',
-            'the schema has no column designated for arbitrary app content or notes',
+            'before' => 'there is nowhere in this table for prose to go',
+            'after' => 'No column is designated for arbitrary app content.',
+            'file' => 'docs/http-contract.md',
         ],
     ];
 

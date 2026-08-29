@@ -33,7 +33,7 @@ use SplFileInfo;
  * their evidence:
  *
  *  - **What the counts reject is a GATE.** Over the guarantee-bearing
- *    surfaces the withdrawn instrument finds 392 of 1,211 prose blocks
+ *    surfaces the withdrawn instrument finds 392 of 1,212 prose blocks
  *    carrying its vocabulary and 288 of those carrying neither a
  *    citation nor a residue note, so requiring every occurrence to be
  *    paired means writing 288 annotations, most onto sentences already
@@ -65,13 +65,17 @@ use SplFileInfo;
  * WHAT IT DOES NOT RECOGNISE. Each of these is driven in
  * `tests/ClaimSurfaceTest.php` rather than only described:
  *
+ *  - **THE SUBJECT OF A CLAIM, CHANGED AT EVERY SITE, WHEN IT SITS
+ *    OUTSIDE THE ABSOLUTE-BEARING REGION OF THE RUN.** This is first
+ *    because it is the sharpest thing the instrument does not see, and
+ *    because it is *the correction shape the class was built for* —
+ *    PR8 kept the absolute word and changed what the sentence was
+ *    about. Such a rewrite can leave this map byte-identical.
+ *    {@see restatedClaimsIn()} has the mechanism and
+ *    `tests/ClaimSurfaceTest.php` drives it.
  *  - **A restatement that is not word-for-word.** The same promise in
  *    different words at its second site shares no window and is
  *    reported nowhere.
- *  - **Words outside the absolute-bearing region of a run**, including
- *    the SUBJECT of the sentence when it sits far enough from the
- *    nearest absolute — which is the correction shape this class was
- *    built for. {@see restatedClaimsIn()} has the detail.
  *  - **A claim at two sites**, which is where the threshold falls, and
  *    **a claim shorter than {@see PHRASE_WORDS} words**, which is where
  *    the window does.

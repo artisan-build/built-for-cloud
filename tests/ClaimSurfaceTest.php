@@ -37,7 +37,21 @@ use ArtisanBuild\BuiltForCloud\Tests\ClaimSurfaceScan;
  * vocabulary finds two of the five false sentences, and finds both of
  * their replacements too.
  */
-$claimSurfaces = ['src', 'docs', 'release-notes', 'database/migrations', 'resources', 'README.md'];
+$claimSurfaces = [
+    'src',
+    'docs',
+    'release-notes',
+    'database/migrations',
+    'resources',
+    'README.md',
+    // E5. 521 lines of it, 32 blocks carrying an absolute, and one live
+    // three-site guarantee was being REPORTED AS TWO because its third
+    // site is here. That is the map being wrong about a real guarantee
+    // rather than merely narrow, which is why this path is added and
+    // nothing else is: `config/` is where this package explains what
+    // each knob does, and explaining a knob is making a claim about it.
+    'config/built-for-cloud.php',
+];
 
 /**
  * Every claim phrase this package writes at three or more sites, with
@@ -234,6 +248,11 @@ $restatedClaims = [
         'src/Audit/AppActionActor.php',
         'src/Console/ConsoleSession.php',
         'src/Console/DelegatedClaims.php',
+    ],
+    'so a nonce accepted once cannot be accepted again anywhere in its valid window boundary' => [
+        'config/built-for-cloud.php',
+        'release-notes/hmac-kind.md',
+        'src/Hmac/HmacVerifier.php',
     ],
     'straight out of the sealed carrier and accepts no secret input of any kind' => [
         'src/Commands/CredentialMintCommand.php',
@@ -537,7 +556,7 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1211,
+        'blocks' => 1212,
         'absolute' => 392,
         'paired' => 104,
         'unpaired' => 288,
@@ -551,35 +570,50 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
 });
 
 it('shows what the vocabulary does with the five corrections this build had to make', function (): void {
-    // THE REASON THE FAMILY WAS SET ASIDE, as a fixture rather than an
-    // assertion in prose. Each pair is a sentence the PR7 review found
-    // false and the sentence that replaced it in dc7afce.
-    $flagged = [];
+    // E4. THE FIRST VERSION OF THIS FIXTURE WAS HAND-AUTHORED FROM THE
+    // REVIEW'S PROPOSED WORDING, and not one of its five `after` halves
+    // occurred in the merged tree — a fixture standing in for a history
+    // that did not happen, which is this PR's own subject committed
+    // inside this PR. So the halves are checked against the artifacts
+    // before anything is concluded from them.
+    $root = dirname(__DIR__);
 
-    foreach (AbsolutePairingMeasurement::CORRECTIONS as [$before, $after]) {
-        $flagged[] = [
-            AbsolutePairingMeasurement::vocabularyIn($before) !== [],
-            AbsolutePairingMeasurement::vocabularyIn($after) !== [],
-        ];
+    foreach (AbsolutePairingMeasurement::CORRECTIONS as $correction) {
+        $contents = (string) file_get_contents($root.'/'.$correction['file']);
+
+        expect($contents)->toContain($correction['after'])
+            ->and($contents)->not->toContain($correction['before']);
     }
 
-    // Two of the five false sentences are found at all. The other three
-    // carry no word from the list — "exactly one event per action" is
-    // absolute and is not in it — so a gate over this vocabulary would
-    // have asked for annotations on sentences that were fine and asked
-    // for nothing on three that were false.
+    // Only then, what the vocabulary makes of them.
+    $flagged = array_map(
+        static fn (array $correction): array => [
+            AbsolutePairingMeasurement::vocabularyIn($correction['before']) !== [],
+            AbsolutePairingMeasurement::vocabularyIn($correction['after']) !== [],
+        ],
+        AbsolutePairingMeasurement::CORRECTIONS,
+    );
+
+    // THE LOAD-BEARING NUMBER: three of the five false phrases carry no
+    // word from the list at all. "exactly one event per action", "What
+    // the schema constrains …" and "there is nowhere in this table for
+    // prose to go" are absolute claims the vocabulary never sees, so a
+    // gate over it would have demanded annotations on sentences that
+    // were fine and demanded nothing on three that were false.
     expect(count(array_filter($flagged, static fn (array $pair): bool => $pair[0])))->toBe(2);
 
-    // And for both that ARE found, the replacement is found too: PR8
-    // kept the absolute word and changed the subject it was predicated
-    // of. Flagging the fix the same way it flagged the defect is what
-    // makes the detector the wrong instrument, and it is the whole of
-    // the argument — five corrections, not a proof about the family.
-    expect(count(array_filter($flagged, static fn (array $pair): bool => $pair[0] && $pair[1])))->toBe(2);
+    // And of the two it does find, ONE has a replacement it finds too —
+    // PR8 kept "only" and moved it from the table to the column. Where
+    // that happens the detector cannot tell the defect from its own fix.
+    //
+    // This number was reported as 2 before the fixture was checked
+    // against the artifacts. It is 1. The miss rate above is what the
+    // argument rests on.
+    expect(count(array_filter($flagged, static fn (array $pair): bool => $pair[0] && $pair[1])))->toBe(1);
 
-    // The specific pair, spelled out, so the claim is legible without
+    // That one pair, spelled out, so the claim is legible without
     // running anything.
     expect(AbsolutePairingMeasurement::vocabularyIn('the only shape this table stores'))->toBe(['only'])
-        ->and(AbsolutePairingMeasurement::vocabularyIn('the column itself enforces only 64 characters and uniqueness'))
+        ->and(AbsolutePairingMeasurement::vocabularyIn('The TABLE enforces only 64 characters and uniqueness'))
         ->toBe(['only']);
 });
