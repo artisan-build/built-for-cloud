@@ -419,6 +419,13 @@ final class HttpContractDocTest extends TestCase
      * own, so the response below carries the conditional capabilities
      * too; on a console-disabled app it would carry eight, and the
      * pinned set would red rather than quietly shrink.
+     *
+     * The same list is pinned a second time, as a response SHAPE, by
+     * `tests/OwnershipFoundationTest.php` — "returns unauthenticated bfc
+     * meta for unclaimed and claimed environments". Two places to update
+     * when a capability lands, deliberately: that one asserts the whole
+     * `/bfc/meta` body, this one asserts the release signal and ties it
+     * to the document. Whoever adds a capability will meet both.
      */
     public function test_every_capability_this_deployment_reports_is_named_in_the_contract(): void
     {
