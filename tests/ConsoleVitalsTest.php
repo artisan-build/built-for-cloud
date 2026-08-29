@@ -11,6 +11,7 @@ use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\DefaultCredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
@@ -20,17 +21,25 @@ use ArtisanBuild\BuiltForCloud\Testing\MintedTestCredential;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ForeignHeadlineLabel;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HeadlineDeclaration;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\NotAnEnumHeadlineDeclaration;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\NoVocabularyHeadlineDeclaration;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\OversizedHeadlineDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\OversizedHeadlineLabel;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RefusingDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SinkHeadlineLabel;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnboundedHeadlineDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnboundedHeadlineLabel;
-use ArtisanBuild\BuiltForCloud\Vitals\HeadlineLabel;
 use ArtisanBuild\BuiltForCloud\Vitals\HeadlineStat;
 use ArtisanBuild\BuiltForCloud\Vitals\HeadlineUnit;
+use ArtisanBuild\BuiltForCloud\Vitals\VitalsPayload;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Route as RoutingRoute;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 
 uses(RefreshDatabase::class, WithCredentials::class, ContractAssertions::class);
@@ -60,6 +69,7 @@ beforeEach(function (): void {
     ]);
 
     HeadlineDeclaration::reset();
+    RefusingDeclaration::$refuse = [];
 });
 
 /**
@@ -75,16 +85,21 @@ function vitalsReader(): MintedTestCredential
 }
 
 /**
- * Bind the headline-declaring fixture as the app's contract declaration.
+ * Bind a headline-declaring fixture as the app's contract declaration.
  *
- * @param  class-string<HeadlineLabel>|null  $vocabulary
+ * The VOCABULARY is chosen by picking a declaration class, not by
+ * setting a value — DeclaresHeadlineStat::HEADLINE_VOCABULARY is a class
+ * constant, so a test cannot vary it any more than an app can. Only the
+ * current stat is passed in, because only the current stat is a runtime
+ * value.
+ *
+ * @param  class-string<HeadlineDeclaration>  $declaration
  */
-function vitalsDeclareHeadline(?string $vocabulary, ?HeadlineStat $stat): void
+function vitalsDeclareHeadline(string $declaration, ?HeadlineStat $stat): void
 {
-    HeadlineDeclaration::$vocabulary = $vocabulary;
     HeadlineDeclaration::$stat = $stat;
 
-    app()->bind(CredentialDeclaration::class, HeadlineDeclaration::class);
+    app()->bind(CredentialDeclaration::class, $declaration);
 }
 
 // ---------------------------------------------------------------- AC1 --
@@ -364,7 +379,7 @@ it('audits an exclusivity refusal with the acting credential', function (): void
 
 it('renders a headline whose label is in the app declared vocabulary', function (): void {
     vitalsDeclareHeadline(
-        SinkHeadlineLabel::class,
+        HeadlineDeclaration::class,
         new HeadlineStat(128, SinkHeadlineLabel::ActiveSessions, HeadlineUnit::Count),
     );
 
@@ -382,7 +397,7 @@ it('refuses a headline label outside the app declared vocabulary', function (): 
     // still come from an enum this app never declared, which is the
     // enum-typed shape of the same mistake.
     vitalsDeclareHeadline(
-        SinkHeadlineLabel::class,
+        HeadlineDeclaration::class,
         new HeadlineStat(7, ForeignHeadlineLabel::SomeoneElsesLabel, HeadlineUnit::Count),
     );
 
@@ -399,7 +414,7 @@ it('refuses a headline whose declared vocabulary is itself unbounded', function 
     // A vocabulary is only a bound if its own members are bounded; an app
     // that declares free text as a "vocabulary" gets no headline.
     vitalsDeclareHeadline(
-        UnboundedHeadlineLabel::class,
+        UnboundedHeadlineDeclaration::class,
         new HeadlineStat(7, UnboundedHeadlineLabel::Whatever),
     );
 
@@ -413,7 +428,7 @@ it('refuses a headline whose declared vocabulary is itself unbounded', function 
 it('gives an app that declares no vocabulary no headline rather than a fabricated one', function (): void {
     // Declaring the interface with an EMPTY vocabulary, and reporting a
     // stat anyway: still nothing on the wire.
-    vitalsDeclareHeadline(null, new HeadlineStat(1, SinkHeadlineLabel::ActiveSessions));
+    vitalsDeclareHeadline(NoVocabularyHeadlineDeclaration::class, new HeadlineStat(1, SinkHeadlineLabel::ActiveSessions));
 
     $contradiction = $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
         ->assertOk();
@@ -441,7 +456,7 @@ it('gives an app that declares no vocabulary no headline rather than a fabricate
 
 it('refuses a vocabulary larger than the declared cap', function (): void {
     vitalsDeclareHeadline(
-        OversizedHeadlineLabel::class,
+        OversizedHeadlineDeclaration::class,
         new HeadlineStat(3, OversizedHeadlineLabel::Label1, HeadlineUnit::Count),
     );
 
@@ -457,12 +472,10 @@ it('refuses a vocabulary larger than the declared cap', function (): void {
 });
 
 it('refuses a declared vocabulary that is not an enum at all', function (): void {
-    // The signature says `class-string<HeadlineLabel>`, and PHP does not
-    // enforce a generic in a docblock — so the guard is driven with a
-    // class name that satisfies the runtime type and nothing else.
-    HeadlineDeclaration::$vocabulary = HeadlineDeclaration::class;
-    HeadlineDeclaration::$stat = new HeadlineStat(3, SinkHeadlineLabel::ActiveSessions);
-    app()->bind(CredentialDeclaration::class, HeadlineDeclaration::class);
+    // PHP enforces only `?string` on the constant, so an app CAN name a
+    // class that is not an enum. The runtime checks, not the type, are
+    // what refuse it.
+    vitalsDeclareHeadline(NotAnEnumHeadlineDeclaration::class, new HeadlineStat(3, SinkHeadlineLabel::ActiveSessions));
 
     $response = $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
         ->assertOk();
@@ -558,7 +571,7 @@ it('reports what a non-database queue driver can tell it and nothing more', func
 });
 
 it('refuses a non-finite headline value', function (): void {
-    vitalsDeclareHeadline(SinkHeadlineLabel::class, new HeadlineStat(NAN, SinkHeadlineLabel::ActiveSessions, HeadlineUnit::Count));
+    vitalsDeclareHeadline(HeadlineDeclaration::class, new HeadlineStat(NAN, SinkHeadlineLabel::ActiveSessions, HeadlineUnit::Count));
 
     $response = $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
         ->assertOk();
@@ -731,6 +744,49 @@ it('registers both vitals limits', function (): void {
         ->and($byKey->get('bfc-vitals-ip|9.9.9.9')->maxAttempts)->toBe(300);
 });
 
+// ------------------------------------------------------- the one gate --
+
+it('mounts exactly one gate on the vitals route', function (): void {
+    $route = collect(Route::getRoutes()->getRoutes())
+        ->first(fn (RoutingRoute $candidate): bool => $candidate->uri() === 'bfc/console/vitals');
+
+    expect($route)->not->toBeNull()
+        ->and($route->gatherMiddleware())->toBe(['throttle:bfc-vitals', EnsureDashboardCredential::class]);
+
+    // `bfc.ability` sat in front of this gate for one revision. It
+    // enforced a strict SUBSET, so it never changed an answer — while
+    // its own denial audit drained the delivery outbox, putting the
+    // amplification lever back in front of the hardening. A redundant
+    // gate is a second code path with its own side effects.
+    expect($route->gatherMiddleware())
+        ->each(fn ($middleware) => $middleware->not->toContain('bfc.ability'));
+});
+
+it('honours the app declaration refusing the dashboard ability', function (): void {
+    // The hook `bfc.ability` used to call is kept, because an app that
+    // narrows its own credentials must be able to narrow this one.
+    config(['built-for-cloud.credentials.declaration' => RefusingDeclaration::class]);
+
+    RefusingDeclaration::$refuse = [OperatorAbility::MetadataRead->value];
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
+        ->assertForbidden();
+
+    $denied = CredentialAuditEvent::query()
+        ->where('event', LifecycleEventType::DeniedAction->value)
+        ->get();
+
+    expect($denied)->toHaveCount(1)
+        ->and($denied[0]->actor_type)->toBe(AuditActorType::OperatorIntegration)
+        ->and((string) $denied[0]->note)->toContain('app declaration refused');
+
+    // The positive control: with the declaration allowing it, the same
+    // credential reads.
+    RefusingDeclaration::$refuse = [];
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])->assertOk();
+});
+
 // --------------------------------------------------------- polling --
 
 it('never drains the outbox from the polled read', function (): void {
@@ -776,6 +832,49 @@ it('never drains the outbox from the polled read', function (): void {
     // transactional) and delivered nothing — including nothing that was
     // already waiting.
     expect(CredentialOutboxEntry::query()->whereNull('delivered_at')->count())->toBe($before + 1)
+        ->and(CredentialOutboxEntry::query()->whereNotNull('claimed_at')->count())->toBe(0);
+});
+
+it('never drains the outbox from a refused poll either', function (): void {
+    // The DENIAL branch is the one an attacker reaches at will, so it is
+    // the branch that most needed this. It is also where the hole moved
+    // last round: an outer `bfc.ability` gate refused a
+    // wrong-ability credential and drained on the way out.
+    $admin = $this->mintCredential([
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => 'control-plane',
+        'abilities' => [OperatorAbility::ADMIN],
+    ]);
+
+    $this->postJson('/bfc/credentials', [
+        'subject_type' => 'external_consumer',
+        'subject_ref' => 'acme',
+    ], ['Authorization' => $admin->bearerHeader()])->assertCreated();
+
+    // A credential that authenticates and is refused. Warmed first, so
+    // the once-per-credential `first_used` transition is not what we
+    // are measuring.
+    $wrongAbility = $this->mintCredential([
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => 'reader',
+        'abilities' => [OperatorAbility::CredentialRead->value],
+    ]);
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $wrongAbility->bearerHeader()])->assertForbidden();
+
+    CredentialOutboxEntry::query()->update(['delivered_at' => null, 'claimed_at' => null, 'claim_token' => null]);
+
+    $before = CredentialOutboxEntry::query()->whereNull('delivered_at')->count();
+
+    expect($before)->toBeGreaterThan(0);
+
+    foreach (range(1, 3) as $ignored) {
+        $this->getJson('/bfc/console/vitals', ['Authorization' => $wrongAbility->bearerHeader()])
+            ->assertForbidden();
+    }
+
+    // Three refusals, three denial audits, and not one delivery.
+    expect(CredentialOutboxEntry::query()->whereNull('delivered_at')->count())->toBe($before + 3)
         ->and(CredentialOutboxEntry::query()->whereNotNull('claimed_at')->count())->toBe(0);
 });
 
@@ -844,6 +943,119 @@ it('reads without caching when the snapshot is turned off', function (): void {
     $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
         ->assertOk()
         ->assertJsonPath('queue.pending', 1);
+});
+
+it('never turns a malformed cached snapshot into a 500', function (): void {
+    DB::table('jobs')->insert([
+        'queue' => 'default', 'payload' => '{}', 'attempts' => 0,
+        'reserved_at' => null, 'available_at' => now()->getTimestamp(), 'created_at' => now()->getTimestamp(),
+    ]);
+
+    // A stale shape, a colliding key, another package's value: the cache
+    // is not a trusted input, and reconstructing from it outside the
+    // degradation guard turned a dependency problem into the one thing
+    // this route promises cannot happen.
+    Cache::shouldReceive('remember')
+        ->andReturn(['pending' => '12', 'degraded' => 'yes', 'unexpected' => true]);
+
+    $response = $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
+        ->assertOk();
+
+    // Bypassed, not repaired and not trusted: the numbers are the ones
+    // this deployment actually read.
+    expect($response->json('queue.pending'))->toBe(1)
+        ->and($response->json('health'))->toBe('ok');
+});
+
+it('never turns an unavailable cache into a 500', function (): void {
+    Cache::shouldReceive('remember')->andThrow(new RuntimeException('the cache store is gone'));
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('queue.pending', 0)
+        ->assertJsonPath('health', 'ok');
+});
+
+it('namespaces the queue snapshot by deployment and by queue configuration', function (): void {
+    config(['built-for-cloud.cloud.application' => 'app-a']);
+
+    $reader = vitalsReader();
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('queue.pending', 0);
+
+    DB::table('jobs')->insert([
+        'queue' => 'default', 'payload' => '{}', 'attempts' => 0,
+        'reserved_at' => null, 'available_at' => now()->getTimestamp(), 'created_at' => now()->getTimestamp(),
+    ]);
+
+    // Same deployment, inside the window: the snapshot stands.
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('queue.pending', 0);
+
+    // A DIFFERENT deployment sharing this cache must not be served
+    // app-a's backlog. Two deployments behind one Redis with one
+    // CACHE_PREFIX is an ordinary staging arrangement.
+    config(['built-for-cloud.cloud.application' => 'app-b']);
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('queue.pending', 1);
+
+    // And changing which queue the app reads must not keep serving the
+    // previous queue's numbers.
+    config(['built-for-cloud.cloud.application' => 'app-a', 'queue.connections.database.table' => 'other_jobs']);
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('queue.pending', null)
+        ->assertJsonPath('health', 'degraded');
+});
+
+// ----------------------------------------------------- derived bounds --
+
+it('degrades rather than reporting an age outside the window it will report', function (): void {
+    config(['built-for-cloud.vitals.deployed_at' => '1901-12-13T20:45:52+00:00']);
+
+    $response = $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
+        ->assertOk();
+
+    expect($response->json('deploy_age_seconds'))->toBeNull()
+        // The instant itself is still reported — it parsed; it is the
+        // derived age that falls outside the bound.
+        ->and($response->json('deployed_at'))->not->toBeNull()
+        ->and($response->json('health'))->toBe('degraded');
+
+    $this->assertBuiltForCloudMetadataEndpoint($response, 'GET /bfc/console/vitals');
+});
+
+it('degrades rather than reporting a headline magnitude past the bound', function (): void {
+    vitalsDeclareHeadline(
+        HeadlineDeclaration::class,
+        new HeadlineStat(VitalsPayload::MAX_HEADLINE_MAGNITUDE * 10, SinkHeadlineLabel::ActiveSessions, HeadlineUnit::Count),
+    );
+
+    $response = $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
+        ->assertOk();
+
+    expect($response->json('headline'))->toBeNull()
+        ->and($response->json('health'))->toBe('degraded');
+
+    // The value AT the bound is reported: the bound is inclusive, and a
+    // test that only drove the refusal could not tell a bound from a
+    // blanket refusal.
+    vitalsDeclareHeadline(
+        HeadlineDeclaration::class,
+        new HeadlineStat(VitalsPayload::MAX_HEADLINE_MAGNITUDE, SinkHeadlineLabel::ActiveSessions, HeadlineUnit::Count),
+    );
+
+    expect($this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
+        ->assertOk()
+        // `toEqual`, not `toBe`: a float with no fractional part
+        // round-trips through JSON as an integer.
+        ->json('headline.value'))->toEqual(VitalsPayload::MAX_HEADLINE_MAGNITUDE);
 });
 
 // ---------------------------------------------------------- AC16/AC17 --

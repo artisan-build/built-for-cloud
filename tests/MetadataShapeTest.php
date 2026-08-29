@@ -3,9 +3,11 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyring;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
+use ArtisanBuild\BuiltForCloud\MetadataShape;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
 use ArtisanBuild\BuiltForCloud\Scope;
@@ -15,6 +17,7 @@ use ArtisanBuild\BuiltForCloud\Testing\MintedTestCredential;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SelfServiceDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
+use ArtisanBuild\BuiltForCloud\Vitals\VitalsPayload;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Response;
 use Illuminate\Testing\TestResponse;
@@ -169,6 +172,137 @@ it('rejects a body where the schema requires an empty one', function (): void {
         ->toThrow(AssertionFailedError::class);
 });
 
+// ------------------------------------------- no app-supplied regexes --
+
+it('refuses a schema that tries to supply its own pattern', function (): void {
+    // THE THIRD FAIL-OPEN BRANCH, closed at the language level rather
+    // than patched. `'type' => 'pattern'` with `/^.*$/sD` certified
+    // `{"note": "arbitrary free text"}` and marked the path certified,
+    // which also silenced the supplemental lexical check. A schema
+    // author is the party being checked; they may not define what
+    // "bounded" means.
+    $schema = [
+        'type' => 'object',
+        'fields' => ['note' => ['type' => 'pattern', 'pattern' => '/^.*$/sD']],
+    ];
+
+    expect(fn () => $this->assertBuiltForCloudMetadataSchema(['note' => 'arbitrary free text'], $schema, 'probe'))
+        ->toThrow(AssertionFailedError::class);
+
+    // And the same escape attempted through a list item.
+    $listSchema = [
+        'type' => 'object',
+        'fields' => ['tags' => ['type' => 'list', 'of' => ['type' => 'pattern', 'pattern' => '/.*/']]],
+    ];
+
+    expect(fn () => $this->assertBuiltForCloudMetadataSchema(['tags' => ['Jane Operator']], $listSchema, 'probe'))
+        ->toThrow(AssertionFailedError::class);
+});
+
+it('names every string type it will certify, and refuses the rest', function (): void {
+    // The set is CLOSED and package-owned. A schema naming a type this
+    // package does not define is a refusal, not a pass — which is what
+    // makes "an unrecognised shape fails" true of the type system too,
+    // not just of the payload.
+    foreach (['token', 'semver', 'timestamp', 'console_key_id'] as $type) {
+        $this->assertBuiltForCloudMetadataSchema(
+            ['field' => match ($type) {
+                'token' => 'console-vitals',
+                'semver' => '1.4.2-beta.1',
+                'timestamp' => '2026-08-29T09:14:00+00:00',
+                default => 'K2.probe',
+            }],
+            ['type' => 'object', 'fields' => ['field' => ['type' => $type]]],
+            'probe',
+        );
+    }
+
+    foreach (['pattern', 'regex', 'string', 'anything'] as $unknown) {
+        expect(fn () => $this->assertBuiltForCloudMetadataSchema(
+            ['field' => 'ok'],
+            ['type' => 'object', 'fields' => ['field' => ['type' => $unknown]]],
+            'probe',
+        ))->toThrow(AssertionFailedError::class);
+    }
+});
+
+it('keeps the console key id type pinned to the keyring own charset', function (): void {
+    // One regex, never a second copy that could drift from it — the
+    // promise ConsoleKeyring::isValidKeyId already makes.
+    expect(MetadataShape::CONSOLE_KEY_ID)->toBe(ConsoleKeyring::KEY_ID_PATTERN);
+
+    foreach (['K2.probe', 'k1', 'a-b_c.1', str_repeat('a', 64)] as $valid) {
+        expect(MetadataShape::isConsoleKeyId($valid))->toBeTrue($valid)
+            ->and(ConsoleKeyring::isValidKeyId($valid))->toBeTrue($valid);
+    }
+
+    foreach (['has space', '', str_repeat('a', 65), 'has/slash', "k1\nk2"] as $invalid) {
+        expect(MetadataShape::isConsoleKeyId($invalid))->toBeFalse($invalid)
+            ->and(ConsoleKeyring::isValidKeyId($invalid))->toBeFalse($invalid);
+    }
+});
+
+// ------------------------------- the registry agrees with the routes --
+
+it('reads its numeric bounds from the producer rather than restating them', function (): void {
+    // A bound written twice is a bound that will disagree with itself,
+    // and this one already did: the schema capped ages at ten years the
+    // producer computed without limit, and rejected headline magnitudes
+    // it was happy to emit.
+    $schema = $this->metadataVitalsSchema();
+
+    $headline = $schema['fields']['headline']['fields']['value'];
+    $deployAge = $schema['fields']['deploy_age_seconds'];
+    $queueAge = $schema['fields']['queue']['fields']['oldest_pending_age_seconds'];
+
+    expect($headline['max'])->toBe(VitalsPayload::MAX_HEADLINE_MAGNITUDE)
+        ->and($headline['min'])->toBe(-VitalsPayload::MAX_HEADLINE_MAGNITUDE)
+        ->and($deployAge['max'])->toBe(VitalsPayload::MAX_AGE_SECONDS)
+        ->and($deployAge['min'])->toBe(-VitalsPayload::MAX_AGE_SECONDS)
+        ->and($queueAge['max'])->toBe(VitalsPayload::MAX_AGE_SECONDS)
+        ->and($queueAge['min'])->toBe(-VitalsPayload::MAX_AGE_SECONDS);
+});
+
+it('bounds list ITEMS and not list length', function (): void {
+    // How many rows share a name is not a classification concern, and
+    // the producer caps nothing — the schema's old 1,000 was a bound
+    // written where nothing enforced it.
+    $ids = array_map(static fn (int $i): string => 'id-'.$i, range(1, 1500));
+
+    $this->assertBuiltForCloudMetadataSchema(
+        ['revoked_ids' => $ids],
+        $this->builtForCloudMetadataSchemas()['DELETE /api/credentials/{name}'],
+        'probe',
+    );
+
+    // Each ITEM is still bounded, which is the claim actually made.
+    expect(fn () => $this->assertBuiltForCloudMetadataSchema(
+        ['revoked_ids' => ['ok', 'Jane Operator']],
+        $this->builtForCloudMetadataSchemas()['DELETE /api/credentials/{name}'],
+        'probe',
+    ))->toThrow(AssertionFailedError::class);
+});
+
+it('certifies both offboard shapes and refuses a hybrid of them', function (): void {
+    $schema = $this->builtForCloudMetadataSchemas()['POST /bfc/subjects/offboard'];
+
+    $this->assertBuiltForCloudMetadataSchema(['offboarded' => true, 'fully_contained' => true], $schema, 'direct');
+    $this->assertBuiltForCloudMetadataSchema(['accepted' => true, 'fully_contained' => false], $schema, 'integration');
+
+    // `one_of` is a choice between EXACT shapes, not a union of their
+    // keys — otherwise fail-closed would have been traded away for the
+    // second shape.
+    foreach ([
+        ['offboarded' => true, 'accepted' => true, 'fully_contained' => true],
+        ['offboarded' => true],
+        ['offboarded' => true, 'fully_contained' => true, 'note' => 'pending'],
+        ['accepted' => false, 'fully_contained' => true],
+    ] as $hybrid) {
+        expect(fn () => $this->assertBuiltForCloudMetadataSchema($hybrid, $schema, 'probe'))
+            ->toThrow(AssertionFailedError::class);
+    }
+});
+
 // ------------------------------------ the lexical walker still bites --
 
 it('rejects a free-text field on a metadata payload', function (mixed $payload): void {
@@ -229,11 +363,27 @@ it('holds the classification on the metadata-classified endpoints the package se
         'POST /bfc/ownership/cancel-transfer',
     );
 
+    // BOTH offboard shapes, through the real route. The registry used to
+    // admit only the direct one while its own comment acknowledged the
+    // other — a registry disagreeing with the route it certifies.
     $this->assertBuiltForCloudMetadataEndpoint(
         $this->postJson('/bfc/subjects/offboard', [
             'subject_type' => SubjectType::ExternalConsumer->value,
             'subject_ref' => 'acme',
         ], ['Authorization' => metadataOperator(OperatorAbility::SubjectOffboard)->bearerHeader()])->assertOk(),
+        'POST /bfc/subjects/offboard',
+    );
+
+    $this->assertBuiltForCloudMetadataEndpoint(
+        $this->postJson('/bfc/subjects/offboard', [
+            'subject_type' => SubjectType::ExternalConsumer->value,
+            'subject_ref' => 'sponsor-login',
+            'integration_namespace' => 'github-sponsors',
+            'event_id' => 'evt-metadata-1',
+            'entitlement_version' => 1,
+            'external_subject' => 'sponsor-login',
+        ], ['Authorization' => metadataOperator(OperatorAbility::SubjectOffboard)->bearerHeader()])
+            ->assertStatus(202),
         'POST /bfc/subjects/offboard',
     );
 
