@@ -161,7 +161,10 @@ Additive unless marked otherwise:
   label vocabulary is a backed enum in the app's own repo; the package ships none of its own.
   The route additionally requires an OPERATOR subject and an ability set exactly equal to
   `{metadata:read}` — D16's "unable to touch content-classified or mutating surfaces" clause,
-  enforced rather than described.
+  enforced rather than described. **Two source-breaking PHP changes ride this release** (no wire
+  shape changes): `OperatorAbility::RESERVED_METADATA_READ` is removed in favour of the
+  `MetadataRead` case, and `DeclaresHeadlineStat` declares its vocabulary as a class CONSTANT.
+  Both are documented with migrations in `release-notes/console-vitals.md`.
 
 **api_version 1** — the 0.3.x baseline: `/bfc/meta`, `/bfc/ownership/*`, the pre-0.4 credential
 API listing shape.
@@ -360,17 +363,32 @@ route it has no schema for**, so "I do not recognise this shape" is a failure ra
 pass. The package ships a schema for every row in the table above and its own suite drives all
 of them.
 
-A second, lexical check (`assertBuiltForCloudMetadataShape()`) runs alongside it and fails on
-any string that is not a lowercase bounded identifier, a semver or an ISO-8601 instant. It is a
+**The string types a schema may name are a closed, package-owned set** — `token`, `semver`,
+`timestamp` and `console_key_id`, each defined in
+`ArtisanBuild\BuiltForCloud\MetadataShape`, plus `enum` for literal members. A schema cannot
+supply a regular expression of its own. That is a deliberate loss of flexibility: an earlier
+revision accepted an arbitrary pattern per field, so a schema author could write `/^.*$/s` and
+certify `{"note": "arbitrary free text"}` — putting the definition of "bounded" in the hands of
+the party being checked. An app whose metadata endpoint carries a bounded shape this package
+does not name cannot certify that field; it can use the lexical check below as a supplement, or
+add the named type here, where it is reviewed once rather than never.
+
+`console_key_id` is the one named type that is bounded and NOT lowercase (`[A-Za-z0-9._-]`,
+1..64 — the keyring's own constant, not a copy of it), which is what
+`POST /bfc/console/re-key` returns. Numeric bounds are read from the producer's own constants
+rather than restated, so the schema and the endpoint cannot disagree about them.
+
+An endpoint with more than one documented 2xx shape uses `one_of`, where each alternative is
+itself an exact schema — `POST /bfc/subjects/offboard` answers `offboarded` on the direct path
+and `accepted` on the integration path, and both are certified. It is a choice between exact
+shapes, never a union of their keys.
+
+A second, lexical check (`assertBuiltForCloudMetadataShape()`) runs alongside the schema and
+fails on any string that is not a lowercase bounded identifier, a semver or an ISO-8601 instant
+(it stands aside only for the `console_key_id` paths the schema already certified). It is a
 supplement, not the instrument: on its own it passes a free-text field whose sampled value
 happens to look identifier-shaped, which is exactly what the schema closes. Both docblocks
 state their limits.
-
-Where a field is bounded in a charset of its own, the SCHEMA is the authority and the lexical
-check stands aside for that field. One field is like this today: a console `kid` is
-`[A-Za-z0-9._-]{1,64}` — bounded, and not lowercase — so `POST /bfc/console/re-key` pins it
-with an explicit pattern. Widening the shared lowercase vocabulary to admit it would have let a
-capitalised word through on every endpoint.
 
 Vendor-side (Console) reads will want the version-discovery endpoint, so a future BEHAVIORAL
 revision may constrain `product` to a bounded shape, letting `GET /bfc/meta` honestly become
@@ -1619,16 +1637,21 @@ content-classified or mutating surfaces**, and forbids using the ownership/admin
 any dashboard read path. That is EXCLUSIVITY, not membership, and this route enforces it as
 three separate conditions:
 
-1. **The credential holds `metadata:read`,** checked by the exact-match ability gate. Unlike
-   every operator verb route, this one is not mounted behind the operator gate, because that
-   gate grants a break-glass credential whatever ability a route names — a route mounted there
-   could not have enforced D16 at all.
+1. **The credential holds `metadata:read`** — and the app's own declaration authorizes it for
+   that ability. Unlike every operator verb route, this one is not mounted behind the operator
+   gate, because that gate grants a break-glass credential whatever ability a route names; a
+   route mounted there could not have enforced D16 at all.
 2. **Its abilities are exactly `{metadata:read}` and nothing more.** A credential holding both
    `metadata:read` and `credential:admin` would read the dashboard AND mutate every operator
    surface; it is refused here. Inability has to be a property of the credential, because the
    credential is what the vendor holds and what an attacker steals.
 3. **Its subject is an `operator`.** The ability vocabulary is an operator vocabulary; an
    application- or user-subject credential carrying the ability is refused.
+
+All three are enforced by ONE gate. There is no `bfc.ability` layer in front of it: that
+middleware enforces a strict subset of the above, so it never changed an answer, while its own
+denial audit drained the delivery outbox — reintroducing on the refusal path the amplification
+this route is hardened against.
 
 Nothing else opens it. Not an admin `api_tokens` token — the `bfc` guard authenticates the
 unified credential store and has no path to the legacy store, so a legacy admin secret is a
@@ -1685,7 +1708,10 @@ field.
   seconds, both `null` when the app declares no deploy time. The age is signed: a `deployed_at`
   in the future reports a negative age rather than a clamped zero, because clock skew between
   the app and the vendor is something an operator should see rather than something this
-  endpoint should hide.
+  endpoint should hide. An age outside ±`VitalsPayload::MAX_AGE_SECONDS` (a century) is
+  reported as `null` with `degraded` health rather than clamped — a clamped age is a wrong
+  number presented as a right one. The same bound applies to
+  `queue.oldest_pending_age_seconds`.
 - `queue` — backlog integers, **every one nullable, and `null` never means zero.** It means
   this endpoint did not obtain the number, for one of two reasons the payload does not
   distinguish and `health` does: the driver does not report it (only the `database` queue
@@ -1693,34 +1719,42 @@ field.
   driver reports `pending` from the connection's own size and nulls the rest, and health stays
   `"ok"`, since nothing failed), or the read FAILED, which degrades.
 
-  **These numbers are a cached snapshot**, refreshed at most once per
-  `built-for-cloud.vitals.queue_cache_seconds` (15 by default; 0 disables caching). A value
-  can therefore be up to that many seconds stale, which is the trade for not putting a queue
-  query on every poll of a route the vendor polls continuously. The snapshot carries its own
-  health, so a poll served from cache after a failed read still reports `degraded`. Caching
-  bounds how OFTEN the read happens, not how long one read may take: there is no portable
-  wall-clock deadline across the queue drivers Laravel supports, so a genuinely hung dependency
-  hangs one request per window rather than every request.
+  **These numbers are a cached snapshot**, refreshed no more than once per
+  `built-for-cloud.vitals.queue_cache_seconds` (15 by default; 0 disables caching) in the
+  steady state. A value can therefore be up to that many seconds stale, which is the trade for
+  not putting a queue query on every poll of a route the vendor polls continuously. The
+  snapshot carries its own health, so a poll served from cache after a failed read still
+  reports `degraded`, and it is keyed by deployment and queue configuration so instances
+  sharing a cache prefix cannot serve each other's backlogs.
+
+  Two limits, stated because an unstated one reads as covered. The cache is read-through, not a
+  lock: concurrent misses on a cold key each run the read, so the bound is on the steady state
+  rather than on every burst. And it bounds how OFTEN the read happens, not how long one read
+  may take — there is no portable wall-clock deadline across the queue drivers Laravel
+  supports, so a genuinely hung dependency hangs the requests that miss the cache rather than
+  every request.
 - `headline` — the app's ONE headline stat, or `null`. `value` is a number, `unit` is
   `count` | `seconds` | `bytes` | `percent` | `null`, and **`label` is a case from a BACKED ENUM
   the app declares** in its own repo (D15) — by implementing
-  `ArtisanBuild\BuiltForCloud\Contracts\DeclaresHeadlineStat`, whose vocabulary hook returns
-  the class-string of an enum implementing
+  `ArtisanBuild\BuiltForCloud\Contracts\DeclaresHeadlineStat` and setting its
+  `HEADLINE_VOCABULARY` **constant** to an enum implementing
   `ArtisanBuild\BuiltForCloud\Vitals\HeadlineLabel`.
 
-  The enum is the enforcement, not a convention. D15 requires a vocabulary "defined in the
-  app's repo at conversion time, never runtime data", and a list of strings cannot express
-  that — an app could have returned `Tag::pluck('slug')->all()`, and any user-authored slug
-  that happened to look identifier-shaped would have been a legal member of its own vocabulary
-  and would have reached the vendor. An enum's case set is fixed at compile time and reviewable
-  in one diff, so runtime data cannot enter this field at all.
+  Both halves of that are the enforcement, not a convention. D15 requires a vocabulary "defined
+  in the app's repo at conversion time, never runtime data". A class constant must be a
+  constant expression, so WHICH vocabulary applies is fixed when the file is parsed and cannot
+  be selected from a request, a row or a tenant; and the enum's case set is fixed at compile
+  time, so WHAT is in it cannot be assembled at runtime. `Tag::pluck('slug')->all()` satisfies
+  neither half — which it would have, as a list of strings returned by a method, and any
+  user-authored slug that happened to look identifier-shaped would have reached the vendor.
 
   The package ships no vocabulary: an app that declares none reports `"headline": null` rather
   than a fabricated stat. Each of the following **refuses** the headline — the field drops to
-  `null` and `health` degrades: a case from an enum this app did not declare, a vocabulary with
-  more than 64 cases or with a case whose backing value is not a bounded identifier, a
-  non-finite value, and a stat reported alongside no declared vocabulary at all (a
-  contradiction in the app's own declaration).
+  `null` and `health` degrades: a case from an enum this app did not declare, a
+  `HEADLINE_VOCABULARY` that is not an enum at all, a vocabulary with more than 64 cases or
+  with a case whose backing value is not a bounded identifier, a value that is non-finite or
+  beyond `VitalsPayload::MAX_HEADLINE_MAGNITUDE`, and a stat reported alongside no declared
+  vocabulary at all (a contradiction in the app's own declaration).
 
   What remains the app's own code review, and nothing a package can decide: whether the
   declared vocabulary is a *good* one.
