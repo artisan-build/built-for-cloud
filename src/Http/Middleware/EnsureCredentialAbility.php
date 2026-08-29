@@ -38,6 +38,11 @@ use Throwable;
  * `FALLBACK_TOKEN` (the guard has no code path to it), an expired or
  * revoked row — is 401 before abilities are even consulted.
  *
+ * A request arriving when the configured guard NAME has no guard at all
+ * is a 401 too, deliberately: an app that never registered the `bfc`
+ * guard must get a bounded refusal on a package route mounted with this
+ * middleware, not a 500 out of the AuthManager.
+ *
  * A denial of an AUTHENTICATED credential is audited as a `denied_action`
  * event (ids only), best-effort — the deny must stand even while the audit
  * store is down. Anonymous 401s are deliberately NOT audited here: this
@@ -65,6 +70,24 @@ final class EnsureCredentialAbility
         }
 
         $guardName = (string) config('built-for-cloud.credentials.guard', 'bfc');
+
+        // No guard configured under that name at all. This is an
+        // operator misconfiguration rather than an attack, but it is
+        // still a request that cannot be authenticated, so it fails
+        // CLOSED with the same 401 an unknown credential gets — the
+        // structural check {@see EnsureUserIsAuthenticated} already
+        // makes for the session gate. Resolving anyway would make the
+        // AuthManager throw, turning every request to a package route
+        // mounted with this middleware into a 500 on an app that never
+        // added the `bfc` guard.
+        //
+        // The cost is stated rather than hidden: an operator who forgot
+        // the guard sees the same 401 as a bad token, and has to look at
+        // `auth.guards` to tell them apart.
+        if (! is_array(config('auth.guards.'.$guardName))) {
+            abort(401);
+        }
+
         $guard = $this->auth->guard($guardName);
 
         if (! $guard instanceof CredentialGuard) {
@@ -90,6 +113,13 @@ final class EnsureCredentialAbility
 
             abort(403);
         }
+
+        // Which credential this gate accepted, for downstream
+        // attribution — the same attribute name and meaning
+        // {@see EnsureCredentialAdmin} sets on its unified-store branch,
+        // so a controller reads the actor the GATE authorized rather
+        // than resolving the guard a second time.
+        $request->attributes->set('bfc.actor_credential_id', $credential->id);
 
         return $next($request);
     }

@@ -190,6 +190,45 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Console Vitals (the ops-vitals read, Console PRD D9/D15)
+    |--------------------------------------------------------------------------
+    |
+    | Two app-declared facts `GET /bfc/console/vitals` reports. Both are
+    | optional, and both are BOUNDED before they reach the wire, because
+    | that endpoint is `metadata`-classified: bounded scalars and enums
+    | only, no free-text strings anywhere (D15).
+    |
+    | `app_version` — this application's own release. It is echoed only
+    | when it is semver-shaped; anything else is dropped and the payload
+    | reports `degraded`, rather than forwarding an unbounded
+    | operator-authored string to the vendor. (This is the same hazard
+    | `product` above carries, and the reason `GET /bfc/meta` is
+    | classified `content` while this endpoint is not.)
+    |
+    | `deployed_at` — when this deployment last shipped, in any format
+    | the framework's date parser accepts; reported as ISO-8601, with a
+    | derived `deploy_age_seconds`. Unparseable is `degraded` too, for
+    | the same reason: a value was declared and could not be used, which
+    | must not look identical to declaring nothing.
+    |
+    | Null for both is an ordinary, un-degraded state: an app that
+    | declares neither simply reports nulls.
+    |
+    | The headline stat is NOT here. Its label vocabulary is code, not
+    | config — the app's contract declaration implements
+    | ArtisanBuild\BuiltForCloud\Contracts\DeclaresHeadlineStat, so the
+    | one label the vendor ever sees is reviewed in the app's repo (D15)
+    | instead of typed into an environment variable.
+    |
+    */
+
+    'vitals' => [
+        'app_version' => env('BUILT_FOR_CLOUD_APP_VERSION'),
+        'deployed_at' => env('BUILT_FOR_CLOUD_DEPLOYED_AT'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Client Identity Observation
     |--------------------------------------------------------------------------
     |

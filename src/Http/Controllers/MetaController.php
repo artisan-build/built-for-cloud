@@ -28,7 +28,13 @@ final class MetaController
             // endpoint, no delegated-actor table. A control plane that
             // read `console` as "this deployment can be entered" would
             // be reading a promise nothing here keeps.
-            'capabilities' => ['tokens', 'ownership', 'onboarding', 'webhooks', 'credentials', 'console-keys'],
+            //
+            // `console-vitals` is likewise named for what it serves —
+            // the ops-vitals READ (Console PRD D9), one
+            // `metadata`-classified endpoint behind `metadata:read`.
+            // Not `console`, and not `dashboard`: the dashboard is the
+            // vendor's, this is the one surface it reads.
+            'capabilities' => ['tokens', 'ownership', 'onboarding', 'webhooks', 'credentials', 'console-keys', 'console-vitals'],
             'claimed' => $ownership !== null && $ownership->owner_token_id !== null,
         ]);
     }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 
@@ -58,11 +59,11 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
  * the one place this vocabulary splits on BLAST RADIUS rather than on
  * verb family, and it splits deliberately.
  *
- * RESERVED, documented and unenforced ({@see self::RESERVED_METADATA_READ},
- * per the Console reservations): the `metadata:read` ability family —
- * least-privilege, read-audited, for future vendor-side reads of
- * `metadata`-classified endpoints. No credential is issued with it and
- * nothing enforces it in this release.
+ * {@see self::MetadataRead} (`metadata:read`) is the Console's
+ * dashboard-read ability, and it is the one name in this vocabulary that
+ * `credential:admin` deliberately does NOT reach. It is absent from
+ * {@see self::adminEquivalent} on purpose — see that case's docblock for
+ * why widening it would defeat the decision it exists to enforce.
  */
 enum OperatorAbility: string
 {
@@ -103,6 +104,32 @@ enum OperatorAbility: string
      */
     case ConsoleKeyWrite = 'console:key:write';
 
+    /**
+     * Read a `metadata`-classified endpoint on behalf of the vendor's
+     * Console — today exactly one route,
+     * {@see ConsoleVitals} (`GET /bfc/console/vitals`).
+     *
+     * **Deliberately absent from {@see self::adminEquivalent}, and this
+     * is the one case where that absence is load-bearing.** Console PRD
+     * D16 names the ability as the ONLY permitted dashboard credential:
+     * least-privilege, read-audited, unable to touch content-classified
+     * or mutating surfaces, and it explicitly FORBIDS using the
+     * ownership/admin credential for any dashboard read path. Putting
+     * this name in the admin-equivalent set — the shape
+     * {@see self::ConsoleKeyWrite} took one release ago — would have
+     * made every break-glass credential a valid dashboard credential and
+     * left nothing enforcing D16 at all.
+     *
+     * The absence alone would not be enough, because
+     * {@see EnsureCredentialAdmin} does not consult that method: it
+     * grants `credential:admin` whatever ability a route names. So the
+     * route does not use that gate. It is mounted behind
+     * {@see EnsureCredentialAbility}, which matches EXACTLY, and where
+     * `credential:admin` therefore reaches nothing it is not literally
+     * holding.
+     */
+    case MetadataRead = 'metadata:read';
+
     /** Read the audit stream. No package HTTP surface serves it yet; the
      * name is vocabulary so the first audit-read surface enforces it. */
     case AuditRead = 'audit:read';
@@ -126,12 +153,6 @@ enum OperatorAbility: string
     public const string ADMIN = 'credential:admin';
 
     /**
-     * Reserved name only (Console fast-follow): documented in the
-     * vocabulary so nothing else claims it; no issuance, no enforcement.
-     */
-    public const string RESERVED_METADATA_READ = 'metadata:read';
-
-    /**
      * The DECLARED inventory of what `credential:admin` reaches on the
      * operator surfaces — every ability those routes ask for today.
      *
@@ -145,9 +166,14 @@ enum OperatorAbility: string
      * deliberately left off would still be satisfied by break-glass, and
      * this list would quietly become a description of the past.
      *
-     * What IS enforced: the MCP abilities' absence, though by a
-     * different mechanism — {@see EnsureCredentialAbility} checks
-     * exact-match, so no operator ability satisfies an MCP gate.
+     * What IS enforced: the MCP abilities' absence, and
+     * {@see self::MetadataRead}'s, though by a different mechanism —
+     * {@see EnsureCredentialAbility} checks exact-match, so no operator
+     * ability satisfies a gate mounted with it, and those three names
+     * are reached only by a credential literally holding them. Their
+     * absence from this list is therefore a real bound rather than a
+     * description, because of where their routes are mounted — not
+     * because this list is consulted anywhere.
      *
      * The contract doc's admin-equivalent sentence is pinned to this
      * method by `HttpContractDocTest`, so the two cannot disagree; that

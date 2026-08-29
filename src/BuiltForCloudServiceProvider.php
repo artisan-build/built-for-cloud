@@ -34,6 +34,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageInvitations;
@@ -292,6 +293,28 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 'bfc.credential.admin:'.OperatorAbility::ConsoleKeyWrite->value,
             ]);
 
+        // The Console's ops-vitals read (Console PRD D9/D15/D16): a
+        // `metadata`-classified surface at a fixed `/bfc/console/*`
+        // path, an ordinary member of the routes family.
+        //
+        // Its gate is `bfc.ability`, NOT the operator gate every verb
+        // route above uses, and that is D16 rather than taste: D16
+        // forbids the ownership/admin credential on any dashboard read
+        // path, and `bfc.credential.admin` grants `credential:admin`
+        // whatever ability a route names — so mounting this behind it
+        // would have left the prohibition unenforced. `bfc.ability`
+        // matches exactly and authenticates through the `bfc` guard,
+        // which never resolves a legacy `api_tokens` secret.
+        //
+        // Rate-limited like every other credentialed surface, per
+        // credential AND per IP, and the throttle sits OUTSIDE the gate
+        // so refused attempts are bounded too.
+        $router->get('/bfc/console/vitals', ConsoleVitals::class)
+            ->middleware([
+                'throttle:bfc-vitals',
+                'bfc.ability:'.OperatorAbility::MetadataRead->value,
+            ]);
+
         // The offboard verb (PRD 1.15, SEC-V3-04): full account
         // containment behind its OWN verb-family ability — the widest
         // verb, so a stolen mint- or revoke-scoped credential cannot
@@ -423,6 +446,23 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // A single compound credential|IP bucket would defeat both: a new
         // IP would refresh a stolen credential's budget, and a new bearer
         // string would refresh an attacker IP's.
+        // The Console dashboard read (D16). Two independent bounds, the
+        // same shape and for the same reasons as the operator-write
+        // limiter below: a stolen dashboard credential is bounded across
+        // every IP it is replayed from, and one address buys no fresh
+        // budget by rotating bearer strings. No global ceiling —
+        // vitals is a read, and one bucket shared by every deployment's
+        // dashboard poll would let one busy app throttle the fleet.
+        RateLimiter::for('bfc-vitals', function (Request $request): array {
+            $bearer = $request->bearerToken();
+            $credentialKey = $bearer === null || $bearer === '' ? 'anonymous' : hash('sha256', $bearer);
+
+            return [
+                Limit::perMinute(60)->by('bfc-vitals-cred|'.$credentialKey),
+                Limit::perMinute(120)->by('bfc-vitals-ip|'.($request->ip() ?? 'unknown')),
+            ];
+        });
+
         RateLimiter::for('bfc-operator-write', function (Request $request): array {
             $bearer = $request->bearerToken();
             $credentialKey = $bearer === null || $bearer === '' ? 'anonymous' : hash('sha256', $bearer);
