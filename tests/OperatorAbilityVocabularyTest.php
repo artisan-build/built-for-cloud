@@ -64,8 +64,8 @@ it('locks the vocabulary names and the break-glass equivalence', function (): vo
         ->and(OperatorAbility::AuditRead->value)->toBe('audit:read')
         ->and(OperatorAbility::ConsoleKeyWrite->value)->toBe('console:key:write')
         ->and(OperatorAbility::McpRead->value)->toBe('mcp:read')
+        ->and(OperatorAbility::MetadataRead->value)->toBe('metadata:read')
         ->and(OperatorAbility::ADMIN)->toBe(EnsureCredentialAdmin::ABILITY)
-        ->and(OperatorAbility::RESERVED_METADATA_READ)->toBe('metadata:read')
         ->and(OperatorAbility::adminEquivalent())->toBe([
             OperatorAbility::CredentialRead,
             OperatorAbility::CredentialMint,
@@ -80,8 +80,14 @@ it('locks the vocabulary names and the break-glass equivalence', function (): vo
             OperatorAbility::ConsoleKeyWrite,
         ]);
 
-    // The reserved name stays reserved: no enum case enforces it.
-    expect(OperatorAbility::tryFrom('metadata:read'))->toBeNull();
+    // `metadata:read` is now a real case (Console PRD D16) — and it is
+    // the one ability the break-glass does NOT reach. Its absence from
+    // adminEquivalent() is asserted above by the exact list; asserted
+    // here as the property itself, because that is the decision:
+    // FORBIDDEN to use the ownership/admin credential for a dashboard
+    // read path.
+    expect(OperatorAbility::tryFrom('metadata:read'))->toBe(OperatorAbility::MetadataRead)
+        ->and(OperatorAbility::adminEquivalent())->not->toContain(OperatorAbility::MetadataRead);
 });
 
 it('grants an operator credential nothing by default (least privilege)', function (): void {
