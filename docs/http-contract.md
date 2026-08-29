@@ -1993,8 +1993,20 @@ an operator gets in.
 
   *Pinned by* `tests/ConsoleEnterTest.php` ("refuses a genuine second presentation of the same
   assertion, because the mint id is spent", "rolls the burn back with the redemption, so the two
-  commit or fail together", "leaves no spent mint and no session behind a redemption that
-  failed" and "keys the burn on a unique index, which is what makes it atomic").
+  commit or fail together", "keys the burn on a unique index, which is what makes it atomic" and
+  "length-delimits the burn key, so two different issuer and mint pairs cannot hash alike").
+
+  **One refusal deliberately does NOT spend the mint.** A contained (offboarded) actor's entry
+  is refused inside the burn's own transaction, so the burn rolls back with it and that
+  assertion stays presentable until its TTL runs out — every presentation refused, every one
+  audited as `actor_deactivated`. Spending it would make the second attempt audit as `replayed`,
+  which asserts the token was already *redeemed*; it was not, and an operator reading an
+  offboarded human's attempts to get back in would draw exactly the wrong conclusion. The burn
+  table records mints this deployment redeemed; the audit stream records presentations, and it
+  records all of them. The exposure is bounded by the 60–120 second TTL and by the rate limiter,
+  and no session is produced on any attempt.
+
+  *Pinned by* `tests/ConsoleEnterTest.php` ("leaves a contained actor's mint unspent, so every attempt audits as containment").
 
   **What the suite does not exercise, said plainly: a genuine CONCURRENT double presentation.**
   sqlite serializes writers in-process, so the tests above drive the sequential replay and the
@@ -2074,8 +2086,7 @@ useful only until the assertion it names expires, and the endpoint drops expired
 successful entry. The margin points one way on purpose: a row dropped while its assertion could
 still be presented would un-spend a mint.
 
-*Pinned by* `tests/ConsoleEnterTest.php` ("prunes burn rows whose assertions expired long enough
-ago to change no answer" and "keeps a burn row while its assertion could still be presented").
+*Pinned by* `tests/ConsoleEnterTest.php` ("sits exactly on the prune boundary: one second inside keeps a burn row, one second past drops it").
 
 ---
 

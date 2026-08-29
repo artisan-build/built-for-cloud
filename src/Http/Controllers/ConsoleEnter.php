@@ -95,8 +95,9 @@ use Throwable;
  *   Pinned by `tests/ConsoleEnterTest.php` — "mints a delegated session
  *   from a valid handoff and lands on the requested relative path",
  *   "refuses a genuine second presentation of the same assertion,
- *   because the mint id is spent" and "rolls the burn back with the
- *   redemption, so the two commit or fail together".
+ *   because the mint id is spent", "rolls the burn back with the
+ *   redemption, so the two commit or fail together" and
+ *   "leaves a contained actor's mint unspent, so every attempt audits as containment".
  *
  * **EVERY REFUSAL IS THE SAME ANSWER — BYTE FOR BYTE. THE TIMING IS
  * NOT.** Thirteen assertion reasons and eight entry reasons collapse

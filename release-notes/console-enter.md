@@ -102,12 +102,18 @@ serializes writers in-process, so the tests drive the sequential replay and the
 shared-transaction property the race rests on, not the interleaving itself. A mutation-debt row
 records it; a two-connection race on a driver with real row locking is what would close it.
 
+**One refusal deliberately does NOT spend the mint.** A contained (offboarded) actor's entry is
+refused inside the burn's own transaction, so the burn rolls back and that assertion stays
+presentable until its TTL runs out — every presentation refused, every one audited as
+`actor_deactivated`. Spending it would make the second attempt audit as `replayed`, which
+asserts the token was already *redeemed*; it was not. The burn table records mints this
+deployment redeemed; the audit stream records presentations, and it records all of them.
+
 *Pinned by* `tests/ConsoleEnterTest.php` ("refuses a genuine second presentation of the same
 assertion, because the mint id is spent", "rolls the burn back with the redemption, so the two
-commit or fail together", "leaves no spent mint and no session behind a redemption that failed",
-"keys the burn on a unique index, which is what makes it atomic", "prunes burn rows whose
-assertions expired long enough ago to change no answer" and "keeps a burn row while its
-assertion could still be presented").
+commit or fail together", "keys the burn on a unique index, which is what makes it atomic",
+"length-delimits the burn key, so two different issuer and mint pairs cannot hash alike",
+"sits exactly on the prune boundary: one second inside keeps a burn row, one second past drops it" and "leaves a contained actor's mint unspent, so every attempt audits as containment").
 
 ---
 

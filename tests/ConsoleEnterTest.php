@@ -23,6 +23,7 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Testing\TestResponse;
 use ParagonIE\ConstantTime\Base64UrlSafe;
+use Symfony\Component\HttpFoundation\Cookie;
 
 uses(RefreshDatabase::class);
 
@@ -150,13 +151,16 @@ it('refuses a genuine second presentation of the same assertion, because the min
         ->and(AssertionBurn::query()->count())->toBe(1);
 });
 
-it('spends the mint even when the two presentations name the same jti under one issuer only', function (): void {
-    // The burn is keyed on a digest of ISSUER + jti, so a second issuer
-    // reusing a mint id is a different row rather than a false replay.
-    // Only one issuer is trusted (D18), so this is a property of the
-    // key rather than a reachable flow — it is asserted directly.
+it('length-delimits the burn key, so two different issuer and mint pairs cannot hash alike', function (): void {
+    // Without the lengths, one issuer's suffix and the next mint id's
+    // prefix concatenate to the same string, and a collision here would
+    // refuse a GENUINE assertion as a replay of somebody else's. Only
+    // one issuer is trusted in v1 (D18), so this is a property of the
+    // key rather than a reachable flow, and it is asserted as one.
     expect(AssertionBurn::mintHash('https://a.test', 'bc'))
-        ->not->toBe(AssertionBurn::mintHash('https://a.testb', 'c'));
+        ->not->toBe(AssertionBurn::mintHash('https://a.testb', 'c'))
+        ->and(AssertionBurn::mintHash('https://a.test', 'm1'))
+        ->toBe(AssertionBurn::mintHash('https://a.test', 'm1'));
 });
 
 // ─── AC3 / AC4: the deployment audience and the clock ───────────────────────
@@ -275,6 +279,26 @@ it('answers a replayed, a wrong-deployment and an expired assertion with byte-id
 
     foreach ($responses as $response) {
         expect($shape($response))->toBe($shape($replayed));
+    }
+
+    // `set-cookie` is excluded above because a session id rotates per
+    // request — but excluding the whole header would hide a difference
+    // in cookie PRESENCE between refusal paths, which would be a real
+    // distinguisher. So the cookie NAMES are compared explicitly, and
+    // the only thing left unpinned is the rotating value itself.
+    $cookieNames = static function (TestResponse $response): array {
+        $names = array_map(
+            static fn (Cookie $cookie): string => $cookie->getName(),
+            $response->baseResponse->headers->getCookies(),
+        );
+
+        sort($names);
+
+        return $names;
+    };
+
+    foreach ($responses as $response) {
+        expect($cookieNames($response))->toBe($cookieNames($replayed));
     }
 });
 
@@ -537,34 +561,37 @@ it('rolls the burn back with the redemption, so the two commit or fail together'
     // mutation-debt row for bfc#pr4). What CAN be driven, and is the
     // property the race rests on, is that the burn row and the session
     // live in ONE transaction: a redemption that fails after the burn
-    // must leave no spent mint behind.
+    // must leave no spent mint and no session behind.
+    //
+    // EVERY ASSERTION BELOW LOOKS AT STATE. An earlier revision of this
+    // test asserted only that the exception propagated, which is a body
+    // that would stay green with the transaction removed entirely — a
+    // test named for the atomicity guarantee that could not detect its
+    // absence.
     Event::listen(Login::class, function (): never {
         throw new RuntimeException('an audit backend that is down');
     });
 
     $handoff = consoleHandoff('/orders');
 
-    $this->withoutExceptionHandling()
-        ->post('/bfc/console/enter', $handoff);
-})->throws(RuntimeException::class, 'an audit backend that is down');
+    $failed = consoleEnter($handoff);
+    $failed->assertStatus(500);
 
-it('leaves no spent mint and no session behind a redemption that failed', function (): void {
-    Event::listen(Login::class, function (): never {
-        throw new RuntimeException('an audit backend that is down');
-    });
-
-    $handoff = consoleHandoff('/orders');
-
-    consoleEnter($handoff)->assertStatus(500);
-
+    // The burn rolled back with the redemption…
     expect(AssertionBurn::query()->count())->toBe(0);
 
-    // And because the mint was never spent, a later presentation of the
-    // SAME assertion is not a replay — which is the direction that makes
-    // this safe rather than merely tidy.
+    // …the session the redemption had begun writing is not usable…
+    consoleFollow($failed)->assertStatus(401)->assertHeader('BFC-Console-Reentry', '1');
+
+    // …and because the mint was never spent, a later presentation of the
+    // SAME assertion is not a replay. That is the direction that makes
+    // this safe rather than merely tidy, and it is also what proves the
+    // row is genuinely absent rather than merely uncounted.
     Event::forget(Login::class);
 
     consoleEnter($handoff)->assertStatus(303);
+
+    expect(AssertionBurn::query()->count())->toBe(1);
 });
 
 it('keys the burn on a unique index, which is what makes it atomic', function (): void {
@@ -582,36 +609,71 @@ it('keys the burn on a unique index, which is what makes it atomic', function ()
 
 // ─── Housekeeping ───────────────────────────────────────────────────────────
 
-it('prunes burn rows whose assertions expired long enough ago to change no answer', function (): void {
+it('sits exactly on the prune boundary: one second inside keeps a burn row, one second past drops it', function (): void {
+    // The boundary is the assertion's own life plus the margin, and the
+    // margin points ONE WAY on purpose: a row dropped while its
+    // assertion could still be presented would UN-SPEND a mint. An
+    // earlier revision travelled 100s against a 150s boundary, so the
+    // constant could have been almost any value and the test would
+    // still have passed. This sits on it from both sides.
+    $start = CarbonImmutable::parse('2026-08-29T12:00:00+00:00');
+    // consoleClaims() mints `exp` 90 seconds after `iat`.
+    $boundary = 90 + AssertionBurn::PRUNE_MARGIN_SECONDS;
+
+    $this->travelTo($start);
+
     consoleEnter(consoleHandoff('/orders'))->assertStatus(303);
-
-    expect(AssertionBurn::query()->count())->toBe(1);
-
-    // Far enough past the assertion's own expiry that the verifier would
-    // refuse the token before the burn was ever consulted.
-    $this->travel(AssertionBurn::PRUNE_MARGIN_SECONDS + 3600)->seconds();
-
-    consoleEnter(consoleHandoff('/reports'))->assertStatus(303);
-
-    expect(AssertionBurn::query()->count())->toBe(1)
-        ->and(AssertionBurn::query()->sole()->mint_id)->toBeString();
-});
-
-it('keeps a burn row while its assertion could still be presented', function (): void {
-    // The margin points one way on purpose. A row pruned while its
-    // assertion is still inside the verifier's window would UN-SPEND a
-    // mint, which is the one direction single-use cannot survive.
-    $entered = consoleEnter(consoleHandoff('/orders'));
-    $entered->assertStatus(303);
 
     $spent = AssertionBurn::query()->sole()->mint_id;
 
-    // Past the assertion's own 90-second expiry, but inside the margin.
-    $this->travel(100)->seconds();
+    // ON the boundary: still inside the margin, still kept.
+    $this->travelTo($start->addSeconds($boundary));
 
     consoleEnter(consoleHandoff('/reports'))->assertStatus(303);
 
     expect(AssertionBurn::query()->pluck('mint_id')->all())->toContain($spent);
+
+    // One second past it: the row can no longer change any answer.
+    $this->travelTo($start->addSeconds($boundary + 1));
+
+    consoleEnter(consoleHandoff('/invoices'))->assertStatus(303);
+
+    expect(AssertionBurn::query()->pluck('mint_id')->all())->not->toContain($spent)
+        // …and the rows still inside their own windows are untouched.
+        ->and(AssertionBurn::query()->count())->toBe(2);
+});
+
+// ─── A contained actor's mint is deliberately NOT spent ─────────────────────
+
+it('leaves a contained actor\'s mint unspent, so every attempt audits as containment', function (): void {
+    // A DELIBERATE CHOICE, not an accident of the transaction shape.
+    // The containment refusal is thrown inside the burn's transaction,
+    // so it rolls the burn back and the assertion stays presentable
+    // until its TTL runs out — every presentation refused, every one
+    // audited as `actor_deactivated`.
+    //
+    // Spending the mint instead would make the SECOND attempt audit as
+    // `replayed`, which says "this token was already redeemed". It was
+    // not. An operator reading the trail of an offboarded human's
+    // attempts to get back in would see one containment and a run of
+    // replays, and reasonably conclude the token had worked once.
+    consoleEnter(consoleHandoff('/orders'))->assertStatus(303);
+
+    DelegatedActor::query()->sole()->deactivate();
+
+    $handoff = consoleHandoff('/orders');
+
+    consoleEnter($handoff)->assertStatus(ConsoleEnter::REFUSAL_STATUS);
+    consoleEnter($handoff)->assertStatus(ConsoleEnter::REFUSAL_STATUS);
+    consoleEnter($handoff)->assertStatus(ConsoleEnter::REFUSAL_STATUS);
+
+    // Only the successful entry spent a mint.
+    expect(AssertionBurn::query()->count())->toBe(1);
+
+    // And all three attempts are recorded as what they were.
+    expect(CredentialAuditEvent::query()->where('event', LifecycleEventType::DeniedAction->value)->count())
+        ->toBe(3)
+        ->and(consoleEntryRefusalReasons())->toBe([ConsoleEntryRefusalReason::ActorDeactivated->value]);
 });
 
 // ─── The contract face ──────────────────────────────────────────────────────

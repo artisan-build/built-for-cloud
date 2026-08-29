@@ -33,9 +33,9 @@ use Illuminate\Database\UniqueConstraintViolationException;
  *   Pinned by `tests/ConsoleEnterTest.php` — "refuses a genuine second
  *   presentation of the same assertion, because the mint id is spent",
  *   "rolls the burn back with the redemption, so the two commit or fail
- *   together", "leaves no spent mint and no session behind a redemption
- *   that failed" and "keys the burn on a unique index, which is what
- *   makes it atomic".
+ *   together", "keys the burn on a unique index, which is what makes it
+ *   atomic" and "length-delimits the burn key, so two different issuer
+ *   and mint pairs cannot hash alike".
  *
  * WHAT IS NOT PROVEN HERE, and it is the one that matters most: **the
  * suite does not exercise a genuine concurrent double presentation.**
@@ -64,10 +64,21 @@ use Illuminate\Database\UniqueConstraintViolationException;
  * the table's growth and its pruning are driven by the same events and
  * an attacker can force neither. The margin points one way on purpose:
  * a row dropped while its assertion could still be presented would
- * UN-SPEND a mint.
- *   Pinned by `tests/ConsoleEnterTest.php` — "prunes burn rows whose
- *   assertions expired long enough ago to change no answer" and "keeps
- *   a burn row while its assertion could still be presented".
+ * UN-SPEND a mint, so the boundary is driven from BOTH sides rather
+ * than from comfortably inside it.
+ *   Pinned by `tests/ConsoleEnterTest.php` — "sits exactly on the prune boundary: one second inside keeps a burn row, one second past drops it".
+ *
+ * ONE REFUSAL DELIBERATELY DOES NOT SPEND A MINT. A contained actor's
+ * entry throws inside this transaction, so the burn rolls back with it
+ * and that assertion stays presentable until its TTL runs out — every
+ * presentation refused, every one audited as `actor_deactivated`.
+ * Spending it instead would make the second attempt audit as
+ * `replayed`, which asserts the token was already REDEEMED. It was not,
+ * and an operator reading an offboarded human's attempts to get back in
+ * would draw exactly the wrong conclusion. This table records mints
+ * this deployment redeemed; the audit stream records presentations, and
+ * it records all of them.
+ *   Pinned by `tests/ConsoleEnterTest.php` — "leaves a contained actor's mint unspent, so every attempt audits as containment".
  */
 final class AssertionBurn extends Model
 {
