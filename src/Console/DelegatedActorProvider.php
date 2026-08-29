@@ -155,6 +155,13 @@ final class DelegatedActorProvider implements UserProvider
      * there is no other login path), so the only recaller that can exist
      * for this guard is one this package did not write.
      *
+     * All of that is DRIVEN rather than argued:
+     * `tests/ConsoleRememberMeTest.php` hands the guard a well-formed
+     * recaller cookie through a real request and observes, through a
+     * recording wrapper around this very provider, that the framework
+     * reached this method — and that nobody authenticated and no session
+     * was written.
+     *
      * @param  mixed  $identifier
      */
     public function retrieveByToken($identifier, #[SensitiveParameter] $token): ?Authenticatable

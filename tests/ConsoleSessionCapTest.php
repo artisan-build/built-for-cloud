@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleGuard;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleReentryReason;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleReturnTo;
@@ -11,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\Console\ConsoleSessionClock;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
@@ -45,6 +47,22 @@ beforeEach(function (): void {
 
     Route::middleware([StartSession::class, 'bfc.console', 'auth:'.ConsoleGuardConfiguration::GUARD])
         ->post('/livewire/update', fn (): array => ['ok' => true]);
+
+    // ONE read, chosen by the caller, and nothing touches the guard
+    // before it — so each of the guard's entry points can be driven as
+    // the genuinely FIRST read on a capped session.
+    Route::middleware([StartSession::class])->get('/console-first-read', function (Request $request): array {
+        /** @var ConsoleGuard $guard */
+        $guard = auth(ConsoleGuardConfiguration::GUARD);
+
+        return ['answer' => match ($request->query('read')) {
+            'id' => $guard->id(),
+            'hasUser' => $guard->hasUser(),
+            'check' => $guard->check(),
+            'user' => $guard->user()?->getAuthIdentifier(),
+            default => 'unknown read',
+        }];
+    });
 
     // Deliberately WITHOUT the gate and without the console guard. The
     // cap lives in the GUARD, so this route must reach exactly the same
@@ -145,6 +163,63 @@ it('refuses and destroys a capped session on a route carrying no console middlew
     // The session did not merely go unread: the guard destroyed it,
     // on a route that never mentioned the Console.
     $response->assertSessionMissing(ConsoleSession::ASSERTION_ISSUED_AT);
+    $response->assertSessionMissing(consoleGuardSessionKey());
+});
+
+it('refuses a capped session when id() is the FIRST thing anything reads', function (): void {
+    // The wrapper forwards several methods to actor(), and a revision
+    // that forwarded any of them to the INNER guard instead would leak
+    // the stale principal while user() looked correct — which is exactly
+    // how an earlier attempt's ConsoleGuard failed. So each entry point
+    // is driven as the first read on a capped session, in its own test:
+    // once anything has called actor(), the refusal is already cached
+    // and a blind forwarder would pass.
+    $actor = consoleActor();
+
+    $this->withSession(consoleSessionState($actor, CarbonImmutable::now()->subMinutes(121)->getTimestamp()));
+
+    $response = $this->getJson('/console-first-read?read=id')
+        ->assertOk()
+        ->assertJsonPath('answer', null);
+
+    $response->assertSessionMissing(consoleGuardSessionKey());
+    $response->assertSessionMissing(ConsoleSession::ASSERTION_ISSUED_AT);
+});
+
+it('refuses a capped session when hasUser() is the FIRST thing anything reads', function (): void {
+    $actor = consoleActor();
+
+    $this->withSession(consoleSessionState($actor, CarbonImmutable::now()->subMinutes(121)->getTimestamp()));
+
+    $response = $this->getJson('/console-first-read?read=hasUser')
+        ->assertOk()
+        ->assertJsonPath('answer', false);
+
+    $response->assertSessionMissing(consoleGuardSessionKey());
+    $response->assertSessionMissing(ConsoleSession::ASSERTION_ISSUED_AT);
+});
+
+it('refuses a capped session when check() is the FIRST thing anything reads', function (): void {
+    $actor = consoleActor();
+
+    $this->withSession(consoleSessionState($actor, CarbonImmutable::now()->subMinutes(121)->getTimestamp()));
+
+    $response = $this->getJson('/console-first-read?read=check')
+        ->assertOk()
+        ->assertJsonPath('answer', false);
+
+    $response->assertSessionMissing(consoleGuardSessionKey());
+});
+
+it('refuses a capped session when user() is the FIRST thing anything reads', function (): void {
+    $actor = consoleActor();
+
+    $this->withSession(consoleSessionState($actor, CarbonImmutable::now()->subMinutes(121)->getTimestamp()));
+
+    $response = $this->getJson('/console-first-read?read=user')
+        ->assertOk()
+        ->assertJsonPath('answer', null);
+
     $response->assertSessionMissing(consoleGuardSessionKey());
 });
 

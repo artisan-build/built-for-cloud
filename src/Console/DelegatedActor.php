@@ -283,11 +283,17 @@ final class DelegatedActor extends Model implements Authenticatable
      * else, and a cookie that outlived them would be the one way the
      * browser got a say in revocation.
      *
-     * Null is also load-bearing on the two paths that DO call this:
-     * `SessionGuard::logout()` cycles a remember token only when this is
-     * non-empty, and `EloquentUserProvider::retrieveByToken()` refuses
-     * outright on a falsy one — so even a stock provider pointed at this
-     * model could not recall a session from a cookie.
+     * Null is LOAD-BEARING, not incidental:
+     * `EloquentUserProvider::retrieveByToken()` refuses outright on a
+     * falsy one, so even a stock provider pointed at this model cannot
+     * recall a session from a cookie. That is driven, against a real
+     * `EloquentUserProvider`, in `tests/ConsoleRememberMeTest.php`
+     * rather than argued here.
+     *
+     * `SessionGuard::logout()` also reads it, to decide whether to cycle
+     * a token — but this package never calls that method
+     * ({@see ConsoleGuard::logout()} says why), so that is a claim about
+     * a path this guard does not take and nothing here depends on it.
      */
     public function getRememberToken(): ?string
     {
@@ -295,12 +301,15 @@ final class DelegatedActor extends Model implements Authenticatable
     }
 
     /**
-     * A no-op, and unreachable rather than merely unused: the only
-     * caller inside Laravel is `SessionGuard::logout()`'s
-     * `cycleRememberToken()`, which runs only when
-     * {@see getRememberToken()} returned a non-empty value, and this
-     * one always returns null. There is no column to write and no
-     * behaviour to swallow.
+     * A no-op: there is no `remember_token` column to write to.
+     *
+     * Nothing in this package calls it — {@see ConsoleGuard} never
+     * remembers a login, and its `logout()` does not call the
+     * framework's, which is the only caller that would cycle a token —
+     * so this is not "unreachable" so much as "not on any path taken
+     * here". What matters is the observable effect, and it is driven
+     * directly in `tests/ConsoleRememberMeTest.php`: calling this and
+     * saving the model stores nothing and creates no attribute.
      *
      * @param  string  $value
      */
@@ -311,11 +320,14 @@ final class DelegatedActor extends Model implements Authenticatable
 
     /**
      * The empty string: there is no remember-token column, so there is
-     * no name to give. Its only caller inside Laravel is
-     * `EloquentUserProvider::updateRememberToken()`, which this type
-     * never meets — and a stock provider that DID meet it could not
-     * resolve a cookie anyway, because `retrieveByToken()` refuses on a
-     * falsy {@see getRememberToken()}, which this one always is.
+     * no name to give, and naming one that does not exist would let a
+     * provider try to write it.
+     *
+     * Its caller inside Laravel is
+     * `EloquentUserProvider::updateRememberToken()`. A stock provider
+     * that reached it could still not recall a session, because
+     * `retrieveByToken()` refuses on a falsy {@see getRememberToken()} —
+     * driven in `tests/ConsoleRememberMeTest.php`.
      */
     public function getRememberTokenName(): string
     {

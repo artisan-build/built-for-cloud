@@ -10,6 +10,7 @@ use ArtisanBuild\BuiltForCloud\Console\ConsoleRole;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedClaims;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
+use ArtisanBuild\BuiltForCloud\Tests\NoGlobalAuthMutationScan;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
@@ -196,86 +197,73 @@ it('leaves auth.defaults.guard untouched through a request that only package cod
 });
 
 it('never calls shouldUse, resolveUsersUsing or writes auth.defaults.guard anywhere in src/', function (): void {
-    // The literal statement of AC28, and the one a future change would
-    // trip over: the repoint is the framework's to make, from its own
-    // `auth:<guard>` middleware, and this package has no business
-    // touching process-global auth state.
-    $offences = [];
-    $scanned = 0;
+    // The literal statement of AC28 as re-locked, and the one a future
+    // change would trip over: the repoint is the framework's to make,
+    // from its own `auth:<guard>` middleware, and this package has no
+    // business touching process-global auth state itself.
+    $root = dirname(__DIR__).'/src';
 
-    $files = new RecursiveIteratorIterator(
-        new RecursiveDirectoryIterator(dirname(__DIR__).'/src', FilesystemIterator::SKIP_DOTS),
-    );
-
-    /** @var SplFileInfo $file */
-    foreach ($files as $file) {
-        if (! $file->isFile() || $file->getExtension() !== 'php') {
-            continue;
-        }
-
-        $scanned++;
-
-        // CODE ONLY. The docblocks in this package name `shouldUse()`
-        // repeatedly — explaining why the package does not call it — so
-        // a raw string search would report every explanation as an
-        // offence and this test would be about its own prose. Comments
-        // and doc comments are stripped before anything is matched.
-        $code = implode('', array_map(
-            static fn (array|string $token): string => is_string($token) ? $token
-                : (in_array($token[0], [T_COMMENT, T_DOC_COMMENT], true) ? ' ' : $token[1]),
-            token_get_all((string) file_get_contents($file->getPathname())),
-        ));
-
-        // WRITES only. Reading `auth.defaults.guard` is exactly what
-        // the resolver and the credential guard are supposed to do —
-        // that key IS the route's applicable guard — so the needles are
-        // the three AuthManager mutators and the two shapes a config
-        // write takes.
-        foreach (['shouldUse', 'resolveUsersUsing', 'setDefaultDriver', "auth.defaults.guard' =>", "set('auth.defaults.guard'"] as $needle) {
-            if (str_contains($code, $needle)) {
-                $offences[] = substr($file->getPathname(), strlen(dirname(__DIR__)) + 1).': '.$needle;
-            }
-        }
-    }
-
-    // A walk that enumerated nothing would report "clean" forever.
-    expect($scanned)->toBeGreaterThan(100)
-        ->and($offences)->toBe([]);
+    // A scanner that enumerated nothing would report "clean" forever.
+    expect(NoGlobalAuthMutationScan::countPhpFiles($root))->toBeGreaterThan(100)
+        ->and(NoGlobalAuthMutationScan::scan($root))->toBe([]);
 });
 
-it('would catch a repoint if one were introduced', function (): void {
-    // The scan above is a claim about ABSENCE, so it is worthless
-    // unless it can fail. This is the same code path over a fixture
-    // that carries the offence — in real code, and in a comment that
-    // must NOT count.
+it('collects and names an offence when the walk meets one', function (): void {
+    // The scan above is a claim about ABSENCE, so it is worth nothing
+    // unless the WALK — not a re-implementation of it in this file — can
+    // fail. This drives the same `scan()` over a fixture tree that
+    // carries the offences, and the offence has to come back NAMED.
     $root = sys_get_temp_dir().'/bfc-repoint-'.bin2hex(random_bytes(6));
 
-    mkdir($root, 0700, true);
+    mkdir($root.'/nested', 0700, true);
 
-    file_put_contents($root.'/repoints.php', "<?php\n\nfunction go(\$auth): void { \$auth->shouldUse('bfc-console'); }\n");
-    file_put_contents($root.'/talks_about_it.php', "<?php\n\n// This function deliberately does not call shouldUse() on the auth manager.\nfunction fine(): bool { return true; }\n");
+    $files = [
+        // A real repoint, nested, so the recursion is exercised too.
+        $root.'/nested/repoints.php' => "<?php\n\nfunction go(\$auth): void { \$auth->shouldUse('bfc-console'); }\n",
+        // A real config write, in the other shape the scanner knows.
+        $root.'/writes_config.php' => "<?php\n\nfunction go(): void { config(['auth.defaults.guard' => 'bfc-console']); }\n",
+        // Prose that NAMES the offence and must not count — this file is
+        // the shape of every docblock in src/ that explains why the
+        // package does not repoint.
+        $root.'/talks_about_it.php' => "<?php\n\n/** This does not call shouldUse() or set auth.defaults.guard' => anything. */\nfunction fine(): bool { return true; }\n",
+        // A legitimate READ of the same key, which is what the resolver
+        // does on every request.
+        $root.'/reads_it.php' => "<?php\n\nfunction which(): mixed { return config('auth.defaults.guard'); }\n",
+        // Not PHP: the walk must ignore it, so a .txt full of offences
+        // cannot make the test pass for the wrong reason either.
+        $root.'/notes.txt' => 'shouldUse( setDefaultDriver(',
+    ];
 
-    $offenders = [];
-
-    foreach (['repoints.php', 'talks_about_it.php'] as $name) {
-        $code = implode('', array_map(
-            static fn (array|string $token): string => is_string($token) ? $token
-                : (in_array($token[0], [T_COMMENT, T_DOC_COMMENT], true) ? ' ' : $token[1]),
-            token_get_all((string) file_get_contents($root.'/'.$name)),
-        ));
-
-        if (str_contains($code, 'shouldUse')) {
-            $offenders[] = $name;
-        }
+    foreach ($files as $path => $contents) {
+        file_put_contents($path, $contents);
     }
 
     try {
-        expect($offenders)->toBe(['repoints.php']);
+        expect(NoGlobalAuthMutationScan::countPhpFiles($root))->toBe(4)
+            ->and(NoGlobalAuthMutationScan::scan($root))->toBe([
+                'nested/repoints.php' => ['shouldUse'],
+                'writes_config.php' => ["auth.defaults.guard' =>"],
+            ]);
     } finally {
-        array_map(unlink(...), [$root.'/repoints.php', $root.'/talks_about_it.php']);
+        array_map(unlink(...), array_keys($files));
+        rmdir($root.'/nested');
         rmdir($root);
     }
 });
+
+it('names every mutator it knows about, and none of them in prose', function (string $code, array $expected): void {
+    expect(NoGlobalAuthMutationScan::offencesIn('<?php '.$code))->toBe($expected);
+})->with([
+    'shouldUse' => ['$auth->shouldUse("x");', ['shouldUse']],
+    'facade shouldUse' => ['Auth::shouldUse("x");', ['shouldUse']],
+    'resolveUsersUsing' => ['$auth->resolveUsersUsing(fn () => null);', ['resolveUsersUsing']],
+    'setDefaultDriver' => ['$auth->setDefaultDriver("x");', ['setDefaultDriver']],
+    'config array write' => ["config(['auth.defaults.guard' => 'x']);", ["auth.defaults.guard' =>"]],
+    'repository set' => ["\$config->set('auth.defaults.guard', 'x');", ["set('auth.defaults.guard'"]],
+    'a read is not an offence' => ["\$g = config('auth.defaults.guard');", []],
+    'a line comment is not an offence' => ['// never call shouldUse() here', []],
+    'a docblock is not an offence' => ["/** setDefaultDriver() is the framework's job. */", []],
+]);
 
 it('resolves a subsequent non-console request normally after a delegated one', function (): void {
     $user = actingUser();
@@ -380,6 +368,77 @@ it('does not let a later handoff change the role of an already-live session', fu
         ->assertJsonPath('role', 'member')
         ->assertJsonPath('attribution', 'Jane Operator')
         ->assertJsonPath('on_behalf_of', null);
+});
+
+it('holds two concurrent sessions for one subject at the roles they each entered with', function (): void {
+    // AC16 in the SHAPE OF THE BUG it guards, rather than one session
+    // re-read after a row write. The escalation is: one human, two live
+    // delegated sessions — a member session already open in one browser,
+    // an admin session opened in another — and the shadow actor row is
+    // shared by both. Reading the role off that row would silently
+    // promote the member session on its very next request.
+    //
+    // Both sessions are live for the whole test and are interleaved, so
+    // "S1 is still a member" is asserted while S2 is genuinely open, not
+    // merely after S2's handoff was recorded.
+    $memberSession = consoleSessionState(consoleActor(role: ConsoleRole::Member, displayName: 'Jane Member'));
+
+    // S2: the SAME issuer + subject, so the same actor row — that is
+    // what makes the two sessions share a referent and what makes
+    // reading claims off it an escalation.
+    $adminSession = consoleSessionState(consoleActor(role: ConsoleRole::Admin, displayName: 'Jane Admin', onBehalfOf: 'Acme Agency'));
+
+    expect(DelegatedActor::query()->count())->toBe(1);
+
+    // Interleaved, both live: member, admin, member, admin.
+    $this->withSession($memberSession);
+    $this->getJson('/console-route')
+        ->assertOk()
+        ->assertJsonPath('role', 'member')
+        ->assertJsonPath('attribution', 'Jane Member');
+
+    $this->withSession($adminSession);
+    $this->getJson('/console-route')
+        ->assertOk()
+        ->assertJsonPath('role', 'admin')
+        ->assertJsonPath('attribution', 'Jane Admin (Acme Agency)');
+
+    // The one that matters: S1 is unchanged, after S2 has acted.
+    $this->withSession($memberSession);
+    $this->getJson('/console-route')
+        ->assertOk()
+        ->assertJsonPath('role', 'member')
+        ->assertJsonPath('attribution', 'Jane Member')
+        ->assertJsonPath('on_behalf_of', null);
+
+    $this->withSession($adminSession);
+    $this->getJson('/console-route')
+        ->assertOk()
+        ->assertJsonPath('role', 'admin');
+
+    // ...and the shared row says admin the whole time, which is the
+    // value a row-reading implementation would have handed S1.
+    expect(DelegatedActor::query()->sole()->last_handoff_role)->toBe(ConsoleRole::Admin);
+});
+
+it('does not let a concurrent admin session promote a member session past the admin gate', function (): void {
+    // The same two live sessions, through the gate that would actually
+    // grant something.
+    Route::middleware([StartSession::class, 'bfc.console', 'auth:'.ConsoleGuardConfiguration::GUARD, 'bfc.admin'])
+        ->get('/concurrent-admin', fn (): array => ['ok' => true]);
+
+    $memberSession = consoleSessionState(consoleActor(role: ConsoleRole::Member));
+    $adminSession = consoleSessionState(consoleActor(role: ConsoleRole::Admin));
+
+    $this->withSession($adminSession);
+    $this->getJson('/concurrent-admin')->assertOk();
+
+    $this->withSession($memberSession);
+    $this->getJson('/concurrent-admin')->assertStatus(403);
+
+    // And back again, so neither session's answer is a one-way latch.
+    $this->withSession($adminSession);
+    $this->getJson('/concurrent-admin')->assertOk();
 });
 
 it('refuses a delegated session whose claims cannot be read', function (string $missing): void {

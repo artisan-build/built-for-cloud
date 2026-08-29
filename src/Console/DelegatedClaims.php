@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Console;
 
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
+
 /**
  * The claims ONE handoff carried, bound to ONE session (Console PRD D8:
  * role and display claims are per-mint and never cached beyond the
@@ -22,6 +24,21 @@ namespace ArtisanBuild\BuiltForCloud\Console;
  * or null, never a partially populated one, because a session carrying a
  * role but no display name is a session whose claims cannot be trusted.
  *
+ * TWO CONVENIENCES WERE DELETED FROM HERE, for one reason.
+ *
+ * `isAdmin()` sat unreferenced while the single place that decides
+ * administrative standing — {@see EnsureUserIsAdmin} — compared the enum
+ * directly. An unreferenced predicate on a claims object is an
+ * invitation to a second, divergent notion of "is admin", and the two
+ * would drift the first time one of them grew a condition. Read
+ * {@see $role} and compare it where the decision is made.
+ *
+ * `fromAssertion()` sat unreferenced beside {@see ConsoleSession::begin()},
+ * which is what actually turns an assertion into this session's claims.
+ * Two ways to derive the same three fields from one assertion is the
+ * same hazard wearing a different hat: there is one derivation, and it
+ * is the one that writes the session.
+ *
  * **THE DISPLAY CLAIMS ARE NOT SANITIZED.** `displayName` and
  * `onBehalfOf` are issuer-supplied free text that the verifier bounded in
  * length and rejected for control characters — nothing more. They may
@@ -39,15 +56,6 @@ final readonly class DelegatedClaims
         public ?string $onBehalfOf,
     ) {}
 
-    public static function fromAssertion(Assertion $assertion): self
-    {
-        return new self(
-            displayName: $assertion->displayName,
-            role: $assertion->role,
-            onBehalfOf: $assertion->onBehalfOf,
-        );
-    }
-
     /**
      * The attribution line the chrome (PR5) and the app-action audit
      * stream (PR7) render: "Jane (Acme Agency)" or plain "Jane".
@@ -59,10 +67,5 @@ final readonly class DelegatedClaims
         return $this->onBehalfOf === null
             ? $this->displayName
             : sprintf('%s (%s)', $this->displayName, $this->onBehalfOf);
-    }
-
-    public function isAdmin(): bool
-    {
-        return $this->role === ConsoleRole::Admin;
     }
 }

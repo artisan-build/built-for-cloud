@@ -160,7 +160,9 @@ use Throwable;
  * true, and nothing is written back. This guard never QUEUES a recaller
  * cookie — {@see redeem()} logs in with remembering off, and there is no
  * other login path — so the only such cookie that can exist is one this
- * package did not write.
+ * package did not write. `tests/ConsoleRememberMeTest.php` drives the
+ * whole of that through a real request, and observes that the branch was
+ * entered rather than assuming it.
  *
  * The guard does not answer the request; it only decides. The refusal
  * REASON is what {@see EnsureConsoleSession} turns into the structured
