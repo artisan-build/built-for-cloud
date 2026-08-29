@@ -43,11 +43,14 @@ the two differ are the rows worth reading.
 **None of these is a reserved name any more.** Checked against what shipped, one at a time:
 
 1. **Endpoint classification — as reserved.** The column is live and covers every endpoint the
-   package mounts, the Console's own included. That sentence is now MECHANICAL rather than
-   maintained by hand: `tests/HttpContractDocTest.php` enumerates the document's route headings and
-   requires each to carry a classification row, in both directions, driven over a fixture so it is
-   proven able to fail. `GET /bfc/meta` is still `content`, for exactly the reason reserved —
-   `product` is still an unbounded config-declared string.
+   package mounts, the Console's own included. That sentence is MECHANICAL rather than maintained by
+   hand: the document's route headings are enumerated and each is required to carry exactly one
+   classification row — a missing row, a row for a route that does not exist, and two rows for one
+   route are all refused, each driven over a fixture so the check is proven able to fail.
+   `GET /bfc/meta` is still `content`, for exactly the reason reserved — `product` is still an
+   unbounded config-declared string.
+
+   *Pinned by* `tests/HttpContractDocTest.php` ("every documented route carries a classification").
 
 2. **Reserved Console names — implemented, and the namespace's first member was NOT the one
    predicted.** The `bfc-console` guard exists and the package registers it itself; the
@@ -74,8 +77,12 @@ the two differ are the rows worth reading.
    guard wins for the acting principal and for all UI/attribution branching, never a union — but it
    arrives through the route's own `auth:bfc-console` scoping rather than through anything this
    package repoints, which is not what a reader of the reserved row would have assumed.
-   `release-notes/unified-store-guard.md` carries the amendment cell by cell;
-   `tests/CredentialPrecedenceTest.php` runs the whole matrix with both session guards configured.
+   `release-notes/unified-store-guard.md` carries the amendment cell by cell.
+
+   *Pinned by* `tests/CredentialPrecedenceTest.php`, which runs the whole precedence matrix with
+   both session guards configured ("still rejects mismatched simultaneous principals with the
+   delegated guard configured", "does not turn a delegated session into a false mismatch on a token
+   route" and "still rejects a mismatched local principal when the session guard is the local one").
 
 5. **`metadata:read` — implemented, and deliberately not what the reservation implied about
    break-glass.** It is enforced by `GET /bfc/console/vitals`, which requires an operator subject

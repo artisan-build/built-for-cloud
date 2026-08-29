@@ -47,15 +47,26 @@ use LogicException;
  *
  * **THE STREAM IS TRANSACTIONAL OR IT IS FICTION** — the same ruling
  * {@see LifecycleEventRecorder} already carries, and for the same
- * reason. An action that rolls back takes its event and its ledger row
- * with it, so nothing is ever recorded about something that did not
- * happen; an event written outside the action's transaction is a record
- * that can outlive the thing it records. The check lives on the MODEL
- * rather than here, so it also catches a direct `create()` — defence in
- * depth, on the writes that fire model events, and not a boundary. This
- * class opens no transaction of its own: one it opened would commit
- * independently of the caller's, which is precisely the failure the
- * requirement exists to prevent.
+ * reason: an event written outside the action's transaction is a record
+ * that can outlive the thing it records. This class opens no transaction
+ * of its own, because one it opened would commit independently of the
+ * caller's, which is precisely the failure the requirement exists to
+ * prevent.
+ *
+ * **WHAT IS ENFORCED IS NARROWER THAN THAT SENTENCE, and the gap is the
+ * caller's to close.** The check is `DB::transactionLevel()`, so all it
+ * establishes is that A transaction is open — never that the business
+ * action happened in THAT one. An app that commits its own write, opens
+ * a second transaction and only then calls `record()` gets an event and
+ * a ledger row atomic with each other and with nothing else, and no
+ * check here can see it. So: **the event and the ledger row are always
+ * atomic with each other; they are atomic with the ACTION only when the
+ * caller performs both inside one transaction it opened.** The
+ * package's own emitter does — `ConsoleEnter` writes the entry and its
+ * event together — and that is a property of the caller, not of this
+ * class. The check itself lives on the MODEL rather than here, so it
+ * also catches a direct `create()`: defence in depth, on the writes that
+ * fire model events, and not a boundary.
  *   Pinned by `tests/RecorderTransactionGuardTest.php` — "refuses to
  *   record an app action outside a database transaction" and "refuses a
  *   direct model write made outside a transaction". Both live there

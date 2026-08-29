@@ -22,18 +22,24 @@ of it.
 Named here because this contract is written for a consumer with no PHP, and a platform requirement
 you cannot see is one you cannot plan for.
 
-**A host serving this contract needs the PHP extension `gmp` (`ext-gmp`), on PHP 8.3 or newer.**
-Nothing in this package calls it directly: it arrives with `paragonie/paseto`, which is what
-verifies the PASETO `v4.public` assertion [`POST /bfc/console/enter`](#post-bfcconsoleenter) is
-gated on, and which declares `ext-gmp` itself. The requirement is **unconditional** — it is a
-dependency of the package, not of the Console — so a deployment that never enables the Console
-needs it too.
+**A host serving this contract needs 64-bit PHP 8.3 or newer with the `gmp` extension
+(`ext-gmp`).** Both halves come from the assertion cryptography, and neither is optional:
 
-Composer resolves it: `composer require` and `composer install` both refuse on a host whose PHP
-lacks the extension, so the ordinary failure is loud and at install time. One caveat worth a base
-image's attention: Composer's generated runtime check (`vendor/composer/platform_check.php`)
-verifies the PHP VERSION only, so a `vendor/` directory built elsewhere and copied onto a host
-without `gmp` will boot and fail when the extension is first used instead.
+- **`ext-gmp`** arrives with `paragonie/paseto`, which is what verifies the PASETO `v4.public`
+  assertion [`POST /bfc/console/enter`](#post-bfcconsoleenter) is gated on, and which declares the
+  extension itself.
+- **64-bit** is declared by `paragonie/sodium_compat` as `php-64bit`. A 32-bit PHP build cannot
+  install this package even with `gmp` present.
+
+Both requirements are **unconditional** — they are dependencies of the package, not of the Console —
+so a deployment that never enables the Console carries them too.
+
+Composer resolves both: `composer require` and `composer install` refuse on a host that is missing
+either, so the ordinary failure is loud and at install time. One caveat worth a base image's
+attention: Composer's generated runtime check (`vendor/composer/platform_check.php`) re-verifies the
+PHP **version and word size** — and **not** the extension. So a `vendor/` directory built elsewhere
+and copied onto a 32-bit host fails at boot, while the same directory copied onto a 64-bit host
+without `gmp` boots fine and fails when the extension is first used.
 
 Everything else is the ordinary Laravel baseline (`ctype`, `filter`, `hash`, `mbstring`, `openssl`,
 `session`, `tokenizer`, `json`).
@@ -48,8 +54,9 @@ Two discriminators, reported by [`GET /bfc/meta`](#get-bfcmeta):
   **documented request or response shape changes incompatibly**: a field is removed or renamed, a
   type changes, or the semantics of an existing field change. It does **not** bump for additive
   changes.
-- **`bfc_version`** (string, e.g. `0.4.0`) — the package release, for feature detection at finer
-  grain than the major, alongside the `capabilities` array.
+- **`bfc_version`** (string, semver — the value in the [`GET /bfc/meta`](#get-bfcmeta) example
+  below, which is the one place this document spells the current release) — the package release,
+  for feature detection at finer grain than the major, alongside the `capabilities` array.
 
 The rules a consumer may rely on:
 
@@ -72,10 +79,24 @@ Additive unless marked otherwise.
 
 **Everything the Console adds in 0.6.0 is additive, so `api_version` stays 2. What carries the
 signal is `bfc_version` 0.6.0 plus the `capabilities` entries** — `console-keys`, `console-vitals`,
-`console-guard`, `console-enter`, `console-chrome-assets` and `app-action-audit-emit`. That is rule 1 applied rather than a
-judgement made loosely: rule 1 names **new routes** as the paradigm additive case, and every Console
-surface in this release is one. Written down here so it is not re-litigated, along with the three
-things that WOULD have moved the major and none of which happened:
+`console-guard`, `console-enter`, `console-chrome-assets` and `app-action-audit-emit`.
+
+**What "additive" covers here, stated as what actually shipped rather than as one paradigm case**,
+because a reader applying rule 1 to their own change needs the real list:
+
+- **New routes** — the paradigm additive case rule 1 names, and most of the Console is this.
+- **New OPTIONAL request fields on existing routes** — `console_key` on the ownership claim and the
+  onboarding exchange, `console_key_authority` on the onboarding issue. A request that omits them
+  behaves exactly as it did before.
+- **Conditionally additive response fields** — a claim or exchange response carries `console_key`
+  only when the request supplied one, so an envelope that named no key is unchanged, response keys
+  included.
+- **Machinery that is not a route at all** — the `bfc-console` guard, the delegated-actor table and
+  the app-action emission point serve no new wire shape and change none.
+
+None of that removes a field, renames one, retypes one, or changes what an existing field means,
+which is what rule 1 makes the major bump about. Written down here so it is not re-litigated, along
+with the three things that WOULD have moved the major and none of which happened:
 
 - **`GET /bfc/meta` reports the same five keys, with the same types and the same meanings.** Only
   `capabilities` changed, by gaining members — and it is documented above as an open set read by
@@ -1811,7 +1832,7 @@ field.
 {
   "version": 1,
   "api_version": 2,
-  "bfc_version": "0.5.0",
+  "bfc_version": "0.6.0",
   "app_version": "1.4.2",
   "health": "ok",
   "deployed_at": "2026-08-29T09:14:00+00:00",
@@ -2621,9 +2642,24 @@ detail and never said to be unreadable reads exactly like one you can query.
 ### Storage
 
 For each successful emission, one row in `bfc_app_action_events` and one row in
-`bfc_app_action_outbox`, written in the **same database transaction** as the action itself. An
-action that rolls back takes both rows with it: the stream is transactional, or it is fiction. An emission attempted outside a
-transaction is refused rather than opening one of its own.
+`bfc_app_action_outbox`, written in the transaction **already open on the caller's connection**. An
+emission attempted outside a transaction is refused rather than opening one of its own — the
+emission point never opens a transaction of its own, because one it opened would commit
+independently of the caller's.
+
+**The two rows are always atomic with each other. Whether they are atomic with the ACTION is the
+calling application's to arrange**, and this is the sentence to read before relying on the stream.
+All the emission point can check is that *a* transaction is open; nothing available to it can tell
+whether the business write happened in that same one. An app that commits its invoice update, opens
+a second transaction and only then records gets two rows that are atomic with nothing.
+
+**What a consuming app must do to get the guarantee: perform the action and the emission inside ONE
+transaction it opened itself.** Do that and a rolled-back action takes both rows with it, so nothing
+is ever recorded about something that did not happen — the stream is transactional, or it is
+fiction. This package's own emitter is written that way: `POST /bfc/console/enter` writes the entry
+and its event in one transaction, and serves no entry it could not record.
+*Pinned by* `tests/ConsoleEnterAuditTest.php` ("records no entry event when the entry transaction
+rolls back" and "does not serve an entry it could not record").
 
 **`bfc_app_action_outbox` is a dedup ledger, not an operational outbox.** The table is
 named for the outbox PATTERN D17 names, and the pattern is what the write side does; the delivery

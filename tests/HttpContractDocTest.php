@@ -332,14 +332,22 @@ final class HttpContractDocTest extends TestCase
      * route that no longer exists tells a vendor-side reader a surface
      * is safe to read when there is no surface.
      *
-     * WHAT IT DOES NOT CATCH, since that is a claim as well:
-     * {@see ContractScan} states its own blind spots in full, and the
-     * load-bearing one is that this checks a classification EXISTS, never
-     * that it is right. A `content`-shaped response under a `metadata`
-     * row passes here and is caught, for this package's own metadata
-     * endpoints only, by
+     * THREE directions, and the third was missing for a round. A route
+     * with a MISSING row and a row for a route that no longer exists were
+     * both driven from the start; a route carrying TWO rows was not, and
+     * it was invisible — the scan keyed its map by route, so the second
+     * row overwrote the first and a document classifying one endpoint as
+     * both `metadata` and `content` reported nothing at all. That is the
+     * contradiction this column exists to prevent, so it is detected
+     * rather than disclosed. Duplicate route HEADINGS are the same
+     * property one level up and are checked with it.
+     *
+     * WHAT IT DOES NOT CATCH: that a classification is RIGHT. A
+     * `content`-shaped response under a `metadata` row passes here, and
+     * is caught — for this package's own metadata endpoints only — by
      * `ContractAssertions::assertBuiltForCloudMetadataEndpoint()` in
-     * `tests/MetadataShapeTest.php`.
+     * `tests/MetadataShapeTest.php`. {@see ContractScan} carries the
+     * boundary of each scan on the method that performs it.
      */
     public function test_every_documented_route_carries_a_classification(): void
     {
@@ -361,8 +369,23 @@ final class HttpContractDocTest extends TestCase
             .implode(', ', ContractScan::phantomClassifications($doc)),
         );
 
+        $this->assertSame(
+            [],
+            ContractScan::conflictingClassifications($doc),
+            'The classification table gives one route more than one row, so the contract states two '
+            .'answers to "is this safe for a vendor-side read": '
+            .implode('; ', ContractScan::conflictingClassifications($doc)),
+        );
+
+        $this->assertSame(
+            [],
+            ContractScan::duplicateRouteHeadings($doc),
+            'docs/http-contract.md declares the same route under more than one heading: '
+            .implode(', ', ContractScan::duplicateRouteHeadings($doc)),
+        );
+
         // The scan is not merely green: it is green on a document where
-        // it CAN be red. Both directions are driven over a fixture
+        // it CAN be red. Every direction is driven over a fixture
         // carrying the offence, because an instrument nobody has watched
         // fail is a claim rather than a check.
         $missingRow = <<<'MD'
@@ -376,6 +399,7 @@ final class HttpContractDocTest extends TestCase
 
         $this->assertSame(['POST /b'], ContractScan::unclassifiedRoutes($missingRow));
         $this->assertSame([], ContractScan::phantomClassifications($missingRow));
+        $this->assertSame([], ContractScan::conflictingClassifications($missingRow));
 
         $phantomRow = <<<'MD'
             ### GET /a
@@ -388,6 +412,74 @@ final class HttpContractDocTest extends TestCase
 
         $this->assertSame([], ContractScan::unclassifiedRoutes($phantomRow));
         $this->assertSame(['DELETE /gone'], ContractScan::phantomClassifications($phantomRow));
+
+        // The case that was invisible: two rows, two answers, and both
+        // of the older scans clean. Asserting they ARE clean here is the
+        // point — it records why disclosure would not have been enough.
+        $contradiction = <<<'MD'
+            ### GET /a
+
+            | endpoint | classification | basis |
+            |---|---|---|
+            | `GET /a` | `metadata` | bounded |
+            | `GET /a` | `content` | free text |
+            MD;
+
+        $this->assertSame([], ContractScan::unclassifiedRoutes($contradiction));
+        $this->assertSame([], ContractScan::phantomClassifications($contradiction));
+        $this->assertSame(['GET /a: metadata, content'], ContractScan::conflictingClassifications($contradiction));
+
+        $repeatedHeading = <<<'MD'
+            ### GET /a
+            ### GET /a
+
+            | endpoint | classification | basis |
+            |---|---|---|
+            | `GET /a` | `metadata` | bounded |
+            MD;
+
+        $this->assertSame(['GET /a'], ContractScan::duplicateRouteHeadings($repeatedHeading));
+        $this->assertSame([], ContractScan::duplicateRouteHeadings($missingRow));
+    }
+
+    /**
+     * **The document's release-version examples agree with each other.**
+     *
+     * They did not: `GET /bfc/meta` showed `0.6.0`, the vitals payload
+     * showed `0.5.0`, and the vitals section says in prose that it
+     * reports the same discriminator `/bfc/meta` does — so a dashboard
+     * implementing this specification saw two expected values for one
+     * release. A lagging `BuiltForCloud::VERSION` explains a doc/code
+     * mismatch; it explains nothing about a doc/doc one.
+     *
+     * DOC-INTERNAL, and that is the whole of the claim. This compares
+     * the examples to each other and to NOTHING else. It does not pin
+     * them to `BuiltForCloud::VERSION`, which lags the document until
+     * the release is tagged — that window stays open and is the
+     * release's to close, not this test's.
+     */
+    public function test_every_release_version_example_agrees(): void
+    {
+        $versions = ContractScan::releaseVersionExamplesIn($this->contractDoc());
+
+        $this->assertNotEmpty(
+            $versions,
+            'docs/http-contract.md spells no bfc_version example at all, so this check would pass vacuously.',
+        );
+
+        $this->assertSame(
+            [$versions[0]],
+            array_values(array_unique($versions)),
+            'docs/http-contract.md spells more than one release version in its bfc_version examples ('
+            .implode(', ', array_unique($versions)).'). Every example names the same release, and the '
+            .'vitals payload reports the same discriminator GET /bfc/meta does.',
+        );
+
+        // Proven able to fail, over a fixture.
+        $this->assertSame(
+            ['0.6.0', '0.5.0'],
+            ContractScan::releaseVersionExamplesIn('{"bfc_version": "0.6.0"} and {"bfc_version": "0.5.0"}'),
+        );
     }
 
     /**
