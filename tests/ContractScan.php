@@ -63,18 +63,21 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
  *    behaviourally, per capability, in the Console suites.
  *  - {@see releaseVersionExamplesIn()} — the `bfc_version` examples,
  *    compared to each other. Deliberately doc-internal.
- *  - {@see releaseVersionMentionsIn()} — every release version the
- *    document spells ANYWHERE, in an example or in prose, which is a
- *    wider set than the examples: the changelog spells the release in
- *    running text three times and the examples scan could not see any
- *    of them. Each semver token in the document lands in this bucket or
- *    in {@see foreignVersionMentionsIn()}, never neither, so a version
- *    cannot leave the comparison by being unrecognised.
+ *  - {@see releaseVersionMentionsIn()} — a SYNTACTIC set, and worth
+ *    reading as one: semver-shaped tokens standing bare in the text,
+ *    plus the value of a JSON field spelled exactly `bfc_version`. It
+ *    is wider than the examples scan, which reads only the second of
+ *    those, and the changelog's three running-text spellings are inside
+ *    it for that reason. It is NOT "every mention of a release": a
+ *    version under any other key is {@see foreignVersionMentionsIn()}'s,
+ *    so a document naming another package's release as
+ *    `"scalpels_version": "0.7.0"` says nothing to this comparison.
  *  - {@see foreignVersionMentionsIn()} — semver tokens that are the
- *    JSON value of a field OTHER than `bfc_version`. `app_version` in
+ *    JSON value of a field other than `bfc_version`. `app_version` in
  *    the vitals example is the consuming application's release and is
- *    supposed to differ; it is excluded by being classified, and the
- *    classification is returned rather than dropped.
+ *    supposed to differ. They are returned rather than dropped, so the
+ *    exclusion is a list somebody can read; reading it is the only
+ *    thing that catches a release hidden under an unexpected key.
  *  - {@see versionPairBreaksIn()} — the document's release against
  *    `BuiltForCloud::VERSION`. NOT an equality assertion: the two are
  *    deliberately unequal during a release window, because the
@@ -82,9 +85,12 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
  *    the merge. What it requires is that a difference be DECLARED, in a
  *    line naming both halves, so the only way for them to differ is for
  *    someone to write down that they differ and what the pending
- *    version is. A declaration that is absent, stale, or names the
- *    wrong pair is a finding; so is one still standing after the tag
- *    landed and the two agree.
+ *    version is. Six things are findings: an undeclared difference, a
+ *    declaration naming the wrong pending half, the wrong tagged half,
+ *    a pending version behind the tagged one, a declaration still
+ *    standing once the two agree, and more than one declaration. A
+ *    seventh — a declaration hidden inside an HTML comment — is refused
+ *    as no declaration at all.
  *  - Nothing here reads the `basis` column of the classification table.
  */
 final class ContractScan
@@ -317,30 +323,92 @@ final class ContractScan
      */
     public static function releaseWindowIn(string $doc): ?array
     {
-        if (preg_match(self::RELEASE_WINDOW, $doc, $match) !== 1) {
-            return null;
-        }
+        $windows = self::releaseWindowsIn($doc);
 
-        return ['pending' => $match[1], 'tagged' => $match[2]];
+        return count($windows) === 1 && $windows[0]['visible'] ? [
+            'pending' => $windows[0]['pending'],
+            'tagged' => $windows[0]['tagged'],
+        ] : null;
     }
 
     /**
-     * Every release version the document spells, in document order —
-     * the `bfc_version` examples AND the prose.
+     * EVERY occurrence of the declaration sentence, each with whether a
+     * reader of the rendered document would see it.
      *
-     * **The prose half is the direction the examples scan cannot see.**
-     * `releaseVersionExamplesIn()` reads `"bfc_version": "…"` and
-     * nothing else, so the changelog's "bfc **0.6.0**, this release"
-     * and "`bfc_version` 0.6.0 plus the `capabilities` entries" were
-     * outside it entirely — three unchecked spellings of the one thing
-     * the document's own opening calls its release discriminator.
+     * **Both halves of this were defects.** A declaration inside an HTML
+     * comment satisfied the parse while rendering to nothing, so the
+     * document could carry a licence to differ that no consumer could
+     * read — and a licence nobody can see is not a declaration. And two
+     * declarations satisfied it as well, with the first one found
+     * deciding: a document could name the real pair once and any other
+     * pair beside it.
      *
-     * Every semver-shaped token in the document is classified: the
-     * value of a `bfc_version` field and every bare mention are release
-     * mentions; the value of any other named field is
-     * {@see foreignVersionMentionsIn()}'s. The release-window
-     * declaration is removed first, since it names both halves of a
-     * pair that is supposed to differ.
+     * Visibility is decided by whether the sentence falls inside an
+     * `<!-- … -->` span. That is the concealment Markdown offers here
+     * and the one that was tried; a sentence hidden some other way — a
+     * fenced code block, a `<details>` a reader must open, an HTML
+     * attribute — is reported as visible.
+     *
+     * @return list<array{pending: string, tagged: string, visible: bool}>
+     */
+    public static function releaseWindowsIn(string $doc): array
+    {
+        if (preg_match_all(self::RELEASE_WINDOW, $doc, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE) === false) {
+            return [];
+        }
+
+        $comments = [];
+
+        if (preg_match_all('/<!--.*?-->/s', $doc, $found, PREG_OFFSET_CAPTURE) !== false) {
+            foreach ($found[0] as $comment) {
+                $comments[] = [$comment[1], $comment[1] + strlen($comment[0])];
+            }
+        }
+
+        $windows = [];
+
+        foreach ($matches as $match) {
+            $offset = $match[0][1];
+            $hidden = false;
+
+            foreach ($comments as [$from, $to]) {
+                if ($offset >= $from && $offset < $to) {
+                    $hidden = true;
+
+                    break;
+                }
+            }
+
+            $windows[] = [
+                'pending' => $match[1][0],
+                'tagged' => $match[2][0],
+                'visible' => ! $hidden,
+            ];
+        }
+
+        return $windows;
+    }
+
+    /**
+     * The semver tokens this parse READS AS THIS DOCUMENT'S OWN
+     * RELEASE, in document order: a token standing bare in the text, or
+     * the value of a JSON field spelled exactly `bfc_version`.
+     *
+     * **A syntactic rule, not "every release the document mentions",
+     * and the difference is load-bearing.** A version given under any
+     * other key — `"scalpels_version": "0.7.0"` — is classified foreign
+     * and compared to nothing, so a document can describe another
+     * package's release and this says nothing about it. What catches
+     * that is reading {@see foreignVersionMentionsIn()}, which is why
+     * it is returned.
+     *
+     * The prose half is the direction `releaseVersionExamplesIn()`
+     * cannot see: it reads `"bfc_version": "…"` and nothing else, so
+     * the changelog's "bfc **0.6.0**, this release" and "`bfc_version`
+     * 0.6.0 plus the `capabilities` entries" were outside every check.
+     *
+     * The release-window declaration is removed before matching, since
+     * it names both halves of a pair that is supposed to differ.
      *
      * @return list<string>
      */
@@ -354,10 +422,18 @@ final class ContractScan
      * than `bfc_version`, each as `field: version`.
      *
      * They are excluded from the release comparison and RETURNED rather
-     * than dropped, so the exclusion is a bucket somebody can read and
-     * not a filter that quietly swallows a release mention. `app_version`
+     * than dropped, so the exclusion is a list somebody can read
+     * instead of a filter that swallows things silently. `app_version`
      * in the vitals example is the consuming application's release and
      * has no reason to match anything here.
+     *
+     * **Reading this list is the only thing that catches a release
+     * spelled under a key nobody expected.** Nothing here decides
+     * whether a key OUGHT to have been compared:
+     * `"scalpels_version": "0.7.0"` lands here exactly as `app_version`
+     * does, and the check that the set is what it should be is an
+     * assertion in `tests/HttpContractDocTest.php`, not a rule in this
+     * method.
      *
      * @return list<string>
      */
@@ -378,23 +454,39 @@ final class ContractScan
      * merge, which is not how this package releases.
      *
      * So the property is not "they agree" but **"a difference is
-     * declared"**: while they differ, the document must carry a line
-     * naming both halves, and the line must name the RIGHT two. Silent
-     * drift then has nowhere to happen — changing either side without
-     * the other reds this, and so does leaving the declaration behind
-     * once the tag has made the two agree.
+     * declared"**: while they differ, the document must carry one
+     * VISIBLE line naming both halves, and it must name the right two.
+     * Changing either side alone makes the declaration wrong; removing
+     * it leaves the difference undeclared; landing the tag so the two
+     * agree makes it stale; writing a second one makes the pair
+     * ambiguous; hiding it in an HTML comment is not writing one.
      *
-     * It reads the document and one string. It does not read
-     * `composer.json`, a git tag, or the release notes; the pair it
-     * pins is the pair the report says drifted.
+     * WHAT IT READS: this document and one string. **Not
+     * `composer.json`, not a git tag, not the release notes** — and
+     * `release-notes/console-reservations.md` spells a release of its
+     * own that nothing compares to anything, which is a real hole
+     * rather than a hypothetical one and is carried as a debt row. What
+     * is pinned is the pair the report said drifted, and only that
+     * pair.
      *
      * @return list<string>
      */
     public static function versionPairBreaksIn(string $doc, string $constant): array
     {
         $mentions = array_values(array_unique(self::releaseVersionMentionsIn($doc)));
+        $declared = self::releaseWindowsIn($doc);
         $window = self::releaseWindowIn($doc);
         $breaks = [];
+
+        if (count($declared) > 1) {
+            return ['the document carries '.count($declared).' release-window declarations, so which '
+                .'pair it declares has no answer'];
+        }
+
+        if ($declared !== [] && ! $declared[0]['visible']) {
+            return ['the release-window declaration is inside an HTML comment, where a reader of this '
+                .'document cannot see it'];
+        }
 
         if ($mentions === []) {
             return ['the document spells no release version at all, so there is no pair to pin'];
@@ -431,6 +523,11 @@ final class ContractScan
         if ($window['tagged'] !== $constant) {
             $breaks[] = 'the release-window declaration names '.$window['tagged']
                 .' as tagged while BuiltForCloud::VERSION reads '.$constant;
+        }
+
+        if ($breaks === [] && version_compare($window['pending'], $window['tagged'], '<')) {
+            $breaks[] = 'the release-window declaration has '.$window['pending']
+                .' pending behind '.$window['tagged'].' tagged, so tagging it would go backwards';
         }
 
         return $breaks;

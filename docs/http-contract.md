@@ -66,11 +66,15 @@ until the tag lands.** This document is written with the release it is part of, 
 bumped when that release is tagged — so during the window a deployment reports the lower number
 while this document describes the higher one. Branch on `capabilities` rather than on the version
 if you are integrating against a deployment inside one. The line above is machine-read: while the
-two differ they must be declared here and named correctly, and once the tag lands and they agree
-the declaration has to go.
-*Pinned by* `tests/HttpContractDocTest.php` ("the documented release and the constant cannot drift
-silently" and "names a version pair that drifted one that is undeclared and a declaration left
-behind").
+two differ exactly one such line must stand here, visibly, naming both halves correctly and with
+the pending version ahead of the tagged one; once the tag lands and the two agree it has to go.
+What is compared is this document's own `bfc_version`, spelled bare or under that exact key —
+a version this document gives under any other key is not compared to anything, and neither is a
+version spelled in a release note.
+*Pinned by* `tests/HttpContractDocTest.php` ("the documented release and the constant differ only
+where the document declares it", "names a version pair that drifted one that is undeclared and a
+declaration left behind" and "refuses a release window a reader cannot see a duplicate one and one
+that goes backwards").
 
 The rules a consumer may rely on:
 
@@ -2663,8 +2667,9 @@ The bound is that the walk follows this package's own class names: a route that 
 collaborator the application supplies is outside it.
 *Pinned by* `tests/AppActionAuditTest.php` ("advertises the app-action emit capability without
 promising a way to read the stream", "names a route that reads the app-action stream under a name
-that mentions neither", "follows a read one class past the route, and stops at the emission door"
-and "pins the emission door's public surface, so a read verb cannot join it unnoticed").
+that mentions neither", "follows a read one class past the route, and stops at the emission door",
+"pins the emission door's public surface, so a verb cannot be ADDED to it unnoticed" and "runs no
+read against the stream on either of the emission door's verbs").
 
 ### Storage
 

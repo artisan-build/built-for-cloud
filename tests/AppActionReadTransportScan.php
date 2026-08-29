@@ -126,7 +126,7 @@ final class AppActionReadTransportScan
     /** The walk reaches the emission door and stops there. */
     public const string EMITS = 'emits';
 
-    /** Neither — enumerated anyway, so nothing leaves the scan unseen. */
+    /** The walk reached neither, or could not be followed at all. */
     public const string UNRELATED = 'unrelated';
 
     /** The namespace a package class is recognised by. */

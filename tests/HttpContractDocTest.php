@@ -533,7 +533,7 @@ final class HttpContractDocTest extends TestCase
     }
 
     /**
-     * **THE PAIR, PINNED WITHOUT REQUIRING THE TAG TO HAVE HAPPENED.**
+     * **THE PAIR, HELD WITHOUT REQUIRING THE TAG TO HAVE HAPPENED.**
      *
      * `bfc_version` in this document and `BuiltForCloud::VERSION` in the
      * code are the same fact written twice, and nothing compared them:
@@ -559,7 +559,7 @@ final class HttpContractDocTest extends TestCase
      *
      * @see ContractScan::versionPairBreaksIn()
      */
-    public function test_the_documented_release_and_the_constant_cannot_drift_silently(): void
+    public function test_the_documented_release_and_the_constant_differ_only_where_the_document_declares_it(): void
     {
         $doc = $this->contractDoc();
 
@@ -668,11 +668,84 @@ final class HttpContractDocTest extends TestCase
             ContractScan::versionPairBreaksIn($contradictory, '0.6.0'),
         );
 
-        // 6. AND THE EXCLUSION IS A BUCKET, NOT A FILTER. `app_version`
-        //    is the consuming application's release and is supposed to
-        //    differ, so it is classified out — and returned, so it
-        //    cannot silently swallow a mention.
+        // 6. THE EXCLUSION IS A LIST, NOT A FILTER. `app_version` is the
+        //    consuming application's release and is supposed to differ,
+        //    so it is classified out — and returned, so a reader can
+        //    see what was left out of the comparison.
         $this->assertSame(['app_version: 1.4.2'], ContractScan::foreignVersionMentionsIn($declared));
+
+        // 7. AND HERE IS WHAT THAT EXCLUSION COSTS, asserted rather
+        //    than left as a sentence. A semver under a key that is not
+        //    exactly `bfc_version` is compared to nothing, so a
+        //    document can describe another package's release and stay
+        //    green. That is why the shipped check asserts the foreign
+        //    SET rather than trusting the release set alone.
+        $foreign = '{"bfc_version": "0.6.0", "scalpels_version": "0.7.0"}';
+
+        $this->assertSame(['0.6.0'], ContractScan::releaseVersionMentionsIn($foreign));
+        $this->assertSame([], ContractScan::versionPairBreaksIn($foreign, '0.6.0'));
+        $this->assertSame(['scalpels_version: 0.7.0'], ContractScan::foreignVersionMentionsIn($foreign));
+    }
+
+    /**
+     * D6 and D8: a declaration a reader cannot see, two of them at
+     * once, and one that points the wrong way.
+     *
+     * The first two were accepted by the shipped parse. A declaration
+     * inside an HTML comment satisfied it while rendering to nothing —
+     * a licence to differ that no consumer of this contract could read
+     * — and a second declaration beside the first was ignored, so the
+     * document could name the real pair once and any other pair as
+     * well, with whichever came first deciding.
+     */
+    public function test_refuses_a_release_window_a_reader_cannot_see_a_duplicate_one_and_one_that_goes_backwards(): void
+    {
+        $window = '**RELEASE WINDOW: this document describes `bfc_version` %s; '
+            .'`BuiltForCloud::VERSION` is %s until the tag lands.**';
+
+        $body = PHP_EOL.PHP_EOL.'{"bfc_version": "0.6.0"}'.PHP_EOL;
+
+        // Hidden: parsed, and refused as no declaration at all — so the
+        // difference below it is undeclared rather than licensed.
+        $hidden = '<!-- '.sprintf($window, '0.6.0', '0.5.0').' -->'.$body;
+
+        $this->assertNull(ContractScan::releaseWindowIn($hidden));
+        $this->assertSame(
+            [['pending' => '0.6.0', 'tagged' => '0.5.0', 'visible' => false]],
+            ContractScan::releaseWindowsIn($hidden),
+        );
+        $this->assertSame(
+            ['the release-window declaration is inside an HTML comment, where a reader of this '
+                .'document cannot see it'],
+            ContractScan::versionPairBreaksIn($hidden, '0.5.0'),
+        );
+
+        // Duplicated: the first names the true pair, so a parse that
+        // stopped at the first match called this clean.
+        $duplicated = sprintf($window, '0.6.0', '0.5.0').PHP_EOL.PHP_EOL
+            .sprintf($window, '0.9.9', '0.1.0').$body;
+
+        $this->assertNull(ContractScan::releaseWindowIn($duplicated));
+        $this->assertCount(2, ContractScan::releaseWindowsIn($duplicated));
+        $this->assertSame(
+            ['the document carries 2 release-window declarations, so which pair it declares has no answer'],
+            ContractScan::versionPairBreaksIn($duplicated, '0.5.0'),
+        );
+
+        // Backwards: internally consistent and honest about both
+        // halves, and tagging it would move the package down a version.
+        $backwards = sprintf($window, '0.5.0', '0.6.0').PHP_EOL.PHP_EOL.'{"bfc_version": "0.5.0"}'.PHP_EOL;
+
+        $this->assertSame(
+            ['the release-window declaration has 0.5.0 pending behind 0.6.0 tagged, so tagging it '
+                .'would go backwards'],
+            ContractScan::versionPairBreaksIn($backwards, '0.6.0'),
+        );
+
+        // A visible, single, forward declaration over the same body is
+        // clean, so the three assertions above are read as findings
+        // rather than as a check that refuses everything.
+        $this->assertSame([], ContractScan::versionPairBreaksIn(sprintf($window, '0.6.0', '0.5.0').$body, '0.5.0'));
     }
 
     /**
