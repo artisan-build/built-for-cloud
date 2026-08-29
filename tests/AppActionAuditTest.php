@@ -81,6 +81,22 @@ function recordAppAction(
 }
 
 /**
+ * Record one app action inside a transaction the caller has ALREADY
+ * opened, optionally keyed. `recordAppAction()` opens its own, which
+ * would make two calls two transactions and hide both cases that use
+ * this: keyless cross-call dedup, and the catch-and-commit pair.
+ */
+function recordAppActionInCurrentTransaction(?string $naturalKey = null): AppActionEvent
+{
+    return app(AppActionRecorder::class)->record(
+        action: SinkAppAction::InvoiceVoided,
+        actor: AppActionActor::delegated(consoleActor(), 'Acme Agency'),
+        reason: AppActionReason::Requested,
+        naturalKey: $naturalKey,
+    );
+}
+
+/**
  * A well-formed row, as attributes, for the direct-model-write tests.
  * Every one of those tests breaks exactly ONE field of this, so what the
  * refusal is about is never in doubt.
@@ -229,8 +245,8 @@ it('persists a well-formed direct model write with no ledger row, which is the r
     // THE RESIDUE, asserted rather than only described. A direct write
     // that satisfies every row invariant still gets no ledger row — the
     // event id it would reference does not exist when `creating` runs —
-    // so "exactly one event per action" is a property of the recorder
-    // and of nothing else.
+    // so one event per caller-identified action is a property of the
+    // recorder and of nothing else.
     DB::transaction(fn (): AppActionEvent => AppActionEvent::query()->create(wellFormedAppActionRow()));
 
     expect(AppActionEvent::query()->count())->toBe(1)
@@ -297,7 +313,7 @@ it('refuses every enumerated bulk mutation on the app-action stream, on both mod
     // families: bulk writes that fire no model events, quiet creates
     // that MUTE the row's own validation, and event-free inserts —
     // `insertOrIgnore` above all, which would swallow the unique-index
-    // violation "exactly one event per action" rests on.
+    // violation one event per caller-identified action rests on.
     $mutations = [
         'createQuietly' => fn (Builder $q): mixed => $q->createQuietly(['action' => 'x']),
         'decrement' => fn (Builder $q): mixed => $q->decrement('id'),
@@ -377,6 +393,28 @@ it('pins the exact set of operations the append-only builder refuses', function 
     // `Model::performInsert()` uses it for a non-incrementing key, so
     // refusing it would refuse the package's own writes.
     expect($declared)->not->toContain('insert');
+});
+
+it('has exactly the public surface it is meant to have on the emission point', function (): void {
+    // `dedupKeyFor()` is PUBLIC on purpose (its own docblock says why),
+    // and this is what makes that a decision rather than an accident: it
+    // was promoted from a private helper to serve a test, and a helper
+    // that becomes public to serve a test is how a package acquires
+    // surface nobody chose. The enumeration means the NEXT one cannot
+    // arrive the same way — adding a public method here reds this test,
+    // and whoever adds it extends the set in the same diff.
+    //
+    // WHAT THIS DOES NOT CATCH, since that is a claim too: it reads
+    // method NAMES, so it says nothing about a change to what `record()`
+    // or `dedupKeyFor()` DOES, nothing about their signatures, and
+    // nothing about a public method added to any other class. The
+    // digest's stability under the name is pinned by the digest tests
+    // above and by `tests/ConsoleEnterAuditTest.php`.
+    $expected = ['dedupKeyFor', 'record'];
+
+    expect(PublicSurfaceScan::of(AppActionRecorder::class))->toBe($expected)
+        ->and(PublicSurfaceScan::unexpectedIn(AppActionRecorder::class, $expected))->toBe([])
+        ->and(PublicSurfaceScan::missingFrom(AppActionRecorder::class, $expected))->toBe([]);
 });
 
 // ─── A8: the dedup key is a digest, not an app-content channel ──────────────
@@ -720,7 +758,13 @@ it('leaves neither the event nor its ledger row behind when the action rolls bac
         ->and(AppActionOutboxEntry::query()->count())->toBe(0);
 });
 
-// ─── AC11: exactly one event per action ─────────────────────────────────────
+// ─── AC11: one event per CALLER-IDENTIFIED action ───────────────────────────
+//
+// The condition is the guarantee: a caller that supplies a natural key
+// gets the duplicate refused; a caller that supplies none is keyed to its
+// own event id and gets no cross-call deduplication at all. Stated in
+// full on `AppActionRecorder::record()`, and driven below in both
+// directions — the keyed one and the keyless one.
 
 it('refuses a second emission of the same logical action, and takes the transaction with it', function (): void {
     $failed = false;
@@ -753,6 +797,53 @@ it('refuses a second emission of the same logical action, and takes the transact
     recordAppAction(naturalKey: 'invoice-43-voided');
 
     expect(AppActionEvent::query()->count())->toBe(2);
+});
+
+// The pair is atomic with ITSELF, and this is the case that proves it
+// rather than describing it. The duplicate test above lets the exception
+// escape `DB::transaction()`, so the caller's own rollback hides whether
+// the recorder did anything: an app that CATCHES the failure inside its
+// transaction and commits anyway used to keep an event row with no
+// ledger row (observed: two events, one ledger row). The savepoint
+// inside `record()` is what closes it.
+it('keeps the event and its ledger row atomic when the caller catches the failure and commits anyway', function (): void {
+    DB::transaction(function (): void {
+        recordAppActionInCurrentTransaction(naturalKey: 'invoice-42-voided');
+
+        try {
+            recordAppActionInCurrentTransaction(naturalKey: 'invoice-42-voided');
+        } catch (UniqueConstraintViolationException) {
+            // The app swallows it and commits anyway — which is its
+            // right, and which must not be able to leave a half-pair
+            // behind.
+        }
+    });
+
+    // The FIRST emission survives, because it succeeded and the caller
+    // committed. The second left nothing at all.
+    expect(AppActionEvent::query()->count())->toBe(1)
+        ->and(AppActionOutboxEntry::query()->count())->toBe(1);
+});
+
+// The OTHER direction of AC11, and the one the guarantee's condition is
+// about. Without it the sentence above reads as unconditional — which is
+// exactly what it read as through three review rounds, while a green
+// suite watched: every existing case passed a natural key, so nothing
+// here could tell "the recorder dedupes" from "the recorder dedupes when
+// the caller names the action".
+it('dedupes nothing across calls when the caller supplies no natural key', function (): void {
+    // The SAME logical action, twice, keyed by nothing. Each call hashes
+    // its own fresh event id, so the two ledger rows do not collide and
+    // both emissions succeed — one event and one ledger row per CALL,
+    // and no cross-call deduplication at all.
+    DB::transaction(function (): void {
+        recordAppActionInCurrentTransaction();
+        recordAppActionInCurrentTransaction();
+    });
+
+    expect(AppActionEvent::query()->count())->toBe(2)
+        ->and(AppActionOutboxEntry::query()->count())->toBe(2)
+        ->and(AppActionOutboxEntry::query()->distinct()->count('dedup_key'))->toBe(2);
 });
 
 // ─── AC15: declared retention — nothing prunes this stream ──────────────────

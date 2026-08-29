@@ -17,6 +17,36 @@ route is individually configurable, no route ever moves behind a prefix except t
 credential API's documented one, and an instance that serves any of this contract serves all
 of it.
 
+## Platform requirements
+
+Named here because this contract is written for a consumer with no PHP, and a platform requirement
+you cannot see is one you cannot plan for.
+
+**A host serving this contract needs 64-bit PHP `^8.3` with the `gmp` extension (`ext-gmp`).** The
+constraint is the package's own and is stated as it is declared: `^8.3` admits 8.3 and 8.4 and
+**excludes PHP 9**, which this package does not claim to support. The other two halves come from the
+assertion cryptography, and neither is optional:
+
+- **`ext-gmp`** arrives with `paragonie/paseto`, which is what verifies the PASETO `v4.public`
+  assertion [`POST /bfc/console/enter`](#post-bfcconsoleenter) is gated on, and which declares the
+  extension itself.
+- **64-bit** is declared by `paragonie/sodium_compat` as `php-64bit`. A 32-bit PHP build cannot
+  install this package even with `gmp` present.
+
+Both requirements are **unconditional** — they are dependencies of the package, not of the Console —
+so a deployment that never enables the Console carries them too.
+
+These are the requirements. **How Composer enforces them — at install, at runtime, or in a `vendor/`
+directory built on one host and copied to another — is Composer's to document, not this contract's:**
+see [Composer's `platform-check` configuration](https://getcomposer.org/doc/06-config.md#platform-check).
+An earlier revision of this section paraphrased that behaviour and was wrong about it twice, which is
+why the paraphrase is gone rather than corrected.
+
+Everything else is the ordinary Laravel baseline (`ctype`, `filter`, `hash`, `mbstring`, `openssl`,
+`session`, `tokenizer`, `json`).
+
+---
+
 ## Versioning and compatibility
 
 Two discriminators, reported by [`GET /bfc/meta`](#get-bfcmeta):
@@ -25,8 +55,9 @@ Two discriminators, reported by [`GET /bfc/meta`](#get-bfcmeta):
   **documented request or response shape changes incompatibly**: a field is removed or renamed, a
   type changes, or the semantics of an existing field change. It does **not** bump for additive
   changes.
-- **`bfc_version`** (string, e.g. `0.4.0`) — the package release, for feature detection at finer
-  grain than the major, alongside the `capabilities` array.
+- **`bfc_version`** (string, semver — the value in the [`GET /bfc/meta`](#get-bfcmeta) example
+  below, which is the one place this document spells the current release) — the package release,
+  for feature detection at finer grain than the major, alongside the `capabilities` array.
 
 The rules a consumer may rely on:
 
@@ -44,8 +75,42 @@ The rules a consumer may rely on:
 
 ### Changelog
 
-**api_version 2** (bfc 0.5, this release). All changes since version 1, in one inventory.
-Additive unless marked otherwise:
+**api_version 2** (bfc **0.6.0**, this release). All changes since version 1, in one inventory.
+Additive unless marked otherwise.
+
+**Everything the Console adds in 0.6.0 is additive, so `api_version` stays 2. What carries the
+signal is `bfc_version` 0.6.0 plus the `capabilities` entries** — `console-keys`, `console-vitals`,
+`console-guard`, `console-enter`, `console-chrome-assets` and `app-action-audit-emit`.
+
+**What "additive" covers here, stated as what actually shipped rather than as one paradigm case**,
+because a reader applying rule 1 to their own change needs the real list:
+
+- **New routes** — the paradigm additive case rule 1 names, and most of the Console is this.
+- **New OPTIONAL request fields on existing routes** — `console_key` on the ownership claim and the
+  onboarding exchange, `console_key_authority` on the onboarding issue. A request that omits them
+  behaves exactly as it did before.
+- **Conditionally additive response fields**, and this list is derived from the diff rather than
+  from memory: the ownership claim and the onboarding exchange carry `console_key` only when the
+  request supplied one, and `POST /bfc/onboarding/issue` carries `console_key_authority: true` only
+  when authority was granted. In every case an envelope that asked for nothing is unchanged,
+  response keys included, so a consumer pinned to the pre-Console shape sees identical keys.
+- **Machinery that is not a route at all** — the `bfc-console` guard, the delegated-actor table and
+  the app-action emission point serve no new wire shape and change none.
+
+None of that removes a field, renames one, retypes one, or changes what an existing field means,
+which is what rule 1 makes the major bump about. Written down here so it is not re-litigated, along
+with the three things that WOULD have moved the major and none of which happened:
+
+- **`GET /bfc/meta` reports the same five keys, with the same types and the same meanings.** Only
+  `capabilities` changed, by gaining members — and it is documented above as an open set read by
+  membership, never by position or by its full contents.
+- **`built-for-cloud.credentials.session_guard` is still a single guard name, not a list.** An app
+  that configured one guard resolves exactly what it resolved before. The matrix now has two session
+  guards in it, but that key still names one, and the delegated guard is reached through the route's
+  own `auth:bfc-console` rather than through this key.
+- **No existing endpoint gained a field that changes how an existing field must be read.**
+  `console_key` appears on a claim or exchange response only when the request supplied one; an
+  envelope carrying none is unchanged, response keys included.
 
 - `GET /api/credentials` listing rows gained `id`, `request_count`, `subject_type` (nullable),
   `subject_ref` (nullable), `status`, and `presentation_cadence_seconds` (nullable); the listing
@@ -197,7 +262,7 @@ Additive unless marked otherwise:
 - **The Console's enter endpoint ships (Console PRD D12/D13).** All additive, and `api_version`
   stays 2: no documented request or response shape changes. New route
   [`POST /bfc/console/enter`](#post-bfcconsoleenter), classified `content`, mounted only on a
-  deployment that has the Console enabled AND whose reserved `bfc-console` guard is this
+  deployment that has the Console enabled AND whose `bfc-console` guard is this
   package's own — `GET /bfc/meta` `capabilities` gains `console-enter` under exactly that
   predicate, and `/bfc/console/enter` therefore moves out of the RESERVED list. What lands with
   it: the single-use `jti` burn (a new `bfc_console_assertion_burns` table, unique-indexed, and
@@ -444,7 +509,7 @@ Public (`bfc-public` throttle). Identifies the instance.
 ```json
 {
   "product": "Sink",
-  "bfc_version": "0.4.0",
+  "bfc_version": "0.6.0",
   "api_version": 2,
   "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials", "console-keys", "console-vitals", "app-action-audit-emit"],
   "claimed": true
@@ -454,11 +519,24 @@ Public (`bfc-public` throttle). Identifies the instance.
 `capabilities` is an open set — ignore unknown entries. `claimed` says whether an owner control
 plane holds this instance.
 
+**Every entry, and what each one is a claim about.** With `api_version` fixed at 2, this array plus
+`bfc_version` is what a consumer feature-detects on, so an entry the contract never explains is a
+name nobody can act on. The four original entries — **`tokens`**, **`ownership`**, **`onboarding`**
+and **`webhooks`** — are UNCONDITIONAL: every install of the package reports all four, whatever it
+is configured to serve. They name the package's four original feature families, and they are not
+predicates about this deployment. One of them reads like one and is not: **`tokens` does not say the
+legacy credential API is mounted.** That surface is gated on `built-for-cloud.credential_api.enabled`
+(default `false`) and **no capability reports it** — an instance reporting `tokens` may answer `404`
+to every route under [the legacy credential API](#the-legacy-credential-api-api_tokens-store). The
+entries below are the ones that do carry a predicate, and each states it.
+
 `console-keys` means this instance serves the countersigning-key surfaces below: the optional
 claim-time key exchange and `POST /bfc/console/re-key`. It deliberately does **not** say
-`console` — key custody is not the Console. There is no delegated guard, no enter endpoint and
-no delegated-actor table in this release, and a control plane that read `console` as "this
-deployment can be entered" would be reading a promise nothing here keeps.
+`console` — key custody is not the Console, and a control plane that read `console` as "this
+deployment can be entered" would be reading a promise this capability does not make. The delegated
+guard, the enter endpoint and the delegated-actor table all DO exist as of this release, each
+advertised under its own name below; `console-keys` says nothing about any of them, and an instance
+can report it while reporting none of them.
 
 `console-vitals` means this instance serves [`GET /bfc/console/vitals`](#get-bfcconsolevitals).
 It is named for the one surface it serves, not for the dashboard that reads it: the fleet
@@ -469,18 +547,26 @@ delegated-session machinery: the `bfc-console` guard, the `bfc_delegated_actors`
 re-entry `401`. It is absent when `built-for-cloud.console.enabled` is off, which is the
 default, because the capability describes this deployment and not the package.
 
+`console-chrome-assets` means this deployment serves the console chrome's machinery: the `bfc::`
+view namespace carrying the single package layout, and the re-entry interceptor at
+[`GET /bfc/console/chrome.js`](#get-bfcconsolechromejs). The name is deliberately about the ASSETS
+— whether any page of the application wears the chrome is that application's own decision, made by
+whichever of its templates extends the layout, and no package capability can report that. It rides
+the chrome route's own predicate, so the capability and the route can never disagree. See
+[the console chrome](#the-console-chrome).
+
 `app-action-audit-emit` means this deployment **records** app-action audit events: the
 `bfc_app_action_events` table, its transactional outbox, and the emission point an app calls. The
 verb is deliberate — see [the app-action audit stream](#the-app-action-audit-stream) — because
 **this release provides no read transport for that stream**, and a capability named
-`app-action-audit` would read as one. It is unconditional, unlike the two Console capabilities
-below: what it names is schema and an emission point every install carries whether or not the
-Console is enabled. Whether the DOOR emits is what `console-enter` already says.
+`app-action-audit` would read as one. It is unconditional, unlike the three Console capabilities
+that carry a predicate — `console-guard`, `console-enter` and `console-chrome-assets`: what it names
+is schema and an emission point every install carries whether or not the Console is enabled. Whether the DOOR emits is what `console-enter` already says.
 
 `console-enter` means this deployment serves
 [`POST /bfc/console/enter`](#post-bfcconsoleenter) — it is the entry that finally says an
 operator can be handed here. Its condition is **stricter** than `console-guard`'s: the Console
-must be enabled AND the reserved `bfc-console` guard must resolve to this package's own driver.
+must be enabled AND the `bfc-console` guard must resolve to this package's own driver.
 An app that defined its own `bfc-console` guard keeps it, and the package mounts no door in
 front of somebody else's guard — so that deployment reports `console-guard` and not
 `console-enter`. The capability and the route ride one predicate, so they can never disagree.
@@ -1749,7 +1835,7 @@ field.
 {
   "version": 1,
   "api_version": 2,
-  "bfc_version": "0.5.0",
+  "bfc_version": "0.6.0",
   "app_version": "1.4.2",
   "health": "ok",
   "deployed_at": "2026-08-29T09:14:00+00:00",
@@ -1908,7 +1994,7 @@ machinery; this is the one surface a **browser** posts to, and the only way a de
 operator session begins.
 
 It exists only on a deployment that reports the `console-enter` capability — the Console
-enabled, and the reserved `bfc-console` guard resolving to this package's own driver. Elsewhere
+enabled, and the `bfc-console` guard resolving to this package's own driver. Elsewhere
 the path is a `404`, never a refusal.
 
 *Pinned by* `tests/ConsoleEnterSurfaceTest.php` ("the door is mounted by default in a console
@@ -2558,28 +2644,58 @@ detail and never said to be unreadable reads exactly like one you can query.
 
 ### Storage
 
-One row per action in `bfc_app_action_events`, plus one row in `bfc_app_action_outbox`, written
-in the **same database transaction** as the action itself. An action that rolls back takes both
-rows with it: the stream is transactional, or it is fiction. An emission attempted outside a
-transaction is refused rather than opening one of its own.
+For each successful emission, one row in `bfc_app_action_events` and one row in
+`bfc_app_action_outbox`, written in the transaction **already open on the caller's connection**. An
+emission attempted outside a transaction is refused rather than opening one of its own — the
+emission point never opens a transaction of its own, because one it opened would commit
+independently of the caller's.
 
-**`bfc_app_action_outbox` is an immutable dedup ledger, not an operational outbox.** The table is
+**The two rows are always atomic with each other**, and that is enforced rather than requested: the
+pair is written inside a SAVEPOINT within the caller's transaction, so a failed ledger insert takes
+the event row with it before the error reaches the caller. **An app that catches a recorder failure
+and commits anyway still cannot end up with an event that has no ledger row.**
+
+**Whether the pair is atomic with the ACTION is the calling application's to arrange**, and this is
+the sentence to read before relying on the stream. All the emission point can check is that *a*
+transaction is open; nothing available to it can tell whether the business write happened in that
+same one. An app that commits its invoice update, opens a second transaction and only then records
+gets two rows that are atomic with each other and with nothing else.
+
+**What a consuming app must do to get the guarantee: perform the action and the emission inside ONE
+transaction it opened itself.** Do that and a rolled-back action takes both rows with it, so nothing
+is ever recorded about something that did not happen — the stream is transactional, or it is
+fiction. This package's own emitter is written that way: `POST /bfc/console/enter` writes the entry
+and its event in one transaction, and serves no entry it could not record.
+*Pinned by* `tests/ConsoleEnterAuditTest.php` ("records no entry event when the entry transaction
+rolls back" and "does not serve an entry it could not record").
+
+**`bfc_app_action_outbox` is a dedup ledger, not an operational outbox.** The table is
 named for the outbox PATTERN D17 names, and the pattern is what the write side does; the delivery
 half does not exist. **No drainer ships for this stream in this release**, because no consumer
 exists to deliver to — nothing drains it, nothing marks it, nothing reads it — and the
 delivery-bookkeeping columns the credential outbox carries (`attempts`, `claimed_at`,
 `claim_token`, `delivered_at`, `delivered_recipients`, `last_error`) are deliberately absent
-rather than present and unwritten. It is also not the replayable history: the EVENT table is
-append-only and complete, and a future consumer can be built against that. And it is not an
+rather than present and unwritten. It is also not the replayable history: the EVENT table is the
+one a future consumer would be built against — it carries every emission the package makes, and the
+package prunes none of them. And it is not an
 ORDERED hand-off — the only ordering it carries is a nullable `created_at` at one-second
 resolution, which cannot sequence two rows written in the same second.
 
-What it does give is dedup, durably. `dedup_key` is UNIQUE, and that index is what makes
-**exactly one event per action** a database property of what the emission point writes: a second emission
-of the same logical action fails the insert and takes the transaction — the action included —
-with it. `event_id` is unique too, so "one ledger row per event" is a database property as well.
+What it does give is dedup, durably. `dedup_key` is UNIQUE, and that index is what makes **one
+event per CALLER-IDENTIFIED action** a database property of what the emission point writes: a
+second emission of the same logical action fails the insert and takes the transaction — the action
+included — with it. `event_id` is unique too, so "one ledger row per event" is a database property
+as well.
 
-**`dedup_key` stores a sha256 digest, never a caller's string.** It is a hash over a
+**Caller-identified is a condition, and it is the whole of the difference.** The emission point
+hashes a natural key the CALLER supplies — its own name for this action: an invoice id, a mint
+digest — into `dedup_key`. **An emission that supplies none is keyed to the new event's own id, so
+it collides with nothing.** For such a call the package still guarantees one event row and one
+ledger row, and guarantees nothing across calls. An app that wants a duplicate refused has to name
+the action.
+
+**The emission point stores a sha256 digest in `dedup_key`, never a caller's string.** It is a
+hash over a
 length-delimited encoding of the action's vocabulary, the action's name and the caller's own
 natural key. Two reasons, and both matter to a consumer reading this schema later: a caller's
 string written verbatim into a wide column would be an **app-content channel** into a stream
@@ -2588,14 +2704,21 @@ straight in; and namespacing by vocabulary and action removes the global collisi
 which two unrelated apps choosing the same natural key would silently suppress each other's
 events.
 
+The model additionally requires lowercase-hex digest SHAPE on the writes that fire `creating`. **The
+column itself enforces only 64 characters and uniqueness**, so a direct write can store sixty-four
+`z`s — and no check anywhere can tell a real digest from any other 64 hex characters, because the
+natural key it would need to recompute one is deliberately not stored.
+
 **And the ledger is append-only exactly as strongly as the event it dedupes** — model guards, the
 enumerated bulk-operation refusals, and the same database triggers. That is not symmetry for its
 own sake: a unique index only rejects a duplicate while the row it collides with still EXISTS, so
 a deletable ledger row would let the duplicate this stream promises to refuse be re-admitted by
 deleting the evidence of the first one.
 
-**Storage is unbounded.** One event row and one ledger row per app action, forever, pruned by
-nothing — see [Retention](#retention) — and the cost is stated here rather than discovered later.
+**Storage is unbounded.** One event row and one ledger row per emission, and **nothing in this
+package ever prunes either** — see [Retention](#retention) — and the cost is stated here rather
+than discovered later. An app deleting its own rows is outside what the package can see, so
+"complete" is not a property this contract claims of either table.
 
 The event columns, all of them:
 
@@ -2610,9 +2733,11 @@ The event columns, all of them:
 | `on_behalf_of` | the agency a delegated operator acts for (D4), or null; never present for the other two actor types |
 | `occurred_at`, `created_at` | timestamps |
 
-**There is no free-text column.** The schema carries no `note` and nothing of that kind, and that
-part is structural: there is nowhere in this table for prose to go. The one string that is not
-identifier-shaped is `on_behalf_of`, and D4 requires it.
+**No column is designated for arbitrary app content.** The schema carries no `note` and nothing of
+that kind, and THAT absence is structural. It is not the same as prose being impossible: the
+emission point writes bounded enums and identifiers throughout, except the delegated agency display
+string — `on_behalf_of`, which D4 requires and which intentionally IS display text — while the
+VARCHAR columns above can physically hold prose through the direct writes described below.
 
 **WHAT THESE COLUMNS CONTAIN IS A GUARANTEE ABOUT WHAT THE PACKAGE WRITES, NOT ABOUT THE TABLE.**
 Read the table above as a description of the rows the package's emission point produces, because
@@ -2631,16 +2756,18 @@ vocabulary, a `delegated_actor` named by a bare id, an `on_behalf_of` on any oth
 a write with no transaction open; the models' shared Eloquent builder refuses an enumerated set of
 bulk mutation spellings. **Neither is a boundary and no guarantee here depends on either being
 complete.** A write that satisfies both still gets **no ledger row** — one cannot be written from
-`creating`, because the event id it would reference is not inserted yet — so "exactly one event per
-action" is likewise a property of the emission point and of nothing else.
+`creating`, because the event id it would reference is not inserted yet — so one event per
+caller-identified action is likewise a property of the emission point and of nothing else.
 
 **And `on_behalf_of` is caller-supplied on every path, this package's included.** On the package's
 own two paths it originates as an issuer-minted claim, bounded to 120 characters and rejected for
 control characters by the assertion verifier: `POST /bfc/console/enter` passes the claims of the
 session its redemption has just begun, and every other emission passes the request's one resolved
 acting principal. Nothing downstream of those re-checks it, and a consuming app calling the actor
-factory itself supplies whatever it likes. What IS enforced is that the column accompanies a
-delegated actor and no other. **Escape it at every sink.**
+factory itself supplies whatever it likes. What IS enforced: the emission point can carry an agency
+only through a delegated actor, and the model's `creating` hook refuses the other combinations on
+the writes that fire it. **The table constrains neither column against the other** — a raw insert
+can store an agency beside a `local_user`. **Escape it at every sink.**
 
 ### The actor vocabulary
 
@@ -2901,7 +3028,19 @@ documented in their own sections above.
     local user.
   - The token gates (`bfc.token.admin`, `bfc.credential.admin`, `bfc.ability`) are unchanged:
     they never consult a session principal.
-  See `release-notes/unified-store-guard.md`, which records this as an amendment to SEC-V3-10.
+  **This is an AMENDMENT to the v3.1 matrix invariant SEC-V3-10, not an additive slot-in**, and it
+  is recorded as one deliberately rather than left to read as an accident. SEC-V3-10 shipped as a
+  token-vs-session rule over a SINGLE `built-for-cloud.credentials.session_guard` name; the Console
+  makes the matrix session-vs-session as well, so a reader of the old statement would conclude the
+  matrix has one session guard in it when after this release it has two. The full amendment, cell by
+  cell and including the cells that did NOT change, is in `release-notes/unified-store-guard.md`.
+  *Pinned by* `tests/CredentialPrecedenceTest.php`, which runs the whole precedence matrix with both
+  session guards configured ("still rejects mismatched simultaneous principals with the delegated
+  guard configured", "does not turn a delegated session into a false mismatch on a token route" and
+  "still rejects a mismatched local principal when the session guard is the local one" — the last
+  being the shipped configuration, so the delegated exclusion cannot be read as having weakened the
+  rule it sits beside).
+
 - **Delegated session clocks.** A delegated session is bounded by Laravel's own sliding idle
   window AND by an absolute assertion-age cap of 120 minutes, measured from the assertion's
   issued-at. The cap is enforced **inside the guard**, so it holds on every route including

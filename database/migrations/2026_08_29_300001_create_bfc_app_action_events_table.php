@@ -14,9 +14,13 @@ use Illuminate\Support\Facades\Schema;
  * in each consuming app's own database, and this migration ships in the
  * package.
  *
- * WHAT THE SCHEMA DECIDES, AND WHAT IT DOES NOT. There is no free-text
- * column (D15) — no `note`, nothing of that kind — and that part IS
- * structural: there is nowhere in this table for prose to go. What each
+ * WHAT THE SCHEMA DECIDES, AND WHAT IT DOES NOT. The schema designates
+ * no column for arbitrary app content or notes (D15) — no `note`,
+ * nothing of that kind — and THAT absence is structural. It is not the
+ * same as prose being impossible: several of the VARCHAR columns below
+ * can physically hold it through the direct-write residue the model's
+ * docblock names, and `on_behalf_of` intentionally IS display text. What
+ * each
  * column CONTAINS is a different question, and the answer is a property
  * of `AppActionRecorder`, not of the table: on that path `action` is the
  * backing value of a case from a compile-time enum the app declares,
@@ -87,9 +91,12 @@ return new class extends Migration
             $table->string('actor_type', 32)->index();
             $table->string('actor_ref', 255);
 
-            // D4's agency. The model refuses a stored row carrying one
-            // on any other actor type; the width is the assertion
-            // verifier's own bound for the claim it comes from.
+            // D4's agency. On the recorder's path only a delegated
+            // actor can carry one, and the model's `creating` hook
+            // refuses the other combinations on the writes that fire it.
+            // The COLUMN constrains nothing — a raw insert can pair it
+            // with any actor type. The width is the assertion verifier's
+            // own bound for the claim it comes from.
             $table->string('on_behalf_of', 120)->nullable();
 
             $table->timestamp('occurred_at')->index();

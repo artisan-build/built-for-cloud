@@ -80,6 +80,16 @@ $citedSurfaces = [
     'docs/http-contract.md',
     'release-notes/console-enter.md',
     'release-notes/unified-store-guard.md',
+    // The reservations note (PR8). It states, item by item, that each of
+    // the five reserved Console names is now implemented and where two
+    // shipped with a shape the reservation did not describe — a page of
+    // claims about what the package does, which is exactly what this
+    // mechanism is for. It is named as a FILE rather than by adding
+    // `release-notes/` as a surface: that would pull in every note in
+    // the directory, each then needing a floor or an exemption in this
+    // same diff, and the notes this PR did not write are not this PR's
+    // to classify.
+    'release-notes/console-reservations.md',
 ];
 
 /**
@@ -99,6 +109,7 @@ $expectedCitations = [
     'src/Audit/AppActorType.php' => 1,
     'release-notes/console-enter.md' => 28,
     'release-notes/unified-store-guard.md' => 8,
+    'release-notes/console-reservations.md' => 4,
     'src/Console/AssertionBurn.php' => 6,
     'src/Console/AssertionVerifier.php' => 2,
     'src/Console/ConsoleEntryState.php' => 8,
@@ -174,6 +185,11 @@ $strictlyCited = [
     'resources/views/chrome.blade.php',
     'resources/js/console-reentry.js',
     'tests/ConsoleChromeRouteScan.php',
+    // PR8's reservations note. Its citations are written under this rule
+    // rather than retrofitted to it, so it can join the strict list on
+    // the day it arrives — which is the whole argument for the list:
+    // a file added here is a file that can never drift.
+    'release-notes/console-reservations.md',
 ];
 
 it('resolves every test title quoted by a guarantee citation', function () use ($citedSurfaces): void {

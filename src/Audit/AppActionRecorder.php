@@ -7,6 +7,8 @@ namespace ArtisanBuild\BuiltForCloud\Audit;
 use ArtisanBuild\BuiltForCloud\Console\AssertionBurn;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
+use Illuminate\Database\Connection;
+use Illuminate\Support\Facades\DB;
 use LogicException;
 
 /**
@@ -17,8 +19,10 @@ use LogicException;
  * **THIS CLASS IS THE BOUNDARY THE STREAM'S GUARANTEES ARE ABOUT.**
  * Every one of them — a bounded action from a compile-time vocabulary, a
  * type-qualified actor, an agency only on a delegated actor, a
- * package-generated id, a transactional emission, exactly one event per
- * action, a digest dedup key — holds of **what is written through
+ * package-generated id, a transactional emission, one event per
+ * CALLER-IDENTIFIED action (the condition is stated in full under
+ * `$naturalKey` below), a digest dedup key — holds of **what is written
+ * through
  * `record()`**. Read as a claim about the TABLE, every one of them is
  * false, and two earlier revisions of this docblock read that way: the
  * first called this "the single emission point", the second moved the
@@ -45,15 +49,48 @@ use LogicException;
  *
  * **THE STREAM IS TRANSACTIONAL OR IT IS FICTION** — the same ruling
  * {@see LifecycleEventRecorder} already carries, and for the same
- * reason. An action that rolls back takes its event and its ledger row
- * with it, so nothing is ever recorded about something that did not
- * happen; an event written outside the action's transaction is a record
- * that can outlive the thing it records. The check lives on the MODEL
- * rather than here, so it also catches a direct `create()` — defence in
- * depth, on the writes that fire model events, and not a boundary. This
- * class opens no transaction of its own: one it opened would commit
- * independently of the caller's, which is precisely the failure the
- * requirement exists to prevent.
+ * reason: an event written outside the action's transaction is a record
+ * that can outlive the thing it records. This class opens no transaction
+ * of its own, because one it opened would commit independently of the
+ * caller's, which is precisely the failure the requirement exists to
+ * prevent.
+ *
+ * **THE TWO ROWS ARE ATOMIC WITH EACH OTHER, AND THAT IS ENFORCED
+ * RATHER THAN ASKED FOR.** The pair is written inside a SAVEPOINT
+ * ({@see Connection::transaction()} nests when a
+ * transaction is already open), so if the ledger insert fails the event
+ * insert is rolled back to the savepoint before the exception leaves
+ * this method. That closes the case an earlier revision merely
+ * described: an app that CATCHES a recorder failure inside its own
+ * transaction and commits anyway used to keep an event row with no
+ * ledger row — the duplicate-emission test never saw it, because it let
+ * the exception escape `DB::transaction()`, which rolled everything back
+ * for a different reason.
+ *   Pinned by `tests/AppActionAuditTest.php` — "keeps the event and its
+ *   ledger row atomic when the caller catches the failure and commits
+ *   anyway".
+ *
+ * **A SAVEPOINT IS NOT THE TRANSACTION THIS CLASS REFUSES TO OPEN.** The
+ * requirement is that nothing here can commit independently of the
+ * caller, and a savepoint cannot: it releases into the enclosing
+ * transaction and dies with it. So the transaction guard runs FIRST,
+ * here, before the savepoint exists — otherwise nesting would hand the
+ * model's own check a transaction level of 1 and quietly satisfy it, and
+ * "refuses an emission outside a transaction" would become false the
+ * moment the pair was made atomic. The model keeps its check too, which
+ * is what catches a direct `create()`: defence in depth, on the writes
+ * that fire model events, and not a boundary.
+ *
+ * **WHAT IS STILL THE CALLER'S TO CLOSE.** All the guard can establish
+ * is that A transaction is open — never that the business action
+ * happened in THAT one. An app that commits its own write, opens a
+ * second transaction and only then calls `record()` gets a pair atomic
+ * with each other and with nothing else, and no check here can see it.
+ * So: **the event and the ledger row are always atomic with each other;
+ * they are atomic with the ACTION only when the caller performs both
+ * inside one transaction it opened.** The package's own emitter does —
+ * `ConsoleEnter` writes the entry and its event together — and that is a
+ * property of the caller, not of this class.
  *   Pinned by `tests/RecorderTransactionGuardTest.php` — "refuses to
  *   record an app action outside a database transaction" and "refuses a
  *   direct model write made outside a transaction". Both live there
@@ -100,10 +137,16 @@ final class AppActionRecorder
      * caller's transaction.
      *
      * `$naturalKey` is the caller's own name for THIS action — an
-     * invoice id, a mint digest — and it is what makes "exactly one
-     * event per action" mean anything: it is hashed into the ledger's
-     * unique `dedup_key`, so a second emission of the same logical
-     * action fails the insert and takes the transaction with it.
+     * invoice id, a mint digest — and it is the CONDITION on the only
+     * thing this stream guarantees about duplicates. Stated here in
+     * full, because every other mention of it in this package is a
+     * reference back to this sentence: **the recorder writes exactly one
+     * event per caller-identified action when the caller supplies a
+     * stable natural key; without one it guarantees one event row and
+     * one ledger row per CALL, and no cross-call deduplication at all.**
+     * The key is hashed into the ledger's unique `dedup_key`, so a
+     * second emission of the same logical action fails the insert and
+     * takes the transaction with it.
      *
      * **IT IS HASHED, NOT STORED.** A caller's string written verbatim
      * into a 255-character column would be an app-content channel into a
@@ -129,44 +172,82 @@ final class AppActionRecorder
         AppActionReason $reason,
         ?string $naturalKey = null,
     ): AppActionEvent {
-        // No `id` is passed and `id` is not fillable on either model:
-        // HasUuids generates both, which is what makes "a
-        // package-generated event id" true of this path rather than a
-        // hope about what the caller supplied.
-        //
-        // The event's own `creating` hook re-checks the shape of what is
-        // written here. That is defence in depth, not a second gate, and
-        // there is deliberately no third copy of those checks in this
-        // method to drift from either of them.
-        $event = AppActionEvent::query()->create([
-            'action' => $action->value,
-            // WHICH vocabulary the name came from. Two apps may both
-            // declare `invoice-voided` and mean different things, and a
-            // bare slug leaves a reader unable to tell — while the enum
-            // class is a compile-time constant, not runtime data.
-            'action_vocabulary' => $action::class,
-            'reason' => $reason,
-            'actor_type' => $actor->type,
-            'actor_ref' => $actor->ref,
-            'on_behalf_of' => $actor->onBehalfOf,
-            'occurred_at' => now(),
-        ]);
+        // FIRST, and before the savepoint below exists. Nesting would
+        // otherwise open a transaction level of its own and satisfy the
+        // model's identical check for free, turning "refuses an emission
+        // outside a transaction" into a sentence about machinery this
+        // method installed.
+        if (DB::transactionLevel() === 0) {
+            throw new LogicException(
+                'An app action must be recorded inside the transaction that performs the action.',
+            );
+        }
 
-        // A duplicate dedup key fails this insert — and with it the whole
-        // transaction, the action included. That is the intended shape:
-        // the same logical action is never recorded twice, and a caller
-        // that tried is told rather than left holding one of two.
-        AppActionOutboxEntry::query()->create([
-            'event_id' => $event->id,
-            'dedup_key' => self::dedupKeyFor($action, $naturalKey ?? $event->id),
-        ]);
+        // A SAVEPOINT, not a transaction: it releases into the caller's
+        // and cannot commit without it. What it buys is that the event
+        // and its ledger row are atomic with EACH OTHER even when the
+        // caller catches the failure and commits anyway.
+        return DB::transaction(function () use ($action, $actor, $reason, $naturalKey): AppActionEvent {
+            // No `id` is passed and `id` is not fillable on either model:
+            // HasUuids generates both, which is what makes "a
+            // package-generated event id" true of this path rather than a
+            // hope about what the caller supplied.
+            //
+            // The event's own `creating` hook re-checks the shape of what
+            // is written here. That is defence in depth, not a second
+            // gate, and there is deliberately no third copy of those
+            // checks in this method to drift from either of them.
+            $event = AppActionEvent::query()->create([
+                'action' => $action->value,
+                // WHICH vocabulary the name came from. Two apps may both
+                // declare `invoice-voided` and mean different things, and
+                // a bare slug leaves a reader unable to tell — while the
+                // enum class is a compile-time constant, not runtime data.
+                'action_vocabulary' => $action::class,
+                'reason' => $reason,
+                'actor_type' => $actor->type,
+                'actor_ref' => $actor->ref,
+                'on_behalf_of' => $actor->onBehalfOf,
+                'occurred_at' => now(),
+            ]);
 
-        return $event;
+            // A duplicate dedup key fails this insert, and the savepoint
+            // takes the event row with it. Whether it also takes the
+            // ACTION depends on the caller: let the exception escape and
+            // the caller's transaction rolls back too, which is the
+            // intended shape — the same logical action is never recorded
+            // twice, and a caller that tried is told rather than left
+            // holding one of two.
+            AppActionOutboxEntry::query()->create([
+                'event_id' => $event->id,
+                'dedup_key' => self::dedupKeyFor($action, $naturalKey ?? $event->id),
+            ]);
+
+            return $event;
+        });
     }
 
     /**
      * The ledger key: sha256 over a LENGTH-DELIMITED encoding of the
      * vocabulary, the action and the caller's natural key.
+     *
+     * **THIS IS INTENDED PUBLIC API, and it is documented as such rather
+     * than left as a test's convenience.** It was promoted from a
+     * private helper to serve a test, which is a reason to ask the
+     * question and not an answer to it. The answer: a consuming app that
+     * wants to know whether an action has already been recorded — before
+     * emitting, or from a reconciliation job — needs the key the ledger
+     * is indexed by, and the alternative to exposing it is every such
+     * app RESTATING the derivation. A restated hash is a second
+     * definition that can drift from this one silently, and the failure
+     * it produces is a SUPPRESSED event rather than a wrong answer. So
+     * it is public, it is a pure function of its arguments, it touches
+     * nothing, and it is covered by the compatibility rule the rest of
+     * this package's public surface is: changing what it returns is a
+     * breaking change. It is pinned by the public-surface enumeration in
+     * `tests/AppActionAuditTest.php` — "has exactly the public surface
+     * it is meant to have on the emission point" — so this class cannot
+     * grow another public method without the diff saying so.
      *
      * **PUBLIC so that a caller's keying can be PINNED rather than
      * restated.** A test asserting only that the stored key is 64 hex
