@@ -10,8 +10,8 @@ use Carbon\CarbonInterface;
 /**
  * What a successful countersigning-key delivery reports back
  * (Console PRD D12) — on the claim envelopes, on the re-key route, and
- * on the CLI verb, from one shape so the three transports cannot
- * describe the same outcome differently.
+ * on the CLI verb, from one shape so no transport can describe the same
+ * outcome differently from another.
  *
  * It carries the filed key's ID and EVERY key id that verifies at the
  * moment the delivery committed. That second field is not decoration:
@@ -23,9 +23,13 @@ use Carbon\CarbonInterface;
  * material** (rework A7). An earlier revision carried the model, whose
  * `public_key` is a public property — so a docblock saying "no key
  * material is on this object" was false the moment anyone dumped, logged
- * or serialized one. Three scalars and a list of key ids cannot become
- * that mistake. Nothing on the delivery path needs to read the material
- * back.
+ * or serialized one. What it holds now is a key id, an instant, and a
+ * list of key ids: nothing that can become that mistake, and nothing on
+ * the delivery path needs to read the material back.
+ *
+ * (`activatedAt` is a {@see CarbonInterface}, not a scalar — said
+ * plainly because an earlier revision called these "three scalars". The
+ * claim that matters is the one about key material, and it is exact.)
  */
 final readonly class ConsoleKeyFiled
 {

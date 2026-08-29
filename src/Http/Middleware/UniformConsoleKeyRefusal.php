@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
 
+use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyRefusal;
 use Closure;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -35,20 +36,35 @@ use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
  * is known. The distinction is kept internally and dropped externally,
  * which is the only place it was ever a leak.
  *
- * Scope, precisely: it normalizes `401` and `403` only. A `429` from the
- * throttle in front of it is untouched (a rate limit that lied about
- * being a rate limit would be unusable), and so is every status the
- * controller itself returns — the controller's `403` for a claim code
- * without key-custody authority never reaches this middleware, because
- * the controller returns a response rather than aborting.
+ * Scope, precisely, because an earlier revision of this paragraph got it
+ * wrong: it normalizes `401` and `403` **wherever on this route they come
+ * from** — thrown by the gate, or RETURNED by anything downstream of it,
+ * the controller included. It is not gate-specific, and it was never a
+ * claim that a returned status is exempt.
+ *
+ * A `429` from the throttle in front of it is untouched (a rate limit
+ * that lied about being a rate limit would be unusable), and so is every
+ * other status: the controller's own refusals are `409` and `422`, which
+ * pass through with their distinct messages because they describe the
+ * DELIVERY, not who was asking.
+ *
+ * That is a standing constraint on this route, not an accident of
+ * today's code: nothing behind this middleware may use `401` or `403` to
+ * mean anything other than "not authorized here", because the viewer
+ * will only ever see the one uniform body. A future controller path that
+ * needs to say something else must pick another status.
+ * ({@see ConsoleKeyRefusal::NotAuthorized}
+ * is a `403`, but it is reachable only from the CLAIM surfaces, which
+ * this middleware is not mounted on.)
  */
 final class UniformConsoleKeyRefusal
 {
     /**
      * The one status every pre-authorization failure answers with.
-     * `403` rather than `401`: two of the three cases are genuinely
-     * "not permitted", and a `401` invites a client to retry with
-     * credentials it has already shown are not the right ones.
+     * `403` rather than `401`: most of what lands here is genuinely
+     * "not permitted" rather than "unidentified", and a `401` invites a
+     * client to retry with credentials it has already shown are not the
+     * right ones.
      */
     public const int STATUS = 403;
 

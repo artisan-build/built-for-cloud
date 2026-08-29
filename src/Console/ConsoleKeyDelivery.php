@@ -25,9 +25,10 @@ use InvalidArgumentException;
  * this package containing no code that signs — see
  * {@see ConsoleKeyring}'s class docblock, which names where.
  *
- * It exists because three surfaces deliver keys — the ownership claim,
- * the onboarding exchange, and the re-key verb — and a second copy of
- * "what a delivery looks like" is a copy that drifts.
+ * It exists because every surface that accepts a key parses one through
+ * here — the ownership claim, the onboarding exchange, and the re-key
+ * verb over both its transports — and a second copy of "what a delivery
+ * looks like" is a copy that drifts.
  */
 final readonly class ConsoleKeyDelivery
 {

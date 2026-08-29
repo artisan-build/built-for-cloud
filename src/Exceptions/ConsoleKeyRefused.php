@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Exceptions;
 
+use ArtisanBuild\BuiltForCloud\Actions\FileConsoleKey;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyDelivery;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyring;
 use RuntimeException;
@@ -22,10 +24,17 @@ use Throwable;
  * enum's constant prose — the delivered key material is never echoed,
  * here or into an audit note.
  *
- * Both refusals are thrown by {@see ConsoleKeyring} as
- * {@see \InvalidArgumentException} and translated here; this class adds
- * no rule of its own, which is why the reasons match the ring's two
- * refusals exactly.
+ * This class adds no rule of its own — it is the one carrier for every
+ * {@see ConsoleKeyRefusal}, and that enum is where the reasons and their
+ * statuses live. Note that they no longer all come from one layer, and
+ * the docblock says so rather than implying a tidiness the code lost:
+ * {@see ConsoleKeyring} raises the two uniqueness refusals as
+ * {@see \InvalidArgumentException} for translation here, while the
+ * key-custody authority check belongs to the onboarding exchange, the
+ * ownership check to {@see FileConsoleKey},
+ * and the malformed-material refusal to
+ * {@see ConsoleKeyDelivery}. Read
+ * {@see ConsoleKeyRefusal} for the current set; do not count them here.
  */
 final class ConsoleKeyRefused extends RuntimeException
 {
