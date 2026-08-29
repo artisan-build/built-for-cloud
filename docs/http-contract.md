@@ -72,7 +72,7 @@ Additive unless marked otherwise.
 
 **Everything the Console adds in 0.6.0 is additive, so `api_version` stays 2. What carries the
 signal is `bfc_version` 0.6.0 plus the `capabilities` entries** — `console-keys`, `console-vitals`,
-`console-guard`, `console-enter` and `app-action-audit-emit`. That is rule 1 applied rather than a
+`console-guard`, `console-enter`, `console-chrome-assets` and `app-action-audit-emit`. That is rule 1 applied rather than a
 judgement made loosely: rule 1 names **new routes** as the paradigm additive case, and every Console
 surface in this release is one. Written down here so it is not re-litigated, along with the three
 things that WOULD have moved the major and none of which happened:
@@ -523,13 +523,21 @@ delegated-session machinery: the `bfc-console` guard, the `bfc_delegated_actors`
 re-entry `401`. It is absent when `built-for-cloud.console.enabled` is off, which is the
 default, because the capability describes this deployment and not the package.
 
+`console-chrome-assets` means this deployment serves the console chrome's machinery: the `bfc::`
+view namespace carrying the single package layout, and the re-entry interceptor at
+[`GET /bfc/console/chrome.js`](#get-bfcconsolechromejs). The name is deliberately about the ASSETS
+— whether any page of the application wears the chrome is that application's own decision, made by
+whichever of its templates extends the layout, and no package capability can report that. It rides
+the chrome route's own predicate, so the capability and the route can never disagree. See
+[the console chrome](#the-console-chrome).
+
 `app-action-audit-emit` means this deployment **records** app-action audit events: the
 `bfc_app_action_events` table, its transactional outbox, and the emission point an app calls. The
 verb is deliberate — see [the app-action audit stream](#the-app-action-audit-stream) — because
 **this release provides no read transport for that stream**, and a capability named
-`app-action-audit` would read as one. It is unconditional, unlike the two Console capabilities
-below: what it names is schema and an emission point every install carries whether or not the
-Console is enabled. Whether the DOOR emits is what `console-enter` already says.
+`app-action-audit` would read as one. It is unconditional, unlike the three Console capabilities
+that carry a predicate — `console-guard`, `console-enter` and `console-chrome-assets`: what it names
+is schema and an emission point every install carries whether or not the Console is enabled. Whether the DOOR emits is what `console-enter` already says.
 
 `console-enter` means this deployment serves
 [`POST /bfc/console/enter`](#post-bfcconsoleenter) — it is the entry that finally says an

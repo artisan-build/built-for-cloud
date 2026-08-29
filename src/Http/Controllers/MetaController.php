@@ -89,7 +89,8 @@ final class MetaController
             // purpose — there is NO read transport for this stream in
             // this release, and `app-action-audit` on its own is exactly
             // the name a control plane would read as "I can query this".
-            // It is UNCONDITIONAL, unlike the two above it, because what
+            // It is UNCONDITIONAL, unlike the three predicated ones
+            // above it, because what
             // it describes is schema and an emission point that every
             // install carries whether or not the Console is enabled —
             // the same standing `credentials` has. The DOOR's own
