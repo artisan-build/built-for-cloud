@@ -214,18 +214,23 @@ the session is destroyed before the failure propagates, because Laravel
 writes and regenerates the session *before* it dispatches that event.
 If the compensation itself fails (an unreachable session store), the
 ORIGINAL failure is still what the caller sees; the compensation failure
-goes to the application's exception handler rather than replacing it. A
-later request finds no delegated identity even then — the compensation's
-in-memory flush precedes the store I/O that failed, and the session id
-the browser is handed was regenerated before the failure, naming a record
-that was never written. What is not guaranteed in that case is that a
-record predating the request is destroyed; it survives under its own id
-carrying what it carried before, which is not a delegated identity.
+goes to the application's exception handler rather than replacing it.
+
+Two halves, and they differ. **Guaranteed:** the regenerated session id
+that redemption hands back cannot rehydrate a delegated identity — the
+compensation's in-memory flush precedes the store I/O that failed, and
+that id names a record which was never written. **Not guaranteed:** a
+record under the PRIOR id may survive carrying whatever identity it
+already held, including a delegated one, because a redemption can begin
+from an already-delegated session and destroying that record requires the
+store that is unavailable. The failed redemption grants nothing new; it
+fails to revoke something already live, and no ordering fixes that.
 *Pinned by* `tests/ConsoleRedemptionTest.php` — "surfaces the original
 failure, not the compensation failure, when the session store is
 unreachable", "leaves a later request unauthenticated when the store
-recovers before the response is saved", and "…when the store is still
-down at save time".
+recovers before the response is saved", "…when the store is still down at
+save time", and "leaves a PRE-EXISTING delegated record alive under its
+own id when the store fails at teardown".
 
 The residue, stated rather than glossed: code that can write the session
 store directly can assemble a delegated session, because that is what
@@ -235,7 +240,12 @@ delegated session without verified assertion bytes** — and the guard
 additionally requires the session to name the principal, so the public
 `setUser()` seam the `Guard` contract forces cannot be combined with
 hand-written claims to act as a delegated admin.
-*Pinned by* `tests/ConsoleRedemptionTest.php` — "offers no public way to
+*Pinned by* `tests/ConsoleSessionWriterScanTest.php`, which enumerates
+every file under `src/` able to write a delegated session key and
+requires the set to be exactly the one permitted writer — proven able to
+fail against a fixture carrying a differently named writer, because a
+fixed list of absent method names cannot express a package-wide negative.
+Also by `tests/ConsoleRedemptionTest.php` — "offers no public way to
 write a delegated session's claims" and "does not authenticate a
 principal handed to setUser, even alongside hand-written claims", whose
 positive control pins the residue itself.

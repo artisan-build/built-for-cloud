@@ -55,13 +55,17 @@ use Illuminate\Contracts\Session\Session;
  * hole in §4.3, which is about credentials and login paths. The claim
  * that IS made and held: no package API assembles a delegated session
  * without verified assertion bytes.
- *   Pinned by `tests/ConsoleRedemptionTest.php` — "offers no public way
- *   to write a delegated session's claims" asserts this class has no
- *   writer at all, and the positive control inside "does not
- *   authenticate a principal handed to setUser, even alongside
- *   hand-written claims" pins the boundary itself: re-seeding all five
- *   keys by hand DOES produce a session, which is what makes the
- *   narrower claim the honest one.
+ *   Pinned by `tests/ConsoleSessionWriterScanTest.php`, which
+ *   ENUMERATES every file under `src/` able to write one of these keys
+ *   and requires the set to be exactly the one permitted writer — the
+ *   only shape that can express a package-wide negative, and itself
+ *   driven over a fixture carrying a differently named writer. Also by
+ *   `tests/ConsoleRedemptionTest.php` — "offers no public way to write a
+ *   delegated session's claims" asserts THIS class has no writer at all,
+ *   and the positive control inside "does not authenticate a principal
+ *   handed to setUser, even alongside hand-written claims" pins the
+ *   boundary itself: re-seeding all five keys by hand DOES produce a
+ *   session, which is what makes the narrower claim the honest one.
  */
 final class ConsoleSession
 {

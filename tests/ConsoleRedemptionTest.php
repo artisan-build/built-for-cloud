@@ -580,3 +580,59 @@ it('leaves a later request unauthenticated when the store is still down at save 
         ->and($next->get(consoleGuardSessionKey()))->toBeNull()
         ->and(ConsoleSession::hasState($next))->toBeFalse();
 });
+
+it('leaves a PRE-EXISTING delegated record alive under its own id when the store fails at teardown', function (): void {
+    // THE CASE THE OTHER TWO DO NOT COVER, and the reason the guarantee
+    // is worded the way it is. Redemption can begin from a session that
+    // is ALREADY delegated — an operator re-entering the console — and
+    // then the prior record is not a blank: it holds a live delegated
+    // identity. If the store is unavailable, nothing can destroy it, so
+    // it survives, and a concurrent request or a replay of the old
+    // cookie still authenticates as whoever it already held.
+    //
+    // No ordering fixes this. Destroying the prior record first would
+    // move the failure earlier, not remove it: destroying requires the
+    // store, and the store is what is unavailable. So the absolute is
+    // not claimed — this pins what IS true, in both directions.
+    ThrowingSessionHandler::reset();
+    RecordingExceptionHandler::reset();
+
+    app()->instance(ExceptionHandler::class, new RecordingExceptionHandler);
+
+    $handler = new ThrowingSessionHandler;
+    $store = new Store('bfc-reentry', $handler);
+
+    app()->instance('session.store', $store);
+    Auth::forgetGuards();
+
+    // A first, successful redemption, persisted — the already-delegated
+    // session the second one re-enters from.
+    $actor = consoleRedeem();
+    $priorId = $store->getId();
+    $store->save();
+
+    expect($handler->stored($priorId))->not->toBe('');
+
+    // The store goes down, and a second redemption is attempted.
+    ThrowingSessionHandler::$failOnDestroy = true;
+    Auth::forgetGuards();
+
+    expect(fn (): DelegatedActor => consoleRedeem())
+        ->toThrow(RuntimeException::class, 'session store is unreachable');
+
+    // THE RESIDUE, asserted rather than described: the prior record is
+    // still there, still carrying the delegated identity it already had.
+    ThrowingSessionHandler::$failOnDestroy = false;
+
+    $prior = new Store('bfc-reentry', $handler, $priorId);
+    $prior->start();
+
+    app()->instance('session.store', $prior);
+    app()->instance('request', Request::create('/next'));
+    Auth::forgetGuards();
+
+    /** @var ConsoleGuard $stillLive */
+    $stillLive = auth(ConsoleGuardConfiguration::GUARD);
+
+    expect($stillLive->actor()?->getKey())->toBe($actor->getKey());
+})->note('This asserts a residue rather than a guarantee: it is what makes "the regenerated id cannot rehydrate a delegated identity" the honest wording instead of "no later request can". The identity that survives is the one the session already held — the failed redemption grants nothing new.');

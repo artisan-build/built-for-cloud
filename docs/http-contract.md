@@ -1893,10 +1893,15 @@ one.
   `onceUsingId` and `viaRemember` do not exist on it, and its user provider answers null/false
   to every credential-shaped question for every input. "No password, no login path" is a
   property of the types, not a set of methods that refuse.
-  *Pinned by* `tests/ConsoleRedemptionTest.php` ("exposes no way to log a delegated actor in
-  without signed bytes"; "refuses a token whose claims were rewritten to claim the admin role")
-  and `tests/ConsoleDelegatedActorTest.php` ("refuses every credential lookup unconditionally";
-  "has no credential-shaped entry point on the guard at all").
+  *Pinned by* `tests/ConsoleSessionWriterScanTest.php`, which **enumerates** every file under
+  `src/` able to write a delegated session key and requires the set to be exactly the one
+  permitted writer — and which is itself driven over a fixture containing a differently named
+  writer, so it is proven able to fail. (A fixed list of absent method names could not express
+  this: adding a writer nobody listed would leave such a test green.) Also by
+  `tests/ConsoleRedemptionTest.php` ("exposes no way to log a delegated actor in without signed
+  bytes"; "refuses a token whose claims were rewritten to claim the admin role") and
+  `tests/ConsoleDelegatedActorTest.php` ("refuses every credential lookup unconditionally"; "has
+  no credential-shaped entry point on the guard at all").
   The one public seam the `Guard` contract forces is `setUser()`, which Laravel's `actingAs()`
   uses. It sets an in-memory principal for the current request and writes **nothing** to the
   session, and the guard additionally requires that the session itself names the principal —
@@ -1911,25 +1916,38 @@ one.
   to reach states a real redemption cannot produce — and it is not a credential or a login
   path, which is what §4.3 governs. The guarantee that is made and held is narrower and exact:
   **no package API assembles a delegated session without verified assertion bytes.**
+  *Pinned by* `tests/ConsoleSessionWriterScanTest.php` — the enumeration above is what makes
+  this a package-wide statement rather than a claim about the classes someone remembered to
+  name.
 
-  **A failed redemption leaves no usable delegated session for any later request.** Laravel
-  writes and regenerates the session before it dispatches its `Login` event, so a host
-  application's listener that throws would otherwise leave a session already carrying the
-  delegated identifier while the redemption reported failure; the operation compensates — the
-  session is destroyed — before the failure propagates. If the compensation *itself* fails (the
-  session store is unreachable), the **original** failure is still what surfaces, and the
-  compensation failure is reported to the application's exception handler rather than replacing
-  it or being dropped.
-  Even in that double-failure case a later request finds no delegated identity: the
-  compensation's in-memory flush precedes the store I/O that failed, and the session id the
-  browser is handed was regenerated before the failure, naming a record that was never written.
-  What is *not* guaranteed there is that a record predating the request is destroyed — it
-  survives under its own id, carrying whatever it carried before, which is not a delegated
-  identity.
+  **A failed redemption cannot hand back a usable delegated session.** Laravel writes and
+  regenerates the session before it dispatches its `Login` event, so a host application's
+  listener that throws would otherwise leave a session already carrying the delegated identifier
+  while the redemption reported failure; the operation compensates — the session is destroyed —
+  before the failure propagates. If the compensation *itself* fails (the session store is
+  unreachable), the **original** failure is still what surfaces, and the compensation failure is
+  reported to the application's exception handler rather than replacing it or being dropped.
+
+  Stated exactly, because the two halves differ:
+
+  - **Guaranteed:** the **regenerated session id this redemption hands back** cannot rehydrate a
+    delegated identity, in either double-failure case — the compensation's in-memory flush
+    precedes the store I/O that fails, and that id names a record which was never written
+    (nothing is persisted mid-request; the store is written once, at the end).
+  - **Not guaranteed:** a record under the **prior** id may survive, **carrying whatever
+    identity it already held — including a delegated one.** A redemption can begin from an
+    already-delegated session (an operator re-entering the console), and with the store
+    unavailable nothing destroys that record, so a concurrent request or a replay of the prior
+    cookie still authenticates as whoever it already held. The failed redemption grants nothing
+    new; it fails to revoke something already live. No ordering fixes this: destroying the prior
+    record requires the store, and the store is what is unavailable.
+
   *Pinned by* `tests/ConsoleRedemptionTest.php` ("leaves no usable session when a Login listener
   throws during redemption"; "surfaces the original failure, not the compensation failure, when
   the session store is unreachable"; "leaves a later request unauthenticated when the store
-  recovers before the response is saved" and "…when the store is still down at save time").
+  recovers before the response is saved"; "…when the store is still down at save time"; and
+  "leaves a PRE-EXISTING delegated record alive under its own id when the store fails at
+  teardown", which asserts the residue itself).
   **Remember-me:** this guard never queues a recaller cookie. Laravel still *checks* for one
   when a session carries no identifier, so that branch is reachable; it is fail-closed because
   the delegated-actor provider's `retrieveByToken()` returns null for every input, so no
