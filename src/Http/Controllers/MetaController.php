@@ -22,13 +22,16 @@ final class MetaController
             // Additive per the compatibility rule (docs/http-contract.md):
             // consumers feature-detect on membership, never on position.
             //
-            // `console-keys` is deliberately NOT `console`: what this
-            // release serves is countersigning-key custody (the
-            // claim-time exchange and the re-key verb, Console PRD D12),
-            // not the Console itself — no delegated guard, no enter
-            // endpoint, no delegated-actor table. A control plane that
-            // read `console` as "this deployment can be entered" would
-            // be reading a promise nothing here keeps.
+            // `console-keys` is deliberately NOT `console`: what it
+            // names is countersigning-key custody (the claim-time
+            // exchange and the re-key verb, Console PRD D12), not the
+            // Console itself. A control plane that read `console` as
+            // "this deployment can be entered" would be reading a
+            // promise this capability does not make — and would now be
+            // reading it wrongly rather than merely early, since the
+            // guard, the door and the actor table have all since
+            // shipped and each is advertised below under its own name.
+            // This one is unconditional; those are not.
             //
             // `console-vitals` is likewise named for what it serves —
             // the ops-vitals READ (Console PRD D9), one
@@ -40,10 +43,12 @@ final class MetaController
             // delegated-session guard, the shadow-actor table and the
             // re-entry 401 — the machinery an entered operator's session
             // runs on. Still not `console`, and deliberately not
-            // `console-enter`: there is no enter endpoint yet, so a
-            // control plane that read this as "you can hand an operator
-            // to this deployment" would be reading a promise nothing
-            // here keeps. It appears only when the deployment has
+            // `console-enter`: the door has its own capability below
+            // under a STRICTER predicate, so a control plane that read
+            // this one as "you can hand an operator to this deployment"
+            // would be reading a promise this one does not make — an app
+            // that defined its own `bfc-console` guard reports this and
+            // not `console-enter`. It appears only when the deployment has
             // actually enabled the Console, because with the flag off
             // none of that machinery is registered and advertising it
             // would be a lie about this deployment rather than about

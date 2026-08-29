@@ -301,11 +301,9 @@ final class HttpContractDocTest extends TestCase
      * mechanically rather than trusted: the route is in the table, and
      * it is in it as `metadata`.
      *
-     * This pins ONE row. Nothing here checks that every documented route
-     * has a classification row, nor that a row's stated classification
-     * matches what the endpoint actually returns — the second is what
-     * `ContractAssertions::assertBuiltForCloudMetadataEndpoint()` checks,
-     * against real responses, in MetadataShapeTest.
+     * This pins ONE row, deliberately — it is the row a vendor-side read
+     * depends on. What it CANNOT see is a route with no row at all, and
+     * that is the check below.
      */
     public function test_the_vitals_route_is_documented_as_metadata_classified(): void
     {
@@ -313,6 +311,147 @@ final class HttpContractDocTest extends TestCase
             '/^\| `GET \/bfc\/console\/vitals` \| `metadata` \|/m',
             $this->contractDoc(),
             'docs/http-contract.md no longer classifies GET /bfc/console/vitals as metadata.',
+        );
+    }
+
+    /**
+     * **EVERY documented route is classified, and every classification
+     * row names a real documented route.**
+     *
+     * This is the standing lesson of this build applied to the
+     * classification column: *a check that selects before it compares
+     * cannot see a MISSING thing.* The row check above reads the vitals
+     * row by name, so it is blind to a route that carries no row — and a
+     * route with no row is exactly the way a surface escapes the privacy
+     * boundary the column exists to be. Classification was one of the
+     * five reservations this release converts from reserved to
+     * implemented, and "every endpoint carries one" is the sentence that
+     * conversion rests on, so it is enumerated rather than asserted.
+     *
+     * Both directions, because a removal is drift too: a row naming a
+     * route that no longer exists tells a vendor-side reader a surface
+     * is safe to read when there is no surface.
+     *
+     * WHAT IT DOES NOT CATCH, since that is a claim as well:
+     * {@see ContractScan} states its own blind spots in full, and the
+     * load-bearing one is that this checks a classification EXISTS, never
+     * that it is right. A `content`-shaped response under a `metadata`
+     * row passes here and is caught, for this package's own metadata
+     * endpoints only, by
+     * `ContractAssertions::assertBuiltForCloudMetadataEndpoint()` in
+     * `tests/MetadataShapeTest.php`.
+     */
+    public function test_every_documented_route_carries_a_classification(): void
+    {
+        $doc = $this->contractDoc();
+
+        $this->assertSame(
+            [],
+            ContractScan::unclassifiedRoutes($doc),
+            'docs/http-contract.md documents routes that carry no classification row. The column is the '
+            .'durable privacy boundary vendor-side reads are decided by, so an endpoint missing from it is '
+            .'an endpoint no consumer can tell is safe to read: '
+            .implode(', ', ContractScan::unclassifiedRoutes($doc)),
+        );
+
+        $this->assertSame(
+            [],
+            ContractScan::phantomClassifications($doc),
+            'The classification table names routes the document does not document: '
+            .implode(', ', ContractScan::phantomClassifications($doc)),
+        );
+
+        // The scan is not merely green: it is green on a document where
+        // it CAN be red. Both directions are driven over a fixture
+        // carrying the offence, because an instrument nobody has watched
+        // fail is a claim rather than a check.
+        $missingRow = <<<'MD'
+            ### GET /a
+            ### POST /b
+
+            | endpoint | classification | basis |
+            |---|---|---|
+            | `GET /a` | `metadata` | bounded |
+            MD;
+
+        $this->assertSame(['POST /b'], ContractScan::unclassifiedRoutes($missingRow));
+        $this->assertSame([], ContractScan::phantomClassifications($missingRow));
+
+        $phantomRow = <<<'MD'
+            ### GET /a
+
+            | endpoint | classification | basis |
+            |---|---|---|
+            | `GET /a` | `metadata` | bounded |
+            | `DELETE /gone` | `metadata` | bounded |
+            MD;
+
+        $this->assertSame([], ContractScan::unclassifiedRoutes($phantomRow));
+        $this->assertSame(['DELETE /gone'], ContractScan::phantomClassifications($phantomRow));
+    }
+
+    /**
+     * **The version signal, checked rather than asserted.**
+     *
+     * `api_version` stays 2 across this release, so what tells a
+     * consumer what a deployment can do is `bfc_version` plus the
+     * `capabilities` array — which the changelog now says in those
+     * words. That makes "every capability this package reports is named
+     * in the contract" a load-bearing sentence rather than a courtesy: a
+     * capability the code emits and the document never mentions is a
+     * feature no consumer can discover, on the one axis the release
+     * deliberately left as the discovery mechanism.
+     *
+     * Modelled on the operator-ability check above, and with the same
+     * two halves: the emitted SET is pinned, so a capability cannot
+     * appear or vanish without the diff saying so, and each emitted name
+     * must occur in the document.
+     *
+     * WHAT IT DOES NOT CATCH. `Somewhere` is the whole of the second
+     * half — an occurrence check over the file, so a capability named
+     * only in a changelog line passes, and nothing here reads what the
+     * document SAYS about one. Nor does it check the PREDICATE: that
+     * `console-enter` appears under a stricter condition than
+     * `console-guard` is driven behaviourally, in
+     * `tests/ConsoleEnterForeignGuardTest.php` and
+     * `tests/ConsoleDisabledTest.php`. This suite's app is a
+     * console-ENABLED deployment whose delegated guard is the package's
+     * own, so the response below carries the conditional capabilities
+     * too; on a console-disabled app it would carry eight, and the
+     * pinned set would red rather than quietly shrink.
+     */
+    public function test_every_capability_this_deployment_reports_is_named_in_the_contract(): void
+    {
+        $expected = [
+            'tokens', 'ownership', 'onboarding', 'webhooks', 'credentials',
+            'console-keys', 'console-vitals', 'app-action-audit-emit',
+            'console-guard', 'console-enter',
+        ];
+
+        $reported = (array) $this->getJson('/bfc/meta')->assertOk()->json('capabilities');
+
+        $this->assertSame(
+            $expected,
+            $reported,
+            'The capabilities GET /bfc/meta reports have changed. That is the release signal this '
+            .'contract tells consumers to feature-detect on, so extend this set in the same diff — and '
+            .'name the new capability in docs/http-contract.md.',
+        );
+
+        $doc = $this->contractDoc();
+
+        $this->assertSame(
+            [],
+            ContractScan::capabilitiesNotNamedIn($doc, $reported),
+            'GET /bfc/meta reports capabilities docs/http-contract.md never names: '
+            .implode(', ', ContractScan::capabilitiesNotNamedIn($doc, $reported)),
+        );
+
+        // Proven able to fail, over a fixture rather than by editing the
+        // shipped contract.
+        $this->assertSame(
+            ['console-enter'],
+            ContractScan::capabilitiesNotNamedIn('a doc naming `tokens` and nothing else', ['tokens', 'console-enter']),
         );
     }
 
@@ -377,15 +516,10 @@ final class HttpContractDocTest extends TestCase
      */
     private function documentedRoutes(): array
     {
-        preg_match_all('/^### (GET|POST|PUT|PATCH|DELETE) (\/\S+)$/m', $this->contractDoc(), $matches, PREG_SET_ORDER);
-
-        $routes = array_map(
-            static fn (array $match): string => $match[1].' '.$match[2],
-            $matches,
-        );
-
-        sort($routes);
-
-        return array_values(array_unique($routes));
+        // ONE definition of "a documented route", shared with the
+        // classification scan. Two copies of this regex would be two
+        // definitions that drift, and the drift would be invisible: each
+        // check would stay green against its own reading of the file.
+        return ContractScan::documentedRoutes($this->contractDoc());
     }
 }

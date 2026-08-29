@@ -17,6 +17,29 @@ route is individually configurable, no route ever moves behind a prefix except t
 credential API's documented one, and an instance that serves any of this contract serves all
 of it.
 
+## Platform requirements
+
+Named here because this contract is written for a consumer with no PHP, and a platform requirement
+you cannot see is one you cannot plan for.
+
+**A host serving this contract needs the PHP extension `gmp` (`ext-gmp`), on PHP 8.3 or newer.**
+Nothing in this package calls it directly: it arrives with `paragonie/paseto`, which is what
+verifies the PASETO `v4.public` assertion [`POST /bfc/console/enter`](#post-bfcconsoleenter) is
+gated on, and which declares `ext-gmp` itself. The requirement is **unconditional** — it is a
+dependency of the package, not of the Console — so a deployment that never enables the Console
+needs it too.
+
+Composer resolves it: `composer require` and `composer install` both refuse on a host whose PHP
+lacks the extension, so the ordinary failure is loud and at install time. One caveat worth a base
+image's attention: Composer's generated runtime check (`vendor/composer/platform_check.php`)
+verifies the PHP VERSION only, so a `vendor/` directory built elsewhere and copied onto a host
+without `gmp` will boot and fail when the extension is first used instead.
+
+Everything else is the ordinary Laravel baseline (`ctype`, `filter`, `hash`, `mbstring`, `openssl`,
+`session`, `tokenizer`, `json`).
+
+---
+
 ## Versioning and compatibility
 
 Two discriminators, reported by [`GET /bfc/meta`](#get-bfcmeta):
@@ -44,8 +67,26 @@ The rules a consumer may rely on:
 
 ### Changelog
 
-**api_version 2** (bfc 0.5, this release). All changes since version 1, in one inventory.
-Additive unless marked otherwise:
+**api_version 2** (bfc **0.6.0**, this release). All changes since version 1, in one inventory.
+Additive unless marked otherwise.
+
+**Everything the Console adds in 0.6.0 is additive, so `api_version` stays 2. What carries the
+signal is `bfc_version` 0.6.0 plus the `capabilities` entries** — `console-keys`, `console-vitals`,
+`console-guard`, `console-enter` and `app-action-audit-emit`. That is rule 1 applied rather than a
+judgement made loosely: rule 1 names **new routes** as the paradigm additive case, and every Console
+surface in this release is one. Written down here so it is not re-litigated, along with the three
+things that WOULD have moved the major and none of which happened:
+
+- **`GET /bfc/meta` reports the same five keys, with the same types and the same meanings.** Only
+  `capabilities` changed, by gaining members — and it is documented above as an open set read by
+  membership, never by position or by its full contents.
+- **`built-for-cloud.credentials.session_guard` is still a single guard name, not a list.** An app
+  that configured one guard resolves exactly what it resolved before. The matrix now has two session
+  guards in it, but that key still names one, and the delegated guard is reached through the route's
+  own `auth:bfc-console` rather than through this key.
+- **No existing endpoint gained a field that changes how an existing field must be read.**
+  `console_key` appears on a claim or exchange response only when the request supplied one; an
+  envelope carrying none is unchanged, response keys included.
 
 - `GET /api/credentials` listing rows gained `id`, `request_count`, `subject_type` (nullable),
   `subject_ref` (nullable), `status`, and `presentation_cadence_seconds` (nullable); the listing
@@ -444,7 +485,7 @@ Public (`bfc-public` throttle). Identifies the instance.
 ```json
 {
   "product": "Sink",
-  "bfc_version": "0.4.0",
+  "bfc_version": "0.6.0",
   "api_version": 2,
   "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials", "console-keys", "console-vitals", "app-action-audit-emit"],
   "claimed": true
@@ -454,11 +495,24 @@ Public (`bfc-public` throttle). Identifies the instance.
 `capabilities` is an open set — ignore unknown entries. `claimed` says whether an owner control
 plane holds this instance.
 
+**Every entry, and what each one is a claim about.** With `api_version` fixed at 2, this array plus
+`bfc_version` is what a consumer feature-detects on, so an entry the contract never explains is a
+name nobody can act on. The four original entries — **`tokens`**, **`ownership`**, **`onboarding`**
+and **`webhooks`** — are UNCONDITIONAL: every install of the package reports all four, whatever it
+is configured to serve. They name the package's four original feature families, and they are not
+predicates about this deployment. One of them reads like one and is not: **`tokens` does not say the
+legacy credential API is mounted.** That surface is gated on `built-for-cloud.credential_api.enabled`
+(default `false`) and **no capability reports it** — an instance reporting `tokens` may answer `404`
+to every route under [the legacy credential API](#the-legacy-credential-api-api_tokens-store). The
+entries below are the ones that do carry a predicate, and each states it.
+
 `console-keys` means this instance serves the countersigning-key surfaces below: the optional
 claim-time key exchange and `POST /bfc/console/re-key`. It deliberately does **not** say
-`console` — key custody is not the Console. There is no delegated guard, no enter endpoint and
-no delegated-actor table in this release, and a control plane that read `console` as "this
-deployment can be entered" would be reading a promise nothing here keeps.
+`console` — key custody is not the Console, and a control plane that read `console` as "this
+deployment can be entered" would be reading a promise this capability does not make. The delegated
+guard, the enter endpoint and the delegated-actor table all DO exist as of this release, each
+advertised under its own name below; `console-keys` says nothing about any of them, and an instance
+can report it while reporting none of them.
 
 `console-vitals` means this instance serves [`GET /bfc/console/vitals`](#get-bfcconsolevitals).
 It is named for the one surface it serves, not for the dashboard that reads it: the fleet
@@ -2922,7 +2976,19 @@ documented in their own sections above.
     local user.
   - The token gates (`bfc.token.admin`, `bfc.credential.admin`, `bfc.ability`) are unchanged:
     they never consult a session principal.
-  See `release-notes/unified-store-guard.md`, which records this as an amendment to SEC-V3-10.
+  **This is an AMENDMENT to the v3.1 matrix invariant SEC-V3-10, not an additive slot-in**, and it
+  is recorded as one deliberately rather than left to read as an accident. SEC-V3-10 shipped as a
+  token-vs-session rule over a SINGLE `built-for-cloud.credentials.session_guard` name; the Console
+  makes the matrix session-vs-session as well, so a reader of the old statement would conclude the
+  matrix has one session guard in it when after this release it has two. The full amendment, cell by
+  cell and including the cells that did NOT change, is in `release-notes/unified-store-guard.md`.
+  *Pinned by* `tests/CredentialPrecedenceTest.php`, which runs the whole precedence matrix with both
+  session guards configured ("still rejects mismatched simultaneous principals with the delegated
+  guard configured", "does not turn a delegated session into a false mismatch on a token route" and
+  "still rejects a mismatched local principal when the session guard is the local one" — the last
+  being the shipped configuration, so the delegated exclusion cannot be read as having weakened the
+  rule it sits beside).
+
 - **Delegated session clocks.** A delegated session is bounded by Laravel's own sliding idle
   window AND by an absolute assertion-age cap of 120 minutes, measured from the assertion's
   issued-at. The cap is enforced **inside the guard**, so it holds on every route including
