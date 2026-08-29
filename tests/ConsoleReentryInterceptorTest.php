@@ -22,13 +22,43 @@ use Illuminate\Support\Facades\Process;
  * Content Security Policy. Those are named in the report rather than
  * implied to be covered.
  *
- * A machine with no `node` on its PATH SKIPS these — skipped, which is
- * its own state and not a pass. CI has node; this is for a developer
- * machine that does not.
+ * **SKIPPED IS ITS OWN STATE AND NOT A PASS, AND THAT IS ENFORCED
+ * RATHER THAN ASSERTED.** An earlier revision of this docblock said "CI
+ * has node" — which was true only because GitHub's runner image happens
+ * to ship one. Nothing pinned it, so if that image had changed, the only
+ * tests that EXECUTE the interceptor would have silently skipped and the
+ * lane would have stayed green, on the component now carrying the
+ * same-origin check a phishing primitive depends on. So:
+ * `.github/workflows/tests.yml` installs node in BOTH lanes with a
+ * pinned `setup-node`, and {@see bfcNodeRequired()} makes this file
+ * REFUSE to skip wherever `CI` is set. A developer machine without node
+ * still skips; a lane without node now fails.
+ *   Pinned by `tests/ConsoleReentryInterceptorTest.php` — "requires node
+ *   in every CI lane rather than inheriting it from the runner image".
  */
 function bfcNodeAvailable(): bool
 {
     return Process::run(['node', '--version'])->successful();
+}
+
+/**
+ * Whether this run is one where node is REQUIRED rather than optional.
+ *
+ * `CI` is set by GitHub Actions and by every other runner worth naming;
+ * `GITHUB_ACTIONS` is checked as well so the intent survives someone
+ * unsetting the generic one.
+ */
+function bfcNodeRequired(): bool
+{
+    foreach (['CI', 'GITHUB_ACTIONS'] as $variable) {
+        $value = getenv($variable);
+
+        if (is_string($value) && ! in_array(strtolower($value), ['', '0', 'false'], true)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 /**
@@ -51,11 +81,77 @@ function bfcInterceptorScenario(string $scenario): array
 }
 
 beforeEach(function (): void {
+    // Loud where it matters. A CI lane with no node is a broken lane,
+    // not an environment to accommodate, and the whole value of this
+    // file is that it EXECUTES the script.
+    if (bfcNodeRequired()) {
+        expect(bfcNodeAvailable())->toBeTrue(
+            'node is required in CI and is installed by .github/workflows/tests.yml; '
+            .'without it the interceptor is never executed by anything.',
+        );
+    }
+
     // The harness reads the shipped file directly; this asserts the
     // route serves that same file, so "the tested script" and "the
     // served script" cannot be two different things.
     expect(file_exists(ConsoleChromeScript::SOURCE))->toBeTrue();
-})->skip(fn (): bool => ! bfcNodeAvailable(), 'node is not on the PATH, so the interceptor cannot be executed here.');
+})->skip(
+    fn (): bool => ! bfcNodeRequired() && ! bfcNodeAvailable(),
+    'node is not on the PATH and this is not a CI run, so the interceptor cannot be executed here.',
+);
+
+// ─── The same-origin gate: any CORS-readable response could forge this ──────
+
+it('ignores a cross-origin response carrying the re-entry header', function (): void {
+    // THE FORGERY THIS CHECK EXISTS FOR. The wrapper sees every response
+    // the page makes, third-party ones included. A CORS-readable
+    // endpoint that exposes `BFC-Console-Reentry` via
+    // `Access-Control-Expose-Headers` can answer 401 with a
+    // `reentry_url` of its choosing — and without an origin check this
+    // script would navigate an ADMINISTRATOR's top-level window there,
+    // on the exact path operators are trained to follow.
+    //
+    // Both transports, because the header is readable on both.
+    foreach (['fetch-cross-origin', 'xhr-cross-origin'] as $scenario) {
+        $observed = bfcInterceptorScenario($scenario);
+
+        expect($observed['topAssigned'])->toBeNull($scenario)
+            ->and($observed['frameAssigned'])->toBeNull($scenario)
+            // Not even reported: this is somebody else's 401, and
+            // announcing it would tell the operator their session had
+            // died when a third party said so.
+            ->and($observed['events'])->toBe([], $scenario)
+            ->and($observed['chromeElement']['attributes'])->toBe([], $scenario);
+    }
+});
+
+it('ignores a response whose own url it cannot read', function (): void {
+    // An opaque response reports an empty `url`, and a document that
+    // cannot report its own origin can never establish that anything is
+    // same-origin. Neither is a pass and neither is a failure to
+    // report: both are ignored, which is the fail-closed direction.
+    foreach (['fetch-unreadable-url', 'fetch-origin-unreadable'] as $scenario) {
+        $observed = bfcInterceptorScenario($scenario);
+
+        expect($observed['topAssigned'])->toBeNull($scenario)
+            ->and($observed['frameAssigned'])->toBeNull($scenario)
+            ->and($observed['events'])->toBe([], $scenario);
+    }
+});
+
+it('refuses to navigate on a body that is not this contract envelope', function (): void {
+    // Same origin and the right header, so this IS a re-entry and is
+    // reported as one — but the body is not the documented
+    // `{version: 1, error: "console_reentry_required"}` pair, so no
+    // destination is read out of it. A future version bump must not be
+    // able to send an operator somewhere under the old rules.
+    foreach (['fetch-wrong-envelope-version', 'fetch-wrong-envelope-error'] as $scenario) {
+        $observed = bfcInterceptorScenario($scenario);
+
+        expect($observed['topAssigned'])->toBeNull($scenario)
+            ->and($observed['events'][0]['type'])->toBe('bfc:console-reentry-unavailable', $scenario);
+    }
+});
 
 it('navigates the top-level window through the issuer, preserving the return path', function (): void {
     $observed = bfcInterceptorScenario('fetch-redirect');
@@ -65,7 +161,9 @@ it('navigates the top-level window through the issuer, preserving the return pat
     expect($observed['topAssigned'])
         ->toBe('https://scalpels.test/console/re-enter?return_to=%2Forders%3Fpage%3D2')
         // Nothing was reported as unavailable: this re-entry happened.
-        ->and($observed['events'])->toBe([]);
+        // The one event is the departure notice, driven on its own
+        // below.
+        ->and(array_column($observed['events'], 'type'))->toBe(['bfc:console-reentry']);
 });
 
 it('navigates the top window rather than the frame the capped request came from', function (): void {
@@ -142,6 +240,56 @@ it('performs the same re-entry for a capped XMLHttpRequest', function (): void {
 
     expect($observed['topAssigned'])
         ->toBe('https://scalpels.test/console/re-enter?return_to=%2Forders');
+});
+
+it('announces the navigation before performing it, so an app can persist unsaved state', function (): void {
+    // D7's honest cost: re-entry is a full-page navigation and unsaved
+    // client-side state goes with it. The event is dispatched
+    // synchronously immediately before `location.assign()`, so a
+    // listener that writes a draft to localStorage has actually run.
+    // It is NOT cancelable — the session is already dead server-side,
+    // and letting an app suppress the navigation would only strand the
+    // operator on a page whose every request fails.
+    $observed = bfcInterceptorScenario('fetch-redirect');
+
+    expect($observed['events'])->toBe([[
+        'type' => 'bfc:console-reentry',
+        'detail' => ['reason' => 'assertion_age_cap', 'return_to' => '/orders?page=2'],
+    ]])
+        // Dispatched BEFORE the navigation: the harness records both in
+        // order, and the navigation is the last thing that happened.
+        ->and($observed['topAssigned'])->not->toBeNull();
+});
+
+it('requires node in every CI lane rather than inheriting it from the runner image', function (): void {
+    // The tests in this file are the only thing that executes the
+    // interceptor. If node were merely inherited from a runner image,
+    // a change to that image would make them all skip and the lane
+    // would stay green on the highest-risk component in this PR.
+    $workflow = (string) file_get_contents(dirname(__DIR__).'/.github/workflows/tests.yml');
+
+    // Every job in the workflow, split on the two-space job keys —
+    // scoped to the `jobs:` block, because `on:` has two-space keys of
+    // its own and counting those would make this pass for the wrong
+    // reason.
+    $jobsBlock = strstr($workflow, "\njobs:\n");
+
+    expect($jobsBlock)->toBeString();
+
+    preg_match_all('/^  ([a-z][a-z0-9_-]*):$/m', (string) $jobsBlock, $jobs, PREG_OFFSET_CAPTURE);
+
+    expect($jobs[1])->toHaveCount(2);
+
+    foreach ($jobs[1] as $index => [$name, $offset]) {
+        $end = $jobs[1][$index + 1][1] ?? strlen((string) $jobsBlock);
+        $body = substr((string) $jobsBlock, $offset, $end - $offset);
+
+        // `toContain()` is variadic in Pest, so the failure message goes
+        // through a boolean expectation rather than a second needle.
+        expect(str_contains($body, 'actions/setup-node@'))->toBeTrue(
+            "The CI job \"{$name}\" does not install node, so ConsoleReentryInterceptorTest would skip there.",
+        );
+    }
 });
 
 it('ignores an ordinary 401 that is not a console re-entry', function (): void {

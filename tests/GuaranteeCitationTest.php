@@ -106,13 +106,13 @@ $expectedCitations = [
     'src/Console/ConsoleReturnTo.php' => 2,
     'src/Console/ConsoleSession.php' => 2,
     'src/Console/DelegatedActor.php' => 6,
-    'src/Console/ConsoleChrome.php' => 5,
+    'src/Console/ConsoleChrome.php' => 6,
     'src/Console/DelegatedActorProvider.php' => 4,
-    'src/Console/ServesConsoleChrome.php' => 2,
+    'src/Console/ServesConsoleChrome.php' => 3,
     'src/Http/Controllers/ConsoleChromeScript.php' => 1,
     'resources/views/chrome.blade.php' => 2,
     'resources/views/layout.blade.php' => 2,
-    'resources/js/console-reentry.js' => 3,
+    'resources/js/console-reentry.js' => 8,
     'src/Http/Controllers/ConsoleEnter.php' => 24,
 ];
 

@@ -20,6 +20,12 @@ const scenario = process.argv[2];
 
 const CHROME_ELEMENT_ID = 'bfc-console-chrome';
 
+// The origin the console page is served from. Every same-origin scenario
+// answers from here; the cross-origin ones deliberately do not.
+const PAGE_ORIGIN = 'https://app.test';
+const SAME_ORIGIN_URL = PAGE_ORIGIN + '/livewire/update';
+const CROSS_ORIGIN_URL = 'https://analytics.vendor.test/collect';
+
 const observed = {
     scenario,
     topAssigned: null,
@@ -32,8 +38,9 @@ const observed = {
     callerLoadFired: false,
 };
 
-function makeResponse(status, headers, body) {
+function makeResponse(status, headers, body, url) {
     const build = () => ({
+        url,
         status,
         headers: { get: (name) => (name in headers ? headers[name] : null) },
         clone: () => build(),
@@ -49,8 +56,16 @@ function makeWindow(options) {
         ? { attributes: {}, textContent: '', setAttribute(key, value) { this.attributes[key] = value; } }
         : null;
 
-    const frameLocation = { assign: (url) => { observed.frameAssigned = url; } };
-    const topLocation = { assign: (url) => { observed.topAssigned = url; } };
+    const frameLocation = {
+        origin: PAGE_ORIGIN,
+        href: PAGE_ORIGIN + '/orders',
+        assign: (url) => { observed.frameAssigned = url; },
+    };
+    const topLocation = {
+        origin: PAGE_ORIGIN,
+        href: PAGE_ORIGIN + '/orders',
+        assign: (url) => { observed.topAssigned = url; },
+    };
 
     const document = {
         getElementById: (id) => (id === CHROME_ELEMENT_ID ? chromeElement : null),
@@ -81,13 +96,23 @@ function makeWindow(options) {
         window.location = topLocation;
     }
 
-    window.fetch = async () => makeResponse(options.status, options.headers, options.body);
+    if (options.originUnreadable) {
+        // A document that cannot report its own origin — the fail-closed
+        // case the script treats as "nothing is same-origin".
+        window.location = { assign: topLocation.assign };
+        window.top = window;
+    }
+
+    const responseUrl = 'responseUrl' in options ? options.responseUrl : SAME_ORIGIN_URL;
+
+    window.fetch = async () => makeResponse(options.status, options.headers, options.body, responseUrl);
 
     class FakeXhr {
         constructor() {
             this.listeners = {};
             this.status = 0;
             this.responseText = '';
+            this.responseURL = '';
             this.responseHeaders = {};
         }
 
@@ -101,6 +126,7 @@ function makeWindow(options) {
             queueMicrotask(() => {
                 this.status = options.status;
                 this.responseText = options.body;
+                this.responseURL = responseUrl;
                 this.responseHeaders = options.headers;
 
                 for (const listener of this.listeners.load || []) {
@@ -121,43 +147,40 @@ function makeWindow(options) {
 
 const REENTRY_HEADERS = { 'BFC-Console-Reentry': '1' };
 
+/**
+ * The body the server actually emits, with whatever this scenario needs
+ * to break in it.
+ */
+function reentryBody(overrides = {}) {
+    return JSON.stringify({
+        version: 1,
+        error: 'console_reentry_required',
+        reason: 'assertion_age_cap',
+        reentry_url: 'https://scalpels.test/console/re-enter',
+        return_to: '/orders',
+        ...overrides,
+    });
+}
+
 const scenarios = {
     'fetch-redirect': {
         status: 401,
         headers: REENTRY_HEADERS,
-        body: JSON.stringify({
-            version: 1,
-            error: 'console_reentry_required',
-            reason: 'assertion_age_cap',
-            reentry_url: 'https://scalpels.test/console/re-enter',
-            return_to: '/orders?page=2',
-        }),
+        body: reentryBody({ return_to: '/orders?page=2' }),
         withChromeElement: true,
     },
     'fetch-redirect-framed': {
         framed: true,
         status: 401,
         headers: REENTRY_HEADERS,
-        body: JSON.stringify({
-            version: 1,
-            error: 'console_reentry_required',
-            reason: 'assertion_age_cap',
-            reentry_url: 'https://scalpels.test/console/re-enter?tenant=acme',
-            return_to: '/orders',
-        }),
+        body: reentryBody({ reentry_url: 'https://scalpels.test/console/re-enter?tenant=acme' }),
         withChromeElement: true,
     },
     'fetch-top-unreachable': {
         topUnreachable: true,
         status: 401,
         headers: REENTRY_HEADERS,
-        body: JSON.stringify({
-            version: 1,
-            error: 'console_reentry_required',
-            reason: 'assertion_age_cap',
-            reentry_url: 'https://scalpels.test/console/re-enter',
-            return_to: '/orders',
-        }),
+        body: reentryBody(),
         withChromeElement: true,
     },
     'fetch-no-reentry-url': {
@@ -174,13 +197,7 @@ const scenarios = {
     'fetch-hostile-reentry-url': {
         status: 401,
         headers: REENTRY_HEADERS,
-        body: JSON.stringify({
-            version: 1,
-            error: 'console_reentry_required',
-            reason: 'not_authenticated',
-            reentry_url: 'javascript:alert(1)',
-            return_to: '/orders',
-        }),
+        body: reentryBody({ reason: 'not_authenticated', reentry_url: 'javascript:alert(1)' }),
         withChromeElement: true,
     },
     'fetch-ordinary-401': {
@@ -189,16 +206,57 @@ const scenarios = {
         body: JSON.stringify({ message: 'Unauthenticated.' }),
         withChromeElement: true,
     },
+    // The forgery: a CORS-readable third party answering 401 with the
+    // sentinel header exposed and a destination of its choosing.
+    'fetch-cross-origin': {
+        responseUrl: CROSS_ORIGIN_URL,
+        status: 401,
+        headers: REENTRY_HEADERS,
+        body: reentryBody({ reentry_url: 'https://phish.attacker.test/login', return_to: '/admin' }),
+        withChromeElement: true,
+    },
+    'xhr-cross-origin': {
+        responseUrl: CROSS_ORIGIN_URL,
+        status: 401,
+        headers: REENTRY_HEADERS,
+        body: reentryBody({ reentry_url: 'https://phish.attacker.test/login', return_to: '/admin' }),
+        withChromeElement: true,
+        transport: 'xhr',
+    },
+    // An opaque response has an empty url: not verifiable, so ignored.
+    'fetch-unreadable-url': {
+        responseUrl: '',
+        status: 401,
+        headers: REENTRY_HEADERS,
+        body: reentryBody(),
+        withChromeElement: true,
+    },
+    // A document that cannot report its own origin: nothing can be
+    // same-origin, so nothing happens.
+    'fetch-origin-unreadable': {
+        originUnreadable: true,
+        status: 401,
+        headers: REENTRY_HEADERS,
+        body: reentryBody(),
+        withChromeElement: true,
+    },
+    // Same origin and the right header, but not this contract's body.
+    'fetch-wrong-envelope-version': {
+        status: 401,
+        headers: REENTRY_HEADERS,
+        body: reentryBody({ version: 2 }),
+        withChromeElement: true,
+    },
+    'fetch-wrong-envelope-error': {
+        status: 401,
+        headers: REENTRY_HEADERS,
+        body: reentryBody({ error: 'something_else' }),
+        withChromeElement: true,
+    },
     'xhr-redirect': {
         status: 401,
         headers: REENTRY_HEADERS,
-        body: JSON.stringify({
-            version: 1,
-            error: 'console_reentry_required',
-            reason: 'assertion_age_cap',
-            reentry_url: 'https://scalpels.test/console/re-enter',
-            return_to: '/orders',
-        }),
+        body: reentryBody(),
         withChromeElement: true,
         transport: 'xhr',
     },

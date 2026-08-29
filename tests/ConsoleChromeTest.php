@@ -148,8 +148,10 @@ it('renders zero console chrome for a local authenticated session', function ():
         ->not->toContain('data-bfc-console-operator')
         ->not->toContain(ConsoleChrome::UNNAMED_OPERATOR)
         // No attribution, no operator identity, and no interceptor: a
-        // local page carries none of the chrome's machinery either.
-        ->not->toContain('/bfc/console/chrome.js');
+        // local page carries none of the chrome's machinery either —
+        // not the tag, and no script element of any kind.
+        ->not->toContain('/bfc/console/chrome.js')
+        ->not->toContain('<script');
 });
 
 // ─── AC3: a delegated session sees the full chrome ──────────────────────────
@@ -291,6 +293,36 @@ it('renders a claim exactly at the verifier bound, so the limit is a bound and n
 });
 
 // ─── The chrome and the interceptor agree on what they share ────────────────
+
+it('renders the interceptor as an external script with no inline script anywhere on the page', function (): void {
+    // THE PREMISE THE CSP GUIDANCE RESTS ON, asserted on the MOUNTED
+    // path rather than argued. An inline `<script>` is the obvious
+    // "quick fix" the first time a CSP problem appears, and adding one
+    // would silently turn the documented `script-src 'self'` posture
+    // into one needing `'unsafe-inline'` — a dependency handing a
+    // consuming app a downgrade.
+    $actor = consoleActor(displayName: 'Jane Operator', onBehalfOf: 'Acme Agency');
+
+    $html = (string) $this->withSession(consoleSessionState($actor))
+        ->get('/chrome-console')->assertOk()->getContent();
+
+    expect(preg_match_all('/<script\b[^>]*>/i', $html, $tags))->toBe(1);
+
+    // External, and the ONLY script on the page.
+    expect($tags[0][0])->toContain('src="/bfc/console/chrome.js"')
+        // No nonce: the guidance in docs/http-contract.md says in so
+        // many words that a nonce-only or `strict-dynamic` policy has to
+        // supply one itself, and that sentence is only true while this
+        // is.
+        ->not->toContain('nonce');
+
+    // And nothing between the tags: the element has no inline body.
+    preg_match('/<script\b[^>]*>(.*?)<\/script>/is', $html, $body);
+
+    expect(trim($body[1] ?? 'MISSING'))->toBe('')
+        // Nor any inline style, which the same policy family governs.
+        ->and($html)->not->toContain('<style');
+});
 
 it('keeps the chrome element id the interceptor script looks for', function (): void {
     // Two files, one string. The script reports an unavailable re-entry

@@ -61,19 +61,30 @@ use SplFileInfo;
  *   carries neither" and "names a route whose throttle hoists the guard
  *   scoping in front of the re-entry answer".
  *
- * **THE SECOND LEG, and it is what closes the hole the first leaves.**
- * The marker is a convention: a controller that renders the chrome and
- * does NOT implement it would be classified {@see UNRELATED} and pass.
- * {@see viewReferencesIn()} therefore walks `src/` for any file that
- * NAMES a `bfc::` view in code — comments stripped first, so the prose
- * in this package that discusses `bfc::layout` is not mistaken for a
- * render — and the test requires every such file to be one the diff
- * accounted for. A new controller reaching for the layout reds the
- * suite.
+ * **THE SECOND LEG, AND EXACTLY WHAT IT IS.** The marker is a
+ * convention: a controller that renders the chrome and does NOT
+ * implement it is classified {@see UNRELATED} and passes.
+ * {@see viewReferencesIn()} walks `src/` and finds files containing the
+ * LITERAL substring `bfc::` in code — comments stripped first, so the
+ * prose in this package that discusses `bfc::layout` is not mistaken for
+ * a render. **That is a literal-substring search and nothing more.** It
+ * is a tripwire over the ordinary spelling, not a proof about every way
+ * a view can be named, and the claim is worded that way deliberately: an
+ * earlier revision of this paragraph said a new controller reaching for
+ * the layout "reds the suite", which is more than a substring search can
+ * promise.
  *
- * **THE RESIDUE, named rather than implied.** Three things are outside
- * what this can see, and none of them is a package route:
+ * **THE RESIDUE, named rather than implied.** Four things are outside
+ * what this can see:
  *
+ *  - **A view named INDIRECTLY.** `view('bfc'.'::layout')`, a class
+ *    constant, a config value, a helper that returns the name, a
+ *    variable assembled at runtime — none of them contains the literal
+ *    substring, so none of them is found. Closing that means an AST or
+ *    data-flow scanner, which is a new instrument making a new claim and
+ *    needing its own proof; this package has already withdrawn one
+ *    general-purpose instrument for exactly that reason, so the honest
+ *    move is to state the bound rather than widen it.
  *  - **A HOST APPLICATION's own routes.** This package cannot enumerate
  *    them, and the app's own pages are where `bfc::layout` is actually
  *    extended. What bounds that is not this scan but the chrome itself:
@@ -264,9 +275,14 @@ final class ConsoleChromeRouteScan
     }
 
     /**
-     * Files under `src/` that NAME a `bfc::` view in code, relative to
-     * the root — the second leg, which sees a chrome renderer the marker
-     * convention missed.
+     * Files under `src/` containing the LITERAL substring `bfc::` in
+     * code, relative to the root.
+     *
+     * A literal search, and the class docblock says what that does and
+     * does not cover: it finds the ordinary spelling of a package view
+     * name and it finds nothing that was assembled, aliased or
+     * configured. It is a tripwire over the common case, not a decision
+     * procedure for "does this file render the chrome".
      *
      * Comments and doc comments are replaced before matching, for the
      * same reason every other scan in this suite does it: this package

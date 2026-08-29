@@ -2250,10 +2250,29 @@ of the re-entry answer" and "serves the interceptor to a delegated session and t
 
 ### What the interceptor does
 
-It wraps `fetch` and `XMLHttpRequest` and watches for the re-entry answer — **branching on the
-header, never on the status alone**, so an application's own `401` is left entirely alone.
+It wraps `fetch` and `XMLHttpRequest` and watches for the re-entry answer.
 
-- With a `reentry_url` in the body, it performs a **top-level** navigation:
+**The first check is that the response is SAME-ORIGIN with the console page**, compared as scheme
+plus authority against the response's own URL (`response.url` for fetch, `responseURL` for XHR).
+The wrapper sees every response the page makes, third-party ones included, so without that check
+any CORS-readable endpoint that exposes `BFC-Console-Reentry` through
+`Access-Control-Expose-Headers` could answer `401` with a `reentry_url` of its choosing and send
+an administrator's top-level window there — a phishing primitive on the exact path operators are
+trained to follow. A response whose URL cannot be read (an opaque `no-cors` response, or a
+document that cannot report its own origin) is **ignored entirely**: not acted on, and not
+reported either, because the script cannot establish it is looking at its own application's
+answer.
+
+**The residue of that check, stated:** a redirected response reports its FINAL URL and is judged
+on where it landed; and a same-origin PROXY the application itself operates is
+indistinguishable from the application — if an app forwards a third party's bytes under its own
+origin, an origin comparison cannot see through it.
+
+Only then does it read the status and the header — **branching on the header, never on the
+status alone**, so an application's own `401` is left entirely alone.
+
+- With the documented envelope in the body (`version` of `1` and `error` of
+  `console_reentry_required`) and a `reentry_url`, it performs a **top-level** navigation:
   `window.top.location`, with `return_to` carried across as a percent-encoded query parameter.
   Never the frame the capped request came from — re-entry means leaving this app, and doing it
   inside an iframe would either be refused by the issuer's framing policy or leave the outer
@@ -2261,54 +2280,131 @@ header, never on the status alone**, so an application's own `401` is left entir
 - With **no** `reentry_url` — which is what the server emits when the deployment has configured
   none — it **invents nothing**. It navigates nowhere, marks the chrome element
   `data-bfc-console-reentry="unavailable"`, replaces its text with a notice, and dispatches
-  `bfc:console-reentry-unavailable` on `document` (with `detail.reason` and `detail.return_to`)
-  so the host application can respond in its own voice. A `reentry_url` whose scheme is not
-  `http(s)`, and a `window.top` that cannot be reached at all, take the same path.
+  `bfc:console-reentry-unavailable` on `document` so the host application can respond in its own
+  voice. A `reentry_url` whose scheme is not `http(s)`, a body that is not the documented
+  envelope, and a `window.top` that cannot be reached at all, all take the same path.
 - It **never swallows** the response. The wrapped `fetch` resolves with the original response
   object (the body is read from a `clone()`), and the XHR wrapper only ADDS a listener, so the
   caller's own handlers still run and still see the `401`.
+
+### Automatic re-entry is a full-page reload, and unsaved work goes with it
+
+This is D7's stated cost and it is said here rather than left to be discovered. **When the
+interceptor re-enters, it performs a top-level navigation, so any unsaved client-side state on
+the page — a half-written form, an in-flight component's local state, an unsent draft — is
+lost.** At the two-hour assertion cap an operator sees exactly one full-page reload; with a live
+session at the issuer they are not logged out, but the reload still happens. "The caller still
+receives its `401`" does not preserve anything once navigation has begun.
+
+The package will not decide for an application what to do about that, but it does give it the
+moment. **Two DOM events on `document`, and they are a public surface:**
+
+| event | when | `detail` |
+|---|---|---|
+| `bfc:console-reentry` | synchronously, immediately **before** the navigation | `{reason, return_to}` |
+| `bfc:console-reentry-unavailable` | when re-entry is required but cannot be performed | `{reason, return_to}` |
+
+`detail.reason` is the `reason` enum from the 401 body (or `null` when the body could not be
+read); `detail.return_to` is the relative path the server chose.
+
+**Neither event is cancelable, and `bfc:console-reentry` is deliberately not.** A listener runs
+synchronously, so a `localStorage` write completes before the page starts leaving; a network save
+does not. Cancelling was considered and rejected: the delegated session is already dead
+server-side, so suppressing the navigation grants no authority and buys nothing — it only strands
+the operator on a page whose every request fails, turning D7's honest reload into a silent dead
+end.
 
 **It is a convenience and not an enforcement.** Revocation is enforced server-side, inside the
 guard, on every route: a browser with this script blocked, disabled or simply not loaded still
 cannot act with a dead session — it sits on a page whose requests all fail. That ordering is
 what the amended D7 chose: revocation truth never depends on the browser.
 
-*Pinned by* `tests/ConsoleReentryInterceptorTest.php` ("navigates the top-level window through
-the issuer, preserving the return path", "navigates the top window rather than the frame the
-capped request came from", "degrades honestly when the deployment has configured no re-entry
-url", "refuses a re-entry url whose scheme is not http or https", "degrades honestly when the
-top window cannot be reached at all", "hands the capped response back to its caller rather than
-swallowing it", "performs the same re-entry for a capped XMLHttpRequest" and "ignores an
-ordinary 401 that is not a console re-entry").
+*Pinned by* `tests/ConsoleReentryInterceptorTest.php` ("ignores a cross-origin response carrying
+the re-entry header", "ignores a response whose own url it cannot read", "refuses to navigate on
+a body that is not this contract envelope", "navigates the top-level window through the issuer,
+preserving the return path", "navigates the top window rather than the frame the capped request
+came from", "announces the navigation before performing it, so an app can persist unsaved state",
+"degrades honestly when the deployment has configured no re-entry url", "refuses a re-entry url
+whose scheme is not http or https", "degrades honestly when the top window cannot be reached at
+all", "hands the capped response back to its caller rather than swallowing it", "performs the
+same re-entry for a capped XMLHttpRequest" and "ignores an ordinary 401 that is not a console
+re-entry").
 
 ### Content Security Policy
 
-**The interceptor is a same-origin external script, and that is the whole of the CSP guidance:**
-`script-src 'self'` is sufficient. It is served from a route rather than inlined into the layout
+**What the package emits is a single same-origin external `<script src>` with no nonce, no inline
+script and no inline style anywhere on the page.** It is served from a route rather than inlined
 precisely so that a consuming app never has to add `'unsafe-inline'` to `script-src` to make a
-dependency's chrome work — a package that forces that on an app has handed it a downgrade.
+dependency's chrome work — a package that forces that on an app has handed it a downgrade. What
+your policy has to say about that tag depends on which KIND of policy you run, and the two
+answers are different.
 
-For an app running a nonce- or hash-based policy, nothing extra is required either: the tag is
-an external `src`, which a `'nonce-…'` or `'strict-dynamic'` policy admits under `'self'`
-without a nonce of its own. If your policy is `script-src 'nonce-…'` with **no** `'self'`, add
-`'self'` or serve the file through your own asset pipeline — the package will not emit an inline
-tag for you.
+*Pinned by* `tests/ConsoleChromeTest.php` ("renders the interceptor as an external script with no
+inline script anywhere on the page").
 
-The rest of what the chrome needs is deliberately small, so that no directive has to be widened:
+**Host-allowlist policies — `script-src 'self'` is sufficient, and nothing else is needed.** A
+policy naming `'self'` (or an origin that covers this app) admits the tag as it stands. This
+covers most deployments and it is the case the package is designed around.
+
+**Nonce-only and `'strict-dynamic'` policies — `'self'` is NOT enough, and the tag will not load
+without help.** Two separate reasons, and an earlier revision of this section got both wrong:
+
+- Under `script-src 'nonce-…'` with no host source, nothing is allowed except what carries the
+  nonce. The package's tag carries none, so it is blocked.
+- Under any policy containing `'strict-dynamic'`, CSP Level 3 says host-source and scheme-source
+  expressions — `'self'` included — **are ignored** for script loading, and only a nonce or hash
+  admits a parser-inserted script. Adding `'self'` alongside `'strict-dynamic'` therefore does
+  not help: the tag is still blocked, and the interceptor silently does not exist while capped
+  XHRs sit on a dead page.
+
+  Worse, this fails *asymmetrically across browsers*: a CSP2-era browser ignores the
+  unrecognised `'strict-dynamic'` keyword and honours `'self'`, so a policy carrying both loads
+  the script in old browsers and blocks it in new ones. Test on a browser that implements CSP3.
+
+**Two supported remedies, and pick whichever fits your policy:**
+
+1. **Publish the views and attach your own nonce.**
+   `php artisan vendor:publish --tag=built-for-cloud-views` puts `layout.blade.php` and
+   `chrome.blade.php` in `resources/views/vendor/bfc`, where you can add
+   `nonce="{{ $yourNonce }}"` to the `<script>` tag. Publishing does **not** create a second
+   layout: Laravel's namespaced finder prefers the published copy for the same view name, so
+   `bfc::layout` still names exactly one template — yours.
+2. **Load it from an already-trusted script.** Under `'strict-dynamic'`, a script injected by a
+   trusted script inherits that trust, which is what the keyword exists for. From your own
+   nonce-carrying bundle:
+   `const s = document.createElement('script'); s.src = '/bfc/console/chrome.js'; document.head.append(s);`
+   In that case remove the package's own tag by publishing the chrome partial and deleting it,
+   or the browser will simply block the duplicate.
+
+**The package will not guess a nonce for you and will not emit an inline tag.** There is no
+config key for a nonce here, deliberately: a nonce has to come from the same request that set the
+header, Laravel has no framework-wide nonce accessor to read it from, and a package inventing one
+would be a package deciding the shape of an app's CSP.
+
+The rest of what the chrome needs is deliberately small, so that no other directive has to be
+widened:
 
 | directive | why |
 |---|---|
-| `script-src 'self'` | the interceptor tag; nothing else is loaded |
+| `script-src` | the interceptor tag, and nothing else is loaded — see the two cases above |
 | `connect-src` | untouched — the interceptor wraps calls the app was already making and issues none of its own |
 | `style-src` | untouched — the chrome ships no stylesheet and no inline `style` attribute |
 | `img-src` | untouched — the chrome loads no images |
 | `frame-ancestors` | your own choice; the interceptor's top-level navigation degrades honestly when it is framed cross-origin, rather than navigating the frame |
 
-**One thing a CSP cannot be relied on for here, said plainly:** `form-action` and
-`navigate-to`-style directives govern where the top-level navigation may go. The destination is
-the `reentry_url` this deployment configured, so an app with a restrictive policy must allow its
-own issuer there, or re-entry will be blocked by the browser — silently, from this script's point
-of view, because a blocked navigation raises nothing it can observe.
+**What a CSP does NOT govern here, corrected:** an earlier revision of this section said a
+restrictive `form-action` or `navigate-to` policy had to allow the issuer or re-entry would be
+blocked. That is wrong twice — `form-action` governs form submissions and not a script-initiated
+`location.assign()`, and `navigate-to` was dropped from CSP Level 3 and never shipped — so **no
+CSP directive stands between this script and the issuer.** There is nothing to add to your policy
+for the navigation itself.
+
+What CAN refuse it is not CSP: a **sandboxed iframe without `allow-top-navigation`**, and a
+`beforeunload` handler that prompts. In both cases the refusal is **silent from this script's
+point of view** — a blocked navigation raises nothing it can observe — so the operator is left on
+a page whose requests all fail, which is the same place they would be with the script absent
+entirely. Revocation is unaffected either way: it is enforced server-side, in the guard, on every
+route.
 
 ---
 

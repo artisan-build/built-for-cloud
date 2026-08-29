@@ -144,14 +144,16 @@ it('names a route whose throttle hoists the guard scoping in front of the re-ent
 it('accounts for every file in src that names a package view', function (): void {
     $src = dirname(__DIR__).'/src';
 
-    // The second leg. The marker interface is a convention, so a
-    // controller that renders the chrome without implementing it would
-    // be classified as unrelated and pass the route rule above. This
-    // enumerates the files that actually reach for a `bfc::` view, and
-    // the expected set is short enough to read: the provider, which
-    // registers the namespace and the layout's composer, and nothing
-    // else. A new file rendering the layout reds this until somebody
-    // says why.
+    // The second leg, and it is a LITERAL substring search — see
+    // ConsoleChromeRouteScan's docblock for what that does and does not
+    // cover. The marker interface is a convention, so a controller that
+    // renders the chrome without implementing it is classified as
+    // unrelated and passes the route rule above; this catches the
+    // ORDINARY spelling of that mistake and does not claim to catch a
+    // view name assembled at runtime, read from config, or reached
+    // through a helper. The expected set is short enough to read: the
+    // provider, which registers the namespace and the layout's
+    // composer, and nothing else.
     expect(ConsoleChromeRouteScan::countPhpFiles($src))->toBeGreaterThan(100);
 
     expect(ConsoleChromeRouteScan::viewReferencesIn($src))
