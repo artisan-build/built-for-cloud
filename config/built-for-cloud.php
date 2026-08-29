@@ -214,6 +214,16 @@ return [
     | Null for both is an ordinary, un-degraded state: an app that
     | declares neither simply reports nulls.
     |
+    | `deployment_id` — a STABLE identifier for this deployment, used to
+    | namespace the cached queue snapshot below. It falls back to
+    | `cloud.application`, and when neither is set the snapshot cache is
+    | DISABLED rather than shared: two apps with no identifier, the same
+    | environment and a shared CACHE_PREFIX would otherwise compute the
+    | same key and serve each other's queue backlog as honest local data
+    | — a silent cross-deployment leak into a vendor dashboard, which is
+    | worse than slow vitals. It is never inferred from the product name
+    | or the environment; those are not identities.
+    |
     | `queue_cache_seconds` — how long one queue-backlog snapshot serves
     | every poll. This route is POLLED: a dashboard reading once a second
     | would otherwise put a queue query (or a redis/sqs round trip) on
@@ -222,7 +232,9 @@ return [
     | the failing read did rather than laundering it into `ok`. Set it to
     | 0 to read on every request. It bounds how OFTEN the read happens,
     | not how long one read may take — see CollectVitals::queueSnapshot
-    | for why the package imposes no wall-clock deadline.
+    | for why the package imposes no wall-clock deadline. The oldest-job
+    | AGE is derived per request from a cached timestamp, so it keeps
+    | moving inside a window even though the counts do not.
     |
     | The headline stat is NOT here. Its label vocabulary is code, not
     | config — the app's contract declaration implements
@@ -237,6 +249,7 @@ return [
     'vitals' => [
         'app_version' => env('BUILT_FOR_CLOUD_APP_VERSION'),
         'deployed_at' => env('BUILT_FOR_CLOUD_DEPLOYED_AT'),
+        'deployment_id' => env('BUILT_FOR_CLOUD_DEPLOYMENT_ID'),
         'queue_cache_seconds' => env('BUILT_FOR_CLOUD_VITALS_QUEUE_CACHE', 15),
     ],
 

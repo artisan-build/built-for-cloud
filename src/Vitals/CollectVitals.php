@@ -58,7 +58,7 @@ final class CollectVitals
      * upgrade reads a new key instead of rejecting the old one on every
      * poll until it expires.
      */
-    private const int CACHE_SHAPE_VERSION = 1;
+    private const int CACHE_SHAPE_VERSION = 2;
 
     /**
      * @param  string|null  $statedContractVersion  the `api_version` the
@@ -188,21 +188,34 @@ final class CollectVitals
      * The snapshot carries its own degradation flag, so a poll served
      * from cache reports the same health as the poll that populated it —
      * a cache hit must not launder a failed read into an `ok`.
+     *
+     * The AGE is derived HERE, per request, from a cached TIMESTAMP.
+     * Caching the computed delta instead froze it: every poll inside a
+     * window reported the same "42 seconds" while the job actually kept
+     * waiting, which is the one number on this payload whose whole
+     * meaning is that it moves.
      */
     private function queue(bool &$degraded): QueueVitals
     {
-        [$queue, $queueDegraded] = $this->queueSnapshot();
+        $snapshot = $this->queueSnapshot();
 
-        if ($queueDegraded) {
+        if ($snapshot['degraded']) {
             $degraded = true;
         }
 
-        return $queue;
+        return new QueueVitals(
+            pending: $snapshot['pending'],
+            reserved: $snapshot['reserved'],
+            failed: $snapshot['failed'],
+            oldestPendingAgeSeconds: $snapshot['oldest_at'] === null
+                ? null
+                : $this->age(CarbonImmutable::now()->getTimestamp() - $snapshot['oldest_at'], $degraded),
+        );
     }
 
     /**
      * The cached read, and the honest statement of what caching does and
-     * does not do here. Three limits, all stated because an unstated one
+     * does not do here. Four limits, all stated because an unstated one
      * reads as covered:
      *
      *  1. **It reduces frequency; it does not bound it.**
@@ -230,32 +243,26 @@ final class CollectVitals
      *     promise this class exists to keep. A value that does not
      *     validate is bypassed for a fresh read rather than trusted or
      *     reported.
+     *  4. **Without a stable deployment identifier there is no cache at
+     *     all.** See {@see self::cacheKey}: sharing is refused rather
+     *     than claimed.
      *
-     * @return array{QueueVitals, bool}
+     * @return array{pending: int|null, reserved: int|null, failed: int|null, oldest_at: int|null, degraded: bool}
      */
     private function queueSnapshot(): array
     {
         $seconds = config('built-for-cloud.vitals.queue_cache_seconds', self::DEFAULT_QUEUE_CACHE_SECONDS);
         $seconds = is_numeric($seconds) ? (int) $seconds : self::DEFAULT_QUEUE_CACHE_SECONDS;
+        $key = $this->cacheKey();
 
-        if ($seconds <= 0) {
+        if ($seconds <= 0 || $key === null) {
             return $this->readQueue();
         }
 
         try {
-            $cached = Cache::remember($this->cacheKey(), $seconds, function (): array {
-                [$queue, $queueDegraded] = $this->readQueue();
-
-                return [
-                    'pending' => $queue->pending,
-                    'reserved' => $queue->reserved,
-                    'failed' => $queue->failed,
-                    'oldest' => $queue->oldestPendingAgeSeconds,
-                    'degraded' => $queueDegraded,
-                ];
-            });
-
-            $snapshot = $this->snapshotFrom($cached);
+            $snapshot = $this->snapshotFrom(
+                Cache::remember($key, $seconds, fn (): array => $this->readQueue()),
+            );
 
             if ($snapshot !== null) {
                 return $snapshot;
@@ -272,14 +279,14 @@ final class CollectVitals
      * Rebuild a snapshot from whatever the cache handed back, or null
      * when that is not a snapshot this class wrote.
      *
-     * Every member is checked: the four counts must be absent, null or
+     * Every member is checked: the four integers must be absent, null or
      * int, and the degradation flag must be a boolean. Nothing is cast.
      * A cached `"12"` is not a pending count — it is evidence that
      * something else owns this key — and a value that fails here is
      * bypassed rather than repaired, because repairing it would report a
      * number this deployment never read.
      *
-     * @return array{QueueVitals, bool}|null
+     * @return array{pending: int|null, reserved: int|null, failed: int|null, oldest_at: int|null, degraded: bool}|null
      */
     private function snapshotFrom(mixed $cached): ?array
     {
@@ -287,64 +294,88 @@ final class CollectVitals
             return null;
         }
 
-        $counts = [];
+        $members = [];
 
-        foreach (['pending', 'reserved', 'failed', 'oldest'] as $member) {
+        foreach (['pending', 'reserved', 'failed', 'oldest_at'] as $member) {
             $value = $cached[$member] ?? null;
 
             if ($value !== null && ! is_int($value)) {
                 return null;
             }
 
-            $counts[$member] = $value;
+            $members[$member] = $value;
         }
 
         return [
-            new QueueVitals(
-                pending: $counts['pending'],
-                reserved: $counts['reserved'],
-                failed: $counts['failed'],
-                oldestPendingAgeSeconds: $counts['oldest'],
-            ),
-            $cached['degraded'],
+            'pending' => $members['pending'],
+            'reserved' => $members['reserved'],
+            'failed' => $members['failed'],
+            'oldest_at' => $members['oldest_at'],
+            'degraded' => $cached['degraded'],
         ];
     }
 
     /**
-     * The snapshot's cache key: versioned, and namespaced by the things
-     * that change what a snapshot MEANS.
+     * The snapshot's cache key, or NULL meaning "do not share a cache".
      *
-     * A fixed global key was wrong in two ways at once. Two deployments
-     * sharing a cache prefix — the same Redis with the same
-     * `CACHE_PREFIX`, which is an ordinary staging arrangement — would
-     * serve each other's backlogs. And changing the queue an app reads
-     * would keep serving the previous queue's numbers until the window
-     * expired. The version segment makes a future change to the cached
-     * ARRAY SHAPE a new key rather than a value {@see self::snapshotFrom}
-     * has to reject on every poll of the upgrade window.
+     * Null is the important half. A shared cache is only safe when this
+     * deployment can be told apart from every other deployment behind
+     * the same store, and an earlier revision built a key out of things
+     * that are routinely identical: `cloud.application` (frequently
+     * unset), `product` (which defaults to `Laravel`), the environment,
+     * and a hand-picked few queue-connection members. Two apps with
+     * those defaults, the same environment and a shared `CACHE_PREFIX`
+     * produced the SAME key and served each other's backlog as honest
+     * local data — a silent cross-deployment leak into a vendor
+     * dashboard, which is worse than a 500. So when no stable identifier
+     * is configured this returns null and every poll reads directly. The
+     * honest failure is slower vitals, not mixed ones.
      *
-     * The namespace is a digest of the deployment identity and the
-     * resolved queue configuration. It is a digest rather than the
-     * values themselves so the key stays a bounded, printable string
-     * whatever an operator put in those settings; none of the inputs is
-     * a secret.
+     * The identifier is `built-for-cloud.vitals.deployment_id`, falling
+     * back to `built-for-cloud.cloud.application`. Nothing is inferred
+     * from a product name or an environment: those are not identities.
+     *
+     * The queue half is the COMPLETE resolved connection config, not a
+     * selection of members. The previous key read `driver`, `connection`
+     * and `table` — so on Redis and SQS, where the queue NAME is what
+     * distinguishes one backlog from another, the queue was not in the
+     * key at all. A whitelist is how that member went missing, so there
+     * is no whitelist now.
+     *
+     * Everything is JSON-encoded before hashing, so segments cannot run
+     * together into a colliding string the way a delimiter-joined list
+     * can. The digest is one-way and is never rendered or logged; note
+     * that its INPUT is the whole connection config, which for some
+     * drivers holds connection credentials. That is deliberate —
+     * different credentials are a different queue — and it is why the
+     * value is hashed rather than used directly.
      */
-    private function cacheKey(): string
+    private function cacheKey(): ?string
     {
+        $deployment = config('built-for-cloud.vitals.deployment_id')
+            ?? config('built-for-cloud.cloud.application');
+
+        if (! is_string($deployment) || trim($deployment) === '') {
+            return null;
+        }
+
         $connection = config('queue.default');
         $connection = is_string($connection) ? $connection : '';
 
-        $namespace = [
-            (string) (config('built-for-cloud.cloud.application') ?? ''),
-            (string) (config('built-for-cloud.product') ?? ''),
-            app()->environment(),
-            $connection,
-            (string) (config('queue.connections.'.$connection.'.driver') ?? ''),
-            (string) (config('queue.connections.'.$connection.'.connection') ?? ''),
-            (string) (config('queue.connections.'.$connection.'.table') ?? ''),
-        ];
+        try {
+            $identity = json_encode([
+                'deployment' => $deployment,
+                'environment' => app()->environment(),
+                'connection' => $connection,
+                'config' => config('queue.connections.'.$connection),
+            ], JSON_THROW_ON_ERROR);
+        } catch (Throwable) {
+            // A connection config this cannot encode is one it cannot
+            // prove distinct, so it does not share a cache either.
+            return null;
+        }
 
-        return self::CACHE_KEY.':v'.self::CACHE_SHAPE_VERSION.':'.hash('sha256', implode('|', $namespace));
+        return self::CACHE_KEY.':v'.self::CACHE_SHAPE_VERSION.':'.hash('sha256', $identity);
     }
 
     /**
@@ -356,7 +387,11 @@ final class CollectVitals
      * limitation, not a fault, and does not degrade health; a read that
      * THROWS does.
      *
-     * @return array{QueueVitals, bool}
+     * The AGE is not derived here: this returns the oldest pending job's
+     * raw enqueue TIMESTAMP, so a cached snapshot ages correctly on
+     * every poll instead of freezing at whatever the read computed.
+     *
+     * @return array{pending: int|null, reserved: int|null, failed: int|null, oldest_at: int|null, degraded: bool}
      */
     private function readQueue(): array
     {
@@ -370,11 +405,11 @@ final class CollectVitals
 
         if ($driver !== 'database') {
             return [
-                new QueueVitals(
-                    pending: $this->attempt(fn (): ?int => $this->connectionSize($connection), $degraded),
-                    failed: $failed,
-                ),
-                $degraded,
+                'pending' => $this->attempt(fn (): ?int => $this->connectionSize($connection), $degraded),
+                'reserved' => null,
+                'failed' => $failed,
+                'oldest_at' => null,
+                'degraded' => $degraded,
             ];
         }
 
@@ -397,21 +432,17 @@ final class CollectVitals
         }, $degraded);
 
         if ($row === null) {
-            return [new QueueVitals(failed: $failed), $degraded];
+            return ['pending' => null, 'reserved' => null, 'failed' => $failed, 'oldest_at' => null, 'degraded' => $degraded];
         }
 
         $oldest = $row->oldest ?? null;
 
         return [
-            new QueueVitals(
-                pending: (int) ($row->pending ?? 0),
-                reserved: (int) ($row->reserved ?? 0),
-                failed: $failed,
-                oldestPendingAgeSeconds: is_numeric($oldest)
-                ? $this->age(CarbonImmutable::now()->getTimestamp() - (int) $oldest, $degraded)
-                : null,
-            ),
-            $degraded,
+            'pending' => (int) ($row->pending ?? 0),
+            'reserved' => (int) ($row->reserved ?? 0),
+            'failed' => $failed,
+            'oldest_at' => is_numeric($oldest) ? (int) $oldest : null,
+            'degraded' => $degraded,
         ];
     }
 
