@@ -27,6 +27,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
+use SensitiveParameter;
 use Symfony\Component\HttpFoundation\Response;
 use Throwable;
 
@@ -41,6 +42,16 @@ use Throwable;
  * `Referer` of the very next request the entered page makes. It is not
  * mounted on GET at all — not redirected, not refused: an unrouted verb
  * cannot be reached by a misconfigured link, and 405 is the answer.
+ *   Pinned by `tests/ConsoleEnterTest.php` — "does not route GET at the
+ *   enter path, so an assertion can never ride a query string".
+ *
+ * **THE BYTES ARE MARKED.** Every frame on this path that holds the
+ * presented token carries `#[SensitiveParameter]`, so a throw below it
+ * cannot put an admin-minting credential into the customer's own logged
+ * stack trace. That is enumerated rather than remembered.
+ *   Pinned by `tests/AssertionSecrecyTest.php` — "marks every frame in
+ *   this package that holds console assertion bytes" and "names an
+ *   unmarked assertion frame when the walk meets one".
  *
  * **THE MINTING PATH IS {@see ConsoleGuard::redeem()}, AND ONLY THAT.**
  * This controller writes no session state of its own. It hands the
@@ -75,23 +86,42 @@ use Throwable;
  *     refused BECAUSE the `jti` is spent rather than because something
  *     later noticed, and the two commit together: a redemption that
  *     fails does not spend the mint, and a burn that loses the race
- *     takes the redemption with it.
+ *     takes the redemption with it. {@see AssertionBurn} states what the
+ *     suite does and does not prove about the race itself.
  *  5. **Redirect**, `303`, to the relative path — as a bare relative
  *     `Location`, never resolved against the request's Host, so a
  *     spoofed Host header cannot turn a validated in-app path into an
  *     absolute URL somewhere else.
+ *   Pinned by `tests/ConsoleEnterTest.php` — "mints a delegated session
+ *   from a valid handoff and lands on the requested relative path",
+ *   "refuses a genuine second presentation of the same assertion,
+ *   because the mint id is spent" and "rolls the burn back with the
+ *   redemption, so the two commit or fail together".
  *
- * **EVERY REFUSAL IS THE SAME ANSWER.** Thirteen assertion reasons and
- * eight entry reasons collapse into one status and one body, so a party
- * feeding tokens at this door cannot tell expired from replayed from
- * wrong-audience from badly-signed. The reason goes to the AUDIT record,
+ * **EVERY REFUSAL IS THE SAME ANSWER — BYTE FOR BYTE. THE TIMING IS
+ * NOT.** Thirteen assertion reasons and eight entry reasons collapse
+ * into one status and one body, so a party feeding tokens at this door
+ * cannot READ which one it hit. The reason goes to the AUDIT record,
  * with the actor typed, and to nothing else.
- *   The bound is on what the ANSWER carries, not on every channel: a
- *   refusal decided before the Ed25519 verification returns measurably
- *   sooner than one decided after it, exactly as
- *   {@see AssertionRefused} states, and a rate-limit `429` still says
- *   `429` because a limiter that lied about being one would be
- *   unusable.
+ *
+ * The bound is on what the ANSWER carries, and only that. Two timing
+ * channels survive and neither is closed:
+ *
+ *  - a refusal decided BEFORE the Ed25519 verification (an unknown,
+ *    pending or retired `kid`) returns measurably sooner than one
+ *    decided after it — {@see AssertionRefused} states this;
+ *  - a REPLAY is measurably SLOWER than a bad signature, a wrong
+ *    audience or an expired token, because it is the only refusal that
+ *    reaches the state binding, the shadow-actor upsert and a contended
+ *    unique insert before it fails. A holder of a stolen assertion can
+ *    therefore infer whether somebody has already redeemed it.
+ *
+ * Neither is padded, deliberately: constant-time padding on a page-load
+ * path costs real latency to hide facts a prober largely supplies
+ * itself, and the properties that make a stolen token worthless are the
+ * per-deployment audience and the burn, not the shape of the clock. A
+ * rate-limit `429` also still says `429`, because a limiter that lied
+ * about being one would be unusable.
  *   Pinned by `tests/ConsoleEnterTest.php` — "answers a replayed, a
  *   wrong-deployment and an expired assertion with byte-identical
  *   responses".
@@ -107,6 +137,16 @@ use Throwable;
  * attacker auto-submitting a mint of their OWN identity into a victim's
  * browser).
  *
+ * **A REFUSAL IS NOT SERVED UNLESS IT WAS RECORDED.** The audit write
+ * fails CLOSED: if it cannot commit, the request errors rather than
+ * answering with the ordinary `403`. D13 says failures are audited, and
+ * a promise that lapses during an audit-store outage — exactly when
+ * someone is probing — is worth less than none. {@see audit()} states
+ * the availability trade that buys.
+ *   Pinned by `tests/ConsoleEnterTest.php` — "does not serve a refusal
+ *   it could not record" and "records every refusal it serves, one row
+ *   per refused entry".
+ *
  * **WHAT THIS ENDPOINT DOES NOT AUDIT.** A SUCCESSFUL entry writes no
  * event to this stream. The credential lifecycle stream is
  * credential-scoped, and PRD D17 gives actor-typed app-action events
@@ -117,6 +157,16 @@ use Throwable;
  * D13's requirement — that verification FAILURES are audited — is met
  * in full; the success side is named here rather than left to be
  * discovered.
+ *
+ * **THE DOOR IS MOUNTED OR ABSENT**, never present-and-refusing, and it
+ * is rate-limited before anything else on the route runs.
+ *   Pinned by `tests/ConsoleEnterSurfaceTest.php` — "the door is
+ *   mounted by default in a console enabled app" and "routes off
+ *   unmounts the door like every other package route";
+ *   `tests/ConsoleDisabledTest.php` — "it mounts no enter door and
+ *   advertises none"; `tests/ConsoleEnterForeignGuardTest.php` — "an
+ *   app that owns the guard owns entry too"; and
+ *   `tests/ConsoleEnterTest.php` — "rate-limits the door".
  */
 final class ConsoleEnter
 {
@@ -242,7 +292,7 @@ final class ConsoleEnter
      *
      * @throws AssertionRefused|ConsoleEntryRefused|DelegatedActorDeactivated
      */
-    private function spendAndRedeem(Assertion $assertion, string $token, CarbonImmutable $now): void
+    private function spendAndRedeem(Assertion $assertion, #[SensitiveParameter] string $token, CarbonImmutable $now): void
     {
         try {
             DB::transaction(function () use ($assertion, $token, $now): void {
@@ -304,7 +354,12 @@ final class ConsoleEnter
     }
 
     /**
-     * Audit the refusal, then answer with the one uniform body.
+     * Audit the refusal, then answer with the one uniform body — **in
+     * that order, and only in that order.**
+     *
+     * {@see audit()} throws when it cannot record, and nothing here
+     * catches it, so the `403` is not reachable without a committed
+     * audit row. See that method for why.
      */
     private function refuse(string $reason, ?string $mintId): JsonResponse
     {
@@ -318,40 +373,54 @@ final class ConsoleEnter
 
     /**
      * Record the refusal with the actor TYPED and the reason named
-     * (D13).
+     * (D13), and **FAIL CLOSED**: if this cannot be written, the
+     * ordinary refusal is not served.
+     *
+     * IT IS NOT BEST-EFFORT, and an earlier revision of this method was.
+     * That revision swallowed every recorder, outbox and database
+     * failure and returned the ordinary `403` anyway, which meant an
+     * attacker operating during an audit-store outage could feed this
+     * door verification attempts that left **no evidence at all** —
+     * while the contract promised every refusal was recorded. A
+     * guarantee that lapses exactly when someone is attacking is worth
+     * less than no guarantee, because it is the one an operator
+     * believed.
+     *
+     * So the exception propagates and the request becomes a `500`. That
+     * is the same ruling the vitals read already carries: D16 refuses an
+     * unaudited read, an app that cannot record cannot serve, and an app
+     * that answers `500` is honestly unreachable rather than quietly
+     * lying. It costs an availability trade that is stated rather than
+     * hidden — **a deployment whose database is unwritable cannot refuse
+     * an entry with a `403`; it errors instead** — and the trade is
+     * cheap, because a deployment whose database is unwritable cannot
+     * complete a successful entry either. Nothing an attacker can do
+     * from outside makes this branch fire.
      *
      * It opens its OWN transaction because there is no state transition
      * to stay transactional with — the entry did not happen — and the
      * transaction the refusal came out of has rolled back.
-     *
-     * BEST-EFFORT, matching the re-key surface's refusal audit and the
-     * operator gate's denial audit. The honest reading of that trade:
-     * this event lands whenever the database is writable, and a
-     * deployment whose audit store is down loses refusal records; the
-     * refusal itself never depends on it, because an unreachable audit
-     * store turning a clean `403` into a `500` would be a worse answer
-     * and a louder oracle.
      *
      * It does NOT drain the outbox. This is the one attacker-reachable
      * path on this route, a drain is O(claimable rows) and may send
      * mail, and hanging one off a refusal is the amplification lever the
      * vitals read was hardened against. The outbox row is still written
      * in the same transaction and is delivered by the next drain.
+     *
+     *   Pinned by `tests/ConsoleEnterTest.php` — "does not serve a
+     *   refusal it could not record" and "records every refusal it
+     *   serves, one row per refused entry".
      */
     private function audit(string $reason, ?string $mintId): void
     {
-        try {
-            DB::transaction(function () use ($reason, $mintId): void {
-                $this->recorder->record(
-                    event: LifecycleEventType::DeniedAction,
-                    actor: AuditActor::assertionPresenter($mintId),
-                    note: self::AUDIT_NOTE.$reason,
-                    drainAfterCommit: false,
-                );
-            });
-        } catch (Throwable) {
-            // See the best-effort note above.
-        }
+        DB::transaction(function () use ($reason, $mintId): void {
+            $this->recorder->record(
+                event: LifecycleEventType::DeniedAction,
+                actor: AuditActor::assertionPresenter($mintId),
+                note: self::AUDIT_NOTE.$reason,
+                drainAfterCommit: false,
+            );
+        });
     }
 
     /**

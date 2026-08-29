@@ -325,6 +325,58 @@ it('honours a configured return-path allowlist, at a segment boundary', function
         ->toBe(2);
 });
 
+it('refuses a return path carrying a traversal segment in any decoded form, allowlist or no allowlist', function (string $returnTo): void {
+    // THE DEFECT THIS CLOSES. `/admin/../billing` is a legitimately
+    // relative path — every syntactic check passes — it matched the
+    // `/admin` prefix, and the BROWSER then resolved it to `/billing`.
+    // The configured landing restriction was bypassed with a value
+    // nothing had rejected. The encoded forms were the same defect one
+    // and two layers down.
+    config(['built-for-cloud.console.return_path_allowlist' => ['/admin']]);
+
+    consoleEnter(consoleHandoff($returnTo))->assertStatus(ConsoleEnter::REFUSAL_STATUS);
+
+    // Refused with no allowlist configured at all, too: a path whose
+    // meaning depends on who normalizes it is not a redirect target.
+    config(['built-for-cloud.console.return_path_allowlist' => []]);
+
+    consoleEnter(consoleHandoff($returnTo))->assertStatus(ConsoleEnter::REFUSAL_STATUS);
+
+    expect(consoleEntryRefusalReasons())->toBe([ConsoleEntryRefusalReason::ReturnPathRefused->value])
+        ->and(AssertionBurn::query()->count())->toBe(0);
+})->with([
+    'raw traversal' => ['/admin/../billing'],
+    'encoded traversal' => ['/admin/%2e%2e/billing'],
+    'double-encoded traversal' => ['/admin/%252e%252e/billing'],
+    'a single dot segment' => ['/admin/./billing'],
+    'traversal above the root' => ['/../billing'],
+    'a trailing traversal' => ['/admin/..'],
+]);
+
+it('leaves a dot inside a segment alone, because that is an ordinary path', function (string $returnTo): void {
+    // The rule is about SEGMENTS. Refusing every path with a dot in it
+    // would cost a caller `/reports..csv` for nothing.
+    consoleEnter(consoleHandoff($returnTo))
+        ->assertStatus(303)
+        ->assertHeader('Location', $returnTo);
+})->with([
+    'a dotted filename' => ['/reports..csv'],
+    'dots inside a word' => ['/o..ders'],
+    'dots in the query string' => ['/orders?sort=..'],
+    'dots in the fragment' => ['/orders#..'],
+]);
+
+it('matches the allowlist against the fully decoded path, not the raw one', function (): void {
+    // `/%61dmin/users` and `/admin/users` are the same path; an
+    // allowlist comparing raw strings would answer differently for them.
+    // The REDIRECT still emits what the issuer signed, verbatim.
+    config(['built-for-cloud.console.return_path_allowlist' => ['/admin']]);
+
+    consoleEnter(consoleHandoff('/%61dmin/users'))
+        ->assertStatus(303)
+        ->assertHeader('Location', '/%61dmin/users');
+});
+
 it('treats an allowlist entry that is not an in-app path as matching nothing', function (): void {
     // A typo must never widen an allowlist.
     config(['built-for-cloud.console.return_path_allowlist' => ['https://evil.example', 'orders']]);
@@ -445,6 +497,37 @@ it('rate-limits the door', function (): void {
     }
 
     consoleEnter($handoff)->assertStatus(429);
+});
+
+// ─── The refusal audit fails CLOSED ─────────────────────────────────────────
+
+it('records every refusal it serves, one row per refused entry', function (): void {
+    foreach (range(1, 3) as $ignored) {
+        consoleEnter(consoleHandoff('/orders', ['aud' => 'https://someone-else.test']))
+            ->assertStatus(ConsoleEnter::REFUSAL_STATUS);
+    }
+
+    expect(CredentialAuditEvent::query()->where('event', LifecycleEventType::DeniedAction->value)->count())
+        ->toBe(3);
+});
+
+it('does not serve a refusal it could not record', function (): void {
+    // An earlier revision swallowed every audit failure and answered
+    // 403 anyway — so an attacker probing during an audit-store outage
+    // left NO evidence, while the contract promised every refusal was
+    // recorded. It fails closed now: no audit row, no ordinary refusal.
+    //
+    // The outage is driven for real rather than mocked: the outbox half
+    // of the stream is gone, so the recorder's second insert throws and
+    // takes the audit row down with it — a partial audit-store failure,
+    // which is the shape that actually happens.
+    Schema::drop('credential_outbox');
+
+    consoleEnter(consoleHandoff('/orders', ['aud' => 'https://someone-else.test']))
+        ->assertStatus(500);
+
+    expect(CredentialAuditEvent::query()->where('event', LifecycleEventType::DeniedAction->value)->count())
+        ->toBe(0);
 });
 
 // ─── AC11: the burn is atomic with the redemption ───────────────────────────

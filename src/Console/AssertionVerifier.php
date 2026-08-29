@@ -10,6 +10,7 @@ use ParagonIE\Paseto\Parser;
 use ParagonIE\Paseto\ProtocolCollection;
 use ParagonIE\Paseto\Purpose;
 use RuntimeException;
+use SensitiveParameter;
 use Throwable;
 
 /**
@@ -72,6 +73,28 @@ use Throwable;
  * Verification is PURE: it reads the keyring and the clock and writes
  * nothing. The single-use burn of `jti` (D12) belongs to the enter
  * endpoint that owns the transaction, not to the crypto choke point.
+ *
+ * THE TOKEN IS A LIVE CREDENTIAL AND IS MARKED AS ONE. Every frame in
+ * this class that holds the presented bytes carries
+ * `#[SensitiveParameter]`, so with `zend.exception_ignore_args=0` — a
+ * perfectly ordinary setting — a throw anywhere downstream cannot put a
+ * complete `v4.public…` assertion into the customer's own logs. That is
+ * not hypothetical: a database failure or a keyring lookup below this
+ * line produces a stack trace whose arguments would otherwise include
+ * an admin-minting credential.
+ *
+ * THE RESIDUE, named because it cannot be closed from here: the
+ * `ParagonIE\Paseto` frames this class calls — `Parser::parse()` and
+ * `Parser::extractFooter()` — receive the same bytes and are VENDOR
+ * code, so no attribute of ours redacts them. A refusal decided inside
+ * the library therefore carries the token in the PREVIOUS exception's
+ * trace. That previous is kept deliberately (it is the only operator
+ * diagnostic for a cryptographic failure) and never reaches a response;
+ * an operator whose log retention treats stack traces as sensitive
+ * should keep treating them that way.
+ *   Pinned by `tests/AssertionSecrecyTest.php` — "marks every frame in
+ *   this package that holds console assertion bytes" and "names an
+ *   unmarked assertion frame when the walk meets one".
  */
 final class AssertionVerifier
 {
@@ -115,7 +138,7 @@ final class AssertionVerifier
      *
      * @throws AssertionRefused
      */
-    public function verify(string $token): Assertion
+    public function verify(#[SensitiveParameter] string $token): Assertion
     {
         $now = CarbonImmutable::now();
 
@@ -264,7 +287,7 @@ final class AssertionVerifier
      * signature, so a swapped `kid` cannot survive the signature check
      * that follows.
      */
-    private function keyIdOf(string $token, Parser $parser): string
+    private function keyIdOf(#[SensitiveParameter] string $token, Parser $parser): string
     {
         if ($token === '' || strlen($token) > self::MAX_TOKEN_LENGTH) {
             throw AssertionRefused::because(AssertionRefusalReason::MalformedToken);

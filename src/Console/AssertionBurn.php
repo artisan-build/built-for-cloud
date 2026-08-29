@@ -30,6 +30,21 @@ use Illuminate\Database\UniqueConstraintViolationException;
  * That direction matters both ways: a redemption that fails after the
  * burn does not spend the mint (the row rolls back with it), and a burn
  * that loses the race takes the redemption down with it.
+ *   Pinned by `tests/ConsoleEnterTest.php` — "refuses a genuine second
+ *   presentation of the same assertion, because the mint id is spent",
+ *   "rolls the burn back with the redemption, so the two commit or fail
+ *   together", "leaves no spent mint and no session behind a redemption
+ *   that failed" and "keys the burn on a unique index, which is what
+ *   makes it atomic".
+ *
+ * WHAT IS NOT PROVEN HERE, and it is the one that matters most: **the
+ * suite does not exercise a genuine concurrent double presentation.**
+ * sqlite serializes writers in-process, so the tests above drive the
+ * SEQUENTIAL replay and the shared-transaction property the race rests
+ * on — not the interleaving itself. The mutation that would expose a
+ * regression (rewriting this method as check-then-insert) leaves every
+ * one of them green. A mutation-debt row records it; a two-connection
+ * race on a driver with real row locking is what would close it.
  *
  * IDENTITY IS A DIGEST, for the reason {@see DelegatedActor} states at
  * length: `jti` is only meaningful inside the issuer that minted it, and
@@ -47,7 +62,12 @@ use Illuminate\Database\UniqueConstraintViolationException;
  * deletes them after a margin, and the enter endpoint calls it on the
  * SUCCESS path only — which is also the only path that writes one, so
  * the table's growth and its pruning are driven by the same events and
- * an attacker can force neither.
+ * an attacker can force neither. The margin points one way on purpose:
+ * a row dropped while its assertion could still be presented would
+ * UN-SPEND a mint.
+ *   Pinned by `tests/ConsoleEnterTest.php` — "prunes burn rows whose
+ *   assertions expired long enough ago to change no answer" and "keeps
+ *   a burn row while its assertion could still be presented".
  */
 final class AssertionBurn extends Model
 {

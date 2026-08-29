@@ -36,10 +36,15 @@ use Throwable;
  *  - **Open redirect is closed.** The return path is not a request
  *    field: it is inside a blob the vendor signed, and it must
  *    additionally be a safe same-origin relative path in every
- *    percent-decoded form ({@see ConsoleReturnTo}) and inside the
- *    deployment's own allowlist. Substituting it invalidates the
- *    digest; supplying an absolute or protocol-relative one is refused
- *    even when the vendor signed it.
+ *    percent-decoded form ({@see ConsoleReturnTo}) — traversal
+ *    segments included — and inside the deployment's own allowlist,
+ *    matched against the DECODED path. Substituting it invalidates the
+ *    digest; supplying an absolute, protocol-relative or traversing one
+ *    is refused even when the vendor signed it.
+ *      Pinned by `tests/ConsoleEnterTest.php` — "refuses a return path
+ *      that is not a safe same-origin relative path, whatever the mint
+ *      signed" and "refuses a return path carrying a traversal segment
+ *      in any decoded form, allowlist or no allowlist".
  *  - **A state cannot be moved between mints.** The digest is claimed
  *    by one assertion, and that assertion's `jti` burns once, so a
  *    captured state is worth nothing beside a different token and
@@ -175,9 +180,14 @@ final readonly class ConsoleEntryState
      */
     private static function returnPath(Assertion $assertion, array $state): string
     {
-        $candidate = ConsoleReturnTo::relative($state[self::RETURN_TO] ?? null);
+        $raw = $state[self::RETURN_TO] ?? null;
 
-        if ($candidate === null || ! self::allowed($candidate)) {
+        $candidate = ConsoleReturnTo::relative($raw);
+        // The allowlist decides about the path that will be REQUESTED,
+        // which is the decoded one; the redirect emits the raw one.
+        $decoded = ConsoleReturnTo::decoded($raw);
+
+        if ($candidate === null || $decoded === null || ! self::allowed($decoded)) {
             throw ConsoleEntryRefused::because(ConsoleEntryRefusalReason::ReturnPathRefused, $assertion->id);
         }
 
@@ -194,6 +204,23 @@ final readonly class ConsoleEntryState
      * the check which actually closes open redirect. The allowlist is
      * opt-in NARROWING for a deployment that wants entry confined to
      * the few paths its console links to.
+     *
+     * **IT IS GIVEN THE DECODED PATH, AND THAT IS THE WHOLE OF THE
+     * RULE.** An earlier revision prefix-matched the raw string, which
+     * a signed `/admin/../billing` walked straight through: it is a
+     * legitimately relative path, so every syntactic check passed, it
+     * matched the `/admin` prefix, and the BROWSER then resolved it to
+     * `/billing` — the configured landing restriction bypassed with a
+     * value nothing had rejected. `/admin/%2e%2e/billing` and
+     * `/admin/%252e%252e/billing` were the same defect one and two
+     * layers down. {@see ConsoleReturnTo} now refuses a `.` or `..`
+     * segment in every decoded form outright, and hands this method the
+     * settled form, so the string being matched and the path that will
+     * be requested are the same string.
+     *   Pinned by `tests/ConsoleEnterTest.php` — "refuses a return path
+     *   carrying a traversal segment in any decoded form, allowlist or
+     *   no allowlist" and "matches the allowlist against the fully
+     *   decoded path, not the raw one".
      *
      * Matching is on the PATH ONLY — everything before the first `?` or
      * `#` — and at a SEGMENT BOUNDARY, so `/admin` covers `/admin` and

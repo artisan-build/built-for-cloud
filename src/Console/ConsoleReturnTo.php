@@ -26,8 +26,26 @@ namespace ArtisanBuild\BuiltForCloud\Console;
  * relative path. A candidate that will not settle within a small number
  * of rounds is refused rather than decoded further.
  *
+ * DOT SEGMENTS ARE REFUSED TOO, and that one is about WHO normalizes.
+ * `/admin/../billing` is a legitimately relative path, so every rule
+ * above lets it through — and the BROWSER resolves it to `/billing`
+ * before it ever reaches this app. Any decision made on the string as
+ * written (an allowlist of landing paths, above all) is therefore
+ * deciding about a different path from the one that gets requested.
+ * Rather than normalize — which would mean this class returning a value
+ * the caller did not supply, and every caller having to know that — a
+ * candidate carrying a `.` or `..` SEGMENT is refused outright, in every
+ * decoded form: `/admin/../billing`, `/admin/%2e%2e/billing` and
+ * `/admin/%252e%252e/billing` alike. A dot inside a segment is
+ * untouched: `/reports..csv` and `/o..ders` are ordinary paths.
+ *   Pinned by `tests/ConsoleEnterTest.php` — "refuses a return path
+ *   carrying a traversal segment in any decoded form, allowlist or no
+ *   allowlist" and "matches the allowlist against the fully decoded
+ *   path, not the raw one".
+ *
  * ACCEPTED: a single-slash-rooted path made only of printable ASCII with
- * no backslash, which stays one after every decoding round.
+ * no backslash and no dot segment, which stays one after every decoding
+ * round.
  * REJECTED, each for its own reason:
  *
  * - anything not rooted at `/` — `https://evil.example/x`,
@@ -35,6 +53,7 @@ namespace ArtisanBuild\BuiltForCloud\Console;
  * - `//evil.example/x` — protocol-relative, a same-origin-looking string
  *   browsers resolve to another host — and anything that DECODES to one;
  * - any backslash, raw or encoded: `/\evil.example`, `%5c`, `%255c`;
+ * - any `.` or `..` PATH SEGMENT, raw or encoded, in any decoded form;
  * - any control character or whitespace, raw or encoded, including the
  *   CR/LF pair that would split a header if this value ever reached one;
  * - anything over the length bound.
@@ -69,10 +88,42 @@ final class ConsoleReturnTo
      */
     public static function relative(mixed $candidate): ?string
     {
-        if (! is_string($candidate)) {
-            return null;
-        }
+        return is_string($candidate) && self::fixedPoint($candidate) !== null ? $candidate : null;
+    }
 
+    /**
+     * The FULLY DECODED form of a safe candidate — what the string
+     * actually means — or null when {@see relative()} would refuse it.
+     *
+     * It exists because a decision made about a return path must be made
+     * about the path that will be requested, not about its spelling.
+     * `/%61dmin/users` and `/admin/users` are the same path, and an
+     * allowlist that compared the raw strings would answer differently
+     * for them. Traversal is the sharp edge of the same problem and is
+     * refused rather than decoded (see the class docblock), so the value
+     * returned here is already normalized: it can carry no `.` or `..`
+     * segment.
+     *
+     * The REDIRECT still uses {@see relative()}'s verbatim answer — this
+     * class never hands a caller a value the caller did not supply.
+     * This is for deciding ABOUT a path, not for emitting one.
+     */
+    public static function decoded(mixed $candidate): ?string
+    {
+        return is_string($candidate) ? self::fixedPoint($candidate) : null;
+    }
+
+    /**
+     * Decode to a fixed point, requiring EVERY form along the way — the
+     * raw one included — to be a safe relative path. Returns the settled
+     * form, or null.
+     *
+     * One loop, used by both public entry points, so "what is safe" and
+     * "what it decodes to" can never be answered by two pieces of code
+     * that disagree.
+     */
+    private static function fixedPoint(string $candidate): ?string
+    {
         $form = $candidate;
 
         for ($round = 0; $round <= self::MAX_DECODE_ROUNDS; $round++) {
@@ -84,7 +135,7 @@ final class ConsoleReturnTo
 
             if ($decoded === $form) {
                 // Fixed point reached and every form so far was safe.
-                return $candidate;
+                return $form;
             }
 
             $form = $decoded;
@@ -137,6 +188,32 @@ final class ConsoleReturnTo
             return false;
         }
 
+        if (self::hasDotSegment($value)) {
+            return false;
+        }
+
         return preg_match('/[^\x21-\x7E]|\\\\/', $value) === 0;
+    }
+
+    /**
+     * Whether this form carries a `.` or `..` PATH segment.
+     *
+     * Query and fragment are cut off first: `/orders?sort=..` and
+     * `/docs#..` name no directory, and refusing them would cost a
+     * caller a legitimate path for nothing. Whole segments only, so a
+     * dot INSIDE a segment — `/reports..csv`, `/o..ders` — is an
+     * ordinary path and passes.
+     */
+    private static function hasDotSegment(string $value): bool
+    {
+        $path = explode('#', explode('?', $value, 2)[0], 2)[0];
+
+        foreach (explode('/', $path) as $segment) {
+            if ($segment === '.' || $segment === '..') {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

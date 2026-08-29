@@ -38,14 +38,36 @@ use SplFileInfo;
  *  - Line wrapping is normalised first, so a title may wrap across lines
  *    and across a docblock's ` * ` markers.
  *
+ * TWO QUESTIONS, because they fail differently.
+ * {@see orphansIn()} asks "does every cited title resolve to a real
+ * test" — the drift a rename causes. {@see shortfallsIn()} and
+ * {@see unexpectedIn()} ask "does every file that is SUPPOSED to carry
+ * guarantees actually cite anything", which is the drift a NEW file
+ * causes. The second pair exists because the first cannot see it: a
+ * scanner that only checks citations that already exist reports
+ * "clean" for a document that makes ten guarantees and cites none, and
+ * an AGGREGATE floor over every scanned file hides it behind the
+ * older files' counts. That is exactly what happened to the first PR
+ * written after this convention shipped.
+ *
  * WHAT IT DOES NOT COVER. It resolves titles against `it('…')` and
- * `it("…")` declarations under `tests/`; a PHPUnit-style
- * `test_*` method is not matched, so a citation must quote a Pest
- * title. It does not check that the named FILE contains the named test,
- * only that some test somewhere has that title — a title moved between
- * files still resolves. And it says nothing about whether the test
- * actually pins the claim beside it; that is a reader's job, and the
- * citation exists to make it possible.
+ * `it("…")` declarations under `tests/`, and against PHPUnit-style
+ * `public function test_snake_case()` methods, which it humanises the
+ * way Pest's own reporter does (drop `test_`, underscores to spaces) —
+ * so a fact that has to be driven PHPUnit-style, as a config-before-boot
+ * test must be, is citable rather than pushing its author towards
+ * citing nothing. It does not check that the named FILE contains the
+ * named test, only that some test somewhere has that title — a title
+ * moved between files still resolves. It says nothing about whether the
+ * test actually pins the claim beside it; that is a reader's job, and
+ * the citation exists to make it possible.
+ *
+ * And the per-file expectation is an ENUMERATION, with an enumeration's
+ * residue: a brand-new guarantee-bearing document that nobody adds to
+ * the scanned surfaces is invisible to it. Adding the file is the
+ * human step, and the moment it is added a zero-citation file reds the
+ * suite. This is a tripwire against the ordinary omission, not a proof
+ * about every file that could exist.
  */
 final class CitationScan
 {
@@ -123,6 +145,13 @@ final class CitationScan
 
             preg_match_all("/\\bit\\(\\s*'((?:[^'\\\\]|\\\\.)*)'/", $contents, $single);
             preg_match_all('/\bit\(\s*"((?:[^"\\\\]|\\\\.)*)"/', $contents, $double);
+            // PHPUnit-style cases, humanised the way Pest's own reporter
+            // prints them. Some facts can only be driven this way — a
+            // config key consumed at provider boot has to be in place
+            // before the application exists — and a convention that
+            // could not cite them would push their authors into citing
+            // nothing at all.
+            preg_match_all('/\bfunction\s+test_([A-Za-z0-9_]+)\s*\(/', $contents, $phpunit);
 
             foreach ($single[1] as $title) {
                 $titles[] = str_replace(["\\'", '\\\\'], ["'", '\\'], $title);
@@ -130,6 +159,10 @@ final class CitationScan
 
             foreach ($double[1] as $title) {
                 $titles[] = str_replace('\\"', '"', $title);
+            }
+
+            foreach ($phpunit[1] as $method) {
+                $titles[] = str_replace('_', ' ', $method);
             }
         }
 
@@ -157,6 +190,55 @@ final class CitationScan
         }
 
         return $orphans;
+    }
+
+    /**
+     * Files that carry FEWER citations than they are expected to — the
+     * drift an orphan check cannot see, because a file that cites
+     * nothing has no citation to orphan.
+     *
+     * Reported as `path: expected N, found M`, and a file expected to
+     * carry citations that carries none reports `found 0` rather than
+     * vanishing.
+     *
+     * @param  list<string>  $paths
+     * @param  array<string, int>  $expected
+     * @return list<string>
+     */
+    public static function shortfallsIn(string $root, array $paths, array $expected): array
+    {
+        $found = self::scan($root, $paths);
+        $shortfalls = [];
+
+        foreach ($expected as $path => $minimum) {
+            $count = count($found[$path] ?? []);
+
+            if ($count < $minimum) {
+                $shortfalls[] = $path.': expected '.$minimum.', found '.$count;
+            }
+        }
+
+        sort($shortfalls);
+
+        return $shortfalls;
+    }
+
+    /**
+     * Files carrying citations that the expectation does not name — a
+     * new guarantee-bearing file nobody added to the map, which must be
+     * a deliberate diff rather than a silent one.
+     *
+     * @param  list<string>  $paths
+     * @param  array<string, int>  $expected
+     * @return list<string>
+     */
+    public static function unexpectedIn(string $root, array $paths, array $expected): array
+    {
+        $unexpected = array_keys(array_diff_key(self::scan($root, $paths), $expected));
+
+        sort($unexpected);
+
+        return array_values($unexpected);
     }
 
     /**

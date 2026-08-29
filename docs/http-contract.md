@@ -1893,6 +1893,11 @@ It exists only on a deployment that reports the `console-enter` capability — t
 enabled, and the reserved `bfc-console` guard resolving to this package's own driver. Elsewhere
 the path is a `404`, never a refusal.
 
+*Pinned by* `tests/ConsoleEnterSurfaceTest.php` ("the door is mounted by default in a console
+enabled app" and "routes off unmounts the door like every other package route"),
+`tests/ConsoleDisabledTest.php` ("it mounts no enter door and advertises none") and
+`tests/ConsoleEnterForeignGuardTest.php` ("an app that owns the guard owns entry too").
+
 ### POST /bfc/console/enter
 
 Unauthenticated by construction: **this is the authentication event.** What stands in for a
@@ -1902,6 +1907,9 @@ audience, the 60–120 second TTL and the single-use burn.
 **The carrier is POST, and GET is not routed at all** — `405`, not a redirect. A GET assertion
 is a live credential in the customer's own server and CDN logs, in browser history, and in the
 `Referer` of the very next request the entered page makes.
+
+*Pinned by* `tests/ConsoleEnterTest.php` ("does not route GET at the enter path, so an assertion
+can never ride a query string").
 
 **Request** (`application/x-www-form-urlencoded`, the shape an auto-submitting form posts):
 
@@ -1923,6 +1931,10 @@ never resolved against the request's `Host`, so a spoofed header cannot turn a v
 path into an absolute URL somewhere else. `Set-Cookie` carries the delegated session; from here
 the operator is authenticated to routes the `bfc-console` guard governs, under D7's clocks.
 
+*Pinned by* `tests/ConsoleEnterTest.php` ("mints a delegated session from a valid handoff and
+lands on the requested relative path" and "carries the handoff its own role and agency into the
+session, not the row's").
+
 **403 — one uniform refusal, for every reason.**
 
 ```json
@@ -1936,11 +1948,33 @@ contained. **Nothing in the response distinguishes them.** The reason is recorde
 stream as a `denied_action` event with the actor typed (`credential_holder`) and a bounded
 reason code in the note — never returned to the caller.
 
-That bound is on what the ANSWER carries, not on every channel: a refusal decided **before** the
-signature check (an unknown or retired key id) returns measurably sooner than one decided after
-it, so key state stays distinguishable by timing. That is a deliberate non-goal — the audience
-binding and the burn are what make a stolen or forged token worthless — and constant-time
-padding would cost real latency on a page-load path to hide a key id the prober already chose.
+**The refusal is not served unless it was recorded.** If the audit write cannot commit, the
+request answers `500` rather than the ordinary `403`: D13 says verification failures are
+audited, and a promise that lapses during an audit-store outage — precisely when someone is
+probing — is worth less than none, because it is the one an operator believed. The availability
+trade is real and stated: a deployment whose database is unwritable cannot refuse an entry with
+a `403`. It also cannot complete one, so nothing is lost that was otherwise available, and no
+caller can reach this branch on purpose.
+
+*Pinned by* `tests/ConsoleEnterTest.php` ("answers a replayed, a wrong-deployment and an expired
+assertion with byte-identical responses", "says nothing about the reason in the body it hands
+back", "types the actor on every refusal, and names the mint only when it verified", "records
+every refusal it serves, one row per refused entry" and "does not serve a refusal it could not
+record").
+
+**The responses are byte-identical. The TIMING is not, and that is a stated non-goal.** Two
+channels survive:
+
+- a refusal decided **before** the signature check (an unknown, pending or retired key id)
+  returns measurably sooner than one decided after it, so key state stays distinguishable;
+- a **replay** is measurably **slower** than a bad signature, a wrong audience or an expired
+  token, because it is the only refusal that reaches the state binding, the shadow-actor upsert
+  and a contended unique insert before it fails. A holder of a stolen assertion can therefore
+  infer whether it has already been redeemed.
+
+Neither is padded. Constant-time padding on a page-load path would cost real latency to hide
+facts a prober largely supplies itself, and what makes a stolen or forged token worthless is the
+per-deployment audience binding and the single-use burn, not the shape of the clock.
 
 **429** — beyond 30 requests per minute per IP, applied **before** everything else on the route,
 so refused attempts are bounded too and a `429` still says `429`. One bound and no global
@@ -1956,6 +1990,17 @@ an operator gets in.
   presentation is refused **because the mint is spent**, not because something later noticed it.
   The two directions both hold: a redemption that fails does not spend the mint, and a burn that
   loses the race takes the redemption with it.
+
+  *Pinned by* `tests/ConsoleEnterTest.php` ("refuses a genuine second presentation of the same
+  assertion, because the mint id is spent", "rolls the burn back with the redemption, so the two
+  commit or fail together", "leaves no spent mint and no session behind a redemption that
+  failed" and "keys the burn on a unique index, which is what makes it atomic").
+
+  **What the suite does not exercise, said plainly: a genuine CONCURRENT double presentation.**
+  sqlite serializes writers in-process, so the tests above drive the sequential replay and the
+  shared-transaction property the race rests on — not the interleaving itself. A mutation-debt
+  row records it, and a two-connection race on a driver with real row locking is what would
+  close it.
 - **The return path cannot be substituted.** It is not a request field; it rides inside the
   vendor's signature, and it must additionally be a same-origin **relative** path in every
   percent-decoded form — absolute, protocol-relative, backslash, encoded-slash, double-encoded
@@ -1963,10 +2008,42 @@ an operator gets in.
   deployment's `built-for-cloud.console.return_path_allowlist`, when it configures one. An empty
   allowlist is the default and means "any path in this app"; the relative check is what closes
   open redirect.
+
+  **A `.` or `..` PATH SEGMENT is refused outright, in every decoded form**, and that rule is
+  about who normalizes. `/admin/../billing` is legitimately relative, so every other check passes
+  — and the *browser* resolves it to `/billing` before this app sees it, which would bypass a
+  configured landing restriction with a value nothing had rejected. `/admin/%2e%2e/billing` and
+  `/admin/%252e%252e/billing` are the same defect one and two layers down. A dot *inside* a
+  segment is untouched: `/reports..csv` is an ordinary path. The allowlist is then matched
+  against the fully **decoded** path, so `/%61dmin/users` and `/admin/users` cannot be answered
+  differently; the redirect still emits what the issuer signed, verbatim.
+
+  *Pinned by* `tests/ConsoleEnterTest.php` ("refuses a return path that is not a safe
+  same-origin relative path, whatever the mint signed", "refuses a return path carrying a
+  traversal segment in any decoded form, allowlist or no allowlist", "leaves a dot inside a
+  segment alone, because that is an ordinary path", "matches the allowlist against the fully
+  decoded path, not the raw one", "honours a configured return-path allowlist, at a segment
+  boundary" and "treats an allowlist entry that is not an in-app path as matching nothing").
 - **No CSRF token, and that is not an oversight.** The handoff is a cross-site POST from the
   issuer's page, and a `SameSite=Lax` session cookie — Laravel's default — is not sent with one,
   so the app has no session with that browser and no token it could have planted. The signed
   state is what replaces it.
+
+  *Pinned by* `tests/PersonalSurfaceWebGroupTest.php` ("the console door starts a session
+  without csrf validation" and "only the personal surface and the console door ride the session
+  stack").
+
+- **The presented bytes are marked sensitive.** Every frame in the package that holds a console
+  assertion carries PHP's `#[SensitiveParameter]`, so with `zend.exception_ignore_args=0` — an
+  ordinary setting — a failure below it cannot write a complete `v4.public…` credential into the
+  customer's own logged stack trace. The residue is named rather than glossed: the
+  `ParagonIE\Paseto` frames this package calls receive the same bytes and are vendor code, so a
+  refusal decided inside the library still carries the token in the *previous* exception's trace,
+  which is kept as the only operator diagnostic for a cryptographic failure and never reaches a
+  response.
+
+  *Pinned by* `tests/AssertionSecrecyTest.php` ("marks every frame in this package that holds
+  console assertion bytes" and "names an unmarked assertion frame when the walk meets one").
 
 **What it does NOT guarantee, stated rather than implied.** The signed state closes open
 redirect and stops a state being moved between mints. It does **not** close forced login: an
@@ -1980,6 +2057,11 @@ session carries the **attacker's** audited identity, so nothing done under it is
 the victim. The residue is that a victim may act inside an app under an identity they did not
 choose.
 
+*Pinned by* `tests/ConsoleEnterTest.php` ("refuses an entry whose state was tampered with after
+the mint signed it", "refuses an entry that presents no state at all", "refuses a mint that
+signed no state, whatever state is presented" and "refuses a state lifted from a different
+mint").
+
 **A successful entry writes no event to the credential lifecycle stream.** That stream is
 credential-scoped; actor-typed app-action events are a separate, later stream (Console PRD D17).
 What a successful entry does leave is the shadow-actor row's refreshed `last_handoff_*` copy and
@@ -1989,7 +2071,11 @@ its `updated_at`. Verification FAILURES are audited in full, which is what D13 r
 issuer + `jti`. It holds no secret — a `jti` is a mint identifier, worthless without the signed
 token that carried it — and it is the one table in this package that is **pruned**: a row is
 useful only until the assertion it names expires, and the endpoint drops expired rows after each
-successful entry.
+successful entry. The margin points one way on purpose: a row dropped while its assertion could
+still be presented would un-spend a mint.
+
+*Pinned by* `tests/ConsoleEnterTest.php` ("prunes burn rows whose assertions expired long enough
+ago to change no answer" and "keeps a burn row while its assertion could still be presented").
 
 ---
 

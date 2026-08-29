@@ -33,6 +33,17 @@ Not "GET is refused" — not routed at all, so the answer is `405`. A GET assert
 credential in the customer's own server and CDN logs, in browser history, and in the `Referer`
 of the very next request the entered page makes. A verb that does not exist cannot leak one.
 
+The same reasoning marks the bytes themselves: every frame in the package that holds a console
+assertion carries `#[SensitiveParameter]`, so a failure below it cannot write a live credential
+into a logged stack trace. The vendor `ParagonIE\Paseto` frames are the residue and cannot be
+annotated by this package — a refusal decided inside the library still carries the token in the
+*previous* exception's trace, which never reaches a response.
+
+*Pinned by* `tests/ConsoleEnterTest.php` ("does not route GET at the enter path, so an assertion
+can never ride a query string") and `tests/AssertionSecrecyTest.php` ("marks every frame in this
+package that holds console assertion bytes" and "names an unmarked assertion frame when the walk
+meets one").
+
 ### 2. The signed state, and what it is not
 
 D13 asks for a return URL "relative, allowlisted, and bound by a signed state parameter". The
@@ -50,6 +61,19 @@ endpoint accepts a state only when the two agree — checked before a single byt
 **That closes** open redirect (the return path is not a request field, and it must still be a
 same-origin relative path in every percent-decoded form) and moving a state between mints.
 
+A `.` or `..` **path segment** is refused outright in every decoded form, and the allowlist is
+matched against the fully **decoded** path. That rule is about who normalizes: `/admin/../billing`
+is legitimately relative, passes every other check, matches an `/admin` prefix — and the browser
+resolves it to `/billing` before the app sees it. `/admin/%2e%2e/billing` and
+`/admin/%252e%252e/billing` are the same defect one and two layers down. A dot *inside* a
+segment is untouched; `/reports..csv` is an ordinary path.
+
+*Pinned by* `tests/ConsoleEnterTest.php` ("refuses a return path that is not a safe same-origin
+relative path, whatever the mint signed", "refuses a return path carrying a traversal segment in
+any decoded form, allowlist or no allowlist", "leaves a dot inside a segment alone, because that
+is an ordinary path" and "matches the allowlist against the fully decoded path, not the raw
+one").
+
 **It does not close forced login**, and the contract says so plainly. An attacker holding a
 legitimately-minted assertion for their **own** issuer identity can auto-submit it in a victim's
 browser, leaving that browser entered as the attacker. No state parameter closes that here,
@@ -59,6 +83,11 @@ delegated session carries the **attacker's** audited identity, so nothing done u
 attributed to the victim. The residue is that a victim may act inside an app under an identity
 they did not choose.
 
+*Pinned by* `tests/ConsoleEnterTest.php` ("refuses an entry whose state was tampered with after
+the mint signed it", "refuses an entry that presents no state at all", "refuses a mint that
+signed no state, whatever state is presented" and "refuses a state lifted from a different
+mint").
+
 ### 3. The burn is an INSERT, not a read-then-write
 
 `jti` is spent by inserting against a unique index, inside the SAME transaction that opens the
@@ -67,6 +96,18 @@ presentations arriving together would both read "not spent" and both mint. With 
 insert survives and every other raises a uniqueness violation — **a replay is refused because
 the mint is spent, not because something later noticed.** Both directions hold: a redemption
 that fails does not spend the mint, and a burn that loses the race takes the redemption with it.
+
+**What the suite does not exercise: a genuine CONCURRENT double presentation.** sqlite
+serializes writers in-process, so the tests drive the sequential replay and the
+shared-transaction property the race rests on, not the interleaving itself. A mutation-debt row
+records it; a two-connection race on a driver with real row locking is what would close it.
+
+*Pinned by* `tests/ConsoleEnterTest.php` ("refuses a genuine second presentation of the same
+assertion, because the mint id is spent", "rolls the burn back with the redemption, so the two
+commit or fail together", "leaves no spent mint and no session behind a redemption that failed",
+"keys the burn on a unique index, which is what makes it atomic", "prunes burn rows whose
+assertions expired long enough ago to change no answer" and "keeps a burn row while its
+assertion could still be presented").
 
 ---
 
@@ -113,6 +154,25 @@ refusal reasons or one of the eight entry refusal reasons. The mint id rides as 
 **only** when the token verified far enough for the server to have read one; a verifier refusal
 names no actor ref rather than guessing one from bytes it did not trust. The response is
 identical for all of them.
+
+**It fails closed.** If the audit write cannot commit, the request answers `500` rather than the
+ordinary `403`. An earlier revision swallowed audit failures and served the refusal anyway,
+which meant an attacker probing during an audit-store outage left no evidence at all while this
+document promised every refusal was recorded. The availability trade is stated rather than
+hidden: a deployment whose database is unwritable cannot refuse an entry with a `403` — it also
+cannot complete one, and no caller can reach that branch on purpose.
+
+**The responses are byte-identical; the timing is not.** A refusal decided before the signature
+check returns sooner than one decided after it, and a **replay** is measurably *slower* than a
+bad signature, a wrong audience or an expired token, because it is the only refusal that reaches
+the state binding, the shadow-actor upsert and a contended unique insert. A holder of a stolen
+assertion can infer whether it has already been redeemed. Neither channel is padded, and that is
+a decision: padding a page-load path buys little against facts a prober largely supplies itself.
+
+*Pinned by* `tests/ConsoleEnterTest.php` ("answers a replayed, a wrong-deployment and an expired
+assertion with byte-identical responses", "types the actor on every refusal, and names the mint
+only when it verified", "records every refusal it serves, one row per refused entry" and "does
+not serve a refusal it could not record").
 
 A **successful** entry writes no event to this stream. The credential lifecycle stream is
 credential-scoped, and PRD D17 gives actor-typed app-action events their own new stream, which is
