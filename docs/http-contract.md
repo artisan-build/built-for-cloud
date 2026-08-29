@@ -36,16 +36,11 @@ assertion cryptography, and neither is optional:
 Both requirements are **unconditional** — they are dependencies of the package, not of the Console —
 so a deployment that never enables the Console carries them too.
 
-Composer resolves all of it: `composer require` and `composer install` refuse on a host missing any
-of them, so the ordinary failure is loud and at install time.
-
-One caveat worth a base image's attention, for anyone who **builds `vendor/` on one host and copies
-it to another**. That directory carries a generated platform check written against the PHP that
-built it, so the running host must satisfy **that directory's own check**, not merely this
-package's declared constraint — a `vendor/` built on 8.4 can refuse to boot on an 8.3 host that
-`^8.3` allows. And the generated check does not cover extensions, so the same directory copied onto
-a host without `gmp` boots fine and fails when the extension is first used. Building `vendor/` on
-the host that runs it avoids both.
+These are the requirements. **How Composer enforces them — at install, at runtime, or in a `vendor/`
+directory built on one host and copied to another — is Composer's to document, not this contract's:**
+see [Composer's `platform-check` configuration](https://getcomposer.org/doc/06-config.md#platform-check).
+An earlier revision of this section paraphrased that behaviour and was wrong about it twice, which is
+why the paraphrase is gone rather than corrected.
 
 Everything else is the ordinary Laravel baseline (`ctype`, `filter`, `hash`, `mbstring`, `openssl`,
 `session`, `tokenizer`, `json`).
