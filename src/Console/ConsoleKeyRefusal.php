@@ -71,6 +71,23 @@ enum ConsoleKeyRefusal: string
     case NotAuthorized = 'console_key_delivery_not_authorized';
 
     /**
+     * Another delivery filed a conflicting key id, or conflicting key
+     * material, in the instant between this delivery's checks and its
+     * insert (rework Advisory 1).
+     *
+     * ONE reason for both constraints, deliberately. Working out WHICH
+     * unique index lost would mean either re-reading the table — which
+     * PostgreSQL forbids inside the transaction the violation just
+     * aborted — or matching driver-specific error text. Neither is
+     * worth it for an outcome the caller handles identically: nothing
+     * was written, re-read the ring and deliver again. The named
+     * {@see self::KeyIdInUse} and {@see self::MaterialAlreadyFiled}
+     * refusals still answer every non-racing delivery, which is every
+     * delivery a real operator makes.
+     */
+    case ConcurrentDelivery = 'console_key_delivery_raced';
+
+    /**
      * Nobody owns this deployment yet (rework A6). A countersigning key
      * names the vendor who may enter as admin, and a deployment with no
      * owner has not yet decided who that is; filing one first would let
@@ -92,7 +109,7 @@ enum ConsoleKeyRefusal: string
     {
         return match ($this) {
             self::InvalidMaterial => 422,
-            self::KeyIdInUse, self::MaterialAlreadyFiled, self::Unclaimed => 409,
+            self::KeyIdInUse, self::MaterialAlreadyFiled, self::Unclaimed, self::ConcurrentDelivery => 409,
             // Not 401: the caller authenticated fine. What it presented
             // simply does not carry this authority.
             self::NotAuthorized => 403,
@@ -112,6 +129,7 @@ enum ConsoleKeyRefusal: string
             self::MaterialAlreadyFiled => 'That console key is already on file under an existing key id. Key material is filed once per deployment, retired keys included — deliver a freshly generated key instead.',
             self::NotAuthorized => 'This claim code does not carry console key-custody authority. Ask the operator to issue a code with console_key_authority, which files exactly one key.',
             self::Unclaimed => 'This deployment has not been claimed, so there is no owner to countersign for. Claim ownership first; the ownership claim can deliver a console key in the same request.',
+            self::ConcurrentDelivery => 'Another console key delivery landed at the same moment and claimed this key id or this key material. Nothing was written by this request; re-read the keyring and deliver again under a fresh key id.',
         };
     }
 }

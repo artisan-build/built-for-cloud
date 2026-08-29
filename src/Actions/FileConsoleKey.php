@@ -15,7 +15,7 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Ownership;
-use Illuminate\Database\QueryException;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use Throwable;
@@ -49,6 +49,12 @@ use Throwable;
  *    state including retired. Retirement is the only revocation this
  *    design has, and a retired key whose bytes can be re-filed under a
  *    fresh `kid` was never really retired.
+ *
+ * Rules 2 and 3 are read checks backed by unique indexes. The reads
+ * answer every delivery an operator actually makes; the indexes are what
+ * hold when two deliveries race, and a delivery that loses that race is
+ * refused as {@see ConsoleKeyRefusal::ConcurrentDelivery} without any
+ * attempt to say which index it lost to.
  *
  * **Make-before-break, and only the first half of it.** A delivery files
  * a NEW key id and activates it. It retires NOTHING — not the key it
@@ -87,7 +93,7 @@ final readonly class FileConsoleKey
      * MUST be called inside the caller's transaction (the recorder
      * enforces this and throws otherwise).
      *
-     * @throws ConsoleKeyRefused when the deployment is unclaimed, the `kid` is taken, or the material is already on file
+     * @throws ConsoleKeyRefused when the deployment is unclaimed, the `kid` is taken, the material is already on file, or a concurrent delivery won the race
      */
     public function __invoke(ConsoleKeyDelivery $delivery, ?AuditActor $actor): ConsoleKeyFiled
     {
@@ -103,19 +109,31 @@ final readonly class FileConsoleKey
 
         try {
             $this->keyring->add($delivery->keyId, $delivery->publicKey);
-        } catch (InvalidArgumentException|QueryException $refused) {
-            // The delivery already validated its `kid` and normalized
-            // its material, and both uniqueness checks above passed, so
-            // what is left is a concurrent delivery that won one of the
-            // two unique indexes between those checks and this line.
-            // Re-reading says which, and the answer is a refusal either
-            // way — never an integrity violation surfacing as a 500.
-            throw ConsoleKeyRefused::because(
-                $this->materialIsOnFile($delivery->publicKey)
-                    ? ConsoleKeyRefusal::MaterialAlreadyFiled
-                    : ConsoleKeyRefusal::KeyIdInUse,
-                $refused,
-            );
+        } catch (InvalidArgumentException|UniqueConstraintViolationException $lost) {
+            // A LOST RACE, and nothing else. The delivery validated its
+            // `kid` and normalized its material before it got here, and
+            // both uniqueness checks above just passed, so the only way
+            // the ring can still refuse is that a concurrent delivery
+            // filed a conflicting row in between — as the ring's own
+            // re-check ({@see InvalidArgumentException}) or as one of
+            // the two unique indexes.
+            //
+            // The reason is deliberately the single
+            // {@see ConsoleKeyRefusal::ConcurrentDelivery} rather than a
+            // guess at WHICH constraint lost. Working that out would
+            // mean re-reading the table, and PostgreSQL fails every
+            // statement in a transaction a unique violation has aborted
+            // (SQLSTATE 25P02) — so the re-read would itself throw and
+            // the caller would get a 500 where a 409 was promised. The
+            // alternative, matching driver-specific error text, is the
+            // kind of thing that works until someone changes database.
+            //
+            // The catch is narrow on purpose too: a connection drop, a
+            // permission failure or a full disk is NOT a refusal, and
+            // reporting one as "that key id is taken" would send an
+            // operator hunting a key that is not there. Those keep
+            // travelling as the server errors they are.
+            throw ConsoleKeyRefused::because(ConsoleKeyRefusal::ConcurrentDelivery, $lost);
         }
 
         $key = $this->keyring->activate($delivery->keyId);
@@ -220,14 +238,6 @@ final readonly class FileConsoleKey
      * `$publicKey` is the delivery's normalized storage form, so this
      * compares like for like: the same key delivered as hex and as
      * base64url is the same row, not two.
-     *
-     * Marked impure because it genuinely is, and the second call in this
-     * class depends on that: it runs AFTER an insert failed, precisely
-     * to learn whether a concurrent delivery filed this material in
-     * between. A pure reading would let the analyser assume the first
-     * call's `false` still holds and collapse that branch.
-     *
-     * @phpstan-impure
      */
     private function materialIsOnFile(string $publicKey): bool
     {
