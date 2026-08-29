@@ -56,8 +56,21 @@ Two discriminators, reported by [`GET /bfc/meta`](#get-bfcmeta):
   type changes, or the semantics of an existing field change. It does **not** bump for additive
   changes.
 - **`bfc_version`** (string, semver — the value in the [`GET /bfc/meta`](#get-bfcmeta) example
-  below, which is the one place this document spells the current release) — the package release,
-  for feature detection at finer grain than the major, alongside the `capabilities` array.
+  below) — the package release, for feature detection at finer grain than the major, alongside the
+  `capabilities` array. Every place this document spells that release, in an example or in running
+  text, has to spell the same one; the previous wording here claimed the example was the only such
+  place, and the changelog below spelled it three more times.
+
+**RELEASE WINDOW: this document describes `bfc_version` 0.6.0; `BuiltForCloud::VERSION` is 0.5.0
+until the tag lands.** This document is written with the release it is part of, and the constant is
+bumped when that release is tagged — so during the window a deployment reports the lower number
+while this document describes the higher one. Branch on `capabilities` rather than on the version
+if you are integrating against a deployment inside one. The line above is machine-read: while the
+two differ they must be declared here and named correctly, and once the tag lands and they agree
+the declaration has to go.
+*Pinned by* `tests/HttpContractDocTest.php` ("the documented release and the constant cannot drift
+silently" and "names a version pair that drifted one that is undeclared and a declaration left
+behind").
 
 The rules a consumer may rely on:
 

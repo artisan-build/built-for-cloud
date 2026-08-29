@@ -533,6 +533,149 @@ final class HttpContractDocTest extends TestCase
     }
 
     /**
+     * **THE PAIR, PINNED WITHOUT REQUIRING THE TAG TO HAVE HAPPENED.**
+     *
+     * `bfc_version` in this document and `BuiltForCloud::VERSION` in the
+     * code are the same fact written twice, and nothing compared them:
+     * every test in this suite compares a response to the CONSTANT and
+     * none of them to the DOCUMENT, so the two read 0.6.0 and 0.5.0 for
+     * a whole release and the suite stayed green.
+     *
+     * A plain equality assertion is the wrong instrument. The pair is
+     * unequal ON PURPOSE for the length of a release window — the
+     * document is written with the release it describes, the constant is
+     * bumped when the tag is cut, and the tag follows the merge — so
+     * asserting equality would red the suite for the entire window and
+     * force the tag to happen before the merge, which is not how this
+     * package releases.
+     *
+     * So what is required is that a difference be DECLARED. While the
+     * two differ the document carries a line naming both halves, and it
+     * has to name the right two. That leaves silent drift nowhere to
+     * happen: change either side alone and the declaration is wrong;
+     * remove the declaration and the difference is undeclared; land the
+     * tag so the two agree and the declaration is stale. All four are
+     * findings, and all four are driven in the test below this one.
+     *
+     * @see ContractScan::versionPairBreaksIn()
+     */
+    public function test_the_documented_release_and_the_constant_cannot_drift_silently(): void
+    {
+        $doc = $this->contractDoc();
+
+        // THE FLOOR FIRST. A parse that recognised no version at all
+        // would report no breaks, so the enumeration is asserted before
+        // anything is concluded from it — and the foreign bucket with
+        // it, because a version EXCLUDED from the comparison is the one
+        // way a mention could vanish from it quietly.
+        $this->assertNotEmpty(ContractScan::releaseVersionMentionsIn($doc));
+        $this->assertSame(['app_version: 1.4.2'], ContractScan::foreignVersionMentionsIn($doc));
+
+        $this->assertSame(
+            [],
+            ContractScan::versionPairBreaksIn($doc, BuiltForCloud::VERSION),
+            'docs/http-contract.md and BuiltForCloud::VERSION disagree in a way nothing declares.',
+        );
+
+        // The wider half of the same property: EVERY spelling of the
+        // release agrees, in prose as well as in the examples. The
+        // examples check above this one could not see the changelog's
+        // three prose mentions, and a document contradicting itself
+        // about its own release discriminator is the defect PR8 fixed by
+        // hand between two examples in this same file.
+        $this->assertSame(
+            [ContractScan::releaseVersionMentionsIn($doc)[0]],
+            array_values(array_unique(ContractScan::releaseVersionMentionsIn($doc))),
+            'docs/http-contract.md spells more than one release version: '
+            .implode(', ', array_unique(ContractScan::releaseVersionMentionsIn($doc))),
+        );
+    }
+
+    /**
+     * Proven able to fail, over fixture documents carrying each offence
+     * — including the one the shipped pair is in today, so the check is
+     * demonstrated on a real mismatch rather than only on the clean
+     * case.
+     */
+    public function test_names_a_version_pair_that_drifted_one_that_is_undeclared_and_a_declaration_left_behind(): void
+    {
+        $declared = <<<'MD'
+            **RELEASE WINDOW: this document describes `bfc_version` 0.6.0; `BuiltForCloud::VERSION` is 0.5.0
+            until the tag lands.**
+
+            ```json
+            {"bfc_version": "0.6.0", "app_version": "1.4.2"}
+            ```
+
+            The Console lands in 0.6.0.
+            MD;
+
+        // 1. THE SHIPPED SHAPE: a declared window over a real mismatch.
+        //    The wrap is deliberate — the declaration is a sentence in a
+        //    wrapped document, and a parse that only read it on one line
+        //    would be satisfied by a document nobody can write.
+        $this->assertSame(['pending' => '0.6.0', 'tagged' => '0.5.0'], ContractScan::releaseWindowIn($declared));
+        $this->assertSame([], ContractScan::versionPairBreaksIn($declared, '0.5.0'));
+
+        // 2. THE TAG LANDS. The two now agree and the declaration is
+        //    stale, which is its own finding: a window that never closes
+        //    is a licence to differ.
+        $this->assertSame(
+            ['the document and BuiltForCloud::VERSION both read 0.6.0, so the release window is over '
+                .'and its declaration must be removed'],
+            ContractScan::versionPairBreaksIn($declared, '0.6.0'),
+        );
+
+        // 3. SILENT DRIFT, which is what the criterion exists for: the
+        //    same document with no declaration at all.
+        $undeclared = '```json'.PHP_EOL.'{"bfc_version": "0.6.0"}'.PHP_EOL.'```'.PHP_EOL;
+
+        $this->assertNull(ContractScan::releaseWindowIn($undeclared));
+        $this->assertSame(
+            ['the document describes 0.6.0 and BuiltForCloud::VERSION reads 0.5.0, and nothing '
+                .'declares the difference'],
+            ContractScan::versionPairBreaksIn($undeclared, '0.5.0'),
+        );
+
+        // 4. A DECLARATION THAT NAMES THE WRONG PAIR — the way a
+        //    declaration could otherwise become a rubber stamp. Both
+        //    halves are reported, not the first one found.
+        $stale = str_replace(
+            ['`bfc_version` 0.6.0;', 'is 0.5.0'],
+            ['`bfc_version` 0.7.0;', 'is 0.4.0'],
+            $declared,
+        );
+
+        $this->assertSame(
+            [
+                'the release-window declaration names 0.7.0 as pending while the document describes 0.6.0',
+                'the release-window declaration names 0.4.0 as tagged while BuiltForCloud::VERSION reads 0.5.0',
+            ],
+            ContractScan::versionPairBreaksIn($stale, '0.5.0'),
+        );
+
+        // 5. THE DOCUMENT CONTRADICTING ITSELF, in prose against an
+        //    example — the half `releaseVersionExamplesIn()` cannot see,
+        //    because it reads `"bfc_version": "…"` and nothing else.
+        $contradictory = '```json'.PHP_EOL.'{"bfc_version": "0.6.0"}'.PHP_EOL.'```'
+            .PHP_EOL.PHP_EOL.'The Console lands in 0.5.0.'.PHP_EOL;
+
+        $this->assertSame(['0.6.0'], ContractScan::releaseVersionExamplesIn($contradictory));
+        $this->assertSame(['0.6.0', '0.5.0'], ContractScan::releaseVersionMentionsIn($contradictory));
+        $this->assertSame(
+            ['the document spells more than one release version (0.6.0, 0.5.0), so which one the '
+                .'constant should be compared to has no answer'],
+            ContractScan::versionPairBreaksIn($contradictory, '0.6.0'),
+        );
+
+        // 6. AND THE EXCLUSION IS A BUCKET, NOT A FILTER. `app_version`
+        //    is the consuming application's release and is supposed to
+        //    differ, so it is classified out — and returned, so it
+        //    cannot silently swallow a mention.
+        $this->assertSame(['app_version: 1.4.2'], ContractScan::foreignVersionMentionsIn($declared));
+    }
+
+    /**
      * **The version signal, checked rather than asserted.**
      *
      * `api_version` stays 2 across this release, so what tells a
