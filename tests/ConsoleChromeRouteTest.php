@@ -5,6 +5,7 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\BuiltForCloudServiceProvider;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Tests\ConsoleChromeRouteScan;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnguardedChromeController;
 use Illuminate\Auth\Middleware\Authenticate;
@@ -83,7 +84,7 @@ it('recognises the seam however a route spells it', function (): void {
     // it the one way the scan understands.
     Route::middleware([
         StartSession::class,
-        \ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession::class,
+        EnsureConsoleSession::class,
         Authenticate::class.':'.ConsoleGuardConfiguration::GUARD.',web',
     ])->get('/probe-chrome-spelled-out', UnguardedChromeController::class);
 
