@@ -7,6 +7,8 @@ namespace ArtisanBuild\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Actions\ListCredentials;
 use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
 use ArtisanBuild\BuiltForCloud\Actions\RevokeCredential;
+use ArtisanBuild\BuiltForCloud\Console\ActingPrincipal;
+use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresSelfServiceMintPolicy;
@@ -20,7 +22,6 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\PersonalCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 
 /**
  * The personal-credentials surface (PRD 1.17): "an authenticated human
@@ -189,11 +190,48 @@ final readonly class PersonalCredentialSurface
     }
 
     /**
+     * The subject every verb acts inside, or a refusal.
+     *
+     * All three public verbs come through here, which is why the
+     * acting-principal check lives here as well as in
+     * {@see sessionUser()}: {@see subject()} is resolved by the APP's own
+     * declaration and may never touch a session at all, so a delegated
+     * session would otherwise reach a listing without anything having
+     * asked who is calling.
+     *
      * @throws SelfServiceUnavailable
      */
     private function requireSubject(Request $request): Subject
     {
+        $this->requireLocalPrincipal();
+
         return $this->subject($request) ?? throw SelfServiceUnavailable::noResolvableSubject();
+    }
+
+    /**
+     * Refuse unless the request is acting as a local human.
+     *
+     * A delegated console session on the request — live or just refused
+     * — is turned away rather than resolved to whoever else is logged
+     * in. See {@see SelfServiceUnavailable::delegatedPrincipal()} and
+     * {@see SelfServiceUnavailable::consoleSessionRefused()} for why
+     * each is terminal rather than a fall-through.
+     *
+     * @throws SelfServiceUnavailable
+     */
+    private function requireLocalPrincipal(): ActingPrincipal
+    {
+        $acting = app(ActingPrincipalResolver::class)->resolve();
+
+        if ($acting->wasRefused()) {
+            throw SelfServiceUnavailable::consoleSessionRefused();
+        }
+
+        if ($acting->delegatedSessionPresent()) {
+            throw SelfServiceUnavailable::delegatedPrincipal();
+        }
+
+        return $acting;
     }
 
     /**
@@ -272,15 +310,26 @@ final readonly class PersonalCredentialSurface
     }
 
     /**
-     * The authenticated human, resolved through the SAME facade the
-     * package's session gate uses
-     * ({@see EnsureUserIsAuthenticated}),
-     * so the gate that admitted the request and the surface that acts on
-     * it can never disagree about who is calling.
+     * The authenticated human, resolved through D14's SINGLE acting-
+     * principal value ({@see ActingPrincipalResolver}) — the same value
+     * the package's session gate ({@see EnsureUserIsAuthenticated}), the
+     * chrome and the audit stream read — so the gate that admitted the
+     * request and the surface that acts on it can never disagree about
+     * who is calling.
+     *
+     * A DELEGATED session on the request is refused outright rather than
+     * resolved to the local session user. The gate already refuses one,
+     * so this is the second lock on the same door: this class is public
+     * API that a consuming app's own Livewire screen calls directly,
+     * without the package's middleware in front of it, and "acts as
+     * whoever `Auth::user()` happens to be" is not a safe default for a
+     * credential-minting surface.
+     *
+     * @throws SelfServiceUnavailable when a delegated console session is on the request
      */
     private function sessionUser(): ?Authenticatable
     {
-        return Auth::user();
+        return $this->requireLocalPrincipal()->principal;
     }
 
     private function declaration(): CredentialDeclaration

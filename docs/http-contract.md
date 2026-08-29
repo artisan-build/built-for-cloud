@@ -170,6 +170,21 @@ Additive unless marked otherwise:
   metadata endpoints only**; a general, app-extensible instrument was prototyped in this release
   and withdrawn — see the note under [Endpoint classification](#endpoint-classification).
 
+- **The Console's delegated-session guard ships (Console PRD §4.3 / D7 / D8 / D14).** All
+  additive, and `api_version` stays 2: no documented request or response shape changes. It is
+  OFF by default behind `built-for-cloud.console.enabled`, and `GET /bfc/meta` `capabilities`
+  gains `console-guard` only while that flag is on. What lands is the `bfc-console` guard (a
+  real custom guard the package registers itself, scoped per route with Laravel's own
+  `auth:bfc-console`), the `bfc_delegated_actors` shadow-actor table, a session-bound claim
+  contract, D7's absolute 120-minute assertion-age cap enforced inside the guard by server-side
+  session invalidation, and the structured re-entry `401` the new `bfc.console` middleware
+  emits. Two package gates change behaviour ONLY for apps that enable the Console: `bfc.admin`
+  admits a delegated `admin` on a route the console guard governs, and `bfc.auth` (plus the
+  personal-credentials surface) refuses a delegated session rather than acting as the local
+  session user. This AMENDS the v3.1 matrix invariant SEC-V3-10 from a token-vs-session rule to
+  a session-vs-session one — see `release-notes/unified-store-guard.md`. Full detail under
+  [Console — what has landed](#console--what-has-landed-and-what-is-still-reserved).
+
 **api_version 1** — the 0.3.x baseline: `/bfc/meta`, `/bfc/ownership/*`, the pre-0.4 credential
 API listing shape.
 
@@ -417,6 +432,14 @@ deployment can be entered" would be reading a promise nothing here keeps.
 `console-vitals` means this instance serves [`GET /bfc/console/vitals`](#get-bfcconsolevitals).
 It is named for the one surface it serves, not for the dashboard that reads it: the fleet
 dashboard is the vendor's, and nothing in this release renders anything.
+
+`console-guard` means this deployment has the Console ENABLED and therefore carries the
+delegated-session machinery: the `bfc-console` guard, the `bfc_delegated_actors` table and the
+re-entry `401`. It is absent when `built-for-cloud.console.enabled` is off, which is the
+default, because the capability describes this deployment and not the package. It deliberately
+does not say `console-enter`: no enter endpoint exists yet, so a control plane that read this as
+"an operator can be handed to this deployment" would be reading a promise nothing here keeps.
+See [Console — what has landed](#console--what-has-landed-and-what-is-still-reserved).
 
 ---
 
@@ -1833,31 +1856,223 @@ mutating request).
 
 ---
 
-## RESERVED — Console fast-follow (not implemented)
+## Console — what has landed, and what is still RESERVED
 
-The vendor-side Console is a decided fast-follow. So that it can land without reopening this
-shipped contract, the following names are RESERVED here now. **Except where a bullet says
-otherwise, none of this exists in this release: no guard, no table, no ability issuance.** Two
-reservations have since been drawn on and have left this section: the `/bfc/console/*`
-namespace now has live members, documented above rather than here, and the `metadata:read`
-ability family is now ENFORCED — see [Authentication](#authentication) and
-[`GET /bfc/console/vitals`](#get-bfcconsolevitals). This section
-deliberately contains no `### METHOD /path` route headings — the mechanical route-completeness
-check covers live routes only, and nothing here is one.
+The vendor-side Console lands in stages. This section says exactly which of its reserved names
+are now real and which are still only names, so a consumer never has to guess. **Nothing in the
+"Landed" list changes any documented request or response shape, so `api_version` does not
+move**: what it adds is a guard, a table and a middleware — server-side machinery whose only
+wire face is one ERROR body. This section deliberately contains no `### METHOD /path` route
+headings; the mechanical route-completeness check covers live routes only, and nothing here is
+one.
 
-- **Guard name `bfc-console`** — reserved for the Console's delegated-session guard. No guard
-  by this name is registered.
-- **Endpoint namespace `/bfc/console/*`** — reserved for Console endpoints. Two members are
-  live: [`POST /bfc/console/re-key`](#post-bfcconsolere-key), the key-custody verb, and
-  [`GET /bfc/console/vitals`](#get-bfcconsolevitals), the ops-vitals read — both documented
-  above. `/bfc/console/enter` remains reserved and unimplemented.
-- **Table name `bfc_delegated_actors`** — reserved for the Console's delegated-actor records.
-  No such table or migration exists.
-- **Dual-session precedence (reserved matrix row).** The session/token precedence matrix (the
-  `bfc` guard's docblock and `release-notes/unified-store-guard.md`) reserves a row for the
-  future `bfc-console` delegated-session guard, recording the decided rule now: on a request
-  carrying both a local `web` session and a delegated session, **the delegated guard wins —
-  for the acting principal and for any UI/attribution branching — never a union of the two.**
-  Nothing enforces this in this release.
-Everything else Console-related remains held behind the Console PRD's decision D6; this
-section reserves exactly these names and nothing more.
+### Landed
+
+- **The Console is OFF unless a deployment enables it.** `built-for-cloud.console.enabled`
+  gates everything below and defaults to `false`. Installing or upgrading the package changes
+  nothing for an app that has not opted in — no new guard, and no change to how the package's
+  session gates behave. `GET /bfc/meta` `capabilities` gains `console-guard` **only while that
+  flag is on**, because the capability describes this deployment rather than the package.
+- **Guard name `bfc-console`** — with the Console enabled, the delegated-session guard EXISTS
+  and is registered **by the package itself**: a consuming app adds nothing to its `auth.php`.
+  It is a session guard over the delegated-actor provider, and it is a SECOND guard alongside
+  the `bfc` credential driver, which is unchanged. An app that has already defined a
+  `bfc-console` guard of its own keeps it; the package never overwrites one. The provider name
+  `bfc-console-actors` is RESERVED: with the Console **enabled**, an app that has defined it as
+  something else, without defining its own guard, fails boot loudly rather than having the
+  delegated guard built on its user table. With the Console **disabled** that collision is
+  ignored entirely — a deployment that never asked for the Console cannot be stopped from
+  booting by it.
+- **Only `redeem()` mints a delegated session through this package, and it takes the SIGNED
+  ASSERTION BYTES.** `ConsoleGuard::redeem()` verifies the token itself — signature, issuer,
+  audience, TTL bound and clocks — inside the same call that writes the session. No public
+  method accepts an already-built assertion OBJECT, and none logs a delegated actor in on
+  request; `Assertion::fromVerifiedClaims()` is public and is documented as not being proof of
+  provenance, so an operation taking one would have accepted a forged claim set. The guard is
+  also a plain `Guard`, deliberately not a `StatefulGuard`: `attempt`, `once`, `loginUsingId`,
+  `onceUsingId` and `viaRemember` do not exist on it, and its user provider answers null/false
+  to every credential-shaped question for every input. "No password, no login path" is a
+  property of the types, not a set of methods that refuse.
+  **Two scans enforce this, and they cover the two shapes the escape has actually taken.** A
+  FILE scan requires exactly one file under `src/` to be able to write a delegated session key,
+  and that file's writer to be private. A PUBLIC-SURFACE scan requires `ConsoleGuard`'s public
+  API to be exactly a known set, so a new public method cannot quietly call that private writer
+  while every file assertion stays green. Both are driven over fixtures carrying the offence, so
+  both are proven able to fail.
+
+  **What they do not enforce**, because the alternative is an absolute nobody can hold: PHP
+  cannot express "no future public method may call this private method" as a language
+  guarantee. These are tripwires — they make the change impossible to introduce *silently*, not
+  impossible to introduce. Uncovered specifically: a **novel write form** (the scanner
+  recognises a fixed textual list of instance mutators — `->put(`, `->replace(`, `->merge(`,
+  `->push(`, `->flash(`, `->now(`, `->flashInput(` — not all PHP or Laravel write forms); a key
+  **assembled at runtime**; **reflection** into the private writer; anything **outside `src/`**,
+  which is the session-store boundary below; and a change to `redeem()`'s **own body**, which
+  the token tests cover instead.
+
+  One residue deserves naming rather than a category, because it is the one the public-surface
+  scan cannot reach: **an already-enumerated public method could be modified to call the private
+  writer.** `actor()`, `setUser()` or `logout()` could be edited to call `beginSession()`, and
+  both scans would stay green — the file set is unchanged, and so is the set of public method
+  names. The scans enumerate which files can write and which methods exist; neither reads what
+  an existing method does. Reviewing a diff that touches one of those methods is the control,
+  and it is a human one.
+
+  *Pinned by* `tests/ConsoleSessionWriterScanTest.php` ("has exactly one file in src/ that can
+  write a delegated session key"; "keeps the one writer unreachable from outside the guard";
+  "has exactly the public surface it is meant to have on the one class that can write";
+  "collects and names a differently-named writer when the walk meets one"; "names an unremarked
+  public method, and a removed one"), `tests/ConsoleRedemptionTest.php` ("exposes no way to log
+  a delegated actor in without signed bytes"; "refuses a token whose claims were rewritten to
+  claim the admin role") and `tests/ConsoleDelegatedActorTest.php` ("refuses every credential
+  lookup unconditionally, not merely the ones that do not match"; "has no credential-shaped
+  entry point on the guard at all").
+
+  The one public seam the `Guard` contract forces is `setUser()`, which Laravel's `actingAs()`
+  uses. It sets an in-memory principal for the current request and writes **nothing** to the
+  session, and the guard additionally requires that the session itself names the principal —
+  `SessionGuard::user()` returns whatever `setUser()` was given without consulting the session,
+  so without that cross-check a caller could combine `setUser()` with hand-written claims and
+  act as a delegated admin with no signature anywhere. Nothing else in the package writes
+  delegated session state: the write lives inside the verifying operation, privately.
+
+  **The residue, named rather than glossed.** Any code that can write the session store can
+  write the four claim keys and the guard's own login key, and the result is indistinguishable
+  from a redeemed session. That is irreducible — it is what this package's own test suite does
+  to reach states a real redemption cannot produce — and it is not a credential or a login
+  path, which is what §4.3 governs. The guarantee that is made and held is narrower and exact:
+  **no package API assembles a delegated session without verified assertion bytes.**
+  *Pinned by* `tests/ConsoleSessionWriterScanTest.php` — the enumeration above is what makes this
+  a package-wide statement rather than a claim about the classes someone remembered to name.
+
+  **A failed redemption cannot hand back a usable delegated session.** Laravel writes and
+  regenerates the session before it dispatches its `Login` event, so a host application's
+  listener that throws would otherwise leave a session already carrying the delegated identifier
+  while the redemption reported failure; the operation compensates — the session is destroyed —
+  before the failure propagates. If the compensation *itself* fails (the session store is
+  unreachable), the **original** failure is still what surfaces, and the compensation failure is
+  reported to the application's exception handler rather than replacing it or being dropped.
+
+  Stated exactly, because the two halves differ:
+
+  - **Guaranteed:** the **regenerated session id this redemption hands back** cannot rehydrate a
+    delegated identity, in either double-failure case — the compensation's in-memory flush
+    precedes the store I/O that fails, and that id names a record which was never written
+    (nothing is persisted mid-request; the store is written once, at the end).
+
+  - **Not guaranteed:** a record under the **prior** id may survive, **carrying whatever
+    identity it already held — including a delegated one.** A redemption can begin from an
+    already-delegated session (an operator re-entering the console), and with the store
+    unavailable nothing destroys that record, so a concurrent request or a replay of the prior
+    cookie still authenticates as whoever it already held. The failed redemption grants nothing
+    new; it fails to revoke something already live. No ordering fixes this: destroying the prior
+    record requires the store, and the store is what is unavailable.
+
+  *Pinned by* `tests/ConsoleRedemptionTest.php` ("leaves no usable session when a Login listener
+  throws during redemption"; "surfaces the original failure, not the compensation failure, when
+  the session store is unreachable"; "leaves a later request unauthenticated when the store
+  recovers before the response is saved"; "leaves a later request unauthenticated when the store
+  is still down at save time"; and "leaves a PRE-EXISTING delegated record alive under its own id
+  when the store fails at teardown", which asserts the residue itself).
+
+  **Remember-me:** this guard never queues a recaller cookie. Laravel still *checks* for one
+  when a session carries no identifier, so that branch is reachable; it is fail-closed because
+  the delegated-actor provider's `retrieveByToken()` returns null for every input, so no
+  principal is ever produced from a cookie.
+- **Table name `bfc_delegated_actors`** — the delegated-actor (shadow actor) table EXISTS. It
+  is **not** a `users` table: no password column, no remember-token column, no login path, and
+  no credential can resolve to one — the `bfc-console:` identifier namespace is RESERVED and is
+  refused before any credential's bound `user_id` reaches a user provider. A delegated
+  principal's identity is **type-qualified** (`bfc-console:{id}`) so it can never collide with a
+  `users` id, and the identifier suffix must be a canonical positive decimal. Actor identity is
+  the **digest of a length-delimited issuer+subject encoding**, not a collated comparison of two
+  text columns, so two subjects differing only in case are two humans on every database.
+  Rows are never pruned — they are the referent of delegated audit attribution.
+- **Per-mint claims are SESSION-bound.** The role, display name and `on_behalf_of` a request
+  acts under are the ones that request's own handoff wrote into its session. The actor row
+  keeps a `last_handoff_*` copy for operator listings and audit context only: a second handoff
+  for the same human never changes the role of an already-live session.
+- **Dual-session precedence.** ENFORCED, and enforced by the framework's own scoping rather
+  than by a package-owned repoint. A delegated route carries Laravel's `auth:bfc-console`, so
+  the console guard is the guard OF THAT REQUEST: `$request->user()`, `Auth::user()`,
+  `Auth::id()`, `Gate` and every policy return the delegated actor, and the package's resolver
+  returns the same object. On such a route, with a local `web` session simultaneously live,
+  **the delegated guard wins — for the acting principal and for all UI/attribution branching —
+  never a union of the two.**
+
+  **What `auth:bfc-console` does to global state, stated exactly.** It is Laravel's own
+  `Authenticate` middleware, and it calls `AuthManager::shouldUse()` → `setDefaultDriver()` →
+  a write to `config('auth.defaults.guard')` — precisely what `auth:web` and `auth:api` do in
+  every Laravel application. This package makes no such write itself (it never calls
+  `shouldUse()` and never sets that key), but the write happens, and it is process-global for
+  the life of the config repository. It does not leak between requests on either runtime this
+  package supports, though they get there differently:
+
+  - **PHP-FPM** — *not* because each request gets a fresh process; an FPM worker ordinarily
+    serves many requests, which is what `pm.max_requests` bounds. It is PHP's shared-nothing
+    execution model: at request shutdown all userland state is destroyed — container and config
+    repository included — and the next request re-reads `auth.defaults.guard` from the
+    application's config. The OS process persists; nothing written into PHP memory does.
+  - **Octane**, which *does* reuse userland state and therefore needs an explicit mechanism: it
+    installs a per-request clone of the config repository via
+    `Laravel\Octane\Listeners\CreateConfigurationSandbox`, which runs on every
+    `RequestReceived`.
+
+  Note explicitly that Octane's `FlushAuthenticationState` is **not** what closes this — it
+  forgets the resolved guards and the `auth.driver` instance and never touches config — so do
+  not re-derive the guarantee from that listener.
+
+  **The runtime assumption:** any runtime that reuses a container across requests **without
+  sandboxing the config repository** leaves the default guard pointed at `bfc-console` for
+  every later request in that process, and a request touching no Console route would resolve
+  its principal through the delegated guard. That is the condition under which this becomes a
+  real privilege leak; it is a property of the host runtime and cannot be prevented from inside
+  a guard.
+  *Pinned by* `tests/ConsoleGuardScopingTest.php`, which models the property rather than invoking
+  Octane (no dependency here): "would resolve a non-console route through the delegated guard on a
+  runtime that never sandboxes config" — asserting the resolved PRINCIPAL, since a refusal reports
+  the same guard name — plus "does not leak into the next request when the config repository is
+  cloned per request, the way Octane clones it" and "leaves auth.defaults.guard pointed at the
+  console guard, and forgetting guards does not put it back".
+
+  A **REFUSED** delegated session (capped, unreadable claims, contained actor) is TERMINAL on
+  every route: the request resolves no principal at all and no package surface falls back to
+  the local user, whose session the guard has invalidated anyway.
+  The package's own gates read one resolved value, and the two directions are deliberately
+  asymmetric — **admission is exact, refusal may be broad**:
+  - `bfc.admin` ADMITS a delegated operator whose own handoff carried `role=admin`, but only
+    on a route the console guard actually governs, so the principal it authorizes is the
+    principal everything behind it acts as. A delegated `member` does not pass; a delegated
+    session on a route the console guard does NOT govern is refused rather than resolved to
+    the local user's `is_admin`; a local user still passes on that attribute as before.
+  - `bfc.auth` and the personal-credentials surface (`/bfc/me/credentials`) REFUSE a delegated
+    session with a `403`, whichever guard the route names, rather than falling through to the
+    local session user. A delegated actor has no personal credentials in this app. On a
+    REFUSED console session they answer `401` and `403` respectively, and never resolve the
+    local user.
+  - The token gates (`bfc.token.admin`, `bfc.credential.admin`, `bfc.ability`) are unchanged:
+    they never consult a session principal.
+  See `release-notes/unified-store-guard.md`, which records this as an amendment to SEC-V3-10.
+- **Delegated session clocks.** A delegated session is bounded by Laravel's own sliding idle
+  window AND by an absolute assertion-age cap of 120 minutes, measured from the assertion's
+  issued-at. The cap is enforced **inside the guard**, so it holds on every route including
+  ones that mount no Console middleware: a capped, orphaned or unreadable delegated session is
+  invalidated server-side the first time anything reads the guard. A route carrying the
+  package's `bfc.console` middleware answers such a request with a `401` carrying the header
+  `BFC-Console-Reentry: 1` and a body of
+  `{"version": 1, "error": "console_reentry_required", "reason": "<enum>", "reentry_url":
+  "<absolute>", "return_to": "<relative path>"}`, where `reason` is one of `assertion_age_cap`,
+  `session_invalidated`, `not_authenticated`, and `reentry_url` is **omitted entirely** when the
+  app has configured none. `return_to` is validated as a same-origin relative path in every
+  percent-decoded form. This is an ERROR body; the metadata/content classification does not
+  apply to it.
+
+### Still RESERVED (not implemented)
+
+- **`/bfc/console/enter`** — reserved inside the live `/bfc/console/*` namespace, whose other
+  members ([`POST /bfc/console/re-key`](#post-bfcconsolere-key) and
+  [`GET /bfc/console/vitals`](#get-bfcconsolevitals)) are documented above. **No enter endpoint
+  exists**, so nothing in this release can start a delegated session over HTTP; the guard above
+  is the machinery such a session will run on.
+
+Everything else Console-related remains held behind the Console PRD's decision D6.

@@ -27,6 +27,11 @@ use ArtisanBuild\BuiltForCloud\Commands\TokenRevokeSelfCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenRotateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\TokenUsageCommand;
 use ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand;
+use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
+use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleGuard;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
+use ArtisanBuild\BuiltForCloud\Console\DelegatedActorProvider;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresDurableStore;
 use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
@@ -45,6 +50,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\PersonalCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
@@ -55,7 +61,9 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\VerifyHmacSignature;
 use ArtisanBuild\BuiltForCloud\Listeners\QueueOwnershipWebhook;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Contracts\Session\Session;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
@@ -90,6 +98,12 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             return $app->make(ApiTokenMinter::class);
         });
 
+        // D14's single resolved value (Console PRD): one instance per
+        // application, memoizing per REQUEST inside itself, so the
+        // acting principal and the chrome's attribution branch cannot be
+        // computed twice and disagree.
+        $this->app->singleton(ActingPrincipalResolver::class);
+
         $this->app->bind(CredentialDeclaration::class, function (Application $app): CredentialDeclaration {
             /** @var class-string<CredentialDeclaration> $declaration */
             $declaration = config('built-for-cloud.credentials.declaration') ?? DefaultCredentialDeclaration::class;
@@ -120,11 +134,54 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
 
         $this->registerRateLimiters();
 
+        // The `bfc-console` guard and provider entries, injected by the
+        // PACKAGE so a consuming app adds nothing to its `auth.php`
+        // (FLEET-C-14). In boot, not register, so the app's OWN
+        // `config/auth.php` is fully loaded first — an app that defined
+        // its own `bfc-console` guard must be seen to have defined it.
+        // ConsoleGuardConfiguration carries the rest: nothing happens
+        // unless `console.enabled` is on, an app's own guard is never
+        // overwritten, and a hijacked reserved PROVIDER name fails boot
+        // loudly rather than backing the delegated guard with the app's
+        // user table.
+        ConsoleGuardConfiguration::apply($this->app->make(Repository::class));
+
         Auth::resolved(function (AuthManager $auth): void {
             $auth->extend('bfc', function (Application $app, string $name, array $config): CredentialGuard {
                 /** @var array<string, mixed> $config */
                 return new CredentialGuard($app, $name, $config);
             });
+
+            // The delegated guard (Console PRD D10) — a SECOND,
+            // session-based guard that does not touch the first: the
+            // `bfc` credential driver above is unchanged and still the
+            // default for `credentials.guard`.
+            //
+            // COMPOSITION: the inner guard is built by the framework's
+            // OWN `createSessionDriver()`, so Laravel's sliding idle
+            // window, cookie jar, events and request refresh all come
+            // from the framework, and ConsoleGuard wraps it to enforce
+            // D7's absolute cap and the session-bound claims. Nothing
+            // here mirrors framework internals, and nothing here
+            // repoints the application's default guard: scoping the
+            // delegated principal to a route is `auth:bfc-console`'s
+            // job, which is the framework's own.
+            $auth->extend(
+                ConsoleGuardConfiguration::DRIVER,
+                function (Application $app, string $name, array $config) use ($auth): ConsoleGuard {
+                    /** @var array<string, mixed> $config */
+                    return new ConsoleGuard(
+                        $auth->createSessionDriver($name, $config),
+                        $app->make(Session::class),
+                        $app->make(AssertionVerifier::class),
+                    );
+                },
+            );
+
+            $auth->provider(
+                ConsoleGuardConfiguration::PROVIDER,
+                fn (): DelegatedActorProvider => new DelegatedActorProvider,
+            );
         });
 
         if ($this->app->bound('router')) {
@@ -139,6 +196,14 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             // The verify half of the hmac pair (PRD 1.21, SEC-V3-07):
             // consuming apps put it in front of signed-message routes.
             $router->aliasMiddleware('bfc.hmac', VerifyHmacSignature::class);
+            // The delegated-session re-entry answer (Console PRD D7). It
+            // goes IN FRONT of `auth:bfc-console` on a console route:
+            // the framework's own middleware is what makes the console
+            // guard that route's guard, and this alias is what turns an
+            // absent or refused session into the structured 401 rather
+            // than a generic one. It enforces no clock of its own —
+            // ConsoleGuard does that on every route.
+            $router->aliasMiddleware('bfc.console', EnsureConsoleSession::class);
 
             if ($this->surfaceEnabled('routes')) {
                 $this->mountRoutes($router);
