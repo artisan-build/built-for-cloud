@@ -48,6 +48,7 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\VerifyHmacSignature;
 use ArtisanBuild\BuiltForCloud\Listeners\QueueOwnershipWebhook;
 use Illuminate\Auth\AuthManager;
@@ -267,12 +268,29 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // that files a countersigning key onto an ALREADY-CLAIMED
         // deployment without re-onboarding it. Fixed path under the
         // `/bfc/console/*` namespace the contract reserved for exactly
-        // this, in the routes family like every other package surface,
-        // throttled FIRST and then gated on the `credential:rotate`
-        // family — a re-key IS a rotation, and this vocabulary is per
-        // verb family (the hmac activate cutover rides the same one).
+        // this, in the routes family like every other package surface.
+        //
+        // Its stack, outermost first, and each layer is load-bearing:
+        //
+        //  1. `throttle:bfc-operator-write` — bounded before anything
+        //     else runs, so refused attempts cost budget too;
+        //  2. `UniformConsoleKeyRefusal` — collapses the gate's 401/403
+        //     split into ONE external answer (rework A5). It sits INSIDE
+        //     the throttle so a 429 still says 429, and OUTSIDE the gate
+        //     so it can catch what the gate aborts with;
+        //  3. the gate itself, on `console:key:write` — its OWN ability,
+        //     NOT the `credential:rotate` family (rework B2). A re-key
+        //     is a rotation in shape, but folding it into that family
+        //     would have handed Console-admin takeover to every
+        //     rotate-scoped credential already in the field, silently,
+        //     on upgrade. `credential:admin` still satisfies it, because
+        //     the break-glass is a marking someone chose.
         $router->post('/bfc/console/re-key', [ManageConsoleKeys::class, 'reKey'])
-            ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::CredentialRotate->value]);
+            ->middleware([
+                'throttle:bfc-operator-write',
+                UniformConsoleKeyRefusal::class,
+                'bfc.credential.admin:'.OperatorAbility::ConsoleKeyWrite->value,
+            ]);
 
         // The offboard verb (PRD 1.15, SEC-V3-04): full account
         // containment behind its OWN verb-family ability — the widest

@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyDelivery;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyFiled;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -28,17 +29,26 @@ use Illuminate\Support\Facades\DB;
  * the new key and retires nothing, so every assertion in flight under
  * the outgoing key keeps verifying.
  *
- * "Already claimed" is not re-checked here. The gate IS the check: this
- * route admits a legacy admin token or an operator credential, and an
- * unclaimed deployment has issued neither.
+ * **"Already claimed" is enforced, not assumed** (rework A6). An earlier
+ * revision argued the gate was the check, on the reasoning that an
+ * unclaimed deployment has issued no credential. That was false:
+ * `bfc:install:operator-credential` mints an operator credential from
+ * the host, before and independently of any ownership claim. The
+ * ownership row is now locked and checked inside the filing transaction
+ * by {@see FileConsoleKey}, and an unclaimed deployment refuses.
  *
- * The gate is the `credential:rotate` FAMILY, not an ability of its own.
- * A re-key is a rotation of the console keyring, and the operator
- * vocabulary is per verb FAMILY by design ({@see OperatorAbility}) —
- * the hmac pending→active cutover rides the same family for the same
- * reason. A `console:rekey` ability would be the vocabulary's first
- * per-OBJECT name, and it would hand every existing rotate-scoped
- * operator credential a surface it silently could not reach.
+ * **The gate is `console:key:write`, its own ability** (rework B2). A
+ * re-key is a rotation in shape, and this route was first specified on
+ * the `credential:rotate` family for that reason. The shape was the
+ * wrong thing to reason from: folding it into that family would have
+ * given every credential ALREADY ISSUED with `credential:rotate` the
+ * power to install a delegated-admin trust root, silently, on upgrade,
+ * with nobody's decision. `credential:admin` — the explicit break-glass
+ * — still satisfies it ({@see OperatorAbility::adminEquivalent}).
+ *
+ * Every pre-authorization refusal on this route is normalized to one
+ * status and body by {@see UniformConsoleKeyRefusal}; the audit stream
+ * keeps the distinction.
  */
 final class ManageConsoleKeys
 {

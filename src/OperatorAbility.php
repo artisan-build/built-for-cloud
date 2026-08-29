@@ -46,6 +46,16 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
  * ({@see CredentialVerb::Activate}) remains the finer instrument for apps
  * that must split them.
  *
+ * Console countersigning-key writes do NOT ride that family, and the
+ * boundary is worth stating because it looks like an exception: filing a
+ * key is a make-before-break rotation in shape, but what it installs is a
+ * standing authority to mint delegated-ADMIN entry into this deployment.
+ * Folding it into `credential:rotate` would have handed that power to
+ * every rotate-scoped credential already in the field, on upgrade, with
+ * no reissue. {@see self::ConsoleKeyWrite} is therefore its own name —
+ * the one place this vocabulary splits on BLAST RADIUS rather than on
+ * verb family, and it splits deliberately.
+ *
  * RESERVED, documented and unenforced ({@see self::RESERVED_METADATA_READ},
  * per the Console reservations): the `metadata:read` ability family —
  * least-privilege, read-audited, for future vendor-side reads of
@@ -68,6 +78,28 @@ enum OperatorAbility: string
 
     /** Offboard a subject — full account containment (PRD 1.15). */
     case SubjectOffboard = 'subject:offboard';
+
+    /**
+     * File a console countersigning key (Console PRD D12) — its OWN
+     * name, deliberately not folded into {@see self::CredentialRotate}.
+     *
+     * A re-key looks like a rotation and was first specified as one.
+     * That was wrong, and the reason is upgrade semantics rather than
+     * taxonomy: every credential ALREADY ISSUED with `credential:rotate`
+     * would have gained Console-admin takeover power the moment this
+     * release landed, with no reissue and nobody's decision. A service
+     * scoped to rotate ordinary integration credentials would have been
+     * able to post its own public key and thereafter mint delegated-ADMIN
+     * assertions for the deployment. Silently widening what an issued
+     * credential means is the exact failure this per-verb-family
+     * vocabulary exists to prevent, and "the verbs are related" does not
+     * outrank it.
+     *
+     * `credential:admin` satisfies it ({@see self::adminEquivalent}) —
+     * the break-glass is an explicit, deliberate marking, so widening it
+     * widens something an operator chose. `credential:rotate` does not.
+     */
+    case ConsoleKeyWrite = 'console:key:write';
 
     /** Read the audit stream. No package HTTP surface serves it yet; the
      * name is vocabulary so the first audit-read surface enforces it. */
@@ -111,6 +143,7 @@ enum OperatorAbility: string
             self::CredentialRevoke,
             self::SubjectOffboard,
             self::AuditRead,
+            self::ConsoleKeyWrite,
         ];
     }
 }
