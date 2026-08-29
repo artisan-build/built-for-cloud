@@ -214,17 +214,30 @@ return [
     | Null for both is an ordinary, un-degraded state: an app that
     | declares neither simply reports nulls.
     |
+    | `queue_cache_seconds` — how long one queue-backlog snapshot serves
+    | every poll. This route is POLLED: a dashboard reading once a second
+    | would otherwise put a queue query (or a redis/sqs round trip) on
+    | every request, sixty times a minute per credential. The snapshot
+    | carries its own health, so a cache hit reports the same `degraded`
+    | the failing read did rather than laundering it into `ok`. Set it to
+    | 0 to read on every request. It bounds how OFTEN the read happens,
+    | not how long one read may take — see CollectVitals::queueSnapshot
+    | for why the package imposes no wall-clock deadline.
+    |
     | The headline stat is NOT here. Its label vocabulary is code, not
     | config — the app's contract declaration implements
-    | ArtisanBuild\BuiltForCloud\Contracts\DeclaresHeadlineStat, so the
-    | one label the vendor ever sees is reviewed in the app's repo (D15)
-    | instead of typed into an environment variable.
+    | ArtisanBuild\BuiltForCloud\Contracts\DeclaresHeadlineStat, whose
+    | vocabulary hook returns a BACKED ENUM CLASS. That is deliberate and
+    | it is the enforcement: an enum's case set is fixed at compile time
+    | in the app's repo, so the one label the vendor ever sees is
+    | reviewed in a diff (D15) rather than assembled at runtime.
     |
     */
 
     'vitals' => [
         'app_version' => env('BUILT_FOR_CLOUD_APP_VERSION'),
         'deployed_at' => env('BUILT_FOR_CLOUD_DEPLOYED_AT'),
+        'queue_cache_seconds' => env('BUILT_FOR_CLOUD_VITALS_QUEUE_CACHE', 15),
     ],
 
     /*

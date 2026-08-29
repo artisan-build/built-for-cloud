@@ -24,6 +24,13 @@ use Throwable;
  * dependency, and `bfc:outbox:drain` re-drains anything a dead process
  * left behind). afterCommit callbacks are discarded on rollback, so a
  * failed transaction triggers no drain.
+ *
+ * `$drainAfterCommit` turns that hook off for one call. It exists for
+ * events emitted from POLLED routes: a drain is O(claimable rows) and
+ * may send mail, so hanging it off a request the vendor makes sixty
+ * times a minute is an amplification lever regardless of how cheap the
+ * event itself is. The audit row and the outbox row are still written
+ * transactionally; only the delivery attempt moves to the next drain.
  */
 final class LifecycleEventRecorder
 {
@@ -39,6 +46,7 @@ final class LifecycleEventRecorder
         ?string $note = null,
         ?string $supersededByCredentialId = null,
         ?string $dedupKey = null,
+        bool $drainAfterCommit = true,
     ): CredentialAuditEvent {
         if (DB::transactionLevel() === 0) {
             throw new LogicException(
@@ -73,6 +81,20 @@ final class LifecycleEventRecorder
             'audit_event_id' => $auditEvent->id,
             'dedup_key' => $dedupKey ?? $auditEvent->id,
         ]);
+
+        // The outbox row is written either way; only the SYNCHRONOUS
+        // drain is optional. A caller passes false when its event rides
+        // a high-frequency request — the Console vitals read is polled up
+        // to sixty times a minute per credential, and draining every
+        // claimable row (and sending its notifications) on each poll
+        // turns a dashboard into a database and mail amplifier. Those
+        // rows stay claimable and are delivered by `bfc:outbox:drain` or
+        // by the next mutating request's drain, so nothing is lost;
+        // what changes is that a READ no longer does other events'
+        // delivery work.
+        if (! $drainAfterCommit) {
+            return $auditEvent;
+        }
 
         // Post-commit bookkeeping must NEVER fail the request the mutation
         // already earned: by the time this runs the transition is committed,
