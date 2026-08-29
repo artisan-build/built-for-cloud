@@ -13,6 +13,7 @@ use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\BurnMode;
 use ArtisanBuild\BuiltForCloud\ClaimError;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyDelivery;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresBurnMode;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresDurableStore;
@@ -80,13 +81,31 @@ final class ManageOnboarding
         return app(DurableCredentialMinter::class);
     }
 
+    /**
+     * Mint a claim code, OPTIONALLY carrying console key-custody
+     * authority (Console PRD D12, rework B1).
+     *
+     * `console_key_authority` is what lets the resulting code deliver a
+     * countersigning key at exchange. It defaults to FALSE, and that
+     * default is the security property: filing a key installs a standing
+     * authority to mint delegated-ADMIN entry into this deployment, so a
+     * routine `scope=consume` code handed to a low-privilege integration
+     * must not be able to do it. Before this flag existed, it could.
+     *
+     * The authority is set HERE, on an admin-gated surface, by the
+     * operator who decides to grant it — never by the party redeeming
+     * the code, and never mass-assignable ({@see OnboardingToken}). It
+     * is spent by the first key it files, whatever the app's burn mode
+     * says about re-presenting the code.
+     */
     public function issue(Request $request): JsonResponse
     {
-        /** @var array{email?: string|null, scope?: string|null, ttl_seconds: int} $validated */
+        /** @var array{email?: string|null, scope?: string|null, ttl_seconds: int, console_key_authority?: bool|null} $validated */
         $validated = $request->validate([
             'email' => ['nullable', 'email'],
             'scope' => ['nullable', 'string', Rule::in(Scope::values())],
             'ttl_seconds' => ['required', 'integer', 'between:'.self::TTL_MIN_SECONDS.','.self::TTL_MAX_SECONDS],
+            'console_key_authority' => ['nullable', 'boolean'],
         ]);
 
         $actor = $this->requestActor($request);
@@ -95,6 +114,7 @@ final class ManageOnboarding
             $email = $validated['email'] ?? null;
             $scope = $validated['scope'] ?? Scope::Consume->value;
             $ttlSeconds = (int) $validated['ttl_seconds'];
+            $consoleKeyAuthority = (bool) ($validated['console_key_authority'] ?? false);
 
             // Issuing supersedes any pending code for the same address+scope,
             // but deliberately does NOT touch the live durable credential
@@ -112,7 +132,7 @@ final class ManageOnboarding
                 }
             }
 
-            [$claimCode, $codeRow] = $this->mintClaimCode($email, $scope, $ttlSeconds);
+            [$claimCode, $codeRow] = $this->mintClaimCode($email, $scope, $ttlSeconds, $consoleKeyAuthority);
 
             $this->recorder->record(
                 event: LifecycleEventType::Issued,
@@ -120,11 +140,18 @@ final class ManageOnboarding
                 actor: $actor,
                 recipient: $email,
                 codeTtlSeconds: $ttlSeconds,
+                // Granting key-custody authority is the interesting half
+                // of an issue, so the audit row says so rather than
+                // leaving it to be inferred from a later filing.
+                note: $consoleKeyAuthority ? 'issued with console key-custody authority (one key)' : null,
             );
 
             return response()->json([
                 'claim_code' => $claimCode->reveal(),
                 'email' => $email,
+                // Additive and echoed only when granted, so a consumer
+                // pinned to the pre-console shape sees identical keys.
+                ...($consoleKeyAuthority ? ['console_key_authority' => true] : []),
             ], 201);
         });
     }
@@ -199,6 +226,15 @@ final class ManageOnboarding
      * included; with it, the vendor's per-deployment PUBLIC key is filed
      * and activated on this app's keyring inside the exchange's own
      * transaction, and the response names the filed key id.
+     *
+     * **Not every code may deliver one** (rework B1). Filing a key
+     * installs a standing authority to mint delegated-ADMIN entry into
+     * this deployment, so the code must have been issued with explicit
+     * `console_key_authority`, and must not have spent it already. The
+     * check runs inside the locked transaction BEFORE the burn, so an
+     * unauthorized attempt costs the code nothing. A `scope=consume`
+     * code — the routine one an operator hands an integration — carries
+     * no such authority and never will unless someone asks for it.
      *
      * A refused key rolls the WHOLE exchange back — no durable minted,
      * no signing key delivered, and (under `at_exchange`) the code
@@ -328,6 +364,24 @@ final class ManageOnboarding
 
             if ($code->expires_at->lessThanOrEqualTo(now())) {
                 return ClaimError::CodeExpired->respond('This code has expired. Ask the issuer for a new one.');
+            }
+
+            // Key-custody authority, re-read from the LOCKED row and
+            // checked BEFORE anything burns, mints or files (rework B1).
+            //
+            // Its position is the point. A filed key is a standing
+            // authority to enter this deployment as an admin, so a code
+            // that may not file one must not be able to spend itself
+            // trying: this throws, the transaction rolls back, and the
+            // code is left exactly as it was found. Checking it later —
+            // after the burn, next to the filing — would have burned a
+            // legitimate code on an unauthorized delivery attempt.
+            //
+            // Locked, not cached: `mayFileConsoleKey()` also asks whether
+            // the authority has already been spent, and that answer is
+            // only meaningful under the row lock taken above.
+            if ($delivery instanceof ConsoleKeyDelivery && ! $code->mayFileConsoleKey()) {
+                throw ConsoleKeyRefused::because(ConsoleKeyRefusal::NotAuthorized);
             }
 
             // The hitch claim surface cannot deliver a signing key (its
@@ -482,6 +536,13 @@ final class ManageOnboarding
         }
 
         $filed = ($this->fileConsoleKey)($delivery, AuditActor::credentialHolder($code->id));
+
+        // The authority is single-use, independently of the burn mode.
+        // Under `first_use` the code stays presentable until the durable
+        // it minted is first used, so without this stamp one authorized
+        // code could file a second key under a fresh key id — and every
+        // filed key is its own standing admin-entry authority.
+        $code->forceFill(['console_key_filed_at' => now()])->save();
 
         /** @var array<string, mixed> $data */
         $data = $response->getData(true);
@@ -992,7 +1053,7 @@ final class ManageOnboarding
      *
      * @return array{MintedSecret, OnboardingToken}
      */
-    private function mintClaimCode(?string $email, string $scope, int $ttlSeconds): array
+    private function mintClaimCode(?string $email, string $scope, int $ttlSeconds, bool $consoleKeyAuthority = false): array
     {
         do {
             $claimCode = new MintedSecret(bin2hex(random_bytes(32)));
@@ -1005,6 +1066,13 @@ final class ManageOnboarding
             'token_hash' => $claimCode->hash(),
             'expires_at' => now()->addSeconds($ttlSeconds),
         ]);
+
+        // forceFill, not the create array: `console_key_authority` is
+        // deliberately not mass-assignable, so it can only be set on this
+        // admin-gated path and never by anything a request body reaches.
+        if ($consoleKeyAuthority) {
+            $codeRow->forceFill(['console_key_authority' => true])->save();
+        }
 
         return [$claimCode, $codeRow];
     }
