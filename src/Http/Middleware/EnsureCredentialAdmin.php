@@ -66,12 +66,12 @@ final class EnsureCredentialAdmin
      * documented expansion is {@see OperatorAbility::adminEquivalent}).
      * The installer mints its operator credential with exactly this.
      *
-     * RESERVED in this ability vocabulary (Console fast-follow,
-     * unimplemented): the `metadata:read` ability family —
-     * least-privilege, read-audited, for future vendor-side reads of
-     * `metadata`-classified endpoints (docs/http-contract.md, "Endpoint
-     * classification"). No credential is issued with it and nothing
-     * enforces it in this release.
+     * `metadata:read` ({@see OperatorAbility::MetadataRead}) is now
+     * enforced, and NOT here: the Console's dashboard read is mounted
+     * behind {@see EnsureDashboardCredential} — its own gate, and the
+     * only middleware on that route — precisely because THIS gate would
+     * grant the ability to a break-glass credential, which Console PRD
+     * D16 forbids.
      */
     public const string ABILITY = 'credential:admin';
 

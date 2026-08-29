@@ -190,6 +190,77 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Console Vitals (the ops-vitals read, Console PRD D9/D15)
+    |--------------------------------------------------------------------------
+    |
+    | Two app-declared facts `GET /bfc/console/vitals` reports. Both are
+    | optional, and both are BOUNDED before they reach the wire, because
+    | that endpoint is `metadata`-classified: bounded scalars and enums
+    | only, no free-text strings anywhere (D15).
+    |
+    | `app_version` — this application's own release. It is echoed only
+    | when it is semver-shaped; anything else is dropped and the payload
+    | reports `degraded`, rather than forwarding an unbounded
+    | operator-authored string to the vendor. (This is the same hazard
+    | `product` above carries, and the reason `GET /bfc/meta` is
+    | classified `content` while this endpoint is not.)
+    |
+    | `deployed_at` — when this deployment last shipped, in any format
+    | the framework's date parser accepts; reported as ISO-8601, with a
+    | derived `deploy_age_seconds`. Unparseable is `degraded` too, for
+    | the same reason: a value was declared and could not be used, which
+    | must not look identical to declaring nothing.
+    |
+    | Null for both is an ordinary, un-degraded state: an app that
+    | declares neither simply reports nulls.
+    |
+    | `deployment_id` — an identifier for this deployment, UNIQUE within
+    | whatever cache namespace it shares, used to key the cached queue
+    | snapshot below. It falls back to `cloud.application`, and when
+    | neither is set the snapshot cache is DISABLED rather than shared:
+    | two apps with no identifier, the same environment and a shared
+    | CACHE_PREFIX would otherwise compute the same key and serve each
+    | other's queue backlog as honest local data — a silent
+    | cross-deployment leak into a vendor dashboard, which is worse than
+    | slow vitals. It is never inferred from the product name or the
+    | environment; those are not identities.
+    |
+    | Unique, not merely stable. Two instances with the same identifier,
+    | environment and queue configuration share a key — right for
+    | replicas of one logical deployment reading one queue, and the
+    | collision this key exists to prevent for anything else.
+    |
+    | `queue_cache_seconds` — how long one queue-backlog snapshot serves
+    | every poll. This route is POLLED: a dashboard reading once a second
+    | would otherwise put a queue query (or a redis/sqs round trip) on
+    | every request, sixty times a minute per credential. The snapshot
+    | carries its own health, so a cache hit reports the same `degraded`
+    | the failing read did rather than laundering it into `ok`. Set it to
+    | 0 to read on every request. It bounds how OFTEN the read happens,
+    | not how long one read may take — see CollectVitals::queueSnapshot
+    | for why the package imposes no wall-clock deadline. The oldest-job
+    | AGE is derived per request from a cached timestamp, so it keeps
+    | moving inside a window even though the counts do not.
+    |
+    | The headline stat is NOT here. Its label vocabulary is code, not
+    | config — the app's contract declaration implements
+    | ArtisanBuild\BuiltForCloud\Contracts\DeclaresHeadlineStat, whose
+    | vocabulary hook returns a BACKED ENUM CLASS. That is deliberate and
+    | it is the enforcement: an enum's case set is fixed at compile time
+    | in the app's repo, so the one label the vendor ever sees is
+    | reviewed in a diff (D15) rather than assembled at runtime.
+    |
+    */
+
+    'vitals' => [
+        'app_version' => env('BUILT_FOR_CLOUD_APP_VERSION'),
+        'deployed_at' => env('BUILT_FOR_CLOUD_DEPLOYED_AT'),
+        'deployment_id' => env('BUILT_FOR_CLOUD_DEPLOYMENT_ID'),
+        'queue_cache_seconds' => env('BUILT_FOR_CLOUD_VITALS_QUEUE_CACHE', 15),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Client Identity Observation
     |--------------------------------------------------------------------------
     |

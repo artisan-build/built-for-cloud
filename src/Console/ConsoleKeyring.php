@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Console;
 
 use ArtisanBuild\BuiltForCloud\Exceptions\AssertionRefused;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
+use ArtisanBuild\BuiltForCloud\MetadataShape;
 use Carbon\CarbonImmutable;
 use InvalidArgumentException;
 use ParagonIE\Paseto\Exception\PasetoException;
@@ -74,7 +75,15 @@ final class ConsoleKeyring
      * Anchored with `\z` rather than `$` because PHP's `$` also matches
      * before a trailing newline — "k1\n" would otherwise pass as "k1".
      */
-    private const string KEY_ID_PATTERN = '/^[A-Za-z0-9._-]{1,64}\z/';
+    /**
+     * The `kid` charset. Public because the metadata-classification
+     * vocabulary ({@see MetadataShape::CONSOLE_KEY_ID}) needs the same
+     * bound to certify `POST /bfc/console/re-key`, and the docblock on
+     * {@see self::isValidKeyId} already promises "one regex, never a
+     * second copy that could drift from it" — a second copy in the
+     * conformance instrument would have been exactly that.
+     */
+    public const string KEY_ID_PATTERN = '/^[A-Za-z0-9._-]{1,64}\z/';
 
     /**
      * File a key as PENDING. Two refusals, and both are uniqueness:

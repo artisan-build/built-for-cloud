@@ -13,7 +13,9 @@ use ArtisanBuild\BuiltForCloud\Scope;
 use Illuminate\Foundation\Testing\TestCase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Testing\TestResponse;
 use PHPUnit\Framework\Assert;
+use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
 /**
  * @phpstan-require-extends TestCase
@@ -748,6 +750,61 @@ trait ContractAssertions
         sort($events);
 
         return $events;
+    }
+
+    /**
+     * Assert that one of THIS PACKAGE'S OWN `metadata`-classified routes
+     * returned exactly the shape that route is documented to return
+     * (Console PRD D15, docs/http-contract.md "Endpoint
+     * classification"). Name the route as `METHOD /uri`; a name that is
+     * not one of {@see self::builtForCloudMetadataEndpoints} FAILS.
+     *
+     * **This is not a general instrument, and there is no way to hand it
+     * a shape of your own.** An earlier revision exposed an
+     * app-extensible schema language and claimed to certify "any
+     * metadata endpoint". It could not, and the reason is structural
+     * rather than a bug anyone could patch: if the consuming app
+     * supplies the schema, the app decides what counts as free text. It
+     * picks the field names and the permitted members, so runtime prose
+     * can be declared a bounded identifier and pass. Four rounds of
+     * narrowing that type language closed four escapes and left this one
+     * untouched, because closing a type-name set does not establish
+     * value PROVENANCE.
+     *
+     * The registry and the evaluator live in
+     * {@see MetadataEndpointShapes}, a `final` class this method merely
+     * delegates to, and that placement is load-bearing. They were
+     * private methods of THIS TRAIT, which does not make them private to
+     * it: a class using a trait may declare a method of the same name
+     * and the class's definition wins. A consuming test class could
+     * therefore have substituted its own registry, or a permissive
+     * evaluator, and had the certification path back — so the claim that
+     * an app endpoint could not be certified here was false. A `final`
+     * class cannot be subclassed and its statics cannot be replaced, so
+     * it is true now.
+     *
+     * A class may still redefine THIS method. That is not a
+     * substitution: a class that does it is not calling this assertion,
+     * which is visible in its own source. What cannot be changed from
+     * outside is what the assertion checks.
+     *
+     * @param  TestResponse<SymfonyResponse>  $response
+     */
+    public function assertBuiltForCloudMetadataEndpoint(TestResponse $response, string $endpoint): void
+    {
+        MetadataEndpointShapes::assertResponse($response, $endpoint);
+    }
+
+    /**
+     * The `METHOD /uri` names shapes are enumerated for — every
+     * `metadata`-classified row in the contract's classification table,
+     * and nothing else.
+     *
+     * @return list<string>
+     */
+    public function builtForCloudMetadataEndpoints(): array
+    {
+        return MetadataEndpointShapes::endpoints();
     }
 
     public function mintBuiltForCloudAdminToken(string $name = 'contract-admin'): string

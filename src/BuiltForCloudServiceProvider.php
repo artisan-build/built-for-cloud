@@ -34,6 +34,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageInvitations;
@@ -46,6 +47,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\PersonalCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
@@ -292,6 +294,34 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 'bfc.credential.admin:'.OperatorAbility::ConsoleKeyWrite->value,
             ]);
 
+        // The Console's ops-vitals read (Console PRD D9/D15/D16): a
+        // `metadata`-classified surface at a fixed `/bfc/console/*`
+        // path, an ordinary member of the routes family.
+        //
+        // ONE gate, not the operator gate every verb route above uses
+        // and not a composition either. {@see EnsureDashboardCredential}
+        // is the whole of D16 — authentication, the app declaration's
+        // authorization hook, an operator subject, and an ability set
+        // EXACTLY equal to `{metadata:read}`.
+        //
+        // `bfc.credential.admin` could never have gated this: it grants
+        // `credential:admin` whatever ability a route names, and D16
+        // forbids the ownership/admin credential on any dashboard read
+        // path. `bfc.ability:metadata:read` was in front of this gate
+        // for one revision and has been removed: it enforces a strict
+        // SUBSET of what the gate below enforces, so it never changed an
+        // answer, while its own denial audit drained the delivery outbox
+        // — putting the amplification lever this route was hardened
+        // against back in front of the hardening. A redundant gate is a
+        // second code path with its own side effects on the
+        // attacker-reachable branch.
+        //
+        // Rate-limited like every other credentialed surface, per
+        // credential AND per IP, and the throttle sits OUTSIDE the gate
+        // so refused attempts are bounded too.
+        $router->get('/bfc/console/vitals', ConsoleVitals::class)
+            ->middleware(['throttle:bfc-vitals', EnsureDashboardCredential::class]);
+
         // The offboard verb (PRD 1.15, SEC-V3-04): full account
         // containment behind its OWN verb-family ability — the widest
         // verb, so a stolen mint- or revoke-scoped credential cannot
@@ -423,6 +453,32 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // A single compound credential|IP bucket would defeat both: a new
         // IP would refresh a stolen credential's budget, and a new bearer
         // string would refresh an attacker IP's.
+        // The Console dashboard read (D16). Two independent bounds, the
+        // same shape and for the same reasons as the operator-write
+        // limiter below: a stolen dashboard credential is bounded across
+        // every IP it is replayed from, and one address buys no fresh
+        // budget by rotating bearer strings. No global ceiling —
+        // vitals is a read, and one bucket shared by every deployment's
+        // dashboard poll would let one busy app throttle the fleet.
+        //
+        // The per-IP bound is five times the per-credential one, and
+        // deliberately so: readers SHARE an IP bucket, and the vendor's
+        // whole control plane polls from one egress address, so a bound
+        // set at 2x would let two saturated readers 429 a third
+        // legitimate one. Five readers' worth of headroom costs nothing
+        // against credential guessing — the secrets are 256-bit, so the
+        // per-IP bucket was never the thing making them unguessable; it
+        // bounds noise, not search.
+        RateLimiter::for('bfc-vitals', function (Request $request): array {
+            $bearer = $request->bearerToken();
+            $credentialKey = $bearer === null || $bearer === '' ? 'anonymous' : hash('sha256', $bearer);
+
+            return [
+                Limit::perMinute(60)->by('bfc-vitals-cred|'.$credentialKey),
+                Limit::perMinute(300)->by('bfc-vitals-ip|'.($request->ip() ?? 'unknown')),
+            ];
+        });
+
         RateLimiter::for('bfc-operator-write', function (Request $request): array {
             $bearer = $request->bearerToken();
             $credentialKey = $bearer === null || $bearer === '' ? 'anonymous' : hash('sha256', $bearer);

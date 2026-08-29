@@ -34,6 +34,10 @@ final class SurfaceSelectionTest extends TestCase
     {
         $this->getJson('/bfc/meta')->assertOk();
 
+        // Mounted by default, and refusing rather than missing: a 401
+        // proves the route exists where a 404 would not.
+        $this->getJson('/bfc/console/vitals')->assertUnauthorized();
+
         $this->assertTrue(Schema::hasTable('credentials'));
         $this->assertArrayHasKey('bfc:credential:mint', Artisan::all());
         $this->assertTrue(Event::hasListeners(OwnershipReleasePending::class));
@@ -61,6 +65,10 @@ final class SurfaceSelectionTest extends TestCase
         // (Console PRD D12).
         $this->postJson('/bfc/console/re-key', ['key_id' => 'k1', 'public_key' => str_repeat('a', 64)])
             ->assertNotFound();
+        // …and the Console vitals read, likewise an ordinary member of
+        // the routes family and not a surface of its own (Console PRD
+        // D9/D16).
+        $this->getJson('/bfc/console/vitals')->assertNotFound();
 
         // …while the aliases stay registered, so an app with routes off
         // still gates its own routes (the MCP per-tool primitive included).

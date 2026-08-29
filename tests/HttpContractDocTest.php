@@ -192,9 +192,28 @@ final class HttpContractDocTest extends TestCase
             );
         }
 
-        foreach ([OperatorAbility::ADMIN, OperatorAbility::RESERVED_METADATA_READ] as $name) {
-            $this->assertStringContainsString('`'.$name.'`', $doc);
-        }
+        $this->assertStringContainsString('`'.OperatorAbility::ADMIN.'`', $doc);
+    }
+
+    /**
+     * The classification column is the durable privacy boundary the
+     * Console reads (Console PRD D15), so the vitals row is pinned
+     * mechanically rather than trusted: the route is in the table, and
+     * it is in it as `metadata`.
+     *
+     * This pins ONE row. Nothing here checks that every documented route
+     * has a classification row, nor that a row's stated classification
+     * matches what the endpoint actually returns — the second is what
+     * `ContractAssertions::assertBuiltForCloudMetadataEndpoint()` checks,
+     * against real responses, in MetadataShapeTest.
+     */
+    public function test_the_vitals_route_is_documented_as_metadata_classified(): void
+    {
+        $this->assertMatchesRegularExpression(
+            '/^\| `GET \/bfc\/console\/vitals` \| `metadata` \|/m',
+            $this->contractDoc(),
+            'docs/http-contract.md no longer classifies GET /bfc/console/vitals as metadata.',
+        );
     }
 
     public function test_every_registered_package_route_is_documented(): void
