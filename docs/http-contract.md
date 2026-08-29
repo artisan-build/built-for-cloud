@@ -157,8 +157,11 @@ Additive unless marked otherwise:
   break-glass whatever ability a route names. `GET /bfc/meta` `capabilities` gains
   `console-vitals`. The `sensitive_read` lifecycle event now also covers vitals reads. Apps
   may declare an optional headline stat through the new
-  `ArtisanBuild\BuiltForCloud\Contracts\DeclaresHeadlineStat` declaration interface; the
-  package ships no label vocabulary of its own.
+  `ArtisanBuild\BuiltForCloud\Contracts\DeclaresHeadlineStat` declaration interface, whose
+  label vocabulary is a backed enum in the app's own repo; the package ships none of its own.
+  The route additionally requires an OPERATOR subject and an ability set exactly equal to
+  `{metadata:read}` — D16's "unable to touch content-classified or mutating surfaces" clause,
+  enforced rather than described.
 
 **api_version 1** — the 0.3.x baseline: `/bfc/meta`, `/bfc/ownership/*`, the pre-0.4 credential
 API listing shape.
@@ -342,11 +345,32 @@ read-audited credential the Console dashboard uses. **A `metadata` classificatio
 itself an access grant:** the other rows in this table keep the gates they already had, and
 `metadata:read` opens exactly the routes that name it.
 
-The classification is verified against real responses rather than asserted here:
-`ArtisanBuild\BuiltForCloud\Testing\ContractAssertions::assertBuiltForCloudMetadataShape()`
-fails on any string in a payload that is not an enum member, a bounded identifier, a semver or
-a timestamp, and the package's own suite points it at the `metadata` rows above. Its docblock
-states what it does not catch.
+**The column describes the 2xx body and nothing else.** Error responses are outside it, as
+stated above: every surface shares prose `message` fields, and a `metadata` classification
+makes no claim about a `401`, `403`, `422` or `429` envelope. It is also not an access grant —
+see the paragraph above.
+
+The classification is verified against real 2xx responses rather than asserted here.
+`ArtisanBuild\BuiltForCloud\Testing\ContractAssertions::assertBuiltForCloudMetadataSchema()`
+is **fail-closed**: it takes a schema naming exactly the keys, types, enum members and numeric
+ranges an endpoint may return, and refuses anything outside it — an unknown key, a missing one,
+a wrong root structure, a near-miss enum member, an out-of-range or non-finite number.
+`assertBuiltForCloudMetadataEndpoint()` looks the schema up by route and **refuses to certify a
+route it has no schema for**, so "I do not recognise this shape" is a failure rather than a
+pass. The package ships a schema for every row in the table above and its own suite drives all
+of them.
+
+A second, lexical check (`assertBuiltForCloudMetadataShape()`) runs alongside it and fails on
+any string that is not a lowercase bounded identifier, a semver or an ISO-8601 instant. It is a
+supplement, not the instrument: on its own it passes a free-text field whose sampled value
+happens to look identifier-shaped, which is exactly what the schema closes. Both docblocks
+state their limits.
+
+Where a field is bounded in a charset of its own, the SCHEMA is the authority and the lexical
+check stands aside for that field. One field is like this today: a console `kid` is
+`[A-Za-z0-9._-]{1,64}` — bounded, and not lowercase — so `POST /bfc/console/re-key` pins it
+with an explicit pattern. Widening the shared lowercase vocabulary to admit it would have let a
+capitalised word through on every endpoint.
 
 Vendor-side (Console) reads will want the version-discovery endpoint, so a future BEHAVIORAL
 revision may constrain `product` to a bounded shape, letting `GET /bfc/meta` honestly become
@@ -1585,19 +1609,36 @@ route. Nothing about this transport's shape should be copied to a verb that hand
 
 ### GET /bfc/console/vitals
 
-*Operator credential carrying `metadata:read`* — rate-limited (`bfc-vitals`), classified
-`metadata`, audited as a `sensitive_read`. The ops-vitals read behind the vendor's fleet
-dashboard (Console PRD D9).
+*Operator credential whose abilities are **exactly** `metadata:read`* — rate-limited
+(`bfc-vitals`), classified `metadata`, audited as a `sensitive_read`. The ops-vitals read
+behind the vendor's fleet dashboard (Console PRD D9).
 
-**The credential is the point of this route, so read the gate carefully.** `metadata:read` is
-the ONLY thing that opens it. Not an admin `api_tokens` token — the `bfc` guard authenticates
-the unified credential store and has no path to the legacy store, so a legacy admin secret is
-a `401` here. Not `FALLBACK_TOKEN`, for the same structural reason. And **not
-`credential:admin`**: unlike every operator verb route, this one is not mounted behind the
-operator gate, because that gate grants a break-glass credential whatever ability a route
-names. This route uses the exact-match ability gate, where no ability implies another. Console
-PRD D16 forbids "using the ownership/admin credential for any dashboard read path", and a
-route mounted behind the operator gate could not have enforced it.
+**The credential is the point of this route, so read the gate carefully.** Console PRD D16
+describes the dashboard credential as least-privilege, read-audited and **unable to touch
+content-classified or mutating surfaces**, and forbids using the ownership/admin credential for
+any dashboard read path. That is EXCLUSIVITY, not membership, and this route enforces it as
+three separate conditions:
+
+1. **The credential holds `metadata:read`,** checked by the exact-match ability gate. Unlike
+   every operator verb route, this one is not mounted behind the operator gate, because that
+   gate grants a break-glass credential whatever ability a route names — a route mounted there
+   could not have enforced D16 at all.
+2. **Its abilities are exactly `{metadata:read}` and nothing more.** A credential holding both
+   `metadata:read` and `credential:admin` would read the dashboard AND mutate every operator
+   surface; it is refused here. Inability has to be a property of the credential, because the
+   credential is what the vendor holds and what an attacker steals.
+3. **Its subject is an `operator`.** The ability vocabulary is an operator vocabulary; an
+   application- or user-subject credential carrying the ability is refused.
+
+Nothing else opens it. Not an admin `api_tokens` token — the `bfc` guard authenticates the
+unified credential store and has no path to the legacy store, so a legacy admin secret is a
+`401` here. Not `FALLBACK_TOKEN`, for the same structural reason.
+
+**What this does NOT do:** it does not stop such a credential being MINTED. A combined
+credential can still be issued and still operates every other surface it names; what it cannot
+do is read the dashboard. Constraining issuance is a declared mint-ceiling concern
+(`ConstrainsMintedCredentials`) with its own consequences for credentials already in the
+field.
 
 **Request** — no body. One optional header:
 
@@ -1651,17 +1692,38 @@ route mounted behind the operator gate could not have enforced it.
   driver exposes the pending/reserved split and an enqueue time to the package — every other
   driver reports `pending` from the connection's own size and nulls the rest, and health stays
   `"ok"`, since nothing failed), or the read FAILED, which degrades.
+
+  **These numbers are a cached snapshot**, refreshed at most once per
+  `built-for-cloud.vitals.queue_cache_seconds` (15 by default; 0 disables caching). A value
+  can therefore be up to that many seconds stale, which is the trade for not putting a queue
+  query on every poll of a route the vendor polls continuously. The snapshot carries its own
+  health, so a poll served from cache after a failed read still reports `degraded`. Caching
+  bounds how OFTEN the read happens, not how long one read may take: there is no portable
+  wall-clock deadline across the queue drivers Laravel supports, so a genuinely hung dependency
+  hangs one request per window rather than every request.
 - `headline` — the app's ONE headline stat, or `null`. `value` is a number, `unit` is
-  `count` | `seconds` | `bytes` | `percent` | `null`, and **`label` is a code from a static
-  vocabulary the APP declares**, in its own repo, at conversion time (D15) — by implementing
-  `ArtisanBuild\BuiltForCloud\Contracts\DeclaresHeadlineStat`. The package ships no
-  vocabulary: an app that declares none reports `"headline": null` rather than a fabricated
-  stat. A label outside the app's declared vocabulary, a vocabulary whose members are not
-  bounded identifiers, and a non-finite value are each **refused** — the field drops to `null`
-  and `health` degrades. What the package enforces is that consequence, not the vocabulary's
-  provenance: `headlineLabels()` is a PHP method and could compute anything, so "static and
-  code-reviewed" is held by the app's review of that method's body, and the package's guarantee
-  is only that nothing outside what it returns reaches the wire.
+  `count` | `seconds` | `bytes` | `percent` | `null`, and **`label` is a case from a BACKED ENUM
+  the app declares** in its own repo (D15) — by implementing
+  `ArtisanBuild\BuiltForCloud\Contracts\DeclaresHeadlineStat`, whose vocabulary hook returns
+  the class-string of an enum implementing
+  `ArtisanBuild\BuiltForCloud\Vitals\HeadlineLabel`.
+
+  The enum is the enforcement, not a convention. D15 requires a vocabulary "defined in the
+  app's repo at conversion time, never runtime data", and a list of strings cannot express
+  that — an app could have returned `Tag::pluck('slug')->all()`, and any user-authored slug
+  that happened to look identifier-shaped would have been a legal member of its own vocabulary
+  and would have reached the vendor. An enum's case set is fixed at compile time and reviewable
+  in one diff, so runtime data cannot enter this field at all.
+
+  The package ships no vocabulary: an app that declares none reports `"headline": null` rather
+  than a fabricated stat. Each of the following **refuses** the headline — the field drops to
+  `null` and `health` degrades: a case from an enum this app did not declare, a vocabulary with
+  more than 64 cases or with a case whose backing value is not a bounded identifier, a
+  non-finite value, and a stat reported alongside no declared vocabulary at all (a
+  contradiction in the app's own declaration).
+
+  What remains the app's own code review, and nothing a package can decide: whether the
+  declared vocabulary is a *good* one.
 
 **This route never reports a dependency failure as an error** (D9). An unreachable queue, an
 unparseable declared deploy time, a refused `app_version`, a refused headline and a stated
@@ -1670,18 +1732,42 @@ contract-version disagreement all produce a `200` carrying every field that coul
 dashboard nothing about the app it most needs to describe.
 
 **The one thing that can fail this route is the audit append**, and that is deliberate.
-`metadata:read` is read-audited (D16): every success writes one `sensitive_read` lifecycle
-event, with the acting credential as an `operator_integration` actor, ids only — inside a
-transaction, before the payload is assembled, and NOT best-effort. A vendor read this
-deployment cannot record is one it does not serve. D9's never-error rule governs what vitals
-reports about the app's dependencies; it does not govern whether the read itself is recorded.
+`metadata:read` is read-audited (D16), so a vendor read this deployment cannot record is one it
+**must not serve**: every success writes one `sensitive_read` lifecycle event inside a
+transaction, before the payload is assembled, and not best-effort. When that append fails the
+route answers `500` and serves nothing.
+
+No D9 exception is claimed for this, because D9 grants none. D9 says an unreachable or stale
+app renders as an honest degraded row rather than breaking the dashboard — and an app answering
+`500` **is** unreachable from the dashboard's side, so it renders as exactly that row. D9 is
+working there, not being suspended. What D9 governs on this route is the payload's contents,
+covered in the paragraph above.
+
+The event carries the acting credential as an `operator_integration` actor, the credential id,
+and a fixed note naming the route. It carries **no request or response body, no presented
+secret and no credential material**. It is not "ids only": like every row in this instance-side
+stream it also records this instance's configured product name, cloud application name and
+environment, which are operator-authored strings. That stream is internal to the deployment and
+is not a `metadata`-classified vendor surface.
+
+The append deliberately does **not** drain the delivery outbox. A drain walks every claimable
+row and may send mail; hanging one off a route polled up to sixty times a minute per credential
+would make a dashboard poll a database and mail amplifier. The outbox row is still written in
+the same transaction and is delivered by the next drain (`bfc:outbox:drain`, or the next
+mutating request).
 
 - **401** — no credential, an unknown one, an expired or revoked one, an offboarded principal's,
   a legacy `api_tokens` secret, or `FALLBACK_TOKEN`. All indistinguishable from one another;
   the audit stream keeps what distinction there is.
 - **403** — a live unified-store credential that does not hold `metadata:read`, `credential:admin`
   included. Audited as `denied_action`.
-- **429** — beyond the `bfc-vitals` limits (per presented credential, and per IP).
+- **429** — beyond the `bfc-vitals` limits: 60/minute per presented credential and
+  300/minute per IP, applied **before** the gates, so refused attempts are bounded too.
+  Note that co-located readers SHARE the IP bucket — two vendor credentials polling from one
+  egress address draw on the same 300 — which is why that bound is five times the per-credential
+  one rather than equal to it. The per-credential bucket is the primary bound; the IP bucket
+  bounds noise from one address, and against 256-bit secrets it was never what made them
+  unguessable.
 
 ---
 
