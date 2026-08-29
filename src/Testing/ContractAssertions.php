@@ -18,6 +18,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Testing\TestResponse;
 use PHPUnit\Framework\Assert;
+use PHPUnit\Framework\AssertionFailedError;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
 /**
@@ -779,6 +780,33 @@ trait ContractAssertions
      *    check cannot do — `dgraded` fails here and passes the walker;
      *  - numeric specs pin range and reject non-finite floats.
      *
+     * **The string types are a CLOSED, package-owned set** — `token`,
+     * `semver`, `timestamp`, `console_key_id`, each defined in
+     * {@see MetadataShape}, plus `enum` for literal members. A schema
+     * cannot supply a regex of its own, and that removal is the point
+     * rather than a simplification: an earlier revision accepted
+     * `'type' => 'pattern'` with an arbitrary expression, so a schema
+     * author could write `'/^.*$/sD'` and certify
+     * `{"note": "arbitrary free text"}`. That put the definition of
+     * "bounded" in the hands of the party being checked, which is the
+     * one thing a conformance instrument may not do.
+     *
+     * The cost is real and is the right trade: an app whose metadata
+     * endpoint carries a bounded shape this package does not name cannot
+     * certify that field. Its options are to use
+     * {@see self::assertBuiltForCloudMetadataShape} as a supplemental
+     * lexical check, or to add the named type here — a change reviewed
+     * once, in this package, rather than a regex reviewed never, in
+     * every consumer. See the report for why flexibility loses to
+     * fail-closed on this instrument specifically.
+     *
+     * `one_of` covers an endpoint with more than one documented 2xx
+     * shape. Each alternative is an exact schema, so fail-closed
+     * survives: the payload must match one of them completely.
+     *
+     * Numeric bounds are READ from the producer's own constants, never
+     * restated — {@see self::metadataVitalsSchema} says why.
+     *
      * The lexical walker ({@see self::assertBuiltForCloudMetadataShape})
      * runs afterwards as a supplemental check. It is not the instrument;
      * it is a second opinion about the strings a schema already admitted.
@@ -796,14 +824,12 @@ trait ContractAssertions
 
         $this->assertBuiltForCloudMetadataAgainst($payload, $schema, $context, '$', $certified);
 
-        // The walker runs on everything the schema did not pin with an
-        // explicit `pattern`. Those fields are bounded in a charset of
-        // their own — a console `kid` is `[A-Za-z0-9._-]{1,64}`, which is
-        // bounded and NOT lowercase — and the walker's lowercase
-        // vocabulary would reject them. The schema is the authority
-        // there; loosening the walker to accommodate them would let
-        // `Jane` back in everywhere, which is the fail-open this
-        // instrument exists to close.
+        // The walker runs on everything except the paths a named type
+        // bounded in a NON-lowercase charset already certified — today
+        // just `console_key_id`. The schema is the authority there;
+        // loosening the walker to accommodate it would let `Jane` back
+        // in everywhere, which is the fail-open this instrument exists
+        // to close.
         $this->assertBuiltForCloudMetadataValue($payload, $context, '$', $certified);
     }
 
@@ -900,33 +926,46 @@ trait ContractAssertions
                 'type' => 'object',
                 'fields' => ['ok' => ['type' => 'bool']],
             ],
-            // The DIRECT offboard path. The integration path answers
-            // `accepted` instead of `offboarded`; it is a different 2xx
-            // shape and would want its own row.
+            // BOTH offboard shapes. The direct path answers
+            // `offboarded`, the integration path the uniform `accepted`,
+            // and each alternative is an exact schema of its own — the
+            // registry used to admit only the first while a comment
+            // acknowledged the second, which is a registry disagreeing
+            // with the route it certifies.
             'POST /bfc/subjects/offboard' => [
-                'type' => 'object',
-                'fields' => [
-                    'offboarded' => ['type' => 'bool'],
-                    'fully_contained' => ['type' => 'bool'],
+                'type' => 'one_of',
+                'shapes' => [
+                    [
+                        'type' => 'object',
+                        'fields' => [
+                            'offboarded' => ['type' => 'enum', 'values' => [true]],
+                            'fully_contained' => ['type' => 'bool'],
+                        ],
+                    ],
+                    [
+                        'type' => 'object',
+                        'fields' => [
+                            'accepted' => ['type' => 'enum', 'values' => [true]],
+                            'fully_contained' => ['type' => 'bool'],
+                        ],
+                    ],
                 ],
             ],
-            // The console `kid` charset is `[A-Za-z0-9._-]{1,64}` — bounded,
-            // and deliberately NOT the lowercase token vocabulary, so it
-            // is pinned with an explicit pattern rather than loosening
-            // the shared one.
+            // The console `kid` charset is bounded and deliberately NOT
+            // the lowercase token vocabulary, so it has its own NAMED
+            // type, whose pattern is the keyring's own constant.
             'POST /bfc/console/re-key' => [
                 'type' => 'object',
                 'fields' => [
                     'console_key' => [
                         'type' => 'object',
                         'fields' => [
-                            'key_id' => ['type' => 'pattern', 'pattern' => '/^[A-Za-z0-9._-]{1,64}$/D'],
+                            'key_id' => ['type' => 'console_key_id'],
                             'status' => ['type' => 'enum', 'values' => ['active']],
                             'activated_at' => ['type' => 'timestamp', 'nullable' => true],
                             'active_key_ids' => [
                                 'type' => 'list',
-                                'max_items' => 64,
-                                'of' => ['type' => 'pattern', 'pattern' => '/^[A-Za-z0-9._-]{1,64}$/D'],
+                                'of' => ['type' => 'console_key_id'],
                             ],
                         ],
                     ],
@@ -935,14 +974,16 @@ trait ContractAssertions
             'DELETE /bfc/credentials/{id}' => ['type' => 'empty'],
             'DELETE /bfc/me/credentials/{id}' => ['type' => 'empty'],
             'DELETE /api/credentials/id/{id}' => ['type' => 'empty'],
+            // No cardinality bound. How many rows share a name is not a
+            // classification concern, and the producer imposes no cap —
+            // the schema's old 1,000 was a bound written where nothing
+            // enforced it, which is the failure mode this instrument
+            // keeps being reworked for. Each ITEM being bounded is the
+            // claim, and it is the one made.
             'DELETE /api/credentials/{name}' => [
                 'type' => 'object',
                 'fields' => [
-                    'revoked_ids' => [
-                        'type' => 'list',
-                        'max_items' => 1000,
-                        'of' => ['type' => 'token'],
-                    ],
+                    'revoked_ids' => ['type' => 'list', 'of' => ['type' => 'token']],
                 ],
             ],
         ];
@@ -957,9 +998,14 @@ trait ContractAssertions
      */
     public function metadataVitalsSchema(): array
     {
-        // A decade in seconds, signed: `deploy_age_seconds` is
-        // deliberately signed so clock skew shows rather than clamping.
-        $decade = 315360000;
+        // READ from the producer, never restated. An earlier revision
+        // wrote these numbers here as well as in CollectVitals and they
+        // disagreed within one round — the schema capped ages at ten
+        // years the producer computed without limit, and rejected
+        // headline magnitudes it was happy to emit. A bound written
+        // twice is a bound that will disagree with itself.
+        $age = VitalsPayload::MAX_AGE_SECONDS;
+        $magnitude = VitalsPayload::MAX_HEADLINE_MAGNITUDE;
 
         return [
             'type' => 'object',
@@ -970,21 +1016,21 @@ trait ContractAssertions
                 'app_version' => ['type' => 'semver', 'nullable' => true],
                 'health' => ['type' => 'enum', 'values' => ['ok', 'degraded', 'down']],
                 'deployed_at' => ['type' => 'timestamp', 'nullable' => true],
-                'deploy_age_seconds' => ['type' => 'int', 'nullable' => true, 'min' => -$decade, 'max' => $decade],
+                'deploy_age_seconds' => ['type' => 'int', 'nullable' => true, 'min' => -$age, 'max' => $age],
                 'queue' => [
                     'type' => 'object',
                     'fields' => [
                         'pending' => ['type' => 'int', 'nullable' => true, 'min' => 0, 'max' => PHP_INT_MAX],
                         'reserved' => ['type' => 'int', 'nullable' => true, 'min' => 0, 'max' => PHP_INT_MAX],
                         'failed' => ['type' => 'int', 'nullable' => true, 'min' => 0, 'max' => PHP_INT_MAX],
-                        'oldest_pending_age_seconds' => ['type' => 'int', 'nullable' => true, 'min' => -$decade, 'max' => $decade],
+                        'oldest_pending_age_seconds' => ['type' => 'int', 'nullable' => true, 'min' => -$age, 'max' => $age],
                     ],
                 ],
                 'headline' => [
                     'type' => 'object',
                     'nullable' => true,
                     'fields' => [
-                        'value' => ['type' => 'number', 'min' => -1.0e15, 'max' => 1.0e15],
+                        'value' => ['type' => 'number', 'min' => -$magnitude, 'max' => $magnitude],
                         'label' => ['type' => 'token'],
                         'unit' => ['type' => 'enum', 'nullable' => true, 'values' => ['count', 'seconds', 'bytes', 'percent']],
                     ],
@@ -1052,28 +1098,31 @@ trait ContractAssertions
             case 'token':
             case 'semver':
             case 'timestamp':
+            case 'console_key_id':
                 Assert::assertIsString($value, $context.': '.$path.' is not a string.');
                 Assert::assertTrue(
                     match ($type) {
                         'token' => MetadataShape::isToken($value),
                         'semver' => MetadataShape::isSemver($value),
-                        default => MetadataShape::isTimestamp($value),
+                        'timestamp' => MetadataShape::isTimestamp($value),
+                        default => MetadataShape::isConsoleKeyId($value),
                     },
                     $context.': '.$path.' is not a bounded '.$type.'. Got: '.var_export($value, true),
                 );
 
+                // `console_key_id` is bounded in the keyring's own
+                // charset, which is not lowercase, so the supplemental
+                // lexical walker would reject what this branch just
+                // accepted. It is the only named type that needs the
+                // walker to stand aside.
+                if ($type === 'console_key_id') {
+                    $certified[] = $path;
+                }
+
                 return;
 
-            case 'pattern':
-                Assert::assertIsString($value, $context.': '.$path.' is not a string.');
-                $pattern = $spec['pattern'] ?? null;
-                Assert::assertIsString($pattern, $context.': the pattern schema at '.$path.' names no pattern.');
-                Assert::assertSame(
-                    1,
-                    preg_match($pattern, $value),
-                    $context.': '.$path.' does not match the bounded pattern this schema requires. Got: '.var_export($value, true),
-                );
-                $certified[] = $path;
+            case 'one_of':
+                $this->assertBuiltForCloudMetadataOneOf($value, $spec, $context, $path, $certified);
 
                 return;
 
@@ -1090,6 +1139,53 @@ trait ContractAssertions
             default:
                 Assert::fail($context.': the schema at '.$path.' names the unknown type ['.$type.'].');
         }
+    }
+
+    /**
+     * An endpoint with more than one exact 2xx shape (Console PRD D15 is
+     * about the SHAPE, and some verbs honestly have two of them —
+     * `POST /bfc/subjects/offboard` answers `offboarded` on the direct
+     * path and `accepted` on the integration path).
+     *
+     * Fail-closed is preserved because each alternative is itself an
+     * exact schema: the payload must match ONE of them completely,
+     * unknown keys and all. This is not "any of these keys may appear";
+     * it is "this is one of these documented shapes". Only the matching
+     * alternative's certified paths are adopted.
+     *
+     * @param  array<string, mixed>  $spec
+     * @param  list<string>  $certified
+     */
+    private function assertBuiltForCloudMetadataOneOf(mixed $value, array $spec, string $context, string $path, array &$certified): void
+    {
+        /** @var list<array<string, mixed>>|null $shapes */
+        $shapes = $spec['shapes'] ?? null;
+
+        Assert::assertIsArray($shapes, $context.': the one_of schema at '.$path.' lists no shapes.');
+        Assert::assertNotEmpty($shapes, $context.': the one_of schema at '.$path.' lists no shapes.');
+
+        $failures = [];
+
+        foreach ($shapes as $index => $shape) {
+            $branch = $certified;
+
+            try {
+                $this->assertBuiltForCloudMetadataAgainst($value, $shape, $context, $path, $branch);
+            } catch (AssertionFailedError $failure) {
+                $failures[] = '  ['.$index.'] '.$failure->getMessage();
+
+                continue;
+            }
+
+            $certified = $branch;
+
+            return;
+        }
+
+        Assert::fail(
+            $context.': '.$path.' matches none of the documented shapes for this endpoint:'.PHP_EOL
+            .implode(PHP_EOL, $failures),
+        );
     }
 
     /**
@@ -1145,16 +1241,6 @@ trait ContractAssertions
             array_keys($value),
             $context.': '.$path.' is a keyed object where this schema requires a sequential list.',
         );
-
-        $maxItems = $spec['max_items'] ?? null;
-
-        if (is_int($maxItems)) {
-            Assert::assertLessThanOrEqual(
-                $maxItems,
-                count($value),
-                $context.': '.$path.' carries more items than this schema permits.',
-            );
-        }
 
         /** @var array<string, mixed>|null $of */
         $of = $spec['of'] ?? null;
