@@ -9,7 +9,6 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
-use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Vitals\CollectVitals;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -24,12 +23,18 @@ use Illuminate\Support\Facades\DB;
  * could never have served: it grants a `credential:admin` credential
  * whatever ability a route names, unconditionally, and D16 forbids
  * "using the ownership/admin credential for any dashboard read path".
- * That gate reads the whole of D16 — authentication through the `bfc`
- * guard (which resolves the unified store only, so a legacy admin
- * `api_tokens` secret and a `FALLBACK_TOKEN` never authenticate here at
- * all), the app declaration's authorization hook, an operator subject,
- * and an abilities list EXACTLY equal to
- * {@see OperatorAbility::MetadataRead} and nothing else.
+ * That gate reads the whole of D16, and the enumeration lives THERE
+ * rather than being paraphrased here — {@see EnsureDashboardCredential}
+ * states all of it, the alias refusal and the guard-exists check
+ * included, and a summary that drifts from it is worth less than a
+ * pointer that cannot.
+ *
+ * One thing worth repeating, because the obvious version of it is beside
+ * the point: a legacy `api_tokens` secret and a `FALLBACK_TOKEN` cannot
+ * authenticate here — the `bfc` guard has no path to either store — and
+ * that is NOT what protects this route. The danger runs the other way,
+ * and the gate refuses a bearer whose bytes are ALSO one of those
+ * things, before anything resolves.
  *
  * There is deliberately no `bfc.ability` layer in front of it. One
  * revision had that composition; it enforced a strict subset, so it
@@ -40,7 +45,9 @@ use Illuminate\Support\Facades\DB;
  *
  * The route is consequently reachable by one thing: a live
  * operator-subject unified-store credential whose abilities list is
- * exactly `metadata:read`.
+ * exactly `metadata:read`, whose bytes are not also the fallback token
+ * or a legacy row, and which the app's own declaration authorizes —
+ * presented to an app that has registered the `bfc` guard.
  *
  * THE AUDIT IS TRANSACTIONAL, NOT BEST-EFFORT, and it runs BEFORE the
  * payload is assembled. **D16 refuses an unaudited read**: the ability

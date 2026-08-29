@@ -151,10 +151,11 @@ Additive unless marked otherwise:
 - **The Console ops-vitals read ships (Console PRD D9/D15/D16).** All additive. New route
   [`GET /bfc/console/vitals`](#get-bfcconsolevitals), classified `metadata`, behind the
   `metadata:read` ability — which moves from RESERVED to ENFORCED in this release, and which
-  **`credential:admin` deliberately does not satisfy**: the route is mounted behind the
-  exact-match ability gate rather than the operator gate, because D16 forbids the
-  ownership/admin credential on any dashboard read path and the operator gate grants
-  break-glass whatever ability a route names. `GET /bfc/meta` `capabilities` gains
+  **`credential:admin` deliberately does not satisfy**: the route is mounted behind its own gate
+  rather than the operator gate, because D16 forbids the ownership/admin credential on any
+  dashboard read path and the operator gate grants break-glass whatever ability a route names.
+  That gate is the whole of the requirement — see the route's own section for the four
+  conditions it enforces. `GET /bfc/meta` `capabilities` gains
   `console-vitals`. The `sensitive_read` lifecycle event now also covers vitals reads. Apps
   may declare an optional headline stat through the new
   `ArtisanBuild\BuiltForCloud\Contracts\DeclaresHeadlineStat` declaration interface, whose

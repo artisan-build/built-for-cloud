@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 
 /**
  * The per-verb-family operator ability vocabulary (PRD 1.10 + GATE-3.7,
@@ -124,9 +125,12 @@ enum OperatorAbility: string
      * {@see EnsureCredentialAdmin} does not consult that method: it
      * grants `credential:admin` whatever ability a route names. So the
      * route does not use that gate. It is mounted behind
-     * {@see EnsureCredentialAbility}, which matches EXACTLY, and where
-     * `credential:admin` therefore reaches nothing it is not literally
-     * holding.
+     * {@see EnsureDashboardCredential} — ALONE, no ability middleware in
+     * front of it — which admits only an operator-subject credential
+     * whose abilities list is exactly `{metadata:read}`. A credential
+     * holding `credential:admin` fails that whether or not it also holds
+     * this name, which is what D16's "unable to touch
+     * content-classified or mutating surfaces" actually asks for.
      */
     case MetadataRead = 'metadata:read';
 
@@ -166,14 +170,26 @@ enum OperatorAbility: string
      * deliberately left off would still be satisfied by break-glass, and
      * this list would quietly become a description of the past.
      *
-     * What IS enforced: the MCP abilities' absence, and
-     * {@see self::MetadataRead}'s, though by a different mechanism —
-     * {@see EnsureCredentialAbility} checks exact-match, so no operator
-     * ability satisfies a gate mounted with it, and those three names
-     * are reached only by a credential literally holding them. Their
-     * absence from this list is therefore a real bound rather than a
-     * description, because of where their routes are mounted — not
-     * because this list is consulted anywhere.
+     * What IS enforced, by two different mechanisms neither of which is
+     * this list:
+     *
+     * The MCP pair's absence — {@see EnsureCredentialAbility} checks
+     * exact-match, so no operator ability satisfies a gate mounted with
+     * it, and `mcp:read` / `mcp:admin` are reached only by a credential
+     * literally holding them.
+     *
+     * {@see self::MetadataRead}'s absence — but NOT by that mechanism,
+     * and the distinction matters because the wrong reason would go
+     * stale the moment the route moved. Its route is mounted behind
+     * {@see EnsureDashboardCredential} alone, which requires an operator
+     * subject and an abilities list EXACTLY equal to `{metadata:read}`.
+     * So a break-glass credential is refused there twice over: it does
+     * not hold the name, and holding it as well would still fail the
+     * exact-set check.
+     *
+     * All three absences are therefore real bounds rather than
+     * descriptions — because of what their routes' own gates require,
+     * not because anything consults this list.
      *
      * The contract doc's admin-equivalent sentence is pinned to this
      * method by `HttpContractDocTest`, so the two cannot disagree; that

@@ -110,12 +110,20 @@ use Throwable;
  * and refusing the combination at issue time is a separate decision with
  * its own upgrade consequences for credentials already in the field.
  *
- * EVERY denial here is audited as a `denied_action` with the acting
- * credential where there is one, best-effort — the deny must stand even
- * while the audit store is down — and with `drainAfterCommit: false`,
- * because this route is polled and a drain walks every claimable row and
- * may send mail. The denial branch is the one an attacker can reach at
- * will, so it is the branch that most needed it.
+ * EVERY denial THAT HAS AN ACTING CREDENTIAL is audited as a
+ * `denied_action`, best-effort — the deny must stand even while the
+ * audit store is down — and with `drainAfterCommit: false`, because this
+ * route is polled and a drain walks every claimable row and may send
+ * mail. The denial branch is the one an attacker can reach at will, so
+ * it is the branch that most needed that.
+ *
+ * The other four branches — an aliased bearer, no `bfc` guard, a guest,
+ * a credential the guard resolved to null — write NOTHING, deliberately.
+ * Each of them refuses before, or without, identifying a principal, so
+ * there is no actor to attribute a row to; and this route is reachable
+ * without a credential at all, so auditing those would hand a stranger a
+ * database-write amplifier on the one branch they can reach for free.
+ * The contract's 401 bullet says the same thing.
  */
 final class EnsureDashboardCredential
 {

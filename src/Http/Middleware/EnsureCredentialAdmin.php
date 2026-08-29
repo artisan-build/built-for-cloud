@@ -68,9 +68,10 @@ final class EnsureCredentialAdmin
      *
      * `metadata:read` ({@see OperatorAbility::MetadataRead}) is now
      * enforced, and NOT here: the Console's dashboard read is mounted
-     * behind {@see EnsureCredentialAbility} precisely because this gate
-     * would grant it to a break-glass credential, which Console PRD D16
-     * forbids.
+     * behind {@see EnsureDashboardCredential} — its own gate, and the
+     * only middleware on that route — precisely because THIS gate would
+     * grant the ability to a break-glass credential, which Console PRD
+     * D16 forbids.
      */
     public const string ABILITY = 'credential:admin';
 
