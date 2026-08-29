@@ -133,11 +133,23 @@ final class ConsoleKeyring
 
     public function find(string $keyId): ?ConsoleKey
     {
-        if (preg_match(self::KEY_ID_PATTERN, $keyId) !== 1) {
+        if (! self::isValidKeyId($keyId)) {
             return null;
         }
 
         return ConsoleKey::query()->where('key_id', $keyId)->first();
+    }
+
+    /**
+     * Whether a string is a well-formed `kid`. Exposed so the delivery
+     * surfaces can refuse a malformed id BEFORE opening a transaction
+     * (and before echoing it into an audit note) against the same
+     * pattern this ring enforces — one regex, never a second copy that
+     * could drift from it.
+     */
+    public static function isValidKeyId(string $keyId): bool
+    {
+        return preg_match(self::KEY_ID_PATTERN, $keyId) === 1;
     }
 
     /**
@@ -292,7 +304,7 @@ final class ConsoleKeyring
 
     private function assertValidKeyId(string $keyId): void
     {
-        if (preg_match(self::KEY_ID_PATTERN, $keyId) !== 1) {
+        if (! self::isValidKeyId($keyId)) {
             throw new InvalidArgumentException('A console key id must be 1-64 characters of [A-Za-z0-9._-].');
         }
     }
