@@ -15,16 +15,23 @@ use Illuminate\Http\Request;
  * D14's single acting principal: ONE value, read by the principal, the
  * chrome and the audit stream alike.
  *
- * IT MUTATES NOTHING. An earlier revision of this class repointed the
- * application's DEFAULT GUARD (`AuthManager::shouldUse()`, undone from a
- * container `terminating` callback) so that `Auth::user()` would agree
- * with it. That was the wrong answer to a real problem: once the
- * delegated actor is the process-global default, every code path
- * assuming default-guard semantics is pointed at it, and the restore is
- * an ordering hazard on every long-lived runtime. The framework already
- * has the right mechanism — `auth:bfc-console` ({@see Authenticate})
- * makes the console guard the guard OF THE ROUTE, for the request it
- * runs in — so this class only ever READS.
+ * THIS CLASS MUTATES NOTHING — and that is a claim about this class, not
+ * about the request. An earlier revision repointed the application's
+ * DEFAULT GUARD (`AuthManager::shouldUse()`, undone from a container
+ * `terminating` callback) so that `Auth::user()` would agree with it.
+ * That was the wrong answer to a real problem: once the delegated actor
+ * is the process-global default, every code path assuming default-guard
+ * semantics is pointed at it, and the restore is an ordering hazard on
+ * every long-lived runtime. The framework already has the mechanism —
+ * `auth:bfc-console` ({@see Authenticate}) makes the console guard the
+ * guard OF THE ROUTE for the request it runs in — so this class only
+ * ever READS.
+ *
+ * That middleware DOES write `config('auth.defaults.guard')`, exactly as
+ * `auth:web` does; what keeps the write from outliving the request is
+ * the runtime's config sandboxing, not anything here. {@see ConsoleGuard}
+ * carries the full statement and the runtime assumption it depends on,
+ * and `tests/ConsoleGuardScopingTest.php` asserts both halves.
  *
  * WHAT IT READS. The route's applicable guard is
  * `AuthManager::getDefaultDriver()`: on a console route that is

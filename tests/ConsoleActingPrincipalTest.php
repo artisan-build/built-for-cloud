@@ -289,9 +289,12 @@ it('resolves a subsequent non-console request normally after a delegated one', f
 
     // The framework's own `auth:bfc-console` set the default guard for
     // the request it ran in, exactly as `auth:api` would on any Laravel
-    // app; a real deployment gets a fresh process (or Octane's restored
-    // config) for the next one, so the next request is simulated by
-    // putting the app's own default back and clearing the cached guards.
+    // app. A real deployment gets a fresh process (PHP-FPM) or a fresh
+    // config clone (Octane) for the next request, so that boundary is
+    // simulated here. The MECHANISM is not simulated away in
+    // tests/ConsoleGuardScopingTest.php, which asserts both that the
+    // leak is real without a config sandbox and that the clone is what
+    // closes it.
     config(['auth.defaults.guard' => 'web']);
     Auth::forgetGuards();
 
@@ -308,7 +311,7 @@ it('resolves a subsequent non-console request normally after a delegated one', f
         ->assertJsonPath('request_user', $user->getKey())
         ->assertJsonPath('auth_user', $user->getKey())
         ->assertJsonPath('default_guard', 'web');
-})->note('The repoint on an auth:bfc-console route is Laravel\'s own Authenticate middleware calling shouldUse(), which writes auth.defaults.guard — so "auth.defaults.guard is unchanged after a console-guarded request" cannot hold for ANY design in which Auth::user() returns the delegated actor, because Auth::user() is by definition the default guard\'s user. What this package guarantees, and what the test above pins, is that it makes no such write itself.');
+})->note('AC28 as originally worded could not hold for ANY design in which Auth::user() returns the delegated actor: Auth::user() is by definition the default guard\'s user, and Laravel\'s own Authenticate middleware writes auth.defaults.guard via shouldUse(). Ed ruled 2026-08-29 to keep the stock middleware. What this package guarantees, and what the test above pins, is that it makes no such write itself; what keeps the framework\'s write from outliving the request is the runtime\'s config sandboxing, asserted in ConsoleGuardScopingTest.');
 
 // ─── AC24: nothing survives into the next request ───────────────────────────
 

@@ -115,8 +115,30 @@ this release it has two.
   makes the console guard the guard of that request, so `$request->user()`,
   `Auth::user()`, `Gate` and `ArtisanBuild\BuiltForCloud\Console\
   ActingPrincipalResolver` all end at the same guard and return the same
-  object. The package writes no process-global auth state: it never calls
-  `AuthManager::shouldUse()` and never sets `auth.defaults.guard`.
+  object.
+
+  This package writes no process-global auth state itself — it never
+  calls `AuthManager::shouldUse()` and never sets `auth.defaults.guard`
+  — but `auth:bfc-console` does, because that is what Laravel's own
+  `Authenticate` middleware does for `auth:web` and `auth:api` too:
+  `shouldUse()` → `setDefaultDriver()` → a write to
+  `config('auth.defaults.guard')`. The write is real and process-global
+  for the life of the config repository. It does not survive the request
+  on either supported runtime: **PHP-FPM** is process-per-request, and
+  **Octane** installs a per-request clone of the config repository
+  (`Laravel\Octane\Listeners\CreateConfigurationSandbox`, on every
+  `RequestReceived`). Octane's `FlushAuthenticationState` is NOT what
+  closes it — it only forgets resolved guards — so do not check that
+  listener and conclude otherwise.
+
+  **If you run this package on anything else**, the assumption to check
+  is precise: a runtime that reuses a container across requests without
+  sandboxing config will leave the default guard pointed at
+  `bfc-console` after the first delegated request, and later requests on
+  ordinary routes will resolve their principal through the delegated
+  guard. `tests/ConsoleGuardScopingTest.php` asserts both halves — that
+  the leak is real without a config sandbox, and that the clone is what
+  closes it.
 - **A delegated actor is never the other half of a mismatch.** The
   credential guard compares a credential's `user_id` — a stringified
   host-app user id — against the session principal. A delegated actor's

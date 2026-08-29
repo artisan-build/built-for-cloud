@@ -60,8 +60,32 @@ use Throwable;
  * THE ROUTE'S GUARD IS THE CONSOLE GUARD. Scoping is Laravel's own —
  * `auth:bfc-console` ({@see Authenticate}) makes this guard the one the
  * request resolves through, for that request. This package therefore
- * never calls `AuthManager::shouldUse()`, never registers a `terminating`
- * restore, and mutates no process-global auth state of its own.
+ * never calls `AuthManager::shouldUse()` and never registers a
+ * `terminating` restore.
+ *
+ * IT IS NOT TRUE THAT NOTHING GLOBAL IS MUTATED, and that claim is not
+ * made. `auth:bfc-console` calls `AuthManager::shouldUse()`, which calls
+ * `setDefaultDriver()`, which writes `config('auth.defaults.guard')` —
+ * exactly as `auth:web` and `auth:api` do in every Laravel application.
+ * The write is real and it is process-global for the life of the config
+ * repository. What makes it safe is the RUNTIME, not this class:
+ * PHP-FPM starts a fresh process per request, and Octane replaces the
+ * config repository with a per-request clone
+ * (`Laravel\Octane\Listeners\CreateConfigurationSandbox`, on every
+ * `RequestReceived`), so the write lands on a clone the next request
+ * never sees. Note that Octane's `FlushAuthenticationState` does NOT
+ * close it — it forgets guards and the `auth.driver` instance and never
+ * touches config — so the guarantee must not be re-derived from that
+ * listener.
+ *
+ * THE ASSUMPTION THIS DEPENDS ON: any runtime that reuses a container
+ * across requests WITHOUT sandboxing config leaves the default guard
+ * pointed here for every later request in that process, and a route that
+ * never mentioned the Console would resolve its principal through this
+ * guard. That is a property of the host runtime and cannot be detected
+ * from inside a guard. Both halves — that the leak is real without a
+ * sandbox, and that the clone is what closes it — are asserted in
+ * `tests/ConsoleGuardScopingTest.php`.
  *
  * WHY THE CAP LIVES IN THE GUARD AND NOT IN A MIDDLEWARE. A cap applied
  * only in middleware is a cap a route can omit: `auth('bfc-console')

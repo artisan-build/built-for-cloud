@@ -1925,8 +1925,27 @@ one.
   `Auth::id()`, `Gate` and every policy return the delegated actor, and the package's resolver
   returns the same object. On such a route, with a local `web` session simultaneously live,
   **the delegated guard wins — for the acting principal and for all UI/attribution branching —
-  never a union of the two.** The package writes no global auth state of its own: it never
-  calls `shouldUse()` and never sets `auth.defaults.guard`.
+  never a union of the two.**
+
+  **What `auth:bfc-console` does to global state, stated exactly.** It is Laravel's own
+  `Authenticate` middleware, and it calls `AuthManager::shouldUse()` → `setDefaultDriver()` →
+  a write to `config('auth.defaults.guard')` — precisely what `auth:web` and `auth:api` do in
+  every Laravel application. This package makes no such write itself (it never calls
+  `shouldUse()` and never sets that key), but the write happens, and it is process-global for
+  the life of the config repository. It does not leak between requests on either runtime this
+  package supports: **PHP-FPM** starts a fresh process per request, and **Octane** replaces the
+  config repository with a per-request clone via
+  `Laravel\Octane\Listeners\CreateConfigurationSandbox`, which runs on every
+  `RequestReceived`. Note explicitly that Octane's `FlushAuthenticationState` is **not** what
+  closes this — it forgets the resolved guards and the `auth.driver` instance and never touches
+  config — so do not re-derive the guarantee from that listener.
+
+  **The runtime assumption:** any runtime that reuses a container across requests **without
+  sandboxing the config repository** leaves the default guard pointed at `bfc-console` for
+  every later request in that process, and a request touching no Console route would resolve
+  its principal through the delegated guard. That is the condition under which this becomes a
+  real privilege leak; it is a property of the host runtime and cannot be prevented from inside
+  a guard.
   A **REFUSED** delegated session (capped, unreadable claims, contained actor) is TERMINAL on
   every route: the request resolves no principal at all and no package surface falls back to
   the local user, whose session the guard has invalidated anyway.
