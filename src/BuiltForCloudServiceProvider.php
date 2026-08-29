@@ -47,6 +47,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\PersonalCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
@@ -297,22 +298,32 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // `metadata`-classified surface at a fixed `/bfc/console/*`
         // path, an ordinary member of the routes family.
         //
-        // Its gate is `bfc.ability`, NOT the operator gate every verb
-        // route above uses, and that is D16 rather than taste: D16
-        // forbids the ownership/admin credential on any dashboard read
-        // path, and `bfc.credential.admin` grants `credential:admin`
-        // whatever ability a route names — so mounting this behind it
-        // would have left the prohibition unenforced. `bfc.ability`
-        // matches exactly and authenticates through the `bfc` guard,
-        // which never resolves a legacy `api_tokens` secret.
+        // Its gate is TWO layers, and neither is the operator gate every
+        // verb route above uses.
+        //
+        //  1. `bfc.ability:metadata:read` — exact match. D16 forbids the
+        //     ownership/admin credential on any dashboard read path, and
+        //     `bfc.credential.admin` grants `credential:admin` whatever
+        //     ability a route names, so mounting this behind it would
+        //     have left the prohibition unenforced. This gate implies
+        //     nothing and authenticates through the `bfc` guard, which
+        //     never resolves a legacy `api_tokens` secret.
+        //  2. EnsureDashboardCredential — operator subject, and an
+        //     ability set EXACTLY equal to `{metadata:read}`. Membership
+        //     is not what D16 asks for: a credential holding both
+        //     `metadata:read` and `credential:admin` passes layer 1 and
+        //     still mutates every operator surface, which is precisely
+        //     the "unable to touch content-classified or mutating
+        //     surfaces" clause failing.
         //
         // Rate-limited like every other credentialed surface, per
-        // credential AND per IP, and the throttle sits OUTSIDE the gate
-        // so refused attempts are bounded too.
+        // credential AND per IP, and the throttle sits OUTSIDE both
+        // gates so refused attempts are bounded too.
         $router->get('/bfc/console/vitals', ConsoleVitals::class)
             ->middleware([
                 'throttle:bfc-vitals',
                 'bfc.ability:'.OperatorAbility::MetadataRead->value,
+                EnsureDashboardCredential::class,
             ]);
 
         // The offboard verb (PRD 1.15, SEC-V3-04): full account
@@ -453,13 +464,22 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // budget by rotating bearer strings. No global ceiling —
         // vitals is a read, and one bucket shared by every deployment's
         // dashboard poll would let one busy app throttle the fleet.
+        //
+        // The per-IP bound is five times the per-credential one, and
+        // deliberately so: readers SHARE an IP bucket, and the vendor's
+        // whole control plane polls from one egress address, so a bound
+        // set at 2x would let two saturated readers 429 a third
+        // legitimate one. Five readers' worth of headroom costs nothing
+        // against credential guessing — the secrets are 256-bit, so the
+        // per-IP bucket was never the thing making them unguessable; it
+        // bounds noise, not search.
         RateLimiter::for('bfc-vitals', function (Request $request): array {
             $bearer = $request->bearerToken();
             $credentialKey = $bearer === null || $bearer === '' ? 'anonymous' : hash('sha256', $bearer);
 
             return [
                 Limit::perMinute(60)->by('bfc-vitals-cred|'.$credentialKey),
-                Limit::perMinute(120)->by('bfc-vitals-ip|'.($request->ip() ?? 'unknown')),
+                Limit::perMinute(300)->by('bfc-vitals-ip|'.($request->ip() ?? 'unknown')),
             ];
         });
 
