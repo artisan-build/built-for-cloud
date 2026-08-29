@@ -204,7 +204,7 @@ final class HttpContractDocTest extends TestCase
      * This pins ONE row. Nothing here checks that every documented route
      * has a classification row, nor that a row's stated classification
      * matches what the endpoint actually returns — the second is what
-     * `ContractAssertions::assertBuiltForCloudMetadataShape()` checks,
+     * `ContractAssertions::assertBuiltForCloudMetadataEndpoint()` checks,
      * against real responses, in MetadataShapeTest.
      */
     public function test_the_vitals_route_is_documented_as_metadata_classified(): void

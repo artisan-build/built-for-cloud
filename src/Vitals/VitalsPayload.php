@@ -22,11 +22,11 @@ use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
  * deliberately absent.
  *
  * That claim is checked rather than asserted in prose:
- * {@see ContractAssertions::assertBuiltForCloudMetadataSchema} is
- * pointed at this payload in the test suite with the shipped
- * {@see ContractAssertions::metadataVitalsSchema}, which is FAIL-CLOSED:
- * it requires this exact key set, rejects any key it does not know, and
- * pins each field's type, enum membership and numeric range.
+ * {@see ContractAssertions::assertBuiltForCloudMetadataEndpoint} is
+ * pointed at this payload in the test suite, against an expected shape
+ * enumerated in that trait for this exact route. It requires this exact
+ * key set, rejects any key it does not name, and pins each field's type,
+ * enum membership and numeric range.
  */
 final readonly class VitalsPayload
 {
@@ -43,14 +43,14 @@ final readonly class VitalsPayload
      * The largest magnitude a headline value may carry, and the widest
      * age in seconds this payload will report.
      *
-     * These exist as constants because the CONFORMANCE SCHEMA reads them
-     * ({@see ContractAssertions::metadataVitalsSchema}) instead of
-     * restating numbers of its own. An earlier revision wrote both
-     * bounds twice — once in the producer, once in the schema — and they
-     * promptly disagreed: the schema rejected magnitudes beyond 1e15
-     * that {@see CollectVitals} was happy to emit, and capped ages at
-     * ten years that it computed without limit. A bound written twice is
-     * a bound that will disagree with itself, so it is written once and
+     * These exist as constants because the route's enumerated expected
+     * shape in {@see ContractAssertions} reads them instead of restating
+     * numbers of its own. An earlier revision wrote both bounds twice —
+     * once in the producer, once in the test-side shape — and they
+     * promptly disagreed: the shape rejected magnitudes beyond 1e15 that
+     * {@see CollectVitals} was happy to emit, and capped ages at ten
+     * years that it computed without limit. A bound written twice is a
+     * bound that will disagree with itself, so it is written once and
      * read from here.
      *
      * The values themselves: a headline is a number a person reads off a

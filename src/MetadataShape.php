@@ -19,12 +19,14 @@ use ArtisanBuild\BuiltForCloud\Vitals\CollectVitals;
  * accommodate it would have let a capitalised word through everywhere,
  * which is the whole failure they exist to prevent.
  *
- * Named, and only named. The conformance instrument used to let a schema
- * supply an arbitrary regex for a field, which put the definition of
- * "bounded" in the hands of the party being checked: `'/^.*$/sD'` is a
- * valid pattern and certifies free text. Every bounded form a schema can
- * name now lives in this class, where it is enumerable, reviewable, and
- * the same object the producer validates against.
+ * Named, and only named. There is no way to introduce a bounded form
+ * except by adding one here, where it is enumerable, reviewable, and the
+ * same object the producer validates against. The general-purpose
+ * conformance instrument that once let a caller supply its own pattern
+ * has been withdrawn entirely (see
+ * {@see ContractAssertions::assertBuiltForCloudMetadataEndpoint}); what
+ * remains reads these forms and the package's own enumerated endpoint
+ * shapes, and claims nothing about anybody else's endpoints.
  *
  * It lives here rather than in the test trait because the same patterns
  * are load-bearing on both sides: {@see CollectVitals} refuses to echo an
@@ -99,17 +101,5 @@ final class MetadataShape
     public static function isConsoleKeyId(string $value): bool
     {
         return preg_match(self::CONSOLE_KEY_ID, $value) === 1;
-    }
-
-    /**
-     * Any of the three — the LEXICAL check, and the whole of what a
-     * shape test can decide about a string in isolation. It says the
-     * value is bounded; it cannot say the FIELD is bounded, which is
-     * what a schema says. See
-     * {@see ContractAssertions::assertBuiltForCloudMetadataSchema}.
-     */
-    public static function isBounded(string $value): bool
-    {
-        return self::isToken($value) || self::isSemver($value) || self::isTimestamp($value);
     }
 }

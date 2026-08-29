@@ -757,101 +757,49 @@ trait ContractAssertions
     }
 
     /**
-     * The `metadata`-classification conformance instrument (Console PRD
-     * D15, docs/http-contract.md "Endpoint classification"), and the
-     * FAIL-CLOSED half of it. Point it at the **2xx body** of a
-     * metadata-classified endpoint together with a schema describing
-     * exactly what that endpoint may return.
+     * Assert that one of THIS PACKAGE'S OWN `metadata`-classified
+     * routes returned exactly the shape that route is documented to
+     * return (Console PRD D15, docs/http-contract.md "Endpoint
+     * classification"). Name the route as `METHOD /uri`; the expected
+     * shapes are enumerated in
+     * {@see self::builtForCloudMetadataEndpoints}, and a name that is
+     * not one of them FAILS.
      *
-     * Fail-closed means the schema is an ALLOWLIST and anything outside
-     * it is a failure, rather than a lexical filter that passes whatever
-     * it does not recognise:
+     * **This is not a general instrument, and there is deliberately no
+     * way to hand it a shape of your own.** An earlier revision of this
+     * trait exposed an app-extensible schema language and claimed to
+     * certify "any metadata endpoint". It could not, and the reason is
+     * structural rather than a bug anyone could patch: if the consuming
+     * app supplies the schema, the app decides what counts as free text.
+     * It picks the field names and the `enum` members, so runtime prose
+     * can be declared a `token` or a permitted member and pass. Four
+     * rounds of narrowing the type language closed four escapes and left
+     * that one untouched, because closing a type-name set does not
+     * establish value PROVENANCE.
      *
-     *  - a key the schema does not name is a failure (so
-     *    `{"note": "pending"}` and `{"customer_name": "alice"}` fail on
-     *    the KEY, without anyone having to guess whether the value looks
-     *    like free text);
-     *  - a key the schema names and the payload omits is a failure
-     *    unless the spec says `optional`;
-     *  - the ROOT structure is pinned, so a bare `"ok"`, a bare `"123"`,
-     *    an empty array where an object belongs, and an arbitrary nested
-     *    list all fail;
-     *  - `enum` specs pin the exact permitted members, which a lexical
-     *    check cannot do — `dgraded` fails here and passes the walker;
-     *  - numeric specs pin range and reject non-finite floats.
+     * What replaces it is enumeration. Every metadata-classified route
+     * this package serves has its expected shape written out below —
+     * exact keys, exact types, exact enum members — so D15 holds for
+     * everything the package serves by inspection of a list, with
+     * nothing app-supplied and nothing that can fail open. It says
+     * nothing whatever about a consuming app's own endpoints. A general
+     * instrument for those is deferred as its own decision.
      *
-     * **The string types are a CLOSED, package-owned set** — `token`,
-     * `semver`, `timestamp`, `console_key_id`, each defined in
-     * {@see MetadataShape}, plus `enum` for literal members. A schema
-     * cannot supply a regex of its own, and that removal is the point
-     * rather than a simplification: an earlier revision accepted
-     * `'type' => 'pattern'` with an arbitrary expression, so a schema
-     * author could write `'/^.*$/sD'` and certify
-     * `{"note": "arbitrary free text"}`. That put the definition of
-     * "bounded" in the hands of the party being checked, which is the
-     * one thing a conformance instrument may not do.
-     *
-     * The cost is real and is the right trade: an app whose metadata
-     * endpoint carries a bounded shape this package does not name cannot
-     * certify that field. Its options are to use
-     * {@see self::assertBuiltForCloudMetadataShape} as a supplemental
-     * lexical check, or to add the named type here — a change reviewed
-     * once, in this package, rather than a regex reviewed never, in
-     * every consumer. See the report for why flexibility loses to
-     * fail-closed on this instrument specifically.
-     *
-     * `one_of` covers an endpoint with more than one documented 2xx
-     * shape. Each alternative is an exact schema, so fail-closed
-     * survives: the payload must match one of them completely.
-     *
-     * Numeric bounds are READ from the producer's own constants, never
-     * restated — {@see self::metadataVitalsSchema} says why.
-     *
-     * The lexical walker ({@see self::assertBuiltForCloudMetadataShape})
-     * runs afterwards as a supplemental check. It is not the instrument;
-     * it is a second opinion about the strings a schema already admitted.
-     *
-     * Consuming apps call this with their own schema. For the package's
-     * own metadata endpoints, {@see self::assertBuiltForCloudMetadataEndpoint}
-     * looks the schema up by route and refuses to certify a route it has
-     * no schema for.
-     *
-     * @param  array<string, mixed>  $schema
-     */
-    public function assertBuiltForCloudMetadataSchema(mixed $payload, array $schema, string $context = 'metadata payload'): void
-    {
-        $certified = [];
-
-        $this->assertBuiltForCloudMetadataAgainst($payload, $schema, $context, '$', $certified);
-
-        // The walker runs on everything except the paths a named type
-        // bounded in a NON-lowercase charset already certified — today
-        // just `console_key_id`. The schema is the authority there;
-        // loosening the walker to accommodate it would let `Jane` back
-        // in everywhere, which is the fail-open this instrument exists
-        // to close.
-        $this->assertBuiltForCloudMetadataValue($payload, $context, '$', $certified);
-    }
-
-    /**
-     * The same check, pointed at a response and at one of the package's
-     * OWN metadata-classified routes, named as `METHOD /uri`.
-     *
-     * A route this trait ships no schema for FAILS rather than passing —
-     * the whole point of a fail-closed instrument is that "I do not know
-     * this shape" is a refusal.
+     * Scope: the 2xx body. Error envelopes are outside the
+     * classification column, as the contract states.
      *
      * @param  TestResponse<SymfonyResponse>  $response
      */
     public function assertBuiltForCloudMetadataEndpoint(TestResponse $response, string $endpoint): void
     {
-        $schemas = $this->builtForCloudMetadataSchemas();
+        $shapes = $this->builtForCloudMetadataShapes();
 
         Assert::assertArrayHasKey(
             $endpoint,
-            $schemas,
-            "No metadata schema is shipped for [{$endpoint}]. A metadata-classified route with no schema cannot be "
-            .'certified: add one to ContractAssertions::builtForCloudMetadataSchemas().',
+            $shapes,
+            "No expected metadata shape is enumerated for [{$endpoint}]. This asserts THIS PACKAGE's own "
+            .'metadata-classified routes and certifies nothing else; a package route with no entry cannot be '
+            .'certified, and an app endpoint cannot be certified here at all.',
         );
 
         $body = (string) $response->getContent();
@@ -859,69 +807,45 @@ trait ContractAssertions
 
         Assert::assertFalse(
             trim($body) !== '' && $decoded === null,
-            $endpoint.': the response body is neither empty nor valid JSON, so its classification cannot be checked.',
+            $endpoint.': the response body is neither empty nor valid JSON, so its shape cannot be checked.',
         );
 
-        $this->assertBuiltForCloudMetadataSchema($decoded, $schemas[$endpoint], $endpoint);
+        $this->assertBuiltForCloudMetadataAgainst($decoded, $shapes[$endpoint], $endpoint, '$');
     }
 
     /**
-     * The SUPPLEMENTAL lexical check: every string in the payload — value
-     * or key — must be one of the three bounded forms in
-     * {@see MetadataShape}. Numbers, booleans and nulls pass; arrays
-     * recurse; a non-finite float fails; anything that is neither a
-     * scalar nor an array fails.
+     * The `METHOD /uri` names this trait knows expected shapes for —
+     * every `metadata`-classified row in the contract's classification
+     * table, and nothing else.
      *
-     * WHAT IT ACTUALLY DECIDES, corrected from an earlier revision that
-     * overclaimed:
-     *
-     *  - It rejects whitespace, punctuation outside `._:-`, empty
-     *    strings, non-ASCII bytes (so unicode free text fails), tokens
-     *    over 64 characters and semvers over 32.
-     *  - It rejects capital letters EXCEPT the fixed `T` and `Z`
-     *    literals inside an ISO-8601 instant, which are part of the
-     *    format rather than content.
-     *
-     * WHAT IT CANNOT DECIDE, which is why it is no longer the primary
-     * instrument:
-     *
-     *  1. **A field's declared DOMAIN.** A free-text field whose value in
-     *     the payload under test happens to be one lowercase word — a
-     *     credential named `staging`, a note reading `pending` — passes.
-     *     This is exactly the fail-open behaviour the schema check
-     *     closes, by rejecting the KEY.
-     *  2. **That an identifier is an ENUM member.** It cannot know the
-     *     enum; `degraded` and `dgraded` both pass.
-     *  3. **Absent fields.** A payload that omits a field entirely, or an
-     *     empty body, passes trivially.
-     *
-     * Use it alone only as a smoke check. Use
-     * {@see self::assertBuiltForCloudMetadataSchema} to certify an
-     * endpoint.
-     *
-     * @param  mixed  $payload  a decoded response body
+     * @return list<string>
      */
-    public function assertBuiltForCloudMetadataShape(mixed $payload, string $context = 'metadata payload'): void
+    public function builtForCloudMetadataEndpoints(): array
     {
-        $this->assertBuiltForCloudMetadataValue($payload, $context, '$', []);
+        return array_keys($this->builtForCloudMetadataShapes());
     }
 
     /**
-     * The metadata schemas for the package's own `metadata`-classified
-     * routes, keyed `METHOD /uri` exactly as
+     * The expected 2xx shape of every `metadata`-classified route this
+     * PACKAGE serves, keyed `METHOD /uri` exactly as
      * docs/http-contract.md's classification table names them.
      *
-     * Every row here is fail-closed against its endpoint's 2xx body.
-     * Error envelopes are deliberately not covered — the contract puts
-     * them outside the classification column, and they share a prose
-     * `message` field on every surface.
+     * Private, and it takes no argument: these are the package's own
+     * shapes, written out here, and there is no path by which a caller
+     * substitutes or extends one. That is the whole difference between
+     * this and the withdrawn instrument.
+     *
+     * Each entry names exact keys, exact types and exact enum members,
+     * and anything else in a payload fails — an unknown key, a missing
+     * one, a wrong root structure, a near-miss enum member, a number
+     * outside range, a non-finite float.
      *
      * @return array<string, array<string, mixed>>
      */
-    public function builtForCloudMetadataSchemas(): array
+    private function builtForCloudMetadataShapes(): array
     {
         return [
-            'GET /bfc/console/vitals' => $this->metadataVitalsSchema(),
+            'GET /bfc/console/vitals' => $this->builtForCloudVitalsShape(),
             'POST /bfc/ownership/cancel-transfer' => [
                 'type' => 'object',
                 'fields' => ['ok' => ['type' => 'bool']],
@@ -996,7 +920,7 @@ trait ContractAssertions
      *
      * @return array<string, mixed>
      */
-    public function metadataVitalsSchema(): array
+    private function builtForCloudVitalsShape(): array
     {
         // READ from the producer, never restated. An earlier revision
         // wrote these numbers here as well as in CollectVitals and they
@@ -1014,7 +938,13 @@ trait ContractAssertions
                 'api_version' => ['type' => 'enum', 'values' => [BuiltForCloud::API_VERSION]],
                 'bfc_version' => ['type' => 'semver'],
                 'app_version' => ['type' => 'semver', 'nullable' => true],
-                'health' => ['type' => 'enum', 'values' => ['ok', 'degraded', 'down']],
+                // `down` is in the Health vocabulary for the fleet
+                // dashboard, and Health::fromDegradation cannot produce
+                // it — so this endpoint's expected shape does not admit
+                // it either. An expected shape wider than the producer
+                // is a shape that would not notice the producer
+                // changing.
+                'health' => ['type' => 'enum', 'values' => ['ok', 'degraded']],
                 'deployed_at' => ['type' => 'timestamp', 'nullable' => true],
                 'deploy_age_seconds' => ['type' => 'int', 'nullable' => true, 'min' => -$age, 'max' => $age],
                 'queue' => [
@@ -1041,9 +971,8 @@ trait ContractAssertions
 
     /**
      * @param  array<string, mixed>  $spec
-     * @param  list<string>  $certified
      */
-    private function assertBuiltForCloudMetadataAgainst(mixed $value, array $spec, string $context, string $path, array &$certified): void
+    private function assertBuiltForCloudMetadataAgainst(mixed $value, array $spec, string $context, string $path): void
     {
         $type = $spec['type'] ?? null;
 
@@ -1110,29 +1039,20 @@ trait ContractAssertions
                     $context.': '.$path.' is not a bounded '.$type.'. Got: '.var_export($value, true),
                 );
 
-                // `console_key_id` is bounded in the keyring's own
-                // charset, which is not lowercase, so the supplemental
-                // lexical walker would reject what this branch just
-                // accepted. It is the only named type that needs the
-                // walker to stand aside.
-                if ($type === 'console_key_id') {
-                    $certified[] = $path;
-                }
-
                 return;
 
             case 'one_of':
-                $this->assertBuiltForCloudMetadataOneOf($value, $spec, $context, $path, $certified);
+                $this->assertBuiltForCloudMetadataOneOf($value, $spec, $context, $path);
 
                 return;
 
             case 'object':
-                $this->assertBuiltForCloudMetadataObject($value, $spec, $context, $path, $certified);
+                $this->assertBuiltForCloudMetadataObject($value, $spec, $context, $path);
 
                 return;
 
             case 'list':
-                $this->assertBuiltForCloudMetadataList($value, $spec, $context, $path, $certified);
+                $this->assertBuiltForCloudMetadataList($value, $spec, $context, $path);
 
                 return;
 
@@ -1154,9 +1074,8 @@ trait ContractAssertions
      * alternative's certified paths are adopted.
      *
      * @param  array<string, mixed>  $spec
-     * @param  list<string>  $certified
      */
-    private function assertBuiltForCloudMetadataOneOf(mixed $value, array $spec, string $context, string $path, array &$certified): void
+    private function assertBuiltForCloudMetadataOneOf(mixed $value, array $spec, string $context, string $path): void
     {
         /** @var list<array<string, mixed>>|null $shapes */
         $shapes = $spec['shapes'] ?? null;
@@ -1167,17 +1086,13 @@ trait ContractAssertions
         $failures = [];
 
         foreach ($shapes as $index => $shape) {
-            $branch = $certified;
-
             try {
-                $this->assertBuiltForCloudMetadataAgainst($value, $shape, $context, $path, $branch);
+                $this->assertBuiltForCloudMetadataAgainst($value, $shape, $context, $path);
             } catch (AssertionFailedError $failure) {
                 $failures[] = '  ['.$index.'] '.$failure->getMessage();
 
                 continue;
             }
-
-            $certified = $branch;
 
             return;
         }
@@ -1190,9 +1105,8 @@ trait ContractAssertions
 
     /**
      * @param  array<string, mixed>  $spec
-     * @param  list<string>  $certified
      */
-    private function assertBuiltForCloudMetadataObject(mixed $value, array $spec, string $context, string $path, array &$certified): void
+    private function assertBuiltForCloudMetadataObject(mixed $value, array $spec, string $context, string $path): void
     {
         Assert::assertIsArray($value, $context.': '.$path.' is not an object.');
 
@@ -1223,15 +1137,14 @@ trait ContractAssertions
             }
 
             /** @var array<string, mixed> $fieldSpec */
-            $this->assertBuiltForCloudMetadataAgainst($value[$key], $fieldSpec, $context, $path.'.'.$key, $certified);
+            $this->assertBuiltForCloudMetadataAgainst($value[$key], $fieldSpec, $context, $path.'.'.$key);
         }
     }
 
     /**
      * @param  array<string, mixed>  $spec
-     * @param  list<string>  $certified
      */
-    private function assertBuiltForCloudMetadataList(mixed $value, array $spec, string $context, string $path, array &$certified): void
+    private function assertBuiltForCloudMetadataList(mixed $value, array $spec, string $context, string $path): void
     {
         Assert::assertIsArray($value, $context.': '.$path.' is not a list.');
 
@@ -1247,10 +1160,7 @@ trait ContractAssertions
         Assert::assertIsArray($of, $context.': the list schema at '.$path.' names no item spec.');
 
         foreach (array_values($value) as $index => $item) {
-            // The path shape matches the walker's exactly, because the
-            // `pattern`-certified paths collected here are what the
-            // walker is told to skip.
-            $this->assertBuiltForCloudMetadataAgainst($item, $of, $context, $path.'.'.$index, $certified);
+            $this->assertBuiltForCloudMetadataAgainst($item, $of, $context, $path.'.'.$index);
         }
     }
 
@@ -1267,57 +1177,6 @@ trait ContractAssertions
 
         Assert::assertGreaterThanOrEqual($min, $value, $context.': '.$path.' is below the range this schema permits.');
         Assert::assertLessThanOrEqual($max, $value, $context.': '.$path.' is above the range this schema permits.');
-    }
-
-    /**
-     * @param  list<string>  $certified
-     */
-    private function assertBuiltForCloudMetadataValue(mixed $value, string $context, string $path, array $certified): void
-    {
-        if (in_array($path, $certified, true)) {
-            return;
-        }
-
-        if ($value === null || is_int($value) || is_bool($value)) {
-            return;
-        }
-
-        if (is_float($value)) {
-            Assert::assertTrue(
-                is_finite($value),
-                $context.': '.$path.' is a non-finite float, which no bounded metadata field may carry.',
-            );
-
-            return;
-        }
-
-        if (is_string($value)) {
-            Assert::assertTrue(
-                MetadataShape::isBounded($value),
-                $context.': '.$path.' carries a free-text string. A metadata-classified endpoint may return '
-                .'only bounded scalars and enums (Console PRD D15) — an enum member or bounded identifier, '
-                .'a semver, or an ISO-8601 timestamp. Got: '.var_export($value, true),
-            );
-
-            return;
-        }
-
-        Assert::assertIsArray(
-            $value,
-            $context.': '.$path.' is neither a scalar nor an array, so it cannot be a bounded metadata value.',
-        );
-
-        /** @var array<array-key, mixed> $value */
-        foreach ($value as $key => $member) {
-            if (is_string($key)) {
-                Assert::assertTrue(
-                    MetadataShape::isToken($key),
-                    $context.': the key '.$path.'.'.$key.' is not a bounded identifier.',
-                );
-            }
-
-            $this->assertBuiltForCloudMetadataValue($member, $context, $path.'.'.$key, $certified);
-        }
     }
 
     public function mintBuiltForCloudAdminToken(string $name = 'contract-admin'): string
