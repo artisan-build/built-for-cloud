@@ -1634,6 +1634,12 @@ three separate conditions:
    succeeds while the same bytes stay admin-equivalent on the legacy surfaces, which is exactly
    the "unable to touch mutating surfaces" clause failing. Every legacy row counts, revoked
    included: the question is not whether those bytes can act elsewhere *today*.
+
+   The refusal is byte-identical to any other `401` and writes nothing. The code paths are **not
+   time-equalised** — a fallback collision returns before any query, a legacy one after a single
+   `exists()`, an ordinary unknown bearer continues into store resolution — and that is accepted
+   rather than closed: reading the difference requires already holding the bearer, and anyone
+   holding it can present it on a legacy surface and learn the same fact directly.
 2. **The credential holds `metadata:read`** — and the app's own declaration authorizes it for
    that ability. Unlike every operator verb route, this one is not mounted behind the operator
    gate, because that gate grants a break-glass credential whatever ability a route names; a
@@ -1730,14 +1736,19 @@ field.
   pending job's enqueue TIMESTAMP and the age is derived per request, so the one number here
   whose entire meaning is that it moves keeps moving inside a window. The counts do not.
 
-  **Caching requires a stable deployment identifier** —
-  `built-for-cloud.vitals.deployment_id`, falling back to `built-for-cloud.cloud.application`.
-  With neither set the snapshot is **not cached at all** and every poll reads directly. That is
-  deliberate: the key is a digest of the deployment identifier plus the complete resolved queue
-  connection config, and without an identifier two apps sharing a cache prefix would compute the
-  same key and be served each other's backlog as honest local data — a silent cross-deployment
-  leak into a vendor dashboard, which is worse than slow vitals. A product name and an
-  environment are not identities and are not used as ones.
+  **Caching requires a deployment identifier that is UNIQUE within the shared cache namespace**
+  — `built-for-cloud.vitals.deployment_id`, falling back to
+  `built-for-cloud.cloud.application`. With neither set the snapshot is **not cached at all** and
+  every poll reads directly. That is deliberate: the key is a digest of the identifier plus the
+  complete resolved queue connection config, and without one, two apps sharing a cache prefix
+  would compute the same key and be served each other's backlog as honest local data — a silent
+  cross-deployment leak into a vendor dashboard, which is worse than slow vitals. A product name
+  and an environment are not identities and are not used as ones.
+
+  Unique, not merely stable: two instances configured with the SAME identifier, environment and
+  queue configuration still share a key. For replicas of one logical deployment reading one
+  queue that is correct and intended — they have the same backlog. For two different deployments
+  it is the collision this requirement exists to prevent, so give them different identifiers.
 
   Two further limits, stated because an unstated one reads as covered. The cache is
   read-through, not a lock: concurrent misses on a cold key each run the read, so the bound is

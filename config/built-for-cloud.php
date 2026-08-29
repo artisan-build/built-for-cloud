@@ -214,15 +214,21 @@ return [
     | Null for both is an ordinary, un-degraded state: an app that
     | declares neither simply reports nulls.
     |
-    | `deployment_id` — a STABLE identifier for this deployment, used to
-    | namespace the cached queue snapshot below. It falls back to
-    | `cloud.application`, and when neither is set the snapshot cache is
-    | DISABLED rather than shared: two apps with no identifier, the same
-    | environment and a shared CACHE_PREFIX would otherwise compute the
-    | same key and serve each other's queue backlog as honest local data
-    | — a silent cross-deployment leak into a vendor dashboard, which is
-    | worse than slow vitals. It is never inferred from the product name
-    | or the environment; those are not identities.
+    | `deployment_id` — an identifier for this deployment, UNIQUE within
+    | whatever cache namespace it shares, used to key the cached queue
+    | snapshot below. It falls back to `cloud.application`, and when
+    | neither is set the snapshot cache is DISABLED rather than shared:
+    | two apps with no identifier, the same environment and a shared
+    | CACHE_PREFIX would otherwise compute the same key and serve each
+    | other's queue backlog as honest local data — a silent
+    | cross-deployment leak into a vendor dashboard, which is worse than
+    | slow vitals. It is never inferred from the product name or the
+    | environment; those are not identities.
+    |
+    | Unique, not merely stable. Two instances with the same identifier,
+    | environment and queue configuration share a key — right for
+    | replicas of one logical deployment reading one queue, and the
+    | collision this key exists to prevent for anything else.
     |
     | `queue_cache_seconds` — how long one queue-backlog snapshot serves
     | every poll. This route is POLLED: a dashboard reading once a second

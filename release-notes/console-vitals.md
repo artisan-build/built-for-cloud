@@ -103,6 +103,11 @@ decision.
 deployment identifier plus the complete resolved queue connection config. Set
 `BUILT_FOR_CLOUD_DEPLOYMENT_ID` (or rely on `built-for-cloud.cloud.application`).
 
+**The identifier must be UNIQUE within the cache namespace it shares, not merely stable.** Two
+instances configured with the same identifier, environment and queue configuration share a key.
+For replicas of one logical deployment reading one queue that is correct — they have the same
+backlog. For two different deployments it is the collision this key exists to prevent.
+
 **With neither set the snapshot is not cached at all** — every poll reads the queue directly.
 That is the intended behaviour, not a regression: without an identifier, two apps sharing a
 cache prefix would compute the same key and be served each other's backlog as honest local data.
