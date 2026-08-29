@@ -3,7 +3,9 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyring;
+use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
@@ -13,10 +15,16 @@ use ArtisanBuild\BuiltForCloud\OwnershipClaim;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
+use ArtisanBuild\BuiltForCloud\Testing\MetadataEndpointShapes;
 use ArtisanBuild\BuiltForCloud\Testing\MintedTestCredential;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HeadlineDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SelfServiceDeclaration;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SinkHeadlineLabel;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SubstitutingContractConsumer;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
+use ArtisanBuild\BuiltForCloud\Vitals\HeadlineUnit;
+use ArtisanBuild\BuiltForCloud\Vitals\Health;
 use ArtisanBuild\BuiltForCloud\Vitals\VitalsPayload;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Response;
@@ -85,9 +93,9 @@ function metadataResponse(mixed $body): TestResponse
 function metadataVitalsBody(): array
 {
     return [
-        'version' => 1,
-        'api_version' => 2,
-        'bfc_version' => '0.5.0',
+        'version' => VitalsPayload::VERSION,
+        'api_version' => BuiltForCloud::API_VERSION,
+        'bfc_version' => BuiltForCloud::VERSION,
         'app_version' => null,
         'health' => 'ok',
         'deployed_at' => null,
@@ -116,6 +124,51 @@ it('exposes no way to hand it an app-authored shape', function (): void {
 
     foreach ($entry->getParameters() as $parameter) {
         expect((string) $parameter->getType())->not->toContain('array');
+    }
+});
+
+it('cannot be steered by a class that substitutes the withdrawn private methods', function (): void {
+    // PHP trait precedence: a class using a trait may declare a method
+    // with the same name as one of the trait's PRIVATE methods, and the
+    // class's definition wins. While the registry and the evaluator were
+    // trait privates, this consumer would have substituted both.
+    $consumer = new SubstitutingContractConsumer;
+
+    // Its registry names an app endpoint. It is not consulted, so the
+    // route is still unknown.
+    expect(fn () => $consumer->assertBuiltForCloudMetadataEndpoint(metadataResponse(['note' => 'pending']), 'GET /app/anything'))
+        ->toThrow(AssertionFailedError::class);
+
+    // Its permissive evaluator and its looser `ok` domain are not
+    // consulted either: the package's own shape still applies.
+    expect(fn () => $consumer->assertBuiltForCloudMetadataEndpoint(metadataResponse(['ok' => false]), 'POST /bfc/ownership/cancel-transfer'))
+        ->toThrow(AssertionFailedError::class);
+
+    $consumer->assertBuiltForCloudMetadataEndpoint(metadataResponse(['ok' => true]), 'POST /bfc/ownership/cancel-transfer');
+
+    // Structurally: there is nothing left in the trait to substitute…
+    $trait = new ReflectionClass(ContractAssertions::class);
+
+    foreach ([
+        'builtForCloudMetadataShapes',
+        'builtForCloudVitalsShape',
+        'assertBuiltForCloudMetadataAgainst',
+        'assertBuiltForCloudMetadataObject',
+        'assertBuiltForCloudMetadataList',
+        'assertBuiltForCloudMetadataOneOf',
+        'assertBuiltForCloudMetadataRange',
+    ] as $gone) {
+        expect($trait->hasMethod($gone))->toBeFalse($gone);
+    }
+
+    // …and the boundary they moved behind cannot be subclassed, so its
+    // statics cannot be replaced either.
+    $boundary = new ReflectionClass(MetadataEndpointShapes::class);
+
+    expect($boundary->isFinal())->toBeTrue();
+
+    foreach ($boundary->getMethods() as $method) {
+        expect($method->isStatic())->toBeTrue($method->getName());
     }
 });
 
@@ -239,6 +292,11 @@ it('takes its numeric bounds from the producer, at the boundary', function (): v
     expect(fn () => $this->assertBuiltForCloudMetadataEndpoint(metadataResponse($pastBound), 'GET /bfc/console/vitals'))
         ->toThrow(AssertionFailedError::class);
 
+    // A headline label is only valid as a CASE of the app's declared
+    // vocabulary, so the app has to declare one for these payloads to be
+    // producible at all.
+    app()->bind(CredentialDeclaration::class, HeadlineDeclaration::class);
+
     $headlineAt = [...metadataVitalsBody(), 'headline' => [
         'value' => VitalsPayload::MAX_HEADLINE_MAGNITUDE, 'label' => 'active-sessions', 'unit' => 'count',
     ]];
@@ -250,6 +308,109 @@ it('takes its numeric bounds from the producer, at the boundary', function (): v
 
     expect(fn () => $this->assertBuiltForCloudMetadataEndpoint(metadataResponse($headlinePast), 'GET /bfc/console/vitals'))
         ->toThrow(AssertionFailedError::class);
+});
+
+it('refuses domains wider than their producers', function (callable $mutate, string $endpoint): void {
+    expect(fn () => $this->assertBuiltForCloudMetadataEndpoint(metadataResponse($mutate()), $endpoint))
+        ->toThrow(AssertionFailedError::class);
+})->with([
+    // `ManageOwnership::cancelTransfer` can only emit `true`. Accepting
+    // either boolean was a domain wider than the producer.
+    'cancel-transfer ok: false' => [
+        fn (): array => ['ok' => false], 'POST /bfc/ownership/cancel-transfer',
+    ],
+    // A version string that is a valid semver and is not THIS release.
+    'a bfc_version that is not this release' => [
+        fn (): array => [...metadataVitalsBody(), 'bfc_version' => '9.9.9'], 'GET /bfc/console/vitals',
+    ],
+]);
+
+it('refuses an identifier-shaped headline label that is no member of the declared vocabulary', function (): void {
+    // THE HOLE THE ENUM WORK EXISTED TO CLOSE, reopened one layer up:
+    // the assertion accepted any token-shaped label, and
+    // `customer-incident` is token-shaped while being a member of
+    // nothing. Being identifier-shaped is not membership.
+    app()->bind(CredentialDeclaration::class, HeadlineDeclaration::class);
+
+    $outOfDomain = [...metadataVitalsBody(), 'headline' => [
+        'value' => 3, 'label' => 'customer-incident', 'unit' => 'count',
+    ]];
+
+    expect(fn () => $this->assertBuiltForCloudMetadataEndpoint(metadataResponse($outOfDomain), 'GET /bfc/console/vitals'))
+        ->toThrow(AssertionFailedError::class);
+
+    // The positive control: a real case of the declared enum passes, so
+    // the assertion above is not simply refusing every headline.
+    $inDomain = [...metadataVitalsBody(), 'headline' => [
+        'value' => 3, 'label' => SinkHeadlineLabel::OpenCases->value, 'unit' => 'count',
+    ]];
+
+    $this->assertBuiltForCloudMetadataEndpoint(metadataResponse($inDomain), 'GET /bfc/console/vitals');
+});
+
+it('refuses any headline at all when the app declares no vocabulary', function (): void {
+    // The producer reports no headline in that case, so a payload
+    // carrying one could not have come from it.
+    $withHeadline = [...metadataVitalsBody(), 'headline' => [
+        'value' => 3, 'label' => 'active-sessions', 'unit' => 'count',
+    ]];
+
+    expect(fn () => $this->assertBuiltForCloudMetadataEndpoint(metadataResponse($withHeadline), 'GET /bfc/console/vitals'))
+        ->toThrow(AssertionFailedError::class);
+});
+
+it('derives the health and unit domains from the producer', function (): void {
+    // Both are computed rather than restated, so a producer change
+    // cannot leave the expected shape describing the old behaviour.
+    // Driven at the members: every value the producer can construct
+    // passes, and one it cannot does not.
+    foreach ([false, true] as $degraded) {
+        $this->assertBuiltForCloudMetadataEndpoint(
+            metadataResponse([...metadataVitalsBody(), 'health' => Health::fromDegradation($degraded)->value]),
+            'GET /bfc/console/vitals',
+        );
+    }
+
+    expect(fn () => $this->assertBuiltForCloudMetadataEndpoint(
+        metadataResponse([...metadataVitalsBody(), 'health' => Health::Down->value]),
+        'GET /bfc/console/vitals',
+    ))->toThrow(AssertionFailedError::class);
+
+    app()->bind(CredentialDeclaration::class, HeadlineDeclaration::class);
+
+    foreach (HeadlineUnit::cases() as $unit) {
+        $this->assertBuiltForCloudMetadataEndpoint(
+            metadataResponse([...metadataVitalsBody(), 'headline' => [
+                'value' => 1, 'label' => 'active-sessions', 'unit' => $unit->value,
+            ]]),
+            'GET /bfc/console/vitals',
+        );
+    }
+
+    expect(fn () => $this->assertBuiltForCloudMetadataEndpoint(
+        metadataResponse([...metadataVitalsBody(), 'headline' => [
+            'value' => 1, 'label' => 'active-sessions', 'unit' => 'furlongs',
+        ]]),
+        'GET /bfc/console/vitals',
+    ))->toThrow(AssertionFailedError::class);
+});
+
+it('refuses a timestamp its producer would not have emitted', function (): void {
+    // "An ISO-8601 instant" was wider than either producer: vitals emits
+    // toAtomString(), re-key emits toRfc3339String(). A `Z` suffix
+    // parses, is bounded, and is not what either one produces.
+    foreach (['2026-08-29T09:14:00Z', '2026-08-29T09:14:00.500+00:00', '2026-08-29 09:14:00+00:00'] as $notEmitted) {
+        expect(fn () => $this->assertBuiltForCloudMetadataEndpoint(
+            metadataResponse([...metadataVitalsBody(), 'deployed_at' => $notEmitted]),
+            'GET /bfc/console/vitals',
+        ))->toThrow(AssertionFailedError::class, '', $notEmitted);
+    }
+
+    // The positive control: what the producer actually emits.
+    $this->assertBuiltForCloudMetadataEndpoint(
+        metadataResponse([...metadataVitalsBody(), 'deployed_at' => now()->toAtomString()]),
+        'GET /bfc/console/vitals',
+    );
 });
 
 it('rejects a body that is neither empty nor json', function (): void {
