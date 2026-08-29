@@ -72,8 +72,27 @@ final class PersonalSurfaceWebGroupTest extends TestCase
      * onto the session stack by this change — a bearer-only route that
      * starts a session and validates CSRF would break every machine
      * caller.
+     *
+     * THE ENUMERATION HAS EXACTLY ONE MEMBER, and it is named here
+     * rather than excluded by a pattern. `POST /bfc/console/enter` is a
+     * BROWSER route by construction: it exists to create a delegated
+     * session, so it cannot do its job without starting one (Console
+     * PRD D12/D13, PR4).
+     *
+     * What it deliberately does NOT ride is the host's `web` GROUP,
+     * which is where the personal surface goes — and the difference is
+     * the point. The group carries CSRF validation, and the console
+     * handoff is a cross-site POST from the issuer's page: a
+     * `SameSite=Lax` session cookie is not sent with one, so the app has
+     * no session with that browser and no token it could have planted.
+     * What stands in for the token is the vendor's signature over the
+     * return path (D13's signed state), the assertion's 60-120s TTL and
+     * its single-use burn.
+     *
+     * So the assertion below is a SET, not an emptiness: adding a second
+     * session-riding route means saying so in this diff.
      */
-    public function test_no_other_package_route_gains_the_session_stack(): void
+    public function test_only_the_personal_surface_and_the_console_door_ride_the_session_stack(): void
     {
         $sessioned = collect(Route::getRoutes()->getRoutes())
             ->filter(fn (RoutingRoute $route): bool => str_starts_with($route->getActionName(), 'ArtisanBuild\\BuiltForCloud\\'))
@@ -87,7 +106,24 @@ final class PersonalSurfaceWebGroupTest extends TestCase
             ->values()
             ->all();
 
-        $this->assertSame([], $sessioned);
+        $this->assertSame(['POST /bfc/console/enter'], $sessioned);
+    }
+
+    /**
+     * …and the door is on the CONCRETE stack rather than the host's
+     * `web` group, which is the half the enumeration above cannot say.
+     */
+    public function test_the_console_door_starts_a_session_without_csrf_validation(): void
+    {
+        $door = collect(Route::getRoutes()->getRoutes())
+            ->sole(fn (RoutingRoute $route): bool => $route->uri() === 'bfc/console/enter');
+
+        $resolved = $this->app['router']->gatherRouteMiddleware($door);
+
+        $this->assertContains(StartSession::class, $resolved);
+        $this->assertContains(EncryptCookies::class, $resolved);
+        $this->assertNotContains(PreventRequestForgery::class, $resolved);
+        $this->assertNotContains('web', $door->gatherMiddleware());
     }
 
     public function test_the_personal_controller_is_the_only_action_behind_that_stack(): void

@@ -19,7 +19,15 @@ use ArtisanBuild\BuiltForCloud\Tests\CitationScan;
  * against renames and two abbreviations that were never resolvable,
  * which is the argument for having it.
  */
-$citedSurfaces = ['src/Console', 'docs/http-contract.md', 'release-notes/unified-store-guard.md'];
+$citedSurfaces = [
+    'src/Console',
+    // The enter endpoint's guarantees live on the controller, which is
+    // outside src/Console — so it is named explicitly rather than left
+    // uncheckable (Console PRD D12/D13, PR4).
+    'src/Http/Controllers/ConsoleEnter.php',
+    'docs/http-contract.md',
+    'release-notes/unified-store-guard.md',
+];
 
 it('resolves every test title quoted by a guarantee citation', function () use ($citedSurfaces): void {
     $root = dirname(__DIR__);
@@ -36,10 +44,12 @@ it('is actually reading citations, in every place that carries one', function ()
     expect(array_keys($found))->toBe([
         'docs/http-contract.md',
         'release-notes/unified-store-guard.md',
+        'src/Console/ConsoleEntryState.php',
         'src/Console/ConsoleGuard.php',
         'src/Console/ConsoleSession.php',
         'src/Console/DelegatedActor.php',
         'src/Console/DelegatedActorProvider.php',
+        'src/Http/Controllers/ConsoleEnter.php',
     ]);
 
     expect(array_sum(array_map(count(...), $found)))->toBeGreaterThanOrEqual(35);

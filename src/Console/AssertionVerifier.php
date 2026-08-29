@@ -39,7 +39,11 @@ use Throwable;
  *  4. **claim shape and charset** — bounded lengths, no control
  *     characters (the verify-side half of D11's escape-by-construction
  *     promise: the chrome must never be the only thing between a hostile
- *     display name and a rendered page);
+ *     display name and a rendered page). The optional `state` claim —
+ *     D13's binding between a mint and its signed handoff state — is
+ *     shape-checked here too: present means exactly a sha256 hex
+ *     digest, and a malformed one is a refusal rather than a silent
+ *     absence;
  *  5. **role** — {@see ConsoleRole} and nothing else, ever;
  *  6. **issuer** — exactly one issuer in v1 (D18), which is what bounds
  *     per-issuer authority;
@@ -85,8 +89,16 @@ final class AssertionVerifier
     /** The bound on the identity claims — issuer, subject, audience. */
     public const int MAX_IDENTITY_LENGTH = 255;
 
-    /** The bound on the mint id PR4 burns. */
+    /** The bound on the mint id the enter endpoint burns. */
     public const int MAX_ID_LENGTH = 64;
+
+    /**
+     * The shape of the optional `state` claim: the lower-case hex
+     * sha256 of the signed handoff state (D13), and nothing else.
+     * Anchored with `\z` rather than `$`, which also matches before a
+     * trailing newline.
+     */
+    public const string STATE_DIGEST_PATTERN = '/^[0-9a-f]{64}\z/';
 
     /**
      * A whole-token size bound, applied before any parsing: a delegated
@@ -133,6 +145,7 @@ final class AssertionVerifier
         $id = $this->boundedString($claims, 'jti', self::MAX_ID_LENGTH);
         $displayName = $this->boundedString($claims, 'display_name', self::MAX_DISPLAY_LENGTH);
         $onBehalfOf = $this->optionalBoundedString($claims, 'on_behalf_of', self::MAX_DISPLAY_LENGTH);
+        $stateDigest = $this->optionalStateDigest($claims);
         $issuedAt = $this->timestamp($claims, 'iat');
         $expiresAt = $this->timestamp($claims, 'exp');
         $notBefore = array_key_exists('nbf', $claims) ? $this->timestamp($claims, 'nbf') : null;
@@ -197,7 +210,42 @@ final class AssertionVerifier
             expiresAt: $expiresAt,
             keyId: $keyId,
             id: $id,
+            stateDigest: $stateDigest,
         );
+    }
+
+    /**
+     * The optional `state` claim: the digest that binds a SIGNED
+     * HANDOFF STATE to this mint (D13).
+     *
+     * Absent is a legitimate, well-formed mint — one that named no
+     * state. PRESENT-BUT-MALFORMED is a refusal, never a silent null,
+     * exactly like `on_behalf_of`: a state binding that cannot be read
+     * is not the same as one that was never claimed, and treating it as
+     * absent would let a mangled digest degrade into "no state" at the
+     * one door where a state is what stops the return path being a
+     * request field.
+     *
+     * The verifier does not decide whether a state is REQUIRED. That is
+     * the enter endpoint's rule, because entry is the flow D13 governs;
+     * this method's whole job is that a claim which is present is
+     * exactly 64 lower-case hex characters.
+     *
+     * @param  array<string, mixed>  $claims
+     */
+    private function optionalStateDigest(array $claims): ?string
+    {
+        if (! array_key_exists('state', $claims) || $claims['state'] === null) {
+            return null;
+        }
+
+        $value = $claims['state'];
+
+        if (! is_string($value) || preg_match(self::STATE_DIGEST_PATTERN, $value) !== 1) {
+            throw AssertionRefused::because(AssertionRefusalReason::InvalidClaims);
+        }
+
+        return $value;
     }
 
     /**

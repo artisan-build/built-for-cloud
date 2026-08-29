@@ -191,6 +191,26 @@ return [
     | somewhere nobody chose. A value that is not an absolute http(s)
     | URL is treated as unset for the same reason.
     |
+    | `return_path_allowlist` — the paths `POST /bfc/console/enter` will
+    | land an entering operator on (D13's "relative and allowlisted").
+    |
+    | EMPTY BY DEFAULT, and empty means "any path in this app", which is
+    | said plainly rather than dressed up as a security control: the
+    | bound that actually closes open redirect is that the return path
+    | must be a same-origin RELATIVE path in every percent-decoded form
+    | (ConsoleReturnTo), and that it rides inside the vendor's SIGNATURE
+    | rather than in a request field. This list is opt-in NARROWING for
+    | a deployment that wants entry confined to the handful of paths its
+    | console actually links to.
+    |
+    | Each entry is a path prefix beginning with `/`. Matching ignores
+    | the query string and fragment and happens at a SEGMENT BOUNDARY,
+    | so `/admin` covers `/admin` and `/admin/users` and never
+    | `/admin-secrets`. An entry that is not an in-app path matches
+    | nothing rather than acting as a wildcard — a typo must never widen
+    | an allowlist. `/` covers everything, which is the same as
+    | configuring nothing.
+    |
     | `enabled` — whether this deployment runs the Console AT ALL. It
     | gates the `bfc-console` guard and provider entries the package
     | injects, and it is OFF by default for two reasons. Delegated entry
@@ -228,6 +248,7 @@ return [
         'assertion_max_ttl_seconds' => env('BUILT_FOR_CLOUD_CONSOLE_ASSERTION_MAX_TTL', 120),
         'clock_skew_seconds' => env('BUILT_FOR_CLOUD_CONSOLE_CLOCK_SKEW', 5),
         'reentry_url' => env('BUILT_FOR_CLOUD_CONSOLE_REENTRY_URL'),
+        'return_path_allowlist' => [],
     ],
 
     /*

@@ -57,8 +57,30 @@ final readonly class Assertion
         public CarbonImmutable $expiresAt,
         /** The keyring key that verified the signature. */
         public string $keyId,
-        /** The `jti` PR4 burns — one redemption per mint, ever. */
+        /** The `jti` the enter endpoint burns — one redemption per mint, ever. */
         public string $id,
+        /**
+         * The sha256 hex digest of the SIGNED HANDOFF STATE (D13), or
+         * null when the mint carried none.
+         *
+         * This is what makes the return path a signed state rather than
+         * a request field: the state travels beside the token, its
+         * digest travels INSIDE it, and the enter endpoint accepts a
+         * state only when the two agree. The app holds nothing but
+         * PUBLIC keys, so an Ed25519 signature over this digest is the
+         * only thing it can verify the issuer produced — and an
+         * OAuth-style state the APP planted is impossible here, because
+         * the handoff POST is cross-site and `SameSite=Lax` means the
+         * browser sends no cookie with it. See
+         * {@see ConsoleEntryState}, which states what that does and does
+         * not buy.
+         *
+         * Null is a well-formed mint that named no state. The VERIFIER
+         * does not require one — its job is that claims are well-formed
+         * — and the ENTER ENDPOINT does, because entry is the flow the
+         * decision governs.
+         */
+        public ?string $stateDigest = null,
     ) {}
 
     /**
@@ -83,6 +105,7 @@ final readonly class Assertion
         CarbonImmutable $expiresAt,
         string $keyId,
         string $id,
+        ?string $stateDigest = null,
     ): self {
         return new self(
             issuer: $issuer,
@@ -95,6 +118,7 @@ final readonly class Assertion
             expiresAt: $expiresAt,
             keyId: $keyId,
             id: $id,
+            stateDigest: $stateDigest,
         );
     }
 
