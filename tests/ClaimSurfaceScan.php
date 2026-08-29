@@ -10,74 +10,84 @@ use RecursiveIteratorIterator;
 use SplFileInfo;
 
 /**
- * **A guarantee this package states at three or more places is stated
- * at three or more places on purpose, and the places are written down.**
- * Narrowing such a claim means narrowing every site; this names the
- * sites so a narrowing round has the list instead of a memory of it.
+ * **WHAT THIS RECOGNISES: a run of ten or more words, containing a word
+ * from {@see ABSOLUTES}, that occurs word-for-word in three or more of
+ * the files it is given.** Each such run is reported with the files
+ * carrying it. Narrowing a claim at some of its sites and not the
+ * others changes that list, so the change is visible in the diff
+ * instead of resting on somebody's memory of where else the sentence
+ * was written.
+ *
+ * It exists because the surviving example of this build's dominant
+ * defect had exactly that shape: "there is nowhere in this table for
+ * prose to go" was written at the events migration, the contract and
+ * the model, and the round that corrected two of them left the third
+ * word for word.
  *
  * WHY IT IS THIS AND NOT A VOCABULARY DETECTOR. The obvious instrument
- * — find absolute words, require each to be paired with a test or a
- * residue note — was built and measured first, and it does not
- * enumerate. Two measurements say so, and they are recorded here
- * because the next person to have the idea deserves them:
+ * — find absolute words, require each occurrence to be paired with a
+ * citation or a residue note — was built and measured before this one.
+ * The measurement is runnable rather than quoted:
+ * {@see AbsolutePairingMeasurement}, pinned by
+ * `tests/ClaimSurfaceTest.php`. Two results, stated at the size of
+ * their evidence:
  *
- *  - Over the guarantee-bearing surfaces, 389 of 1,209 prose blocks
- *    carry one of *never, cannot, always, only, every path, in full,
- *    forever, complete, from nowhere else, no … can*; 287 of them carry
- *    no citation and no residue note. Requiring a pairing means writing
- *    287 annotations, most of them onto sentences that are already true
- *    and already enforced.
- *  - The decisive one: **this package's own corrections KEEP the
- *    absolute word.** `dedup_key` stores a sha256 digest, never a
- *    caller's string" became "**The emission point stores a sha256
- *    digest in `dedup_key`**, never a caller's string". "there is
- *    nowhere in this table for prose to go" became a sentence about
- *    what the recorder writes. What changed in each was the SUBJECT the
- *    absolute is predicated of, not the vocabulary. A word list cannot
- *    tell the defect from its own fix, and an instrument that cannot is
- *    looking for the wrong thing.
+ *  - **What the counts reject is a GATE.** Over the guarantee-bearing
+ *    surfaces the withdrawn instrument finds 392 of 1,211 prose blocks
+ *    carrying its vocabulary and 288 of those carrying neither a
+ *    citation nor a residue note, so requiring every occurrence to be
+ *    paired means writing 288 annotations, most onto sentences already
+ *    true and already enforced. **That is an argument against a gate
+ *    and against nothing else** — a pinned baseline over the same
+ *    blocks, or a detector firing only where prose CHANGED, would cost
+ *    something different and these counts say nothing about either.
+ *  - **The reason the family was set aside is the five corrections
+ *    themselves.** Of the five sentences the PR7 review required PR8 to
+ *    narrow, the vocabulary finds **two**; and for both of those it
+ *    finds the replacement too, because PR8 kept the absolute word and
+ *    changed the SUBJECT it was predicated of. So on this build's own
+ *    corrections the detector misses three outright and cannot
+ *    distinguish the other two from their own fixes.
  *
- * So this looks for the shape the defect actually had. The claim that
- * survived three narrowing rounds — "there is nowhere in this table for
- * prose to go" — survived because it was written at three sites (the
- * migration, the contract, the model) and each round corrected the
- * sites someone had open. Restatement is what made the miss possible,
- * and restatement is enumerable.
+ * That is what argued for looking at restatement instead. It is a
+ * judgement from five corrections, not a proof about the family, and
+ * anyone with a better instrument in it should build it.
  *
- * WHAT IT RECOGNISES. Prose only — PHP comment and doc-comment tokens,
- * JavaScript comments, Blade comments, Markdown in full — lower-cased,
- * with emphasis and back-quote characters dropped and runs of
- * non-word characters treated as one break. Over that it slides a
- * window of {@see PHRASE_WORDS} words, keeps the windows containing a
- * word from {@see ABSOLUTES}, and reports those occurring in
- * {@see RESTATEMENT_SITES} or more FILES, each collapsed to its longest
- * form ({@see restatedClaimsIn()} explains the collapse).
+ * **WHY NOTHING IN `docs/` OR `src/` CITES THIS.** `AppActionReadTransportScan`
+ * and the version-pair check both added `Pinned by` lines to the
+ * contract, and this one deliberately did not. Those two hold sentences
+ * the contract makes to consumers; this holds claims made in DOCBLOCKS,
+ * which are not contract surface, and writing a contract sentence about
+ * an internal tripwire would promise consumers something about our
+ * tooling. This docblock is the right home for it. (Ed's ruling, rework
+ * round 1 — recorded so the omission is not later "fixed".)
  *
- * THE RESIDUE, and it is large. Stated as what is not seen, not as a
- * measure of how much is:
+ * WHAT IT DOES NOT RECOGNISE. Each of these is driven in
+ * `tests/ClaimSurfaceTest.php` rather than only described:
  *
- *  - **A restatement that is not word-for-word is not a restatement
- *    here.** A claim paraphrased at its second site — the same promise
- *    in different words — shares no window and is reported nowhere.
- *    That is the majority of how a claim can be repeated, and closing
- *    it is a semantic comparison, not a text one.
- *  - **Two sites are below the threshold.** A claim written at exactly
- *    two places is outside this pin, and the threshold is a judgement
- *    about how many entries a person will maintain rather than a
- *    property of claims. The two-site case is asserted as unreported in
- *    `tests/ClaimSurfaceTest.php`, so the bound is driven rather than
- *    described.
- *  - **The window length is a threshold too.** A restated claim shorter
- *    than {@see PHRASE_WORDS} words shares no window.
- *  - **Nothing here reads whether a claim is TRUE**, whether it is
- *    absolute, or whether the sites agree about anything beyond the
- *    matched words. Two sites can carry the same ten words inside
+ *  - **A restatement that is not word-for-word.** The same promise in
+ *    different words at its second site shares no window and is
+ *    reported nowhere.
+ *  - **Words outside the absolute-bearing region of a run**, including
+ *    the SUBJECT of the sentence when it sits far enough from the
+ *    nearest absolute — which is the correction shape this class was
+ *    built for. {@see restatedClaimsIn()} has the detail.
+ *  - **A claim at two sites**, which is where the threshold falls, and
+ *    **a claim shorter than {@see PHRASE_WORDS} words**, which is where
+ *    the window does.
+ *  - **A run whose words cycle**: every window in it can be continued,
+ *    so none is maximal and none is reported.
+ *  - **Whether any of it is TRUE.** Nothing here reads a claim, only
+ *    where its words recur. Two sites can share ten words inside
  *    sentences that say opposite things.
- *  - **A file outside the surfaces passed in is invisible.** The
- *    surfaces are an argument, and choosing them is the human step —
- *    the same residue `tests/CitationScan.php` names for the same
- *    reason. The migration that carried the surviving claim is inside
- *    them because of it.
+ *  - **A file outside the surfaces it is handed.** Choosing them is the
+ *    human step — the residue `tests/CitationScan.php` names for the
+ *    same reason. The migration that carried the surviving claim is
+ *    inside them because of it.
+ *
+ * The thresholds above are numbers somebody chose, and the vocabulary
+ * is a list somebody wrote; the next claim written just outside either
+ * is not on it.
  */
 final class ClaimSurfaceScan
 {
@@ -123,13 +133,31 @@ final class ClaimSurfaceScan
     /**
      * Restated claim phrases, as phrase => the files carrying it.
      *
-     * REPORTED AS THE WHOLE RESTATED RUN. A restated sentence produces
-     * one window per starting word, so a twenty-word claim at three
-     * sites arrives as eleven overlapping windows carrying identical
-     * site lists. Reporting all eleven would say one thing eleven times
-     * and make an inventory nobody can read, so the chain is walked
-     * back to its start and reported once, as the full run of words the
-     * sites share.
+     * REPORTED AS THE ABSOLUTE-BEARING REGION OF THE RUN, WHICH IS NOT
+     * THE WHOLE SENTENCE. A restated sentence produces one window per
+     * starting word, so a twenty-word claim at three sites arrives as
+     * eleven overlapping windows carrying identical site lists;
+     * reporting all eleven would say one thing eleven times, so the
+     * chain is walked back and reported once.
+     *
+     * **But the chain is built only from windows that contain a word
+     * from {@see ABSOLUTES}, so it stops wherever ten consecutive words
+     * carry none — and the words beyond that stop are not in the
+     * reported phrase and are not pinned.** An earlier revision of this
+     * paragraph said "the full run of words the sites share", which is
+     * more than the walk does. Two consequences, both fixtured in
+     * `tests/ClaimSurfaceTest.php` — "reports only the absolute-bearing
+     * region of a restated sentence, so words beyond it are not pinned":
+     *
+     *  - A restated sentence is clipped at both ends and across any
+     *    interior stretch of ten words with no absolute in it.
+     *  - **A subject changed at every site, far enough from the nearest
+     *    absolute, leaves this map byte-identical.** That is the
+     *    correction shape this class was built for, so it is the sharpest
+     *    thing it does not see: the reviewer's
+     *    `the package database table holding … can never contain caller
+     *    supplied prose` is reported from `table` onward, and rewriting
+     *    the three words before it changes nothing here.
      *
      * The chain is followed by SITE LIST, not by text: two claims that
      * happen to overlap have different site lists and stay apart, and a
@@ -182,14 +210,25 @@ final class ClaimSurfaceScan
     }
 
     /**
-     * One window walked back to the start of its run: every window
-     * carrying the same site list that ends where this one begins,
-     * prepended a word at a time.
+     * One window walked back: each window carrying the same site list
+     * that ends where the current phrase begins, prepended a word at a
+     * time, until no unused predecessor is left.
      *
-     * The walk stops when the run has no further predecessor and, as a
-     * guard rather than an expectation, when a phrase repeats — a
-     * document whose words cycle (`a b a b a b`) can otherwise extend a
-     * run without ever reaching a start.
+     * **`$seen` HOLDS WINDOWS, NOT THE GROWING PHRASE, AND THAT IS WHAT
+     * MAKES THIS TERMINATE.** The first revision recorded the phrase,
+     * which gains a word every pass and is therefore never one it has
+     * recorded before — so the guard could not fire, and three files
+     * each holding ten repetitions of one absolute word ran until the
+     * process died. A hanging test is worse than a failing one: CI has
+     * no signal to give. Windows come from a finite set, so the loop
+     * cannot run more times than that set has members.
+     *
+     * The consequence, which is a real trade and not a technicality: a
+     * window that genuinely recurs later in the same run is used once,
+     * so a run whose words cycle is reported CLIPPED at the repeat
+     * rather than followed round it. That is pinned in
+     * `tests/ClaimSurfaceTest.php` — "walks a run of repeated words to a
+     * finite phrase instead of running forever".
      *
      * @param  list<string>  $sites
      * @param  array<string, list<string>>  $repeated
@@ -204,7 +243,7 @@ final class ClaimSurfaceScan
             $previous = null;
 
             foreach ($repeated as $other => $otherSites) {
-                if ($otherSites === $sites && str_ends_with($other, $head)) {
+                if ($otherSites === $sites && ! isset($seen[$other]) && str_ends_with($other, $head)) {
                     $previous = $other;
 
                     break;
@@ -215,20 +254,15 @@ final class ClaimSurfaceScan
                 return $phrase;
             }
 
+            $seen[$previous] = true;
             $phrase = explode(' ', $previous)[0].' '.$phrase;
-
-            if (isset($seen[$phrase])) {
-                return $phrase;
-            }
-
-            $seen[$phrase] = true;
         }
     }
 
     /**
-     * Every claim-bearing window in one document, de-duplicated: a file
-     * that says the same thing twice is one SITE, because the sites are
-     * what a narrowing round has to visit.
+     * The claim-bearing windows this parse finds in one document,
+     * de-duplicated: a file that says the same thing twice is one SITE,
+     * because the sites are what a narrowing round has to visit.
      *
      * @return list<string>
      */

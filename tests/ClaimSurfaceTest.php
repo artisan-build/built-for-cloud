@@ -2,44 +2,40 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\Tests\AbsolutePairingMeasurement;
 use ArtisanBuild\BuiltForCloud\Tests\ClaimSurfaceScan;
 
 /**
- * THE CLAIM SURFACE, made enumerable in the one direction it turned out
- * to be enumerable in.
+ * THE RESTATEMENT MAP, and the measurement that argued for it.
  *
  * The build this closes had one dominant defect: sentences asserting
  * properties nothing enforced. Three rounds of hand-narrowing each fixed
- * the sentences somebody had open and missed the ones nobody had
- * enumerated — one finding, arrived at three times. The thing that made
- * the miss possible is visible in the surviving example: "there is
- * nowhere in this table for prose to go" was written at THREE sites —
- * the events migration, the contract document and the model — and a
- * round that corrected the contract and the model left the migration
- * word for word.
+ * the sentences somebody had open. The surviving example says why that
+ * was possible — "there is nowhere in this table for prose to go" was
+ * written at the events migration, the contract and the model, and the
+ * round that corrected two of them left the third word for word.
  *
- * So the property pinned here is restatement, not truth: **a guarantee
- * phrase this package writes at three or more places is listed below
- * with its places.** Narrow it at two of three sites and this suite
- * reds, naming the site still carrying the old words. That is the exact
- * failure mode, and it is the one an instrument can actually decide.
+ * So what is pinned here is restatement, not truth: the runs this parse
+ * finds at three or more sites, with their sites. Narrow one at two of
+ * three and the map changes, naming the site still carrying the old
+ * words. `tests/ClaimSurfaceScan.php` states what the parse recognises
+ * and what it does not; the tests below drive each of those bounds.
  *
- * **WHAT WAS TRIED FIRST AND DOES NOT WORK**, recorded because the idea
- * is a natural one and somebody will have it again. Detecting absolute
- * VOCABULARY — *never, cannot, always, only, forever, complete* — and
- * requiring each instance to be paired with a citation or a residue
- * note was built and measured before this was written. It does not
- * separate the defect from the fix: this package's own corrections keep
- * the absolute word and change the SUBJECT it is predicated of.
- * "`dedup_key` stores a sha256 digest, never a caller's string" was
- * false; "**The emission point stores a sha256 digest in `dedup_key`**,
- * never a caller's string" is true; both say "never". The measurements
- * are in {@see ClaimSurfaceScan}'s docblock and the finding is a debt
- * row, not a silent omission.
+ * **WHAT WAS BUILT FIRST AND SET ASIDE**, with the measurement runnable
+ * instead of quoted. Detecting absolute VOCABULARY and requiring each
+ * occurrence to be paired with a citation or a residue note was built
+ * and measured before this was written. The counting rules are
+ * {@see AbsolutePairingMeasurement} and the numbers are asserted below,
+ * because a measurement supporting a design decision that a reader
+ * cannot re-run is a citation nobody can follow — the defect this PR is
+ * about, committed by the PR.
  *
- * THE RESIDUE IS ON THE SCAN, and it is large: word-for-word
- * restatement only, three sites or more, ten words or more, and nothing
- * at all about whether any of it is true.
+ * The numbers reject a GATE requiring every unpaired occurrence to be
+ * annotated. They do not reject a pinned baseline or a changed-prose
+ * detector over the same blocks; nothing here was measured about those.
+ * What argued against the family is the five corrections: the
+ * vocabulary finds two of the five false sentences, and finds both of
+ * their replacements too.
  */
 $claimSurfaces = ['src', 'docs', 'release-notes', 'database/migrations', 'resources', 'README.md'];
 
@@ -436,4 +432,154 @@ it('reads a wrapped and emphasised claim as the same phrase as a plain one', fun
 
     expect(ClaimSurfaceScan::words($plain))
         ->toBe(ClaimSurfaceScan::words(ClaimSurfaceScan::proseIn('src/A.php', $wrapped)));
+});
+
+it('walks a run of repeated words to a finite phrase instead of running forever', function (): void {
+    // D1, AND IT WAS NOT A THEORETICAL INPUT. Three files each holding
+    // ten repetitions of one absolute word made the leftward walk
+    // prepend words until the process ran out of memory, because the
+    // cycle guard recorded the GROWING PHRASE — which gains a word every
+    // pass and is therefore never one it has recorded before — instead
+    // of the predecessor WINDOW, which comes from a finite set.
+    //
+    // A hanging test is worse than a failing one: CI has no signal to
+    // give. So the guard is pinned with a finite expected result rather
+    // than described in a docblock.
+    $repeated = trim(str_repeat('never ', 10));
+
+    expect(ClaimSurfaceScan::restatedClaimsIn([
+        'docs/a.md' => $repeated,
+        'docs/b.md' => $repeated,
+        'docs/c.md' => $repeated,
+    ]))->toBe([$repeated => ['docs/a.md', 'docs/b.md', 'docs/c.md']]);
+
+    // The same shape with the cycle spread across two words. It
+    // terminates, and it reports NOTHING — asserted because it is a
+    // second thing this walk does that nobody would guess: every window
+    // in a fully cyclic run can be continued by another window with the
+    // same site list, so every one of them is non-maximal and none is
+    // reported. A claim written as a cycle is invisible here.
+    $alternating = trim(str_repeat('never always ', 8));
+
+    expect(ClaimSurfaceScan::restatedClaimsIn([
+        'docs/a.md' => $alternating,
+        'docs/b.md' => $alternating,
+        'docs/c.md' => $alternating,
+    ]))->toBe([]);
+});
+
+it('reports only the absolute-bearing region of a restated sentence, so words beyond it are not pinned', function (): void {
+    // D2, AND IT IS THE SHARPEST THING THIS INSTRUMENT DOES NOT SEE.
+    // The chain is built from windows that contain an absolute, so it
+    // stops wherever ten consecutive words carry none — and everything
+    // past that stop is outside the reported phrase and outside the pin.
+    $sites = static fn (string $prose): array => [
+        'docs/a.md' => $prose,
+        'docs/b.md' => $prose,
+        'docs/c.md' => $prose,
+    ];
+
+    // The reviewer's input. Reported from `table` onward: the three
+    // words before it are outside the region.
+    $claim = 'the package database table holding app action events and ledger rows can never '
+        .'contain caller supplied prose';
+
+    expect(array_keys(ClaimSurfaceScan::restatedClaimsIn($sites($claim))))
+        ->toBe(['table holding app action events and ledger rows can never contain caller supplied prose']);
+
+    // AND THE CONSEQUENCE, DRIVEN RATHER THAN DESCRIBED: the SUBJECT
+    // rewritten at every site, outside the region, leaves the map
+    // byte-identical. This is the correction shape the class was built
+    // for — PR8 kept "never" and changed what the sentence was about —
+    // so a reader needs to know it is invisible here when the changed
+    // words sit far enough from the nearest absolute.
+    $subjectChanged = 'the recorder emission point table holding app action events and ledger rows '
+        .'can never contain caller supplied prose';
+
+    expect(ClaimSurfaceScan::restatedClaimsIn($sites($subjectChanged)))
+        ->toBe(ClaimSurfaceScan::restatedClaimsIn($sites($claim)));
+
+    // A change INSIDE the region does red it, so the assertion above is
+    // read as a bound rather than as an instrument that sees nothing.
+    $insideChanged = 'the package database table holding app action events and ledger rows can never '
+        .'contain operator supplied prose';
+
+    expect(ClaimSurfaceScan::restatedClaimsIn($sites($insideChanged)))
+        ->not->toBe(ClaimSurfaceScan::restatedClaimsIn($sites($claim)));
+
+    // An interior stretch of ten words with no absolute clips the run
+    // there, which is the same bound in the middle of a sentence.
+    $withGap = 'the ledger never records anything that the consuming application has not first '
+        .'written down inside its own database transaction and committed successfully to disk';
+
+    expect(array_keys(ClaimSurfaceScan::restatedClaimsIn($sites($withGap))))
+        ->toBe(['the ledger never records anything that the consuming application has not first']);
+});
+
+it('reproduces the measurement the pairing instrument was set aside on', function () use ($claimSurfaces): void {
+    // D3. The counts were quoted in a docblock and nowhere runnable, so
+    // a reader had to take a design decision on trust. These are the
+    // same surfaces `tests/CitationScan.php` treats as guarantee-bearing
+    // — the ones an annotation gate would have applied to — and the
+    // counting rules are in AbsolutePairingMeasurement's docblock.
+    //
+    // THEY ARE PINNED EXACTLY, AND THAT MEANS PROSE EDITS RED THIS.
+    // Deliberate: the numbers are cited in ClaimSurfaceScan's docblock,
+    // and a cited number that drifts silently is the thing this package
+    // exists to prevent. When it reds, update both.
+    $gateSurfaces = [
+        'src/Console', 'src/Audit', 'src/Http/Controllers/ConsoleEnter.php',
+        'src/Http/Controllers/ConsoleChromeScript.php', 'resources/views', 'resources/js',
+        'docs/http-contract.md', 'release-notes/console-enter.md',
+        'release-notes/unified-store-guard.md', 'release-notes/console-reservations.md',
+    ];
+
+    expect(AbsolutePairingMeasurement::measure(
+        AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
+    ))->toBe([
+        'blocks' => 1211,
+        'absolute' => 392,
+        'paired' => 104,
+        'unpaired' => 288,
+    ]);
+
+    // The surfaces the restatement map runs over are wider than the
+    // gate's, and deliberately so — the migration that carried the
+    // surviving claim is in one of them and in none of the gate's.
+    expect($claimSurfaces)->toContain('database/migrations')
+        ->and($gateSurfaces)->not->toContain('database/migrations');
+});
+
+it('shows what the vocabulary does with the five corrections this build had to make', function (): void {
+    // THE REASON THE FAMILY WAS SET ASIDE, as a fixture rather than an
+    // assertion in prose. Each pair is a sentence the PR7 review found
+    // false and the sentence that replaced it in dc7afce.
+    $flagged = [];
+
+    foreach (AbsolutePairingMeasurement::CORRECTIONS as [$before, $after]) {
+        $flagged[] = [
+            AbsolutePairingMeasurement::vocabularyIn($before) !== [],
+            AbsolutePairingMeasurement::vocabularyIn($after) !== [],
+        ];
+    }
+
+    // Two of the five false sentences are found at all. The other three
+    // carry no word from the list — "exactly one event per action" is
+    // absolute and is not in it — so a gate over this vocabulary would
+    // have asked for annotations on sentences that were fine and asked
+    // for nothing on three that were false.
+    expect(count(array_filter($flagged, static fn (array $pair): bool => $pair[0])))->toBe(2);
+
+    // And for both that ARE found, the replacement is found too: PR8
+    // kept the absolute word and changed the subject it was predicated
+    // of. Flagging the fix the same way it flagged the defect is what
+    // makes the detector the wrong instrument, and it is the whole of
+    // the argument — five corrections, not a proof about the family.
+    expect(count(array_filter($flagged, static fn (array $pair): bool => $pair[0] && $pair[1])))->toBe(2);
+
+    // The specific pair, spelled out, so the claim is legible without
+    // running anything.
+    expect(AbsolutePairingMeasurement::vocabularyIn('the only shape this table stores'))->toBe(['only'])
+        ->and(AbsolutePairingMeasurement::vocabularyIn('the column itself enforces only 64 characters and uniqueness'))
+        ->toBe(['only']);
 });
