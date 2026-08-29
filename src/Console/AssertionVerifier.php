@@ -10,6 +10,7 @@ use ParagonIE\Paseto\Parser;
 use ParagonIE\Paseto\ProtocolCollection;
 use ParagonIE\Paseto\Purpose;
 use RuntimeException;
+use SensitiveParameter;
 use Throwable;
 
 /**
@@ -39,7 +40,11 @@ use Throwable;
  *  4. **claim shape and charset** — bounded lengths, no control
  *     characters (the verify-side half of D11's escape-by-construction
  *     promise: the chrome must never be the only thing between a hostile
- *     display name and a rendered page);
+ *     display name and a rendered page). The optional `state` claim —
+ *     D13's binding between a mint and its signed handoff state — is
+ *     shape-checked here too: present means exactly a sha256 hex
+ *     digest, and a malformed one is a refusal rather than a silent
+ *     absence;
  *  5. **role** — {@see ConsoleRole} and nothing else, ever;
  *  6. **issuer** — exactly one issuer in v1 (D18), which is what bounds
  *     per-issuer authority;
@@ -68,6 +73,28 @@ use Throwable;
  * Verification is PURE: it reads the keyring and the clock and writes
  * nothing. The single-use burn of `jti` (D12) belongs to the enter
  * endpoint that owns the transaction, not to the crypto choke point.
+ *
+ * THE TOKEN IS A LIVE CREDENTIAL AND IS MARKED AS ONE. Every frame in
+ * this class that holds the presented bytes carries
+ * `#[SensitiveParameter]`, so with `zend.exception_ignore_args=0` — a
+ * perfectly ordinary setting — a throw anywhere downstream cannot put a
+ * complete `v4.public…` assertion into the customer's own logs. That is
+ * not hypothetical: a database failure or a keyring lookup below this
+ * line produces a stack trace whose arguments would otherwise include
+ * an admin-minting credential.
+ *
+ * THE RESIDUE, named because it cannot be closed from here: the
+ * `ParagonIE\Paseto` frames this class calls — `Parser::parse()` and
+ * `Parser::extractFooter()` — receive the same bytes and are VENDOR
+ * code, so no attribute of ours redacts them. A refusal decided inside
+ * the library therefore carries the token in the PREVIOUS exception's
+ * trace. That previous is kept deliberately (it is the only operator
+ * diagnostic for a cryptographic failure) and never reaches a response;
+ * an operator whose log retention treats stack traces as sensitive
+ * should keep treating them that way.
+ *   Pinned by `tests/AssertionSecrecyTest.php` — "marks every frame in
+ *   this package that holds console assertion bytes" and "names an
+ *   unmarked assertion frame when the walk meets one".
  */
 final class AssertionVerifier
 {
@@ -85,8 +112,16 @@ final class AssertionVerifier
     /** The bound on the identity claims — issuer, subject, audience. */
     public const int MAX_IDENTITY_LENGTH = 255;
 
-    /** The bound on the mint id PR4 burns. */
+    /** The bound on the mint id the enter endpoint burns. */
     public const int MAX_ID_LENGTH = 64;
+
+    /**
+     * The shape of the optional `state` claim: the lower-case hex
+     * sha256 of the signed handoff state (D13), and nothing else.
+     * Anchored with `\z` rather than `$`, which also matches before a
+     * trailing newline.
+     */
+    public const string STATE_DIGEST_PATTERN = '/^[0-9a-f]{64}\z/';
 
     /**
      * A whole-token size bound, applied before any parsing: a delegated
@@ -103,7 +138,7 @@ final class AssertionVerifier
      *
      * @throws AssertionRefused
      */
-    public function verify(string $token): Assertion
+    public function verify(#[SensitiveParameter] string $token): Assertion
     {
         $now = CarbonImmutable::now();
 
@@ -133,6 +168,7 @@ final class AssertionVerifier
         $id = $this->boundedString($claims, 'jti', self::MAX_ID_LENGTH);
         $displayName = $this->boundedString($claims, 'display_name', self::MAX_DISPLAY_LENGTH);
         $onBehalfOf = $this->optionalBoundedString($claims, 'on_behalf_of', self::MAX_DISPLAY_LENGTH);
+        $stateDigest = $this->optionalStateDigest($claims);
         $issuedAt = $this->timestamp($claims, 'iat');
         $expiresAt = $this->timestamp($claims, 'exp');
         $notBefore = array_key_exists('nbf', $claims) ? $this->timestamp($claims, 'nbf') : null;
@@ -197,7 +233,42 @@ final class AssertionVerifier
             expiresAt: $expiresAt,
             keyId: $keyId,
             id: $id,
+            stateDigest: $stateDigest,
         );
+    }
+
+    /**
+     * The optional `state` claim: the digest that binds a SIGNED
+     * HANDOFF STATE to this mint (D13).
+     *
+     * Absent is a legitimate, well-formed mint — one that named no
+     * state. PRESENT-BUT-MALFORMED is a refusal, never a silent null,
+     * exactly like `on_behalf_of`: a state binding that cannot be read
+     * is not the same as one that was never claimed, and treating it as
+     * absent would let a mangled digest degrade into "no state" at the
+     * one door where a state is what stops the return path being a
+     * request field.
+     *
+     * The verifier does not decide whether a state is REQUIRED. That is
+     * the enter endpoint's rule, because entry is the flow D13 governs;
+     * this method's whole job is that a claim which is present is
+     * exactly 64 lower-case hex characters.
+     *
+     * @param  array<string, mixed>  $claims
+     */
+    private function optionalStateDigest(array $claims): ?string
+    {
+        if (! array_key_exists('state', $claims) || $claims['state'] === null) {
+            return null;
+        }
+
+        $value = $claims['state'];
+
+        if (! is_string($value) || preg_match(self::STATE_DIGEST_PATTERN, $value) !== 1) {
+            throw AssertionRefused::because(AssertionRefusalReason::InvalidClaims);
+        }
+
+        return $value;
     }
 
     /**
@@ -216,7 +287,7 @@ final class AssertionVerifier
      * signature, so a swapped `kid` cannot survive the signature check
      * that follows.
      */
-    private function keyIdOf(string $token, Parser $parser): string
+    private function keyIdOf(#[SensitiveParameter] string $token, Parser $parser): string
     {
         if ($token === '' || strlen($token) > self::MAX_TOKEN_LENGTH) {
             throw AssertionRefused::because(AssertionRefusalReason::MalformedToken);

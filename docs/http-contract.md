@@ -185,6 +185,24 @@ Additive unless marked otherwise:
   a session-vs-session one — see `release-notes/unified-store-guard.md`. Full detail under
   [Console — what has landed](#console--what-has-landed-and-what-is-still-reserved).
 
+- **The Console's enter endpoint ships (Console PRD D12/D13).** All additive, and `api_version`
+  stays 2: no documented request or response shape changes. New route
+  [`POST /bfc/console/enter`](#post-bfcconsoleenter), classified `content`, mounted only on a
+  deployment that has the Console enabled AND whose reserved `bfc-console` guard is this
+  package's own — `GET /bfc/meta` `capabilities` gains `console-enter` under exactly that
+  predicate, and `/bfc/console/enter` therefore moves out of the RESERVED list. What lands with
+  it: the single-use `jti` burn (a new `bfc_console_assertion_burns` table, unique-indexed, and
+  the only pruned table in the package), D13's **signed handoff state** — the return path rides
+  inside the assertion's signature via a new optional `state` claim carrying the sha256 of the
+  state blob — a per-IP `bfc-console-enter` limiter at 30/minute, and one uniform `403` for
+  every refusal with the reason going to the audit stream as a `denied_action` event. The
+  `denied_action` lifecycle event now also covers refused console entries. Apps may narrow where
+  an entry may land with the new `built-for-cloud.console.return_path_allowlist` config key,
+  which is empty (any in-app path) by default. **One source-additive PHP change rides this
+  release** (no wire shape changes): `Assertion` gains a nullable `stateDigest`, and
+  `Assertion::fromVerifiedClaims()` gains a matching trailing optional parameter — existing
+  callers are unaffected.
+
 **api_version 1** — the 0.3.x baseline: `/bfc/meta`, `/bfc/ownership/*`, the pre-0.4 credential
 API listing shape.
 
@@ -358,6 +376,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/me/credentials` | `content` | the `delivery` single reveal, plus free-text name/subject fields |
 | `DELETE /bfc/me/credentials/{id}` | `metadata` | empty `204` body |
 | `POST /bfc/console/re-key` | `metadata` | key ids from a bounded charset, a fixed status enum and a timestamp — no free text, and never any key material |
+| `POST /bfc/console/enter` | `content` | its success is a `303`, not a body: the `Set-Cookie` it establishes IS a single reveal of a live delegated session credential, and the `Location` echoes the return path the issuer signed |
 | `GET /bfc/console/vitals` | `metadata` | bounded integers, a fixed health enum, a semver-validated `app_version`, a timestamp, and a headline label drawn from the app's declared vocabulary — no free text anywhere, and deliberately no `product` |
 | `POST /bfc/subjects/offboard` | `metadata` | `{"offboarded": true, "fully_contained": bool}` / `{"accepted": true, "fully_contained": bool}` — bounded booleans only |
 
@@ -368,8 +387,10 @@ read-audited credential the Console dashboard uses. **A `metadata` classificatio
 itself an access grant:** the other rows in this table keep the gates they already had, and
 `metadata:read` opens exactly the routes that name it.
 
-**The column describes the 2xx body and nothing else.** Error responses are outside it, as
-stated above: every surface shares prose `message` fields, and a `metadata` classification
+**The column describes the success body and nothing else.** One row's success path is a
+redirect rather than a body — [`POST /bfc/console/enter`](#post-bfcconsoleenter) — and it is
+classified `content` on what that redirect carries, which is a session cookie. Error responses
+are outside the column, as stated above: every surface shares prose `message` fields, and a `metadata` classification
 makes no claim about a `401`, `403`, `422` or `429` envelope. It is also not an access grant —
 see the paragraph above.
 
@@ -436,9 +457,15 @@ dashboard is the vendor's, and nothing in this release renders anything.
 `console-guard` means this deployment has the Console ENABLED and therefore carries the
 delegated-session machinery: the `bfc-console` guard, the `bfc_delegated_actors` table and the
 re-entry `401`. It is absent when `built-for-cloud.console.enabled` is off, which is the
-default, because the capability describes this deployment and not the package. It deliberately
-does not say `console-enter`: no enter endpoint exists yet, so a control plane that read this as
-"an operator can be handed to this deployment" would be reading a promise nothing here keeps.
+default, because the capability describes this deployment and not the package.
+
+`console-enter` means this deployment serves
+[`POST /bfc/console/enter`](#post-bfcconsoleenter) — it is the entry that finally says an
+operator can be handed here. Its condition is **stricter** than `console-guard`'s: the Console
+must be enabled AND the reserved `bfc-console` guard must resolve to this package's own driver.
+An app that defined its own `bfc-console` guard keeps it, and the package mounts no door in
+front of somebody else's guard — so that deployment reports `console-guard` and not
+`console-enter`. The capability and the route ride one predicate, so they can never disagree.
 See [Console — what has landed](#console--what-has-landed-and-what-is-still-reserved).
 
 ---
@@ -1856,15 +1883,255 @@ mutating request).
 
 ---
 
+## Console entry
+
+The door. Everything above in the `/bfc/console/*` namespace is operator- or vendor-facing
+machinery; this is the one surface a **browser** posts to, and the only way a delegated
+operator session begins.
+
+It exists only on a deployment that reports the `console-enter` capability — the Console
+enabled, and the reserved `bfc-console` guard resolving to this package's own driver. Elsewhere
+the path is a `404`, never a refusal.
+
+*Pinned by* `tests/ConsoleEnterSurfaceTest.php` ("the door is mounted by default in a console
+enabled app" and "routes off unmounts the door like every other package route"),
+`tests/ConsoleDisabledTest.php` ("it mounts no enter door and advertises none") and
+`tests/ConsoleEnterForeignGuardTest.php` ("an app that owns the guard owns entry too").
+
+### POST /bfc/console/enter
+
+Unauthenticated by construction: **this is the authentication event.** What stands in for a
+gate is the issuer's Ed25519 signature over a PASETO `v4.public` assertion, the per-deployment
+audience, the 60–120 second TTL and the single-use burn.
+
+**The carrier is POST, and GET is not routed at all** — `405`, not a redirect. A GET assertion
+is a live credential in the customer's own server and CDN logs, in browser history, and in the
+`Referer` of the very next request the entered page makes.
+
+*Pinned by* `tests/ConsoleEnterTest.php` ("does not route GET at the enter path, so an assertion
+can never ride a query string").
+
+**Request** (`application/x-www-form-urlencoded`, the shape an auto-submitting form posts):
+
+```
+assertion=v4.public.<base64url payload>.<base64url footer>
+state=<base64url of {"return_to": "/orders?tab=open"}>
+```
+
+- `assertion` — the signed handoff. Required, ≤ 4096 bytes.
+- `state` — the **signed handoff state**. Required, ≤ 4096 bytes, unpadded base64url of a JSON
+  object. The only member this deployment reads is `return_to`; unknown members are ignored, so
+  an issuer may grow the payload without a contract break. The assertion's `state` claim carries
+  the lower-case hex **sha256 of these exact bytes**, which is what makes the state signed: it
+  is checked before a single byte is decoded, and a state that does not hash to the claim is
+  refused.
+
+**303** — entry succeeded. `Location` is the **relative** `return_to`, emitted verbatim and
+never resolved against the request's `Host`, so a spoofed header cannot turn a validated in-app
+path into an absolute URL somewhere else. `Set-Cookie` carries the delegated session; from here
+the operator is authenticated to routes the `bfc-console` guard governs, under D7's clocks.
+
+*Pinned by* `tests/ConsoleEnterTest.php` ("mints a delegated session from a valid handoff and
+lands on the requested relative path" and "carries the handoff its own role and agency into the
+session, not the row's").
+
+**403 — one uniform refusal, for every reason.**
+
+```json
+{"version": 1, "error": "console_entry_refused"}
+```
+
+Every failure answers with that body and that status: an expired assertion, one minted for
+another deployment, a bad signature, an unknown key, a replayed mint, a tampered or absent
+state, a return path this deployment will not honour, and an actor this deployment has
+contained. **Nothing in the response distinguishes them.** The reason is recorded in the audit
+stream as a `denied_action` event with the actor typed (`credential_holder`) and a bounded
+reason code in the note — never returned to the caller.
+
+**The refusal is not served unless it was recorded.** If the audit write cannot commit, the
+request answers `500` rather than the ordinary `403`: D13 says verification failures are
+audited, and a promise that lapses during an audit-store outage — precisely when someone is
+probing — is worth less than none, because it is the one an operator believed. The availability
+trade is real and stated: a deployment whose database is unwritable cannot refuse an entry with
+a `403`. It also cannot complete one, so nothing is lost that was otherwise available, and no
+caller can reach this branch on purpose.
+
+*Pinned by* `tests/ConsoleEnterTest.php` ("answers a replayed, a wrong-deployment and an expired
+assertion with byte-identical responses", "says nothing about the reason in the body it hands
+back", "types the actor on every refusal, and names the mint only when it verified", "records
+every refusal it serves, one row per refused entry" and "does not serve a refusal it could not
+record").
+
+**The responses are byte-identical. The TIMING is not, and that is a stated non-goal.** Two
+channels survive:
+
+- a refusal decided **before** the signature check (an unknown, pending or retired key id)
+  returns measurably sooner than one decided after it, so key state stays distinguishable;
+- a **replay** is measurably **slower** than a bad signature, a wrong audience or an expired
+  token, because it is the only refusal that reaches the state binding, the shadow-actor upsert
+  and a contended unique insert before it fails. A holder of a stolen assertion can therefore
+  infer whether it has already been redeemed.
+
+Neither is padded. Constant-time padding on a page-load path would cost real latency to hide
+facts a prober largely supplies itself, and what makes a stolen or forged token worthless is the
+per-deployment audience binding and the single-use burn, not the shape of the clock.
+
+**429** — beyond 30 requests per minute per IP, applied **before** everything else on the route,
+so refused attempts are bounded too and a `429` still says `429`. One bound and no global
+ceiling, both deliberate: this surface is pre-authentication and carries no stable caller
+identity that is not attacker-chosen (a second bucket on the mint id or key id would refresh
+itself for free), and a bucket every caller shares would be a lockout lever on the **only** way
+an operator gets in.
+
+**What the endpoint guarantees**
+
+- **Single use.** The assertion's `jti` is burned in the SAME transaction that opens the
+  session, as an INSERT against a unique index rather than a read-then-write. A second
+  presentation is refused **because the mint is spent**, not because something later noticed it.
+  The two directions both hold: a redemption that fails does not spend the mint, and a burn that
+  loses the race takes the redemption with it.
+
+  *Pinned by* `tests/ConsoleEnterTest.php` ("refuses a genuine second presentation of the same
+  assertion, because the mint id is spent", "rolls the burn back with the redemption, so the two
+  commit or fail together", "keys the burn on a unique index, which is what makes it atomic" and
+  "length-delimits the burn key, so two different issuer and mint pairs cannot hash alike").
+
+  **One refusal deliberately does NOT spend the mint.** A contained (offboarded) actor's entry
+  is refused inside the burn's own transaction, so the burn rolls back with it and that
+  assertion stays presentable until its TTL runs out — every presentation refused, every one
+  audited as `actor_deactivated`. Spending it would make the second attempt audit as `replayed`,
+  which asserts the token was already *redeemed*; it was not, and an operator reading an
+  offboarded human's attempts to get back in would draw exactly the wrong conclusion. The burn
+  table records mints this deployment redeemed; the audit stream records presentations, and it
+  records all of them. The exposure is bounded by the 60–120 second TTL and by the rate limiter,
+  and no session is produced on any attempt.
+
+  *Pinned by* `tests/ConsoleEnterTest.php` ("leaves a contained actor's mint unspent, so every attempt audits as containment").
+
+  **What the suite does not exercise, said plainly: a genuine CONCURRENT double presentation.**
+  sqlite serializes writers in-process, so the tests above drive the sequential replay and the
+  shared-transaction property the race rests on — not the interleaving itself. A mutation-debt
+  row records it, and a two-connection race on a driver with real row locking is what would
+  close it.
+- **The return path cannot be substituted.** It is not a request field; it rides inside the
+  vendor's signature, and it must additionally be a same-origin **relative** path in every
+  percent-decoded form — absolute, protocol-relative, backslash, encoded-slash, double-encoded
+  and control-character forms are all refused, whatever the issuer signed — and inside the
+  deployment's `built-for-cloud.console.return_path_allowlist`, when it configures one. An empty
+  allowlist is the default and means "any path in this app"; the relative check is what closes
+  open redirect.
+
+  **A `.` or `..` PATH SEGMENT is refused outright, in every decoded form**, and that rule is
+  about who normalizes. `/admin/../billing` is legitimately relative, so every other check passes
+  — and the *browser* resolves it to `/billing` before this app sees it, which would bypass a
+  configured landing restriction with a value nothing had rejected. `/admin/%2e%2e/billing` and
+  `/admin/%252e%252e/billing` are the same defect one and two layers down. A dot *inside* a
+  segment is untouched: `/reports..csv` is an ordinary path. The allowlist is then matched
+  against the fully **decoded** path, so `/%61dmin/users` and `/admin/users` cannot be answered
+  differently; the redirect still emits what the issuer signed, verbatim.
+
+  **The path is established ONCE, before anything is decoded**, and that ordering is what makes
+  the rule hold. Query and fragment are split off the *raw* value; everything before the first
+  literal `?` or `#` is the path, for good. A revision that split them off each *decoded* form
+  was bypassed by `/admin%3F/%2e%2e/billing`: it carries no literal `?`, so the raw path is the
+  whole string and looks clean, and decoding invents a `?` behind which the traversal hid — the
+  check saw `/admin` while the browser, which treats `%3F` as an ordinary path character,
+  resolved the `%2e%2e` and landed on `/billing`. `%23` did the same with a fragment.
+
+  **The configured prefixes go through the same door.** A prefix is canonicalized before it is
+  compared, and one that is not itself a safe in-app path matches *nothing* rather than being
+  trimmed into something: a configured `//` used to `rtrim()` to the empty string, which was the
+  wildcard branch, so it silently allowed every path. Only a literal `/` is the wildcard now.
+
+  *Pinned by* `tests/ConsoleEnterTest.php` ("refuses a return path that is not a safe
+  same-origin relative path, whatever the mint signed", "refuses a return path carrying a
+  traversal segment in any decoded form, allowlist or no allowlist", "leaves a dot inside a
+  segment alone, because that is an ordinary path", "matches the allowlist against the fully
+  decoded path, not the raw one", "establishes the path once, so a query string cannot appear
+  out of a decoding round", "honours a configured return-path allowlist, at a segment boundary",
+  "refuses an allowlist prefix that is not itself a safe in-app path, rather than widening on
+  it", "treats a literal root prefix as the wildcard it looks like" and "canonicalizes the
+  configured prefixes the same way it canonicalizes the path").
+- **No CSRF token, and that is not an oversight.** The handoff is a cross-site POST from the
+  issuer's page, and a `SameSite=Lax` session cookie — Laravel's default — is not sent with one,
+  so the app has no session with that browser and no token it could have planted. The signed
+  state is what replaces it.
+
+  *Pinned by* `tests/PersonalSurfaceWebGroupTest.php` ("the console door starts a session
+  without csrf validation" and "only the personal surface and the console door ride the session
+  stack").
+
+- **The presented credential is marked sensitive, and then removed.** Every frame in the package
+  that can hold a console assertion — a string named for a token, and the `Request` that carries
+  the submitted form — declares PHP's `#[SensitiveParameter]`. More importantly, the assertion is
+  **taken out of the request object** as soon as it has been read and before anything that can
+  throw runs, because a rich error reporter serializes request *input* alongside a trace
+  regardless of which frames hold what, and no attribute touches that.
+
+  **The claim is narrower than "no frame leaks the credential", deliberately.** The `Request`
+  travels through the entire framework pipeline — routing, middleware, the controller dispatcher
+  — and every one of those frames holds it; they are vendor frames and this package cannot
+  annotate them, which is equally true of every bearer token a Laravel application receives. So
+  does `ParagonIE\Paseto`, which receives the token itself and carries it in the *previous*
+  exception's trace on a cryptographic refusal — kept as the only operator diagnostic for one,
+  and never reaching a response. What **is** enforced: no frame this package declares carries the
+  credential unmarked, and the object those vendor frames hold no longer carries it. What is
+  **not** reachable: the raw request body if something has already buffered it (the documented
+  carrier is a form POST, where nothing does), and any credential held in a shape the scan's two
+  rules do not name.
+
+  The scan itself covers filename-derived classes, enums and interfaces under `src/`; it does
+  **not** cover package functions, anonymous classes or standalone traits, which PHP can also make
+  a frame from. Such a frame is caught by reviewing the diff that adds it, not by this suite, and
+  a debt row names it.
+
+  *Pinned by* `tests/AssertionSecrecyTest.php` ("marks every frame in this package that holds
+  console assertion bytes", "names an unmarked assertion frame when the walk meets one", "names
+  the shapes it cannot reach, so the claim beside it stays true" and "takes the presented
+  assertion out of the request before any validation runs").
+
+**What it does NOT guarantee, stated rather than implied.** The signed state closes open
+redirect and stops a state being moved between mints. It does **not** close forced login: an
+attacker who holds a legitimately-minted assertion for their **own** issuer identity can
+auto-submit it in a victim's browser, leaving that browser entered as the attacker. No state
+parameter closes that here, because every state such an attacker needs is one the issuer minted
+for them, and the classic defence — a state the relying party planted in the caller's session —
+requires a request that carries the app's cookie, which the cross-site POST is not. What bounds
+it is the 60–120 second TTL and the burn: the window is short, the token is spent, and the
+session carries the **attacker's** audited identity, so nothing done under it is attributed to
+the victim. The residue is that a victim may act inside an app under an identity they did not
+choose.
+
+*Pinned by* `tests/ConsoleEnterTest.php` ("refuses an entry whose state was tampered with after
+the mint signed it", "refuses an entry that presents no state at all", "refuses a mint that
+signed no state, whatever state is presented" and "refuses a state lifted from a different
+mint").
+
+**A successful entry writes no event to the credential lifecycle stream.** That stream is
+credential-scoped; actor-typed app-action events are a separate, later stream (Console PRD D17).
+What a successful entry does leave is the shadow-actor row's refreshed `last_handoff_*` copy and
+its `updated_at`. Verification FAILURES are audited in full, which is what D13 requires.
+
+**Storage.** One row per redeemed mint in `bfc_console_assertion_burns`, keyed on a digest of
+issuer + `jti`. It holds no secret — a `jti` is a mint identifier, worthless without the signed
+token that carried it — and it is the one table in this package that is **pruned**: a row is
+useful only until the assertion it names expires, and the endpoint drops expired rows after each
+successful entry. The margin points one way on purpose: a row dropped while its assertion could
+still be presented would un-spend a mint.
+
+*Pinned by* `tests/ConsoleEnterTest.php` ("sits exactly on the prune boundary: one second inside keeps a burn row, one second past drops it").
+
+---
+
 ## Console — what has landed, and what is still RESERVED
 
 The vendor-side Console lands in stages. This section says exactly which of its reserved names
 are now real and which are still only names, so a consumer never has to guess. **Nothing in the
 "Landed" list changes any documented request or response shape, so `api_version` does not
-move**: what it adds is a guard, a table and a middleware — server-side machinery whose only
-wire face is one ERROR body. This section deliberately contains no `### METHOD /path` route
-headings; the mechanical route-completeness check covers live routes only, and nothing here is
-one.
+move**: what it adds is a guard, two tables, a middleware and one browser route whose success
+is a redirect. This section deliberately contains no `### METHOD /path` route headings — the
+mechanical route-completeness check covers live routes only, and the routes named here are
+documented in their own sections above.
 
 ### Landed
 
@@ -2066,13 +2333,17 @@ one.
   app has configured none. `return_to` is validated as a same-origin relative path in every
   percent-decoded form. This is an ERROR body; the metadata/content classification does not
   apply to it.
+- **The door is open.** [`POST /bfc/console/enter`](#post-bfcconsoleenter) is a live route on a
+  deployment reporting `console-enter`, and it is the only way a delegated session begins over
+  HTTP. It calls `ConsoleGuard::redeem()` — the one operation that mints one — rather than
+  writing session state of its own, so the package-wide writer scan still names exactly one
+  file. Its full contract, including the single-use burn, the signed handoff state, the uniform
+  refusal and the forced-login residue the signed state does **not** close, is in
+  [that route's own section](#post-bfcconsoleenter).
 
 ### Still RESERVED (not implemented)
 
-- **`/bfc/console/enter`** — reserved inside the live `/bfc/console/*` namespace, whose other
-  members ([`POST /bfc/console/re-key`](#post-bfcconsolere-key) and
-  [`GET /bfc/console/vitals`](#get-bfcconsolevitals)) are documented above. **No enter endpoint
-  exists**, so nothing in this release can start a delegated session over HTTP; the guard above
-  is the machinery such a session will run on.
-
-Everything else Console-related remains held behind the Console PRD's decision D6.
+Nothing in the `/bfc/console/*` namespace is a reserved name any more: `re-key`, `vitals` and
+`enter` are all live routes, documented above. Everything else Console-related — the chrome and
+its layout, the switcher, the app-action audit stream, the fleet dashboard — remains held behind
+the Console PRD's decision D6.

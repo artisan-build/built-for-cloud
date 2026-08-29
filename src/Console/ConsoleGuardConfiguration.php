@@ -67,6 +67,37 @@ final class ConsoleGuardConfiguration
     }
 
     /**
+     * Whether this deployment serves DELEGATED ENTRY — the condition
+     * `POST /bfc/console/enter` is mounted under, and the condition the
+     * `console-enter` capability reports.
+     *
+     * It is deliberately stricter than {@see enabled()}. The enter
+     * endpoint hands signed bytes to {@see ConsoleGuard::redeem()}, so
+     * it needs the reserved guard name to resolve to THIS package's
+     * driver. An app that took the first rule above — defining its own
+     * `bfc-console` guard, which the package then never overwrites —
+     * has a delegated guard of its own design, and mounting a package
+     * endpoint that assumes ours would be the package deciding how
+     * somebody else's guard works. So the route is not mounted, the
+     * capability is not advertised, and the app owns entry as it owns
+     * the guard.
+     *
+     * Read off the RESOLVED config rather than off a flag, so it
+     * answers for what `auth.guards.bfc-console` actually says at boot
+     * — including the case where {@see apply()} stepped aside.
+     */
+    public static function servesDelegatedEntry(?Repository $config = null): bool
+    {
+        if (! self::enabled($config)) {
+            return false;
+        }
+
+        $guard = $config?->get('auth.guards.'.self::GUARD) ?? config('auth.guards.'.self::GUARD);
+
+        return is_array($guard) && ($guard['driver'] ?? null) === self::DRIVER;
+    }
+
+    /**
      * @throws RuntimeException when the Console is enabled and the reserved provider name is taken
      */
     public static function apply(Repository $config): void

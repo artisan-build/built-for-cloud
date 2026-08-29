@@ -38,19 +38,77 @@ use SplFileInfo;
  *  - Line wrapping is normalised first, so a title may wrap across lines
  *    and across a docblock's ` * ` markers.
  *
+ * TWO QUESTIONS, because they fail differently.
+ * {@see orphansIn()} asks "does every cited title resolve to a real
+ * test" — the drift a rename causes. {@see shortfallsIn()} and
+ * {@see unexpectedIn()} ask "does every file that is SUPPOSED to carry
+ * guarantees actually cite anything", which is the drift a NEW file
+ * causes. The second pair exists because the first cannot see it: a
+ * scanner that only checks citations that already exist reports
+ * "clean" for a document that makes ten guarantees and cites none, and
+ * an AGGREGATE floor over every scanned file hides it behind the
+ * older files' counts. That is exactly what happened to the first PR
+ * written after this convention shipped.
+ *
  * WHAT IT DOES NOT COVER. It resolves titles against `it('…')` and
- * `it("…")` declarations under `tests/`; a PHPUnit-style
- * `test_*` method is not matched, so a citation must quote a Pest
- * title. It does not check that the named FILE contains the named test,
- * only that some test somewhere has that title — a title moved between
- * files still resolves. And it says nothing about whether the test
- * actually pins the claim beside it; that is a reader's job, and the
- * citation exists to make it possible.
+ * `it("…")` declarations under `tests/`, and against PHPUnit-style
+ * `public function test_snake_case()` methods, which it humanises the
+ * way Pest's own reporter does (drop `test_`, underscores to spaces) —
+ * so a fact that has to be driven PHPUnit-style, as a config-before-boot
+ * test must be, is citable rather than pushing its author towards
+ * citing nothing. It does not check that the named FILE contains the
+ * named test, only that some test somewhere has that title — a title
+ * moved between files still resolves. It says nothing about whether the
+ * test actually pins the claim beside it; that is a reader's job, and
+ * the citation exists to make it possible.
+ *
+ * THE NEW-FILE TRIPWIRE IS {@see unclassifiedIn()}, AND IT IS NOT
+ * BUILT ON {@see scan()}. That distinction is the fix: `scan()` returns
+ * only files that cite something, so a check built on its output can
+ * never see a new document that cites nothing — which is exactly how a
+ * release note shipped with a page of uncited guarantees while this
+ * suite stayed green. {@see candidatesIn()} enumerates the files that
+ * EXIST under the scanned surfaces, and every one of them must be
+ * classified: listed with a citation floor, or listed as exempt with a
+ * reason. Absence is then detectable, which is the whole property.
+ *
+ * THE RESIDUE, and it is now a small one: a guarantee-bearing file
+ * outside the scanned surfaces entirely. `src/Console`, the contract
+ * document and the console release notes are enumerated; a guarantee
+ * written into, say, a new top-level document nobody adds is still
+ * invisible. Adding a surface is the human step; everything inside one
+ * is mechanical.
  */
 final class CitationScan
 {
     /** The marker that opens a citation. */
     public const string MARKER = 'Pinned by';
+
+    /**
+     * The file extensions a guarantee can plausibly live in, matched
+     * case-INSENSITIVELY.
+     *
+     * `md` is first for a reason: the contract and every release note
+     * are markdown, and a `README.md` sitting beside the guard is an
+     * entirely likely place for somebody to write a guarantee. An
+     * earlier revision matched lower-case `.php` and nothing else, so
+     * such a file — and a `.PHP` or an `.inc` — EXISTED UNCLASSIFIED
+     * while the new-file tripwire reported clean. That is the same
+     * shape as the two defects before it: a filter that could not see
+     * the thing that was missing.
+     *
+     * @var list<string>
+     */
+    public const array CANDIDATE_EXTENSIONS = ['md', 'php', 'inc'];
+
+    /**
+     * Where a Pest or PHPUnit title can be DECLARED. Deliberately
+     * narrower than the candidate set: a markdown file declares no
+     * tests, and walking it for `it(` would be noise.
+     *
+     * @var list<string>
+     */
+    private const array TEST_EXTENSIONS = ['php'];
 
     /**
      * Every title quoted by a citation in one file, in the order they
@@ -95,7 +153,7 @@ final class CitationScan
         foreach ($paths as $path) {
             $target = $root.'/'.$path;
 
-            foreach (is_dir($target) ? self::phpFiles($target, $path) : [$path => $target] as $relative => $file) {
+            foreach (is_dir($target) ? self::filesIn($target, $path, self::CANDIDATE_EXTENSIONS) : [$path => $target] as $relative => $file) {
                 $titles = self::citedTitlesIn((string) file_get_contents($file));
 
                 if ($titles !== []) {
@@ -118,11 +176,18 @@ final class CitationScan
     {
         $titles = [];
 
-        foreach (self::phpFiles($testsRoot, '') as $file) {
+        foreach (self::filesIn($testsRoot, '', self::TEST_EXTENSIONS) as $file) {
             $contents = (string) file_get_contents($file);
 
             preg_match_all("/\\bit\\(\\s*'((?:[^'\\\\]|\\\\.)*)'/", $contents, $single);
             preg_match_all('/\bit\(\s*"((?:[^"\\\\]|\\\\.)*)"/', $contents, $double);
+            // PHPUnit-style cases, humanised the way Pest's own reporter
+            // prints them. Some facts can only be driven this way — a
+            // config key consumed at provider boot has to be in place
+            // before the application exists — and a convention that
+            // could not cite them would push their authors into citing
+            // nothing at all.
+            preg_match_all('/\bfunction\s+test_([A-Za-z0-9_]+)\s*\(/', $contents, $phpunit);
 
             foreach ($single[1] as $title) {
                 $titles[] = str_replace(["\\'", '\\\\'], ["'", '\\'], $title);
@@ -130,6 +195,10 @@ final class CitationScan
 
             foreach ($double[1] as $title) {
                 $titles[] = str_replace('\\"', '"', $title);
+            }
+
+            foreach ($phpunit[1] as $method) {
+                $titles[] = str_replace('_', ' ', $method);
             }
         }
 
@@ -157,6 +226,119 @@ final class CitationScan
         }
 
         return $orphans;
+    }
+
+    /**
+     * Every file the scanned surfaces contain — the CANDIDATES, whether
+     * or not they cite anything.
+     *
+     * This is the half {@see scan()} cannot supply and the reason the
+     * new-file tripwire did not exist for a round: `scan()` omits files
+     * with zero cited titles, so a check built on its output can only
+     * ever see files that already cite something. A new document that
+     * makes a page of guarantees and cites nothing is, to `scan()`,
+     * indistinguishable from a file that is not there.
+     *
+     * A directory surface contributes every `.php` file under it; a
+     * file surface contributes itself.
+     *
+     * @param  list<string>  $paths
+     * @return list<string>
+     */
+    public static function candidatesIn(string $root, array $paths): array
+    {
+        $candidates = [];
+
+        foreach ($paths as $path) {
+            $target = $root.'/'.$path;
+
+            foreach (is_dir($target) ? array_keys(iterator_to_array(self::filesIn($target, $path, self::CANDIDATE_EXTENSIONS))) : [$path] as $relative) {
+                $candidates[] = $relative;
+            }
+        }
+
+        sort($candidates);
+
+        return array_values(array_unique($candidates));
+    }
+
+    /**
+     * Candidate files that are neither expected to carry citations nor
+     * explicitly exempt — the new guarantee-bearing file nobody
+     * classified.
+     *
+     * ABSENCE IS THE PROPERTY. Every other check in this class reasons
+     * about files that cite something; this one reasons about files
+     * that exist. A new file reds the suite until somebody says, in the
+     * diff, either how many citations it must carry or why it needs
+     * none.
+     *
+     * @param  list<string>  $paths
+     * @param  array<string, int>  $expected
+     * @param  array<string, string>  $exempt  path => the reason it needs no citation
+     * @return list<string>
+     */
+    public static function unclassifiedIn(string $root, array $paths, array $expected, array $exempt): array
+    {
+        $classified = $expected + $exempt;
+
+        $unclassified = array_values(array_filter(
+            self::candidatesIn($root, $paths),
+            static fn (string $candidate): bool => ! array_key_exists($candidate, $classified),
+        ));
+
+        sort($unclassified);
+
+        return $unclassified;
+    }
+
+    /**
+     * Files that carry FEWER citations than they are expected to — the
+     * drift an orphan check cannot see, because a file that cites
+     * nothing has no citation to orphan.
+     *
+     * Reported as `path: expected N, found M`, and a file expected to
+     * carry citations that carries none reports `found 0` rather than
+     * vanishing.
+     *
+     * @param  list<string>  $paths
+     * @param  array<string, int>  $expected
+     * @return list<string>
+     */
+    public static function shortfallsIn(string $root, array $paths, array $expected): array
+    {
+        $found = self::scan($root, $paths);
+        $shortfalls = [];
+
+        foreach ($expected as $path => $minimum) {
+            $count = count($found[$path] ?? []);
+
+            if ($count < $minimum) {
+                $shortfalls[] = $path.': expected '.$minimum.', found '.$count;
+            }
+        }
+
+        sort($shortfalls);
+
+        return $shortfalls;
+    }
+
+    /**
+     * Files carrying citations that the expectation does not name — a
+     * new guarantee-bearing file nobody added to the map, which must be
+     * a deliberate diff rather than a silent one.
+     *
+     * @param  list<string>  $paths
+     * @param  array<string, int>  $expected
+     * @return list<string>
+     */
+    public static function unexpectedIn(string $root, array $paths, array $expected): array
+    {
+        $unexpected = array_keys(array_diff_key(self::scan($root, $paths), $expected));
+
+        sort($unexpected);
+
+        return array_values($unexpected);
     }
 
     /**
@@ -208,9 +390,14 @@ final class CitationScan
     }
 
     /**
+     * Every file under a root whose extension is in the given set,
+     * matched case-insensitively so a `.PHP` or a `.MD` is not a way
+     * past this walk.
+     *
+     * @param  list<string>  $extensions
      * @return iterable<string, string>
      */
-    private static function phpFiles(string $root, string $prefix): iterable
+    private static function filesIn(string $root, string $prefix, array $extensions): iterable
     {
         $files = new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
@@ -218,7 +405,7 @@ final class CitationScan
 
         /** @var SplFileInfo $file */
         foreach ($files as $file) {
-            if ($file->isFile() && $file->getExtension() === 'php') {
+            if ($file->isFile() && in_array(strtolower($file->getExtension()), $extensions, true)) {
                 $relative = substr($file->getPathname(), strlen($root) + 1);
 
                 yield ($prefix === '' ? $relative : $prefix.'/'.$relative) => $file->getPathname();

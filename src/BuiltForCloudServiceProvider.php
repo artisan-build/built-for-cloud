@@ -39,6 +39,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleEnter;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
@@ -359,6 +360,39 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 'bfc.credential.admin:'.OperatorAbility::ConsoleKeyWrite->value,
             ]);
 
+        // THE DOOR (Console PRD D12/D13): `POST /bfc/console/enter`,
+        // at a fixed `/bfc/console/*` path like every other package
+        // surface, an ordinary member of the routes family — and
+        // additionally gated on this deployment actually serving
+        // delegated entry, because an endpoint that hands signed bytes
+        // to a guard needs that guard to be ours.
+        //
+        // POST ONLY, and the verb is the security decision: a GET
+        // assertion lands a live credential in the customer's own
+        // server and CDN logs, in browser history, and in the `Referer`
+        // of the next request the entered page makes. GET is not
+        // routed at all, so a misconfigured link gets a 405 rather than
+        // a redirect that has already leaked.
+        //
+        // Its stack, outermost first:
+        //
+        //  1. `throttle:bfc-console-enter` — bounded before anything
+        //     else runs, so refused attempts cost budget too and a
+        //     429 still says 429;
+        //  2. the SESSION stack, deliberately assembled here rather
+        //     than taken from the host's `web` group — see
+        //     consoleEntrySessionMiddleware(), which is where the
+        //     absence of CSRF is argued rather than assumed.
+        //
+        // There is no auth middleware, because this IS the
+        // authentication event. What stands in for a gate is the
+        // vendor's Ed25519 signature, the per-deployment audience, the
+        // 60-120s TTL and the single-use burn.
+        if (ConsoleGuardConfiguration::servesDelegatedEntry()) {
+            $router->post('/bfc/console/enter', ConsoleEnter::class)
+                ->middleware(['throttle:bfc-console-enter', ...$this->consoleEntrySessionMiddleware()]);
+        }
+
         // The Console's ops-vitals read (Console PRD D9/D15/D16): a
         // `metadata`-classified surface at a fixed `/bfc/console/*`
         // path, an ordinary member of the routes family.
@@ -446,6 +480,45 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             AddQueuedCookiesToResponse::class,
             StartSession::class,
             PreventRequestForgery::class,
+        ];
+    }
+
+    /**
+     * The session stack `POST /bfc/console/enter` rides (Console PRD
+     * D12/D13) — assembled here rather than taken from the host's `web`
+     * group, which is the opposite of what the personal-credentials
+     * surface does above, and for one reason.
+     *
+     * **The `web` group carries CSRF validation, and this route cannot
+     * pass it.** The handoff is a cross-site POST from the issuer's
+     * page: Laravel's default `SameSite=Lax` session cookie is not sent
+     * with a cross-site POST at all, so at the moment the entry arrives
+     * the app has no session with that browser and there is no token it
+     * could have planted. Mounting the group would make every entry a
+     * `419`.
+     *
+     * What replaces the token is D13's SIGNED STATE — the return path
+     * rides inside the vendor's signature rather than in a request
+     * field — plus the assertion's 60-120s TTL and its single-use burn.
+     * {@see ConsoleEntryState} states exactly what that closes and what
+     * it does not.
+     *
+     * THE COST, named rather than glossed: an app that customized its
+     * `web` group (a different cookie encrypter, a session driver
+     * decorator, tenancy) does not get those layers here. The three
+     * below are the framework's own and produce the SAME session — the
+     * cookie name and driver come from the app's `session` config —
+     * which is what makes the delegated session the app's other
+     * middleware will read on every later request.
+     *
+     * @return list<class-string>
+     */
+    private function consoleEntrySessionMiddleware(): array
+    {
+        return [
+            EncryptCookies::class,
+            AddQueuedCookiesToResponse::class,
+            StartSession::class,
         ];
     }
 
@@ -543,6 +616,35 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 Limit::perMinute(300)->by('bfc-vitals-ip|'.($request->ip() ?? 'unknown')),
             ];
         });
+
+        // The door's limiter (Console PRD D13). ONE bound, keyed on the
+        // IP, and both halves of that are deliberate.
+        //
+        // One bound because this surface is PRE-AUTHENTICATION and
+        // carries no stable caller identity that is not attacker-chosen.
+        // The operator limiters bucket on a bearer digest, which works
+        // because a stolen credential is a fixed string; here the
+        // equivalents — the mint id, the key id — are fields the caller
+        // writes, so a second bucket on any of them refreshes itself
+        // for free and only looks like a limit.
+        //
+        // And NO global ceiling, unlike `bfc-operator-write`. This is
+        // the only way an operator gets in, so a bucket every caller
+        // shares is a lockout lever: one flood and no legitimate
+        // operator can enter until the window rolls. That is the same
+        // reading `bfc-vitals` made for the same reason. The per-IP
+        // bound is what stops one source spending this app's CPU on
+        // Ed25519 verifications; it is not, and is not claimed to be,
+        // a bound on a distributed flood.
+        //
+        // 30/min is sized for humans clicking through a console from
+        // behind one office NAT, not for a machine: the assertions are
+        // vendor-signed and single-use, so the limiter bounds noise
+        // rather than search.
+        RateLimiter::for(
+            'bfc-console-enter',
+            fn (Request $request): Limit => Limit::perMinute(30)->by('bfc-console-enter-ip|'.($request->ip() ?? 'unknown')),
+        );
 
         RateLimiter::for('bfc-operator-write', function (Request $request): array {
             $bearer = $request->bearerToken();

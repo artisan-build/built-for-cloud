@@ -88,6 +88,19 @@ final class ConsoleDisabledTest extends TestCase
         $this->getJson('/disabled-admin')->assertOk();
     }
 
+    public function test_it_mounts_no_enter_door_and_advertises_none(): void
+    {
+        // The door is ABSENT, not present-and-refusing: a deployment
+        // that never asked for the Console has nothing to hand an
+        // operator to, and `GET /bfc/meta` must not say otherwise.
+        $this->post('/bfc/console/enter', ['assertion' => 'nope'])->assertNotFound();
+
+        $capabilities = (array) $this->getJson('/bfc/meta')->json('capabilities');
+
+        $this->assertNotContains('console-enter', $capabilities);
+        $this->assertNotContains('console-guard', $capabilities);
+    }
+
     public function test_the_console_gate_refuses_rather_than_erroring(): void
     {
         Route::middleware([StartSession::class, 'bfc.console'])->get('/disabled-console', fn (): array => ['ok' => true]);

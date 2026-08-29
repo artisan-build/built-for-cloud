@@ -45,4 +45,23 @@ final readonly class AuditActor
     {
         return new self(AuditActorType::CredentialHolder, $presentedId);
     }
+
+    /**
+     * Whoever presented a console assertion at the enter endpoint
+     * (Console PRD D13) — the same honest attribution as
+     * {@see credentialHolder()}, and named separately so an audit row
+     * says which door was knocked on.
+     *
+     * The ref is NULLABLE and usually null, deliberately. It is the
+     * mint identifier (`jti`), which the server only knows once the
+     * token has verified — so a refusal decided by the verifier (wrong
+     * audience, expired, bad signature) types the actor and leaves the
+     * ref genuinely unknown rather than guessing one from bytes it did
+     * not trust. It is NOT the delegated actor: typing a refused entry
+     * as one would name an identity this deployment declined to grant.
+     */
+    public static function assertionPresenter(?string $mintId): self
+    {
+        return new self(AuditActorType::CredentialHolder, $mintId);
+    }
 }

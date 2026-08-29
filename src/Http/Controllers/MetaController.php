@@ -48,6 +48,17 @@ final class MetaController
             // none of that machinery is registered and advertising it
             // would be a lie about this deployment rather than about
             // the package.
+            //
+            // `console-enter` is the one that finally says a delegated
+            // operator can be handed to this deployment: `POST
+            // /bfc/console/enter` is mounted and will redeem a signed
+            // assertion. Its condition is STRICTER than
+            // `console-guard`'s — it also requires that the reserved
+            // guard name resolves to this package's own driver, which
+            // is exactly the condition the route is mounted under, so
+            // the capability and the route can never disagree. An app
+            // that defined its own `bfc-console` guard has the guard
+            // machinery and does NOT get the package's door.
             'capabilities' => self::capabilities(),
             'claimed' => $ownership !== null && $ownership->owner_token_id !== null,
         ]);
@@ -65,6 +76,10 @@ final class MetaController
 
         if (ConsoleGuardConfiguration::enabled()) {
             $capabilities[] = 'console-guard';
+        }
+
+        if (ConsoleGuardConfiguration::servesDelegatedEntry()) {
+            $capabilities[] = 'console-enter';
         }
 
         return $capabilities;

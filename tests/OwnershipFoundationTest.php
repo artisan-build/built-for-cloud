@@ -43,11 +43,14 @@ it('returns unauthenticated bfc meta for unclaimed and claimed environments', fu
             'product' => 'Sink',
             'bfc_version' => BuiltForCloud::VERSION,
             'api_version' => BuiltForCloud::API_VERSION,
-            // `console-guard` is present because this suite's app is a
-            // console-ENABLED deployment (tests/TestCase.php); the
-            // capability is conditional on that flag, and
-            // ConsoleGuardRegistrationTest drives its absence.
-            'capabilities' => ['tokens', 'ownership', 'onboarding', 'webhooks', 'credentials', 'console-keys', 'console-vitals', 'console-guard'],
+            // `console-guard` and `console-enter` are present because
+            // this suite's app is a console-ENABLED deployment whose
+            // delegated guard is this package's own (tests/TestCase.php).
+            // Both capabilities are conditional on that;
+            // ConsoleGuardRegistrationTest and ConsoleDisabledTest drive
+            // their absence, and ConsoleEnterForeignGuardTest drives the
+            // case where only `console-enter` goes away.
+            'capabilities' => ['tokens', 'ownership', 'onboarding', 'webhooks', 'credentials', 'console-keys', 'console-vitals', 'console-guard', 'console-enter'],
             'claimed' => false,
         ]);
 

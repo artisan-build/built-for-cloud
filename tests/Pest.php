@@ -5,6 +5,7 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\Console\Assertion;
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleEntryState;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuard;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKey;
@@ -416,4 +417,44 @@ function consoleSessionState(DelegatedActor $actor, mixed $issuedAt = null, ?Del
     $state[ConsoleSession::ON_BEHALF_OF] = $claims->onBehalfOf;
 
     return $state;
+}
+
+/**
+ * Console ENTRY helpers (PR4). The vendor posts two fields to
+ * `/bfc/console/enter`: the signed assertion, and the signed handoff
+ * state whose sha256 the assertion's `state` claim carries. These build
+ * that pair the way Scalpels would.
+ */
+function consoleStatePayload(string $returnTo = '/orders'): string
+{
+    return Base64UrlSafe::encodeUnpadded(
+        (string) json_encode([ConsoleEntryState::RETURN_TO => $returnTo], JSON_THROW_ON_ERROR),
+    );
+}
+
+/**
+ * A complete handoff: the exact form body the vendor auto-submits.
+ *
+ * `$claims` overrides ride over the state binding, so a test can break
+ * exactly one thing — including the binding itself.
+ *
+ * @param  array<string, mixed>  $claims
+ * @return array{assertion: string, state: string}
+ */
+function consoleHandoff(string $returnTo = '/orders', array $claims = [], ?string $state = null): array
+{
+    config([
+        'built-for-cloud.console.issuer' => 'https://scalpels.test',
+        'built-for-cloud.console.audience' => 'https://sink.test',
+    ]);
+
+    $state ??= consoleStatePayload($returnTo);
+
+    return [
+        'assertion' => consoleMint(consoleTestSigningKey(), consoleClaims(array_merge(
+            ['state' => hash('sha256', $state)],
+            $claims,
+        ))),
+        'state' => $state,
+    ];
 }
