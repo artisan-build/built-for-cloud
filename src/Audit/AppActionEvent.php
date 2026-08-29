@@ -53,10 +53,12 @@ use LogicException;
  *   model write whose action is not a case of the vocabulary it names",
  *   "refuses a direct model write that names a delegated actor by a bare
  *   id" and "refuses a direct model write that fabricates an agency for
- *   a local user"; and by `tests/RecorderTransactionGuardTest.php` —
- *   "refuses a direct model write made outside a transaction", which
- *   lives there because RefreshDatabase wraps every test it touches in a
- *   transaction and would make the case under test unreachable.
+ *   a local user".
+ *
+ *   Pinned by `tests/RecorderTransactionGuardTest.php` — "refuses a
+ *   direct model write made outside a transaction", which lives there
+ *   because RefreshDatabase wraps every test it touches in a transaction
+ *   and would make the case under test unreachable.
  *
  * **THE ONE INVARIANT THIS HOOK CANNOT KEEP, named rather than left to
  * be found: the ledger row.** "Exactly one event per action" is a unique

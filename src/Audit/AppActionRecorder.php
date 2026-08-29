@@ -53,10 +53,13 @@ use LogicException;
  * independently of the caller's, which is precisely the failure the
  * requirement exists to prevent.
  *   Pinned by `tests/RecorderTransactionGuardTest.php` — "refuses to
- *   record an app action outside a database transaction"; and
- *   `tests/AppActionAuditTest.php` — "leaves neither the event nor its
- *   ledger row behind when the action rolls back" and "refuses a direct
- *   model write made outside a transaction".
+ *   record an app action outside a database transaction" and "refuses a
+ *   direct model write made outside a transaction". Both live there
+ *   because RefreshDatabase wraps every test it touches in a
+ *   transaction, which would make the case under test unreachable.
+ *
+ *   Pinned by `tests/AppActionAuditTest.php` — "leaves neither the event
+ *   nor its ledger row behind when the action rolls back".
  *
  * **THE ACTION IS AN ENUM CASE, AND ON THIS PATH THE TYPE IS THE
  * ENFORCEMENT.** The parameter is typed {@see AppAction}, which extends
