@@ -41,11 +41,17 @@ final class ConsoleEnterForeignGuardTest extends TestCase
 
         $this->post('/bfc/console/enter', ['assertion' => 'nope'])->assertNotFound();
 
+        // The chrome's interceptor rides the same condition, for the
+        // same reason: it answers through this package's own delegated
+        // guard, and this app's is its own.
+        $this->get('/bfc/console/chrome.js')->assertNotFound();
+
         // …and the capability is not advertised, so a control plane is
         // never told it can hand an operator to a door that is not there.
         $capabilities = (array) $this->getJson('/bfc/meta')->json('capabilities');
 
         $this->assertNotContains('console-enter', $capabilities);
+        $this->assertNotContains('console-chrome-assets', $capabilities);
 
         // `console-guard` still IS advertised: the delegated-session
         // machinery is enabled, and that capability describes the

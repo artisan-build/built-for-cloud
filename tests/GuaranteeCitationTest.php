@@ -68,6 +68,15 @@ $citedSurfaces = [
     // release note, both outside src/Console — so both are named
     // explicitly rather than left uncheckable (Console PRD D12/D13).
     'src/Http/Controllers/ConsoleEnter.php',
+    // The console chrome (Console PRD D11/D7). Its guarantees are spread
+    // across a value object under src/Console (already a surface), one
+    // controller, the two Blade templates and the interceptor script —
+    // so the two RESOURCE directories are added as surfaces rather than
+    // file by file, for the reason src/Audit was: everything under them
+    // must be classified from the day it appears.
+    'src/Http/Controllers/ConsoleChromeScript.php',
+    'resources/views',
+    'resources/js',
     'docs/http-contract.md',
     'release-notes/console-enter.md',
     'release-notes/unified-store-guard.md',
@@ -97,7 +106,13 @@ $expectedCitations = [
     'src/Console/ConsoleReturnTo.php' => 2,
     'src/Console/ConsoleSession.php' => 2,
     'src/Console/DelegatedActor.php' => 6,
+    'src/Console/ConsoleChrome.php' => 5,
     'src/Console/DelegatedActorProvider.php' => 4,
+    'src/Console/ServesConsoleChrome.php' => 2,
+    'src/Http/Controllers/ConsoleChromeScript.php' => 1,
+    'resources/views/chrome.blade.php' => 2,
+    'resources/views/layout.blade.php' => 2,
+    'resources/js/console-reentry.js' => 3,
     'src/Http/Controllers/ConsoleEnter.php' => 24,
 ];
 
@@ -130,6 +145,35 @@ $exemptFromCitation = [
     'src/Console/ConsoleRole.php' => 'the two-value contract vocabulary (D8)',
     'src/Console/ConsoleSessionClock.php' => 'D7\'s cap constant and its fail-closed read; cited from ConsoleGuard, which is where the cap is enforced',
     'src/Console/DelegatedClaims.php' => 'a readonly value object carrying one session\'s claims',
+];
+
+/**
+ * THE STRICTER FORM, and the files held to it.
+ *
+ * `orphansIn()` asks only whether a cited title resolves to a test
+ * SOMEWHERE, which lets a citation name the wrong file and stay green —
+ * and that is how a misattribution survived a hand check on the PR
+ * before this one. Two additional rules close it: a citation names
+ * exactly ONE test file, and every title it quotes is declared in THAT
+ * file.
+ *
+ * **THE RESIDUE IS THE REASON THIS IS A LIST AND NOT A SURFACE**, and it
+ * is named rather than glossed: the documents that landed before this
+ * rule existed carry citations that name three test files at once — the
+ * contract's session-writer paragraph is one — and rewriting other
+ * people's citations is not this change's business. So the rule is
+ * enforced where it is enforceable, over the files this release adds,
+ * and everything older stays held to the orphan check alone. A file
+ * added here is a file that can never drift; a file not here can.
+ */
+$strictlyCited = [
+    'src/Console/ConsoleChrome.php',
+    'src/Console/ServesConsoleChrome.php',
+    'src/Http/Controllers/ConsoleChromeScript.php',
+    'resources/views/layout.blade.php',
+    'resources/views/chrome.blade.php',
+    'resources/js/console-reentry.js',
+    'tests/ConsoleChromeRouteScan.php',
 ];
 
 it('resolves every test title quoted by a guarantee citation', function () use ($citedSurfaces): void {
@@ -372,6 +416,74 @@ it('refuses an abbreviated citation, because an abbreviation is not checkable', 
             ->toBe(['src/Claim.php: "…when the store is still down at save time"']);
     } finally {
         array_map(unlink(...), [$root.'/src/Claim.php', $root.'/tests/RealTest.php']);
+        rmdir($root.'/src');
+        rmdir($root.'/tests');
+        rmdir($root);
+    }
+});
+
+it('holds the console chrome to one test file per citation, and to the file it names', function () use ($strictlyCited): void {
+    $root = dirname(__DIR__);
+
+    expect(CitationScan::multiFileCitationsIn($root, $strictlyCited))->toBe([])
+        ->and(CitationScan::misattributedIn($root, $strictlyCited, $root.'/tests'))->toBe([]);
+
+    // NOT VACUOUS: every file on the strict list actually carries
+    // citations. A path typo would otherwise read as compliance.
+    foreach ($strictlyCited as $path) {
+        expect(CitationScan::countCitationsIn((string) file_get_contents($root.'/'.$path)))
+            ->toBeGreaterThan(0, $path.' is on the strict list but cites nothing.');
+    }
+});
+
+it('names a citation that points at the wrong test file, and one that points at several', function (): void {
+    // Proven able to fail, on both shapes. The first is the one an
+    // orphan check cannot see: the title is real, the file is wrong, and
+    // a reader following the citation lands somewhere that does not
+    // contain it.
+    $root = sys_get_temp_dir().'/bfc-citation-strict-'.bin2hex(random_bytes(6));
+
+    mkdir($root.'/src', 0700, true);
+    mkdir($root.'/tests', 0700, true);
+
+    file_put_contents($root.'/tests/RightTest.php', "<?php\n\nit('a title that lives here', function (): void {});\n");
+    file_put_contents($root.'/tests/WrongTest.php', "<?php\n\nit('a title that lives somewhere else', function (): void {});\n");
+
+    file_put_contents($root.'/src/Misattributed.php', <<<'PHP'
+        <?php
+
+        /**
+         * A claim.
+         *   Pinned by `tests/RightTest.php` — "a title that lives here"
+         *   and "a title that lives somewhere else".
+         */
+        PHP);
+
+    file_put_contents($root.'/src/MultiFile.php', <<<'PHP'
+        <?php
+
+        /**
+         * A claim.
+         *   Pinned by `tests/RightTest.php` ("a title that lives here")
+         *   and `tests/WrongTest.php` ("a title that lives somewhere
+         *   else").
+         */
+        PHP);
+
+    $paths = ['src/Misattributed.php', 'src/MultiFile.php'];
+
+    try {
+        expect(CitationScan::misattributedIn($root, $paths, $root.'/tests'))
+            ->toBe(['src/Misattributed.php: "a title that lives somewhere else" is cited to tests/RightTest.php but declared in tests/WrongTest.php'])
+            ->and(CitationScan::multiFileCitationsIn($root, $paths))
+            ->toBe(['src/MultiFile.php: names 2 files']);
+    } finally {
+        array_map(unlink(...), [
+            $root.'/src/Misattributed.php',
+            $root.'/src/MultiFile.php',
+            $root.'/tests/RightTest.php',
+            $root.'/tests/WrongTest.php',
+        ]);
         rmdir($root.'/src');
         rmdir($root.'/tests');
         rmdir($root);

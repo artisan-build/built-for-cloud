@@ -61,6 +61,12 @@ Additive unless marked otherwise:
 - New `capabilities` entry `app-action-audit-emit`, and the app-action audit stream's schema and
   emission (Console PRD D17). Additive: no request or response shape changes, and the stream has
   no read transport — see [the app-action audit stream](#the-app-action-audit-stream).
+- New `capabilities` entry `console-chrome-assets` and one new route,
+  [`GET /bfc/console/chrome.js`](#get-bfcconsolechromejs) — the console chrome's re-entry
+  interceptor, plus the `bfc::` view namespace carrying the single package layout (Console PRD
+  D11/D7). Additive: no existing request or response shape changes, and the capability names
+  what this deployment SERVES, never that any page of the application renders it. See
+  [the console chrome](#the-console-chrome).
 - New rotation routes (PRD 1.7): `POST /bfc/credentials/{id}/rotate` and
   `POST /api/credentials/id/{id}/rotate` — rotate-by-id, the primary verb, on both stores.
   Unified-store summary rows gained the nullable `rotated_at` field (rotation provenance).
@@ -380,6 +386,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `DELETE /bfc/me/credentials/{id}` | `metadata` | empty `204` body |
 | `POST /bfc/console/re-key` | `metadata` | key ids from a bounded charset, a fixed status enum and a timestamp — no free text, and never any key material |
 | `POST /bfc/console/enter` | `content` | its success is a `303`, not a body: the `Set-Cookie` it establishes IS a single reveal of a live delegated session credential, and the `Location` echoes the return path the issuer signed |
+| `GET /bfc/console/chrome.js` | `content` | not a JSON body at all — a static JavaScript asset shipped inside the package. `metadata` is a claim about a bounded JSON shape, and a response with no such shape cannot make one; nothing in the body comes from this deployment's data |
 | `GET /bfc/console/vitals` | `metadata` | bounded integers, a fixed health enum, a semver-validated `app_version`, a timestamp, and a headline label drawn from the app's declared vocabulary — no free text anywhere, and deliberately no `product` |
 | `POST /bfc/subjects/offboard` | `metadata` | `{"offboarded": true, "fully_contained": bool}` / `{"accepted": true, "fully_contained": bool}` — bounded booleans only |
 
@@ -2069,8 +2076,8 @@ an operator gets in.
   state is what replaces it.
 
   *Pinned by* `tests/PersonalSurfaceWebGroupTest.php` ("the console door starts a session
-  without csrf validation" and "only the personal surface and the console door ride the session
-  stack").
+  without csrf validation" and "only the personal surface and the console browser routes ride
+  the session stack").
 
 - **The presented credential is marked sensitive, and then removed.** Every frame in the package
   that can hold a console assertion — a string named for a token, and the `Request` that carries
@@ -2146,6 +2153,162 @@ successful entry. The margin points one way on purpose: a row dropped while its 
 still be presented would un-spend a mint.
 
 *Pinned by* `tests/ConsoleEnterTest.php` ("sits exactly on the prune boundary: one second inside keeps a burn row, one second past drops it").
+
+---
+
+## The console chrome
+
+Console PRD D11 (one layout) and D7 (re-entry). This section describes what the PACKAGE serves;
+whether any page of a consuming application wears the chrome is that application's own decision,
+made by whichever of its templates extends the layout. `GET /bfc/meta` `capabilities` gains
+`console-chrome-assets` on a deployment serving these, and the name is deliberately about the
+ASSETS: no package capability can report that an app's pages render them.
+
+### One layout, branching internally
+
+The package ships **exactly one** layout, `bfc::layout`, in a `bfc::` view namespace registered
+unconditionally (a view namespace mounts nothing — it is a name an application has to reach for
+— so it is not one of the selectable surface families). It is publishable as
+`built-for-cloud-views`; publishing does not create a second layout, because Laravel's namespaced
+finder prefers the published copy for the SAME view name.
+
+**Layout selection is never conditional.** There is no "console layout" to switch to. What
+differs between a local login and a delegated console session is what the one file renders
+inside itself, driven by the ONE resolved acting principal (D14) — the same value the request
+acts as and the audit stream attributes to.
+
+- A **local** (non-delegated) authenticated session renders **zero** chrome: no attribution bar,
+  no operator identity, and no interceptor script on the page.
+- A **delegated** session renders the attribution D4 promises — the operator, the agency they
+  act for when their handoff named one, the trusted issuer's host, and this session's role from
+  the two-value `admin`/`member` vocabulary.
+
+**Display values are bounded again at render time, and refused rather than truncated.** The
+assertion verifier already bounds `display_name` and `on_behalf_of` to 120 characters and
+rejects control characters, at the door. The chrome applies the same rule a second time, because
+the claims a request acts under are read from the SESSION and anything able to write the session
+store can write a claim that never passed a verifier. A value that is over-long, carries a
+control character, or is not valid UTF-8 is treated as no value at all: the operator renders as
+`Delegated operator` and the agency is omitted. **Bounded is not sanitized** — a short, printable
+hostile string is a legal claim — so every display sink is an escaped Blade echo, in an element
+body or a double-quoted attribute, never in a script, a style, a URL or an unquoted attribute.
+
+**The residue, named:** the bound is on SHAPE and the escaping is on SYNTAX. Neither is a
+statement about TRUTH. A well-formed name that is simply not this operator's renders exactly as
+a correct one would; what makes the claim trustworthy is the vendor's signature at the door.
+
+*Pinned by* `tests/ConsoleChromeTest.php` ("renders one and the same layout file for a local
+session and a delegated one", "renders zero console chrome for a local authenticated session",
+"renders the delegated attribution the operator entered with", "follows the resolved acting
+principal, not the delegated guard the route does not name", "renders a hostile display name,
+agency and issuer inert", "proves the escaping assertion can fail against an unescaped sink" and
+"refuses a display claim that is over-long, control-bearing or invalid UTF-8 rather than
+truncating it").
+
+### GET /bfc/console/chrome.js
+
+The chrome's re-entry interceptor, served from the application's own origin. Mounted under the
+same condition as [the door](#post-bfcconsoleenter): the Console enabled AND the reserved
+`bfc-console` guard resolving to this package's own driver.
+
+**Request.** No body, no parameters. A browser `<script src>` fetch carrying the app's session
+cookie.
+
+**Gate.** Both halves of D14's seam, in this order: `bfc.console` (the structured re-entry 401)
+and then Laravel's own `auth:bfc-console` (which makes the console guard the guard of the
+request). The chrome is a delegated surface end to end, so its one asset route answers on the
+same terms as the page that loads it. This is scoping rather than confidentiality — the script
+is not secret — and what it buys is that every chrome route answers by one rule instead of a
+list of exceptions.
+
+**Response.** `200` with `Content-Type: text/javascript; charset=utf-8`,
+`Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff` and a content `ETag`. The
+`no-store` is deliberate: a response whose availability depends on a session cookie must never
+enter a shared cache, and the cost is a re-fetch per page load of a few hundred static bytes.
+
+**Refusals.** No delegated session — absent, capped or invalidated — answers with the same
+structured `401` every other console surface does: header `BFC-Console-Reentry: 1` and the body
+documented under [delegated session clocks](#console--what-has-landed-and-what-is-still-reserved).
+A deployment that mounts no package routes, or whose `bfc-console` guard is its own, answers
+`404`.
+
+**The throttle is INSIDE the gate on this route, and every other route in this contract puts it
+outside.** That inversion is forced by the framework rather than chosen. Laravel sorts a route's
+middleware by its priority map, in which `AuthenticatesRequests` outranks `ThrottleRequests`, so
+a throttle listed in FRONT of `auth:bfc-console` makes Laravel hoist the auth middleware above
+everything that follows it — `bfc.console` included — and a request with no delegated session
+then meets the framework's generic `AuthenticationException` instead of the structured 401. That
+would kill re-entry. The cost, stated: the pre-gate path is not rate-limited by this route. What
+a refused fetch costs is a session read and a guard read, the same as any page in the host
+application.
+
+*Pinned by* `tests/ConsoleChromeRouteTest.php` ("requires both halves of the delegated seam on
+every registered chrome route", "runs the re-entry answer in front of the guard scoping, after
+Laravel has sorted the stack", "names a route whose throttle hoists the guard scoping in front
+of the re-entry answer" and "serves the interceptor to a delegated session and the structured
+401 to nobody").
+
+### What the interceptor does
+
+It wraps `fetch` and `XMLHttpRequest` and watches for the re-entry answer — **branching on the
+header, never on the status alone**, so an application's own `401` is left entirely alone.
+
+- With a `reentry_url` in the body, it performs a **top-level** navigation:
+  `window.top.location`, with `return_to` carried across as a percent-encoded query parameter.
+  Never the frame the capped request came from — re-entry means leaving this app, and doing it
+  inside an iframe would either be refused by the issuer's framing policy or leave the outer
+  document on a dead session.
+- With **no** `reentry_url` — which is what the server emits when the deployment has configured
+  none — it **invents nothing**. It navigates nowhere, marks the chrome element
+  `data-bfc-console-reentry="unavailable"`, replaces its text with a notice, and dispatches
+  `bfc:console-reentry-unavailable` on `document` (with `detail.reason` and `detail.return_to`)
+  so the host application can respond in its own voice. A `reentry_url` whose scheme is not
+  `http(s)`, and a `window.top` that cannot be reached at all, take the same path.
+- It **never swallows** the response. The wrapped `fetch` resolves with the original response
+  object (the body is read from a `clone()`), and the XHR wrapper only ADDS a listener, so the
+  caller's own handlers still run and still see the `401`.
+
+**It is a convenience and not an enforcement.** Revocation is enforced server-side, inside the
+guard, on every route: a browser with this script blocked, disabled or simply not loaded still
+cannot act with a dead session — it sits on a page whose requests all fail. That ordering is
+what the amended D7 chose: revocation truth never depends on the browser.
+
+*Pinned by* `tests/ConsoleReentryInterceptorTest.php` ("navigates the top-level window through
+the issuer, preserving the return path", "navigates the top window rather than the frame the
+capped request came from", "degrades honestly when the deployment has configured no re-entry
+url", "refuses a re-entry url whose scheme is not http or https", "degrades honestly when the
+top window cannot be reached at all", "hands the capped response back to its caller rather than
+swallowing it", "performs the same re-entry for a capped XMLHttpRequest" and "ignores an
+ordinary 401 that is not a console re-entry").
+
+### Content Security Policy
+
+**The interceptor is a same-origin external script, and that is the whole of the CSP guidance:**
+`script-src 'self'` is sufficient. It is served from a route rather than inlined into the layout
+precisely so that a consuming app never has to add `'unsafe-inline'` to `script-src` to make a
+dependency's chrome work — a package that forces that on an app has handed it a downgrade.
+
+For an app running a nonce- or hash-based policy, nothing extra is required either: the tag is
+an external `src`, which a `'nonce-…'` or `'strict-dynamic'` policy admits under `'self'`
+without a nonce of its own. If your policy is `script-src 'nonce-…'` with **no** `'self'`, add
+`'self'` or serve the file through your own asset pipeline — the package will not emit an inline
+tag for you.
+
+The rest of what the chrome needs is deliberately small, so that no directive has to be widened:
+
+| directive | why |
+|---|---|
+| `script-src 'self'` | the interceptor tag; nothing else is loaded |
+| `connect-src` | untouched — the interceptor wraps calls the app was already making and issues none of its own |
+| `style-src` | untouched — the chrome ships no stylesheet and no inline `style` attribute |
+| `img-src` | untouched — the chrome loads no images |
+| `frame-ancestors` | your own choice; the interceptor's top-level navigation degrades honestly when it is framed cross-origin, rather than navigating the frame |
+
+**One thing a CSP cannot be relied on for here, said plainly:** `form-action` and
+`navigate-to`-style directives govern where the top-level navigation may go. The destination is
+the `reentry_url` this deployment configured, so an app with a restrictive policy must allow its
+own issuer there, or re-entry will be blocked by the browser — silently, from this script's point
+of view, because a blocked navigation raises nothing it can observe.
 
 ---
 
@@ -2526,6 +2689,16 @@ documented in their own sections above.
   app has configured none. `return_to` is validated as a same-origin relative path in every
   percent-decoded form. This is an ERROR body; the metadata/content classification does not
   apply to it.
+- **The chrome is served, and it is ONE layout.** The `bfc::` view namespace, the single
+  `bfc::layout`, and [`GET /bfc/console/chrome.js`](#get-bfcconsolechromejs) — the XHR re-entry
+  interceptor — are all live on a deployment reporting `console-chrome-assets`. The layout
+  branches INTERNALLY on the resolved acting principal: a local login renders zero chrome, a
+  delegated session renders the full attribution, and there is no second layout to select. The
+  capability names the ASSETS and not the pages: whether an application's own templates extend
+  the layout is that application's decision and nothing here can report it. Full contract,
+  including the render-time bounds on display claims, the escaping, the interceptor's honest
+  degradation when no `reentry_url` is configured, and the CSP guidance, is in
+  [its own section](#the-console-chrome).
 - **The door is open.** [`POST /bfc/console/enter`](#post-bfcconsoleenter) is a live route on a
   deployment reporting `console-enter`, and it is the only way a delegated session begins over
   HTTP. It calls `ConsoleGuard::redeem()` — the one operation that mints one — rather than
@@ -2536,8 +2709,11 @@ documented in their own sections above.
 
 ### Still RESERVED (not implemented)
 
-Nothing in the `/bfc/console/*` namespace is a reserved name any more: `re-key`, `vitals` and
-`enter` are all live routes, documented above. The app-action audit stream's SCHEMA and EMISSION
-have landed ([above](#the-app-action-audit-stream)); its **read transport has not**, and is not a
-name this contract offers. Everything else Console-related — the chrome and its layout, the
-switcher, the fleet dashboard — remains held behind the Console PRD's decision D6.
+Nothing in the `/bfc/console/*` namespace is a reserved name any more: `re-key`, `vitals`,
+`enter` and `chrome.js` are all live routes, documented above. The app-action audit stream's
+SCHEMA and EMISSION have landed ([above](#the-app-action-audit-stream)); its **read transport
+has not**, and is not a name this contract offers. The chrome and its single layout have landed
+([above](#the-console-chrome)). Everything else Console-related — the switcher and its roster,
+the fleet dashboard — remains held behind the Console PRD's decision D6, and **no roster claim
+exists in the assertion vocabulary**, so there is nothing of that kind for the chrome to render
+yet.

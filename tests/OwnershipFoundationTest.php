@@ -54,7 +54,12 @@ it('returns unauthenticated bfc meta for unclaimed and claimed environments', fu
             // and an emission point every install carries, and the verb
             // is in the name because this release ships no way to READ
             // that stream (Console PRD D17).
-            'capabilities' => ['tokens', 'ownership', 'onboarding', 'webhooks', 'credentials', 'console-keys', 'console-vitals', 'app-action-audit-emit', 'console-guard', 'console-enter'],
+            // `console-chrome-assets` rides the same condition as
+            // `console-enter`, and is named for what is SERVED — the
+            // layout and the re-entry interceptor — never for any page
+            // of this app wearing them, which is the app's own decision
+            // (Console PRD D11).
+            'capabilities' => ['tokens', 'ownership', 'onboarding', 'webhooks', 'credentials', 'console-keys', 'console-vitals', 'app-action-audit-emit', 'console-guard', 'console-enter', 'console-chrome-assets'],
             'claimed' => false,
         ]);
 

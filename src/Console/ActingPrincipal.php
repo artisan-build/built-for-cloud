@@ -83,6 +83,19 @@ final readonly class ActingPrincipal
          * **Issuer-supplied free text. Escape at every sink.**
          */
         public ?string $attribution,
+        /**
+         * The operator's display name ALONE, as this session's own
+         * handoff carried it — the same claim {@see $attribution}
+         * composes, carried separately because the chrome (PR5) renders
+         * the name and the agency into two different sinks and bounds
+         * each on its own. It comes from the SESSION's claims for the
+         * reason {@see DelegatedClaims} gives: the actor row's
+         * `last_handoff_display_name` is shared by every live session
+         * for the same subject.
+         *
+         * **Issuer-supplied free text. Escape at every sink.**
+         */
+        public ?string $displayName,
         /** This session's delegated role (D8), or null when the acting principal is not delegated. */
         public ?ConsoleRole $role,
         /** The agency the operator acts for (D4), or null. */
@@ -121,6 +134,7 @@ final readonly class ActingPrincipal
             delegated: true,
             principal: $actor,
             attribution: $claims->attribution(),
+            displayName: $claims->displayName,
             role: $claims->role,
             onBehalfOf: $claims->onBehalfOf,
             refusal: null,
@@ -135,6 +149,7 @@ final readonly class ActingPrincipal
             delegated: false,
             principal: $user,
             attribution: null,
+            displayName: null,
             role: null,
             onBehalfOf: null,
             refusal: null,
@@ -155,6 +170,7 @@ final readonly class ActingPrincipal
             delegated: false,
             principal: null,
             attribution: null,
+            displayName: null,
             role: null,
             onBehalfOf: null,
             refusal: $reason,
@@ -169,6 +185,7 @@ final readonly class ActingPrincipal
             delegated: false,
             principal: null,
             attribution: null,
+            displayName: null,
             role: null,
             onBehalfOf: null,
             refusal: null,

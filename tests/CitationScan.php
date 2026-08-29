@@ -97,9 +97,15 @@ final class CitationScan
      * shape as the two defects before it: a filter that could not see
      * the thing that was missing.
      *
+     * `js` joined the set when the console chrome shipped a script the
+     * package serves, for exactly that reason: a guarantee written in a
+     * `//` comment is a guarantee, and a scanned surface containing one
+     * that this walk stepped over would be the same defect a fourth
+     * time.
+     *
      * @var list<string>
      */
-    public const array CANDIDATE_EXTENSIONS = ['md', 'php', 'inc'];
+    public const array CANDIDATE_EXTENSIONS = ['md', 'php', 'inc', 'js'];
 
     /**
      * Where a Pest or PHPUnit title can be DECLARED. Deliberately
@@ -177,29 +183,45 @@ final class CitationScan
         $titles = [];
 
         foreach (self::filesIn($testsRoot, '', self::TEST_EXTENSIONS) as $file) {
-            $contents = (string) file_get_contents($file);
-
-            preg_match_all("/\\bit\\(\\s*'((?:[^'\\\\]|\\\\.)*)'/", $contents, $single);
-            preg_match_all('/\bit\(\s*"((?:[^"\\\\]|\\\\.)*)"/', $contents, $double);
-            // PHPUnit-style cases, humanised the way Pest's own reporter
-            // prints them. Some facts can only be driven this way — a
-            // config key consumed at provider boot has to be in place
-            // before the application exists — and a convention that
-            // could not cite them would push their authors into citing
-            // nothing at all.
-            preg_match_all('/\bfunction\s+test_([A-Za-z0-9_]+)\s*\(/', $contents, $phpunit);
-
-            foreach ($single[1] as $title) {
-                $titles[] = str_replace(["\\'", '\\\\'], ["'", '\\'], $title);
+            foreach (self::titlesDeclaredIn((string) file_get_contents($file)) as $title) {
+                $titles[] = $title;
             }
+        }
 
-            foreach ($double[1] as $title) {
-                $titles[] = str_replace('\\"', '"', $title);
-            }
+        return array_values(array_unique($titles));
+    }
 
-            foreach ($phpunit[1] as $method) {
-                $titles[] = str_replace('_', ' ', $method);
-            }
+    /**
+     * Every title one test file declares — Pest `it()` in either quote
+     * style, plus PHPUnit-style `test_snake_case` methods humanised the
+     * way Pest's own reporter prints them.
+     *
+     * @return list<string>
+     */
+    private static function titlesDeclaredIn(string $contents): array
+    {
+        $titles = [];
+
+        preg_match_all("/\\bit\\(\\s*'((?:[^'\\\\]|\\\\.)*)'/", $contents, $single);
+        preg_match_all('/\bit\(\s*"((?:[^"\\\\]|\\\\.)*)"/', $contents, $double);
+        // PHPUnit-style cases, humanised the way Pest's own reporter
+        // prints them. Some facts can only be driven this way — a
+        // config key consumed at provider boot has to be in place
+        // before the application exists — and a convention that
+        // could not cite them would push their authors into citing
+        // nothing at all.
+        preg_match_all('/\bfunction\s+test_([A-Za-z0-9_]+)\s*\(/', $contents, $phpunit);
+
+        foreach ($single[1] as $title) {
+            $titles[] = str_replace(["\\'", '\\\\'], ["'", '\\'], $title);
+        }
+
+        foreach ($double[1] as $title) {
+            $titles[] = str_replace('\\"', '"', $title);
+        }
+
+        foreach ($phpunit[1] as $method) {
+            $titles[] = str_replace('_', ' ', $method);
         }
 
         return array_values(array_unique($titles));
@@ -339,6 +361,138 @@ final class CitationScan
         sort($unexpected);
 
         return array_values($unexpected);
+    }
+
+    /**
+     * THE STRICTER FORM OF THE CONVENTION, applied to an explicit list
+     * of files: **a citation names ONE test file, and every title it
+     * quotes is declared in THAT file.**
+     *
+     * {@see orphansIn()} asks only whether a title resolves to some test
+     * SOMEWHERE. That is deliberately loose — a title moved between
+     * files still resolves — and it is loose enough that a citation can
+     * name the wrong file and stay green, which is how a misattribution
+     * survived a hand check. These two checks close that, and they are
+     * applied to a NAMED SET of files rather than to every scanned
+     * surface, because the documents that landed before this convention
+     * carry citations that name three test files at once. That is the
+     * residue, and it is named rather than waved at: everything in
+     * {@see GuaranteeCitationTest}'s strict list is held to this;
+     * everything older is held only to {@see orphansIn()}.
+     *
+     * Citations that name more than one file, as `path: names N files`.
+     *
+     * @param  list<string>  $paths
+     * @return list<string>
+     */
+    public static function multiFileCitationsIn(string $root, array $paths): array
+    {
+        $found = [];
+
+        foreach ($paths as $path) {
+            foreach (self::citationParts((string) file_get_contents($root.'/'.$path)) as $citation) {
+                if (count($citation['files']) !== 1) {
+                    $found[] = $path.': names '.count($citation['files']).' files';
+                }
+            }
+        }
+
+        sort($found);
+
+        return array_values($found);
+    }
+
+    /**
+     * Cited titles that are NOT declared in the file the citation names,
+     * as `path: "title" is cited to X but declared in Y`.
+     *
+     * A citation naming no file, or several, is
+     * {@see multiFileCitationsIn()}'s finding rather than this one's:
+     * "which file should this title have been in" has no answer when the
+     * citation does not name exactly one.
+     *
+     * @param  list<string>  $paths
+     * @return list<string>
+     */
+    public static function misattributedIn(string $root, array $paths, string $testsRoot): array
+    {
+        $byFile = self::declaredTitlesByFile($testsRoot);
+        $found = [];
+
+        foreach ($paths as $path) {
+            foreach (self::citationParts((string) file_get_contents($root.'/'.$path)) as $citation) {
+                if (count($citation['files']) !== 1) {
+                    continue;
+                }
+
+                $cited = $citation['files'][0];
+
+                foreach ($citation['titles'] as $title) {
+                    if (in_array($title, $byFile[$cited] ?? [], true)) {
+                        continue;
+                    }
+
+                    $declaredIn = array_keys(array_filter(
+                        $byFile,
+                        static fn (array $titles): bool => in_array($title, $titles, true),
+                    ));
+
+                    $found[] = $path.': "'.$title.'" is cited to '.$cited.' but declared in '
+                        .($declaredIn === [] ? 'no test file' : implode(', ', $declaredIn));
+                }
+            }
+        }
+
+        sort($found);
+
+        return array_values($found);
+    }
+
+    /**
+     * Every title declared by each test file, keyed by its path relative
+     * to the package root (`tests/…`), which is how a citation spells
+     * it.
+     *
+     * @return array<string, list<string>>
+     */
+    public static function declaredTitlesByFile(string $testsRoot): array
+    {
+        $declared = [];
+
+        foreach (self::filesIn($testsRoot, '', self::TEST_EXTENSIONS) as $relative => $file) {
+            $titles = self::titlesDeclaredIn((string) file_get_contents($file));
+
+            if ($titles !== []) {
+                $declared['tests/'.$relative] = $titles;
+            }
+        }
+
+        ksort($declared);
+
+        return $declared;
+    }
+
+    /**
+     * Each citation broken into the test FILES it names and the TITLES
+     * it quotes.
+     *
+     * @return list<array{files: list<string>, titles: list<string>}>
+     */
+    public static function citationParts(string $contents): array
+    {
+        $parts = [];
+
+        foreach (self::citations($contents) as $citation) {
+            preg_match_all('/"([^"]+)"/', $citation, $titles);
+            preg_match_all('#tests/[A-Za-z0-9_/.-]+\.php#', $citation, $files);
+
+            $parts[] = [
+                'files' => array_values(array_unique($files[0])),
+                'titles' => array_values($titles[1]),
+            ];
+        }
+
+        return $parts;
     }
 
     /**
