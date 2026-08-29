@@ -298,33 +298,29 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // `metadata`-classified surface at a fixed `/bfc/console/*`
         // path, an ordinary member of the routes family.
         //
-        // Its gate is TWO layers, and neither is the operator gate every
-        // verb route above uses.
+        // ONE gate, not the operator gate every verb route above uses
+        // and not a composition either. {@see EnsureDashboardCredential}
+        // is the whole of D16 — authentication, the app declaration's
+        // authorization hook, an operator subject, and an ability set
+        // EXACTLY equal to `{metadata:read}`.
         //
-        //  1. `bfc.ability:metadata:read` — exact match. D16 forbids the
-        //     ownership/admin credential on any dashboard read path, and
-        //     `bfc.credential.admin` grants `credential:admin` whatever
-        //     ability a route names, so mounting this behind it would
-        //     have left the prohibition unenforced. This gate implies
-        //     nothing and authenticates through the `bfc` guard, which
-        //     never resolves a legacy `api_tokens` secret.
-        //  2. EnsureDashboardCredential — operator subject, and an
-        //     ability set EXACTLY equal to `{metadata:read}`. Membership
-        //     is not what D16 asks for: a credential holding both
-        //     `metadata:read` and `credential:admin` passes layer 1 and
-        //     still mutates every operator surface, which is precisely
-        //     the "unable to touch content-classified or mutating
-        //     surfaces" clause failing.
+        // `bfc.credential.admin` could never have gated this: it grants
+        // `credential:admin` whatever ability a route names, and D16
+        // forbids the ownership/admin credential on any dashboard read
+        // path. `bfc.ability:metadata:read` was in front of this gate
+        // for one revision and has been removed: it enforces a strict
+        // SUBSET of what the gate below enforces, so it never changed an
+        // answer, while its own denial audit drained the delivery outbox
+        // — putting the amplification lever this route was hardened
+        // against back in front of the hardening. A redundant gate is a
+        // second code path with its own side effects on the
+        // attacker-reachable branch.
         //
         // Rate-limited like every other credentialed surface, per
-        // credential AND per IP, and the throttle sits OUTSIDE both
-        // gates so refused attempts are bounded too.
+        // credential AND per IP, and the throttle sits OUTSIDE the gate
+        // so refused attempts are bounded too.
         $router->get('/bfc/console/vitals', ConsoleVitals::class)
-            ->middleware([
-                'throttle:bfc-vitals',
-                'bfc.ability:'.OperatorAbility::MetadataRead->value,
-                EnsureDashboardCredential::class,
-            ]);
+            ->middleware(['throttle:bfc-vitals', EnsureDashboardCredential::class]);
 
         // The offboard verb (PRD 1.15, SEC-V3-04): full account
         // containment behind its OWN verb-family ability — the widest

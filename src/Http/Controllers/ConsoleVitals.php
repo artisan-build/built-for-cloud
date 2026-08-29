@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\AuditActor;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
@@ -20,31 +19,28 @@ use Illuminate\Support\Facades\DB;
  * `GET /bfc/console/vitals` — the ops-vitals surface the fleet dashboard
  * reads (Console PRD D9/D15/D16), classified `metadata`.
  *
- * ITS GATE IS TWO LAYERS, and both are D16 rather than style.
+ * ITS GATE IS {@see EnsureDashboardCredential}, alone, and that is D16
+ * rather than style. The operator gate ({@see EnsureCredentialAdmin})
+ * could never have served: it grants a `credential:admin` credential
+ * whatever ability a route names, unconditionally, and D16 forbids
+ * "using the ownership/admin credential for any dashboard read path".
+ * That gate reads the whole of D16 — authentication through the `bfc`
+ * guard (which resolves the unified store only, so a legacy admin
+ * `api_tokens` secret and a `FALLBACK_TOKEN` never authenticate here at
+ * all), the app declaration's authorization hook, an operator subject,
+ * and an abilities list EXACTLY equal to
+ * {@see OperatorAbility::MetadataRead} and nothing else.
  *
- * `bfc.ability:metadata:read` ({@see EnsureCredentialAbility}) is the
- * outer one. D16 forbids "using the ownership/admin credential for any
- * dashboard read path", and the operator gate
- * ({@see EnsureCredentialAdmin}) cannot enforce that: it grants a
- * `credential:admin` credential whatever ability a route names,
- * unconditionally and without consulting any list, so a break-glass
- * credential would have passed a route mounted behind it. This gate
- * matches EXACTLY — no ability implies another, `credential:admin`
- * included — and it authenticates through the `bfc` guard, which
- * resolves the unified store only, so a legacy admin `api_tokens` secret
- * and a `FALLBACK_TOKEN` never authenticate here at all.
- *
- * {@see EnsureDashboardCredential} is the inner one, and it is what
- * makes the rule EXCLUSIVITY rather than membership: an operator
- * subject, and an abilities list exactly equal to `{metadata:read}`.
- * Without it a credential holding both `metadata:read` and
- * `credential:admin` reads the dashboard and mutates every operator
- * surface, which satisfies the ability check and violates D16's
- * "unable to touch content-classified or mutating surfaces" outright.
+ * There is deliberately no `bfc.ability` layer in front of it. One
+ * revision had that composition; it enforced a strict subset, so it
+ * never changed an answer, and its own denial audit drained the
+ * delivery outbox — putting the amplification this route is hardened
+ * against back onto the refusal path, which is the path an attacker can
+ * reach at will.
  *
  * The route is consequently reachable by one thing: a live
  * operator-subject unified-store credential whose abilities list is
- * exactly {@see OperatorAbility::MetadataRead} and nothing else.
+ * exactly `metadata:read`.
  *
  * THE AUDIT IS TRANSACTIONAL, NOT BEST-EFFORT, and it runs BEFORE the
  * payload is assembled. **D16 refuses an unaudited read**: the ability
