@@ -341,11 +341,10 @@ it('names a claim narrowed at some of its sites and left standing at another', f
     $prose = array_combine(array_keys($sites), $prose);
 
     // All three sites carrying it: reported, with the sites named.
+    $phrase = 'own kind and that part is structural there is nowhere in this table for prose to go';
+
     expect(ClaimSurfaceScan::restatedClaimsIn($prose))
-        ->toBe([
-            'own kind and that part is structural there is nowhere in this table for prose to go'
-                => array_keys($sites),
-        ]);
+        ->toBe([$phrase => array_keys($sites)]);
 
     // Round two: the contract and the model narrowed, the migration
     // left exactly as it was. The map CHANGES — which is what reds a
