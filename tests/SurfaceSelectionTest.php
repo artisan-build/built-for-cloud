@@ -56,6 +56,11 @@ final class SurfaceSelectionTest extends TestCase
         $this->postJson('/bfc/claim', ['claim_code' => 'x', 'version' => 1])->assertNotFound();
         $this->getJson('/bfc/credentials')->assertNotFound();
         $this->getJson('/bfc/me/credentials')->assertNotFound();
+        // …the console key-custody verb included: it is an ordinary
+        // member of the routes family, not a surface of its own
+        // (Console PRD D12).
+        $this->postJson('/bfc/console/re-key', ['key_id' => 'k1', 'public_key' => str_repeat('a', 64)])
+            ->assertNotFound();
 
         // …while the aliases stay registered, so an app with routes off
         // still gates its own routes (the MCP per-tool primitive included).
@@ -69,6 +74,25 @@ final class SurfaceSelectionTest extends TestCase
         $this->assertTrue(Schema::hasTable('credentials'));
         $this->assertArrayHasKey('bfc:credential:mint', Artisan::all());
         $this->assertTrue(Event::hasListeners(OwnershipReleasePending::class));
+    }
+
+    #[WithConfig('built-for-cloud.surfaces.routes', false, false)]
+    public function test_routes_off_unmounts_the_console_re_key_verb_while_its_command_survives(): void
+    {
+        // The re-key verb has two transports, and they belong to two
+        // DIFFERENT surface families: an app that stops serving /bfc/*
+        // keeps `bfc:console:re-key` and can still be re-keyed on the
+        // box (Console PRD D12, PRD 1.14's independence).
+        $this->postJson('/bfc/console/re-key', ['key_id' => 'k1', 'public_key' => str_repeat('a', 64)])
+            ->assertNotFound();
+
+        $this->assertArrayHasKey('bfc:console:re-key', Artisan::all());
+    }
+
+    #[WithConfig('built-for-cloud.surfaces.commands', false, false)]
+    public function test_commands_off_unmounts_the_console_re_key_command(): void
+    {
+        $this->assertArrayNotHasKey('bfc:console:re-key', Artisan::all());
     }
 
     #[WithConfig('built-for-cloud.surfaces.migrations', false, false)]
