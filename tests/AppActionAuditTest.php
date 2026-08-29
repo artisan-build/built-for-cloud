@@ -81,16 +81,18 @@ function recordAppAction(
 }
 
 /**
- * Record one app action with NO natural key, inside a transaction the
- * caller has already opened. `recordAppAction()` opens its own, which
- * would make two calls two transactions and hide the case under test.
+ * Record one app action inside a transaction the caller has ALREADY
+ * opened, optionally keyed. `recordAppAction()` opens its own, which
+ * would make two calls two transactions and hide both cases that use
+ * this: keyless cross-call dedup, and the catch-and-commit pair.
  */
-function recordAppActionInCurrentTransaction(): AppActionEvent
+function recordAppActionInCurrentTransaction(?string $naturalKey = null): AppActionEvent
 {
     return app(AppActionRecorder::class)->record(
         action: SinkAppAction::InvoiceVoided,
         actor: AppActionActor::delegated(consoleActor(), 'Acme Agency'),
         reason: AppActionReason::Requested,
+        naturalKey: $naturalKey,
     );
 }
 
@@ -795,6 +797,32 @@ it('refuses a second emission of the same logical action, and takes the transact
     recordAppAction(naturalKey: 'invoice-43-voided');
 
     expect(AppActionEvent::query()->count())->toBe(2);
+});
+
+// The pair is atomic with ITSELF, and this is the case that proves it
+// rather than describing it. The duplicate test above lets the exception
+// escape `DB::transaction()`, so the caller's own rollback hides whether
+// the recorder did anything: an app that CATCHES the failure inside its
+// transaction and commits anyway used to keep an event row with no
+// ledger row (observed: two events, one ledger row). The savepoint
+// inside `record()` is what closes it.
+it('keeps the event and its ledger row atomic when the caller catches the failure and commits anyway', function (): void {
+    DB::transaction(function (): void {
+        recordAppActionInCurrentTransaction(naturalKey: 'invoice-42-voided');
+
+        try {
+            recordAppActionInCurrentTransaction(naturalKey: 'invoice-42-voided');
+        } catch (UniqueConstraintViolationException) {
+            // The app swallows it and commits anyway — which is its
+            // right, and which must not be able to leave a half-pair
+            // behind.
+        }
+    });
+
+    // The FIRST emission survives, because it succeeded and the caller
+    // committed. The second left nothing at all.
+    expect(AppActionEvent::query()->count())->toBe(1)
+        ->and(AppActionOutboxEntry::query()->count())->toBe(1);
 });
 
 // The OTHER direction of AC11, and the one the guarantee's condition is

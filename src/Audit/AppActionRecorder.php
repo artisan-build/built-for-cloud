@@ -7,6 +7,8 @@ namespace ArtisanBuild\BuiltForCloud\Audit;
 use ArtisanBuild\BuiltForCloud\Console\AssertionBurn;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
+use Illuminate\Database\Connection;
+use Illuminate\Support\Facades\DB;
 use LogicException;
 
 /**
@@ -53,20 +55,42 @@ use LogicException;
  * caller's, which is precisely the failure the requirement exists to
  * prevent.
  *
- * **WHAT IS ENFORCED IS NARROWER THAN THAT SENTENCE, and the gap is the
- * caller's to close.** The check is `DB::transactionLevel()`, so all it
- * establishes is that A transaction is open — never that the business
- * action happened in THAT one. An app that commits its own write, opens
- * a second transaction and only then calls `record()` gets an event and
- * a ledger row atomic with each other and with nothing else, and no
- * check here can see it. So: **the event and the ledger row are always
- * atomic with each other; they are atomic with the ACTION only when the
- * caller performs both inside one transaction it opened.** The
- * package's own emitter does — `ConsoleEnter` writes the entry and its
- * event together — and that is a property of the caller, not of this
- * class. The check itself lives on the MODEL rather than here, so it
- * also catches a direct `create()`: defence in depth, on the writes that
- * fire model events, and not a boundary.
+ * **THE TWO ROWS ARE ATOMIC WITH EACH OTHER, AND THAT IS ENFORCED
+ * RATHER THAN ASKED FOR.** The pair is written inside a SAVEPOINT
+ * ({@see Connection::transaction()} nests when a
+ * transaction is already open), so if the ledger insert fails the event
+ * insert is rolled back to the savepoint before the exception leaves
+ * this method. That closes the case an earlier revision merely
+ * described: an app that CATCHES a recorder failure inside its own
+ * transaction and commits anyway used to keep an event row with no
+ * ledger row — the duplicate-emission test never saw it, because it let
+ * the exception escape `DB::transaction()`, which rolled everything back
+ * for a different reason.
+ *   Pinned by `tests/AppActionAuditTest.php` — "keeps the event and its
+ *   ledger row atomic when the caller catches the failure and commits
+ *   anyway".
+ *
+ * **A SAVEPOINT IS NOT THE TRANSACTION THIS CLASS REFUSES TO OPEN.** The
+ * requirement is that nothing here can commit independently of the
+ * caller, and a savepoint cannot: it releases into the enclosing
+ * transaction and dies with it. So the transaction guard runs FIRST,
+ * here, before the savepoint exists — otherwise nesting would hand the
+ * model's own check a transaction level of 1 and quietly satisfy it, and
+ * "refuses an emission outside a transaction" would become false the
+ * moment the pair was made atomic. The model keeps its check too, which
+ * is what catches a direct `create()`: defence in depth, on the writes
+ * that fire model events, and not a boundary.
+ *
+ * **WHAT IS STILL THE CALLER'S TO CLOSE.** All the guard can establish
+ * is that A transaction is open — never that the business action
+ * happened in THAT one. An app that commits its own write, opens a
+ * second transaction and only then calls `record()` gets a pair atomic
+ * with each other and with nothing else, and no check here can see it.
+ * So: **the event and the ledger row are always atomic with each other;
+ * they are atomic with the ACTION only when the caller performs both
+ * inside one transaction it opened.** The package's own emitter does —
+ * `ConsoleEnter` writes the entry and its event together — and that is a
+ * property of the caller, not of this class.
  *   Pinned by `tests/RecorderTransactionGuardTest.php` — "refuses to
  *   record an app action outside a database transaction" and "refuses a
  *   direct model write made outside a transaction". Both live there
@@ -148,39 +172,59 @@ final class AppActionRecorder
         AppActionReason $reason,
         ?string $naturalKey = null,
     ): AppActionEvent {
-        // No `id` is passed and `id` is not fillable on either model:
-        // HasUuids generates both, which is what makes "a
-        // package-generated event id" true of this path rather than a
-        // hope about what the caller supplied.
-        //
-        // The event's own `creating` hook re-checks the shape of what is
-        // written here. That is defence in depth, not a second gate, and
-        // there is deliberately no third copy of those checks in this
-        // method to drift from either of them.
-        $event = AppActionEvent::query()->create([
-            'action' => $action->value,
-            // WHICH vocabulary the name came from. Two apps may both
-            // declare `invoice-voided` and mean different things, and a
-            // bare slug leaves a reader unable to tell — while the enum
-            // class is a compile-time constant, not runtime data.
-            'action_vocabulary' => $action::class,
-            'reason' => $reason,
-            'actor_type' => $actor->type,
-            'actor_ref' => $actor->ref,
-            'on_behalf_of' => $actor->onBehalfOf,
-            'occurred_at' => now(),
-        ]);
+        // FIRST, and before the savepoint below exists. Nesting would
+        // otherwise open a transaction level of its own and satisfy the
+        // model's identical check for free, turning "refuses an emission
+        // outside a transaction" into a sentence about machinery this
+        // method installed.
+        if (DB::transactionLevel() === 0) {
+            throw new LogicException(
+                'An app action must be recorded inside the transaction that performs the action.',
+            );
+        }
 
-        // A duplicate dedup key fails this insert — and with it the whole
-        // transaction, the action included. That is the intended shape:
-        // the same logical action is never recorded twice, and a caller
-        // that tried is told rather than left holding one of two.
-        AppActionOutboxEntry::query()->create([
-            'event_id' => $event->id,
-            'dedup_key' => self::dedupKeyFor($action, $naturalKey ?? $event->id),
-        ]);
+        // A SAVEPOINT, not a transaction: it releases into the caller's
+        // and cannot commit without it. What it buys is that the event
+        // and its ledger row are atomic with EACH OTHER even when the
+        // caller catches the failure and commits anyway.
+        return DB::transaction(function () use ($action, $actor, $reason, $naturalKey): AppActionEvent {
+            // No `id` is passed and `id` is not fillable on either model:
+            // HasUuids generates both, which is what makes "a
+            // package-generated event id" true of this path rather than a
+            // hope about what the caller supplied.
+            //
+            // The event's own `creating` hook re-checks the shape of what
+            // is written here. That is defence in depth, not a second
+            // gate, and there is deliberately no third copy of those
+            // checks in this method to drift from either of them.
+            $event = AppActionEvent::query()->create([
+                'action' => $action->value,
+                // WHICH vocabulary the name came from. Two apps may both
+                // declare `invoice-voided` and mean different things, and
+                // a bare slug leaves a reader unable to tell — while the
+                // enum class is a compile-time constant, not runtime data.
+                'action_vocabulary' => $action::class,
+                'reason' => $reason,
+                'actor_type' => $actor->type,
+                'actor_ref' => $actor->ref,
+                'on_behalf_of' => $actor->onBehalfOf,
+                'occurred_at' => now(),
+            ]);
 
-        return $event;
+            // A duplicate dedup key fails this insert, and the savepoint
+            // takes the event row with it. Whether it also takes the
+            // ACTION depends on the caller: let the exception escape and
+            // the caller's transaction rolls back too, which is the
+            // intended shape — the same logical action is never recorded
+            // twice, and a caller that tried is told rather than left
+            // holding one of two.
+            AppActionOutboxEntry::query()->create([
+                'event_id' => $event->id,
+                'dedup_key' => self::dedupKeyFor($action, $naturalKey ?? $event->id),
+            ]);
+
+            return $event;
+        });
     }
 
     /**

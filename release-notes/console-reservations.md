@@ -43,10 +43,13 @@ the two differ are the rows worth reading.
 **None of these is a reserved name any more.** Checked against what shipped, one at a time:
 
 1. **Endpoint classification — as reserved.** The column is live and covers every endpoint the
-   package mounts, the Console's own included. That sentence is MECHANICAL rather than maintained by
-   hand: the document's route headings are enumerated and each is required to carry exactly one
-   classification row — a missing row, a row for a route that does not exist, and two rows for one
-   route are all refused, each driven over a fixture so the check is proven able to fail.
+   package mounts, the Console's own included. That sentence has a MECHANICAL half rather than being
+   maintained entirely by hand: a scan enumerates the document's route-like headings and
+   classification rows, normalizes method case and internal spacing, and refuses a heading with no
+   row, a row with no heading, two rows for one route and two headings for one route — each driven
+   over a fixture carrying the offence, so the check is proven able to fail. **What it does not
+   cover:** a row or heading the parse does not recognise is not counted, and whether a
+   classification is CORRECT is a separate question the scan never asks.
    `GET /bfc/meta` is still `content`, for exactly the reason reserved — `product` is still an
    unbounded config-declared string.
 

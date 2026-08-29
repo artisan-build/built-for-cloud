@@ -17,41 +17,54 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
  * the real file inside these methods would have made that impossible
  * without editing the shipped contract.
  *
- * WHAT THESE SCANS CHECK, and the boundary of each — worded as what is
- * checked rather than as how complete the set is, because the first
- * revision of this docblock claimed to state its blind spots "in full"
- * and then missed one. A duplicate classification row was invisible: the
- * map was keyed by route, so a second row silently overwrote the first
- * and a document classifying `GET /a` as both `metadata` and `content`
- * produced no unclassified route and no phantom route. That is now
- * {@see conflictingClassifications()}, and the lesson is kept in the
- * wording: an instrument that reports its own completeness has made the
- * one kind of claim it exists to prevent.
+ * WHAT EACH SCAN CHECKS, and what it leaves over. **Written as what is
+ * checked, never as how complete the set is** — twice now a sentence
+ * about this class's own coverage has outrun what the class does, which
+ * is exactly the failure the class exists to catch in the document. The
+ * first claimed to state its blind spots "in full" and missed duplicate
+ * rows; the replacement claimed each heading is required to carry
+ * "exactly one" row, and missed case and whitespace variants of the same
+ * route. So there is no completeness sentence here any more, and there
+ * should not be one added: these are regexes over Markdown, and a claim
+ * about what a Markdown document CANNOT contain is not something a regex
+ * can own.
  *
- *  - {@see unclassifiedRoutes()} checks that a documented route HAS a
- *    classification. Not that the classification is CORRECT — a route
- *    returning free text under a `metadata` row passes here. The truth
- *    of a row against a real response is
- *    `ContractAssertions::assertBuiltForCloudMetadataEndpoint()`'s job,
- *    in `tests/MetadataShapeTest.php`, and it covers this package's own
- *    metadata endpoints only.
- *  - {@see conflictingClassifications()} checks that a route carries at
- *    most ONE classification row, so the table cannot state two answers
- *    for one route. {@see duplicateRouteHeadings()} is the same property
- *    one level up, over the `### METHOD /path` headings themselves.
- *  - {@see documentedRoutes()} sees only routes the document declares
- *    with such a heading. A route that exists and is documented nowhere
- *    is caught against the ROUTER instead, by the route-completeness
- *    checks in `tests/HttpContractDocTest.php`.
- *  - {@see capabilitiesNotNamedIn()} checks that a capability's NAME
- *    occurs in the document. Not that what the document says about it is
- *    true, and not that the condition under which the package emits it
- *    matches the predicate the document states — those are driven
+ * **THE RESIDUE, which is the honest form of the same information: a
+ * heading or a row this parse does not RECOGNISE is not counted, and no
+ * scan below can see it.** Recognition is normalized — the method is
+ * matched case-insensitively and internal whitespace is collapsed, so
+ * `get /a`, `GET  /a` and `GET /a` are one route — but normalization is
+ * a list of variants somebody thought of, and the next variant (a
+ * unicode lookalike, a trailing character, a differently rendered table)
+ * is not on it. What these scans give is that the recognised rows are
+ * consistent with the recognised headings; a reader wanting more than
+ * that has to read the table.
+ *
+ *  - {@see unclassifiedRoutes()} — a recognised route heading with no
+ *    recognised classification row. Not whether the classification is
+ *    CORRECT: a route returning free text under a `metadata` row passes
+ *    here, and is caught, for this package's own metadata endpoints
+ *    only, by `ContractAssertions::assertBuiltForCloudMetadataEndpoint()`
+ *    in `tests/MetadataShapeTest.php`.
+ *  - {@see phantomClassifications()} — a recognised row whose route has
+ *    no recognised heading.
+ *  - {@see conflictingClassifications()} — a route with more than one
+ *    recognised row, so the table cannot give two answers to "is this
+ *    safe for a vendor-side read".
+ *  - {@see duplicateRouteHeadings()} — the same route under more than
+ *    one recognised heading.
+ *  - {@see documentedRoutes()} sees only headings. A route that exists
+ *    and is documented nowhere is caught against the ROUTER, by the
+ *    route-completeness checks in `tests/HttpContractDocTest.php`.
+ *  - {@see capabilitiesNotNamedIn()} — a capability NAME that does not
+ *    occur in the document. Not whether what the document says about it
+ *    is true, and not whether the condition the package emits it under
+ *    matches the predicate the document states; those are driven
  *    behaviourally, per capability, in the Console suites.
- *  - {@see releaseVersionExamplesIn()} checks that the document's
- *    `bfc_version` examples agree with EACH OTHER. It is deliberately
- *    doc-internal: it says nothing about whether they agree with
- *    `BuiltForCloud::VERSION`, which lags until the release is tagged.
+ *  - {@see releaseVersionExamplesIn()} — the `bfc_version` examples,
+ *    compared to each other. Deliberately doc-internal: it says nothing
+ *    about `BuiltForCloud::VERSION`, which lags until the release is
+ *    tagged.
  *  - Nothing here reads the `basis` column of the classification table.
  */
 final class ContractScan
@@ -64,16 +77,44 @@ final class ContractScan
      */
     public static function documentedRoutes(string $doc): array
     {
-        preg_match_all('/^### (GET|POST|PUT|PATCH|DELETE) (\/\S+)$/m', $doc, $matches, PREG_SET_ORDER);
-
         $routes = array_map(
-            static fn (array $match): string => $match[1].' '.$match[2],
-            $matches,
+            static fn (array $match): string => self::normalize($match[1], $match[2]),
+            self::routeHeadingMatches($doc),
         );
 
         sort($routes);
 
         return array_values(array_unique($routes));
+    }
+
+    /**
+     * One route, in the single spelling every scan here counts by:
+     * upper-case method, one space, path as written.
+     *
+     * **Normalization is what makes "the same route" a decidable
+     * question at all.** Two rows spelled `GET /a` and `get  /a` render
+     * as one endpoint and read as one endpoint, so counting them as two
+     * routes let a contradictory pair through every scan below. It is
+     * also, unavoidably, a list of the variants someone thought of — the
+     * class docblock names that as the residue rather than implying the
+     * list is closed.
+     */
+    private static function normalize(string $method, string $path): string
+    {
+        return strtoupper(trim($method)).' '.(string) preg_replace('/\s+/', '', $path);
+    }
+
+    /**
+     * Every `### METHOD /path` heading, matched case-insensitively and
+     * tolerating repeated internal whitespace.
+     *
+     * @return list<array<int, string>>
+     */
+    private static function routeHeadingMatches(string $doc): array
+    {
+        preg_match_all('/^###\s+(GET|POST|PUT|PATCH|DELETE)\s+(\/\S+)\s*$/mi', $doc, $matches, PREG_SET_ORDER);
+
+        return $matches;
     }
 
     /**
@@ -91,7 +132,7 @@ final class ContractScan
     public static function classifiedRoutes(string $doc): array
     {
         preg_match_all(
-            '/^\| `(GET|POST|PUT|PATCH|DELETE) (\/[^`]+)` \| `(metadata|content)` \|/m',
+            '/^\|\s*`(GET|POST|PUT|PATCH|DELETE)\s+(\/[^`]+)`\s*\|\s*`(metadata|content)`\s*\|/mi',
             $doc,
             $matches,
             PREG_SET_ORDER,
@@ -100,7 +141,7 @@ final class ContractScan
         $classified = [];
 
         foreach ($matches as $match) {
-            $classified[$match[1].' '.$match[2]][] = $match[3];
+            $classified[self::normalize($match[1], $match[2])][] = strtolower($match[3]);
         }
 
         ksort($classified);
@@ -153,12 +194,10 @@ final class ContractScan
      */
     public static function duplicateRouteHeadings(string $doc): array
     {
-        preg_match_all('/^### (GET|POST|PUT|PATCH|DELETE) (\/\S+)$/m', $doc, $matches, PREG_SET_ORDER);
-
         $counts = [];
 
-        foreach ($matches as $match) {
-            $route = $match[1].' '.$match[2];
+        foreach (self::routeHeadingMatches($doc) as $match) {
+            $route = self::normalize($match[1], $match[2]);
             $counts[$route] = ($counts[$route] ?? 0) + 1;
         }
 

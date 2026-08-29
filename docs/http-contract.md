@@ -22,8 +22,10 @@ of it.
 Named here because this contract is written for a consumer with no PHP, and a platform requirement
 you cannot see is one you cannot plan for.
 
-**A host serving this contract needs 64-bit PHP 8.3 or newer with the `gmp` extension
-(`ext-gmp`).** Both halves come from the assertion cryptography, and neither is optional:
+**A host serving this contract needs 64-bit PHP `^8.3` with the `gmp` extension (`ext-gmp`).** The
+constraint is the package's own and is stated as it is declared: `^8.3` admits 8.3 and 8.4 and
+**excludes PHP 9**, which this package does not claim to support. The other two halves come from the
+assertion cryptography, and neither is optional:
 
 - **`ext-gmp`** arrives with `paragonie/paseto`, which is what verifies the PASETO `v4.public`
   assertion [`POST /bfc/console/enter`](#post-bfcconsoleenter) is gated on, and which declares the
@@ -34,12 +36,16 @@ you cannot see is one you cannot plan for.
 Both requirements are **unconditional** — they are dependencies of the package, not of the Console —
 so a deployment that never enables the Console carries them too.
 
-Composer resolves both: `composer require` and `composer install` refuse on a host that is missing
-either, so the ordinary failure is loud and at install time. One caveat worth a base image's
-attention: Composer's generated runtime check (`vendor/composer/platform_check.php`) re-verifies the
-PHP **version and word size** — and **not** the extension. So a `vendor/` directory built elsewhere
-and copied onto a 32-bit host fails at boot, while the same directory copied onto a 64-bit host
-without `gmp` boots fine and fails when the extension is first used.
+Composer resolves all of it: `composer require` and `composer install` refuse on a host missing any
+of them, so the ordinary failure is loud and at install time.
+
+One caveat worth a base image's attention, for anyone who **builds `vendor/` on one host and copies
+it to another**. That directory carries a generated platform check written against the PHP that
+built it, so the running host must satisfy **that directory's own check**, not merely this
+package's declared constraint — a `vendor/` built on 8.4 can refuse to boot on an 8.3 host that
+`^8.3` allows. And the generated check does not cover extensions, so the same directory copied onto
+a host without `gmp` boots fine and fails when the extension is first used. Building `vendor/` on
+the host that runs it avoids both.
 
 Everything else is the ordinary Laravel baseline (`ctype`, `filter`, `hash`, `mbstring`, `openssl`,
 `session`, `tokenizer`, `json`).
@@ -88,9 +94,11 @@ because a reader applying rule 1 to their own change needs the real list:
 - **New OPTIONAL request fields on existing routes** — `console_key` on the ownership claim and the
   onboarding exchange, `console_key_authority` on the onboarding issue. A request that omits them
   behaves exactly as it did before.
-- **Conditionally additive response fields** — a claim or exchange response carries `console_key`
-  only when the request supplied one, so an envelope that named no key is unchanged, response keys
-  included.
+- **Conditionally additive response fields**, and this list is derived from the diff rather than
+  from memory: the ownership claim and the onboarding exchange carry `console_key` only when the
+  request supplied one, and `POST /bfc/onboarding/issue` carries `console_key_authority: true` only
+  when authority was granted. In every case an envelope that asked for nothing is unchanged,
+  response keys included, so a consumer pinned to the pre-Console shape sees identical keys.
 - **Machinery that is not a route at all** — the `bfc-console` guard, the delegated-actor table and
   the app-action emission point serve no new wire shape and change none.
 
@@ -259,7 +267,7 @@ with the three things that WOULD have moved the major and none of which happened
 - **The Console's enter endpoint ships (Console PRD D12/D13).** All additive, and `api_version`
   stays 2: no documented request or response shape changes. New route
   [`POST /bfc/console/enter`](#post-bfcconsoleenter), classified `content`, mounted only on a
-  deployment that has the Console enabled AND whose reserved `bfc-console` guard is this
+  deployment that has the Console enabled AND whose `bfc-console` guard is this
   package's own — `GET /bfc/meta` `capabilities` gains `console-enter` under exactly that
   predicate, and `/bfc/console/enter` therefore moves out of the RESERVED list. What lands with
   it: the single-use `jti` burn (a new `bfc_console_assertion_burns` table, unique-indexed, and
@@ -563,7 +571,7 @@ is schema and an emission point every install carries whether or not the Console
 `console-enter` means this deployment serves
 [`POST /bfc/console/enter`](#post-bfcconsoleenter) — it is the entry that finally says an
 operator can be handed here. Its condition is **stricter** than `console-guard`'s: the Console
-must be enabled AND the reserved `bfc-console` guard must resolve to this package's own driver.
+must be enabled AND the `bfc-console` guard must resolve to this package's own driver.
 An app that defined its own `bfc-console` guard keeps it, and the package mounts no door in
 front of somebody else's guard — so that deployment reports `console-guard` and not
 `console-enter`. The capability and the route ride one predicate, so they can never disagree.
@@ -1991,7 +1999,7 @@ machinery; this is the one surface a **browser** posts to, and the only way a de
 operator session begins.
 
 It exists only on a deployment that reports the `console-enter` capability — the Console
-enabled, and the reserved `bfc-console` guard resolving to this package's own driver. Elsewhere
+enabled, and the `bfc-console` guard resolving to this package's own driver. Elsewhere
 the path is a `404`, never a refusal.
 
 *Pinned by* `tests/ConsoleEnterSurfaceTest.php` ("the door is mounted by default in a console
@@ -2647,11 +2655,16 @@ emission attempted outside a transaction is refused rather than opening one of i
 emission point never opens a transaction of its own, because one it opened would commit
 independently of the caller's.
 
-**The two rows are always atomic with each other. Whether they are atomic with the ACTION is the
-calling application's to arrange**, and this is the sentence to read before relying on the stream.
-All the emission point can check is that *a* transaction is open; nothing available to it can tell
-whether the business write happened in that same one. An app that commits its invoice update, opens
-a second transaction and only then records gets two rows that are atomic with nothing.
+**The two rows are always atomic with each other**, and that is enforced rather than requested: the
+pair is written inside a SAVEPOINT within the caller's transaction, so a failed ledger insert takes
+the event row with it before the error reaches the caller. **An app that catches a recorder failure
+and commits anyway still cannot end up with an event that has no ledger row.**
+
+**Whether the pair is atomic with the ACTION is the calling application's to arrange**, and this is
+the sentence to read before relying on the stream. All the emission point can check is that *a*
+transaction is open; nothing available to it can tell whether the business write happened in that
+same one. An app that commits its invoice update, opens a second transaction and only then records
+gets two rows that are atomic with each other and with nothing else.
 
 **What a consuming app must do to get the guarantee: perform the action and the emission inside ONE
 transaction it opened itself.** Do that and a rolled-back action takes both rows with it, so nothing

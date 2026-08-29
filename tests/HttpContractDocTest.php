@@ -332,22 +332,30 @@ final class HttpContractDocTest extends TestCase
      * route that no longer exists tells a vendor-side reader a surface
      * is safe to read when there is no surface.
      *
-     * THREE directions, and the third was missing for a round. A route
-     * with a MISSING row and a row for a route that no longer exists were
-     * both driven from the start; a route carrying TWO rows was not, and
-     * it was invisible — the scan keyed its map by route, so the second
-     * row overwrote the first and a document classifying one endpoint as
-     * both `metadata` and `content` reported nothing at all. That is the
-     * contradiction this column exists to prevent, so it is detected
-     * rather than disclosed. Duplicate route HEADINGS are the same
-     * property one level up and are checked with it.
+     * **This test asserts four things about the routes and rows the scan
+     * RECOGNISES**, and that qualifier is the whole of the claim: a
+     * recognised heading has a classification row, a recognised row has
+     * a heading, no route has two rows, and no route has two headings.
      *
-     * WHAT IT DOES NOT CATCH: that a classification is RIGHT. A
-     * `content`-shaped response under a `metadata` row passes here, and
-     * is caught — for this package's own metadata endpoints only — by
+     * It is worded that way after two rounds of it being worded
+     * otherwise. The first version said {@see ContractScan} "states its
+     * own blind spots in full" — it did not, and duplicate rows were
+     * invisible because the scan keyed a value by route. The second said
+     * each heading is "required to carry exactly one classification row"
+     * — also false, because `GET /a` and `get  /a` counted as two
+     * routes, so a contradictory pair passed. Normalization closed that
+     * variant. It did not close the CLASS: these are regexes over
+     * Markdown, and "the document contains no second row for this route"
+     * is not a property a regex can own.
+     *
+     * So the residue is named instead of a third completeness sentence
+     * being written: **a row or heading this parse does not recognise is
+     * not counted and cannot be seen here.** {@see ContractScan} carries
+     * the boundary of each scan on the method that performs it. Whether
+     * a classification is RIGHT is a different question again, answered
+     * for this package's own metadata endpoints only by
      * `ContractAssertions::assertBuiltForCloudMetadataEndpoint()` in
-     * `tests/MetadataShapeTest.php`. {@see ContractScan} carries the
-     * boundary of each scan on the method that performs it.
+     * `tests/MetadataShapeTest.php`.
      */
     public function test_every_documented_route_carries_a_classification(): void
     {
@@ -440,6 +448,48 @@ final class HttpContractDocTest extends TestCase
 
         $this->assertSame(['GET /a'], ContractScan::duplicateRouteHeadings($repeatedHeading));
         $this->assertSame([], ContractScan::duplicateRouteHeadings($missingRow));
+
+        // The two variants that slipped past the first version of the
+        // conflict check, both driven: the contradiction is only visible
+        // once "the same route" survives a difference in method case and
+        // in spacing. A document renders `get /a` and `GET  /a` as the
+        // same endpoint, so the scan has to count them as one.
+        $caseVariant = <<<'MD'
+            ### GET /a
+
+            | endpoint | classification | basis |
+            |---|---|---|
+            | `GET /a` | `metadata` | bounded |
+            | `get /a` | `content` | free text |
+            MD;
+
+        $this->assertSame(['GET /a: metadata, content'], ContractScan::conflictingClassifications($caseVariant));
+        $this->assertSame([], ContractScan::unclassifiedRoutes($caseVariant));
+        $this->assertSame([], ContractScan::phantomClassifications($caseVariant));
+
+        $spacingVariant = <<<'MD'
+            ###  get   /a
+
+            | endpoint | classification | basis |
+            |---|---|---|
+            | `GET /a` | `metadata` | bounded |
+            |  `GET  /a`  |  `content`  | free text |
+            MD;
+
+        $this->assertSame(['GET /a: metadata, content'], ContractScan::conflictingClassifications($spacingVariant));
+        $this->assertSame([], ContractScan::unclassifiedRoutes($spacingVariant));
+        $this->assertSame([], ContractScan::phantomClassifications($spacingVariant));
+
+        $headingCaseVariant = <<<'MD'
+            ### GET /a
+            ### get  /a
+
+            | endpoint | classification | basis |
+            |---|---|---|
+            | `GET /a` | `metadata` | bounded |
+            MD;
+
+        $this->assertSame(['GET /a'], ContractScan::duplicateRouteHeadings($headingCaseVariant));
     }
 
     /**
