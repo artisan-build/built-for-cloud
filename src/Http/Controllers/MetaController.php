@@ -59,6 +59,22 @@ final class MetaController
             // the capability and the route can never disagree. An app
             // that defined its own `bfc-console` guard has the guard
             // machinery and does NOT get the package's door.
+            //
+            // `app-action-audit-emit` says this deployment RECORDS
+            // app-action audit events (Console PRD D17): the
+            // `bfc_app_action_events` table, its outbox, and the
+            // emission point an app calls. The verb is in the name on
+            // purpose — there is NO read transport for this stream in
+            // this release, and `app-action-audit` on its own is exactly
+            // the name a control plane would read as "I can query this".
+            // It is UNCONDITIONAL, unlike the two above it, because what
+            // it describes is schema and an emission point that every
+            // install carries whether or not the Console is enabled —
+            // the same standing `credentials` has. The DOOR's own
+            // emission is already conditional and already advertised:
+            // that is what `console-enter` says, and duplicating its
+            // predicate here would give a control plane two names for
+            // one fact.
             'capabilities' => self::capabilities(),
             'claimed' => $ownership !== null && $ownership->owner_token_id !== null,
         ]);
@@ -72,7 +88,10 @@ final class MetaController
      */
     private static function capabilities(): array
     {
-        $capabilities = ['tokens', 'ownership', 'onboarding', 'webhooks', 'credentials', 'console-keys', 'console-vitals'];
+        $capabilities = [
+            'tokens', 'ownership', 'onboarding', 'webhooks', 'credentials',
+            'console-keys', 'console-vitals', 'app-action-audit-emit',
+        ];
 
         if (ConsoleGuardConfiguration::enabled()) {
             $capabilities[] = 'console-guard';

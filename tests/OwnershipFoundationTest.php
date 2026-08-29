@@ -50,7 +50,11 @@ it('returns unauthenticated bfc meta for unclaimed and claimed environments', fu
             // ConsoleGuardRegistrationTest and ConsoleDisabledTest drive
             // their absence, and ConsoleEnterForeignGuardTest drives the
             // case where only `console-enter` goes away.
-            'capabilities' => ['tokens', 'ownership', 'onboarding', 'webhooks', 'credentials', 'console-keys', 'console-vitals', 'console-guard', 'console-enter'],
+            // `app-action-audit-emit` is UNCONDITIONAL: it names schema
+            // and an emission point every install carries, and the verb
+            // is in the name because this release ships no way to READ
+            // that stream (Console PRD D17).
+            'capabilities' => ['tokens', 'ownership', 'onboarding', 'webhooks', 'credentials', 'console-keys', 'console-vitals', 'app-action-audit-emit', 'console-guard', 'console-enter'],
             'claimed' => false,
         ]);
 

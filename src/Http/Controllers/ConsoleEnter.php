@@ -4,7 +4,12 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
+use ArtisanBuild\BuiltForCloud\Audit\AppActionActor;
+use ArtisanBuild\BuiltForCloud\Audit\AppActionReason;
+use ArtisanBuild\BuiltForCloud\Audit\AppActionRecorder;
+use ArtisanBuild\BuiltForCloud\Audit\ConsoleAction;
 use ArtisanBuild\BuiltForCloud\AuditActor;
+use ArtisanBuild\BuiltForCloud\Console\ActingPrincipal;
 use ArtisanBuild\BuiltForCloud\Console\Assertion;
 use ArtisanBuild\BuiltForCloud\Console\AssertionBurn;
 use ArtisanBuild\BuiltForCloud\Console\AssertionRefusalReason;
@@ -13,7 +18,9 @@ use ArtisanBuild\BuiltForCloud\Console\ConsoleEntryRefusalReason;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleEntryState;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuard;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleSession;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
+use ArtisanBuild\BuiltForCloud\Console\DelegatedClaims;
 use ArtisanBuild\BuiltForCloud\Exceptions\AssertionRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleEntryRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\DelegatedActorDeactivated;
@@ -22,6 +29,7 @@ use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Tests\AssertionParameterScan;
 use Carbon\CarbonImmutable;
+use Illuminate\Contracts\Session\Session;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -175,16 +183,55 @@ use Throwable;
  *   it could not record" and "records every refusal it serves, one row
  *   per refused entry".
  *
- * **WHAT THIS ENDPOINT DOES NOT AUDIT.** A SUCCESSFUL entry writes no
- * event to this stream. The credential lifecycle stream is
- * credential-scoped, and PRD D17 gives actor-typed app-action events
- * their own new stream, which is a later deliverable. What a successful
- * entry does leave is the shadow-actor row's refreshed
- * `last_handoff_*` copy and its `updated_at`
- * ({@see DelegatedActor::recordHandoff()}).
- * D13's requirement — that verification FAILURES are audited — is met
- * in full; the success side is named here rather than left to be
- * discovered.
+ * **A SUCCESSFUL ENTRY IS AUDITED TOO, ON THE OTHER STREAM.** The
+ * refusals above go to the credential lifecycle stream as
+ * `denied_action` rows, which is where they have always gone. A
+ * SUCCESS goes to the app-action stream (PRD D17,
+ * {@see AppActionRecorder}) as one `console-entered` event, typed as
+ * the delegated actor that was admitted and carrying the agency that
+ * actor's own handoff named. The two streams are not merged and the
+ * credential stream gains nothing here: it is credential-work only, its
+ * actor vocabulary has no delegated actor in it, and D17 says plainly
+ * that it is not extended.
+ *
+ * IT IS EMITTED INSIDE {@see spendAndRedeem()}'s TRANSACTION — the same
+ * one that holds the burn and the redemption — so an entry that rolls
+ * back records nothing, and the door cannot admit an operator without
+ * recording that it did. It fails CLOSED for the same reason the
+ * refusal audit does: if the event cannot be written, the transaction
+ * fails, the session is compensated, and no `303` is served. An
+ * unrecorded entry is not served.
+ *
+ * **THE ACTOR IS THE ONE THAT WAS ADMITTED, and it is not asked for
+ * twice.** {@see ConsoleGuard::redeem()} returns the actor it logged
+ * in, and the agency comes from {@see ConsoleSession::claims()} — the
+ * session that redemption just began, read through the atomic reader
+ * that every other console surface reads it through. Nothing here asks
+ * a guard, `Auth::` or the request a second time, and nothing reaches
+ * for a request-scoped
+ * {@see ActingPrincipal}: on THIS request there
+ * was no delegated session at all when such a principal would have been
+ * resolved.
+ *
+ * **IT DOES NOT DRAIN AN OUTBOX AFTER COMMIT, and there is nothing to
+ * drain.** The app-action stream ships no drainer in this release —
+ * {@see AppActionRecorder} says
+ * why: no consumer exists, and a delivery mechanism with nowhere to
+ * deliver is a moving part pretending to be a guarantee. The decision
+ * survives the arrival of a consumer, and is recorded now because it
+ * will be re-opened then: this is a page-load path an operator is
+ * waiting on, a drain is O(claimable rows) and may send mail, and the
+ * refusal branch on this same route already declines one for the harder
+ * version of that argument. What a successful entry does ALSO leave is
+ * the shadow-actor row's refreshed `last_handoff_*` copy and its
+ * `updated_at` ({@see DelegatedActor::recordHandoff()}).
+ *   Pinned by `tests/ConsoleEnterAuditTest.php` — "records one
+ *   app-action event for a successful entry, through the real door",
+ *   "records the agency the entering handoff named, and null when it
+ *   named none", "records no entry event when the entry transaction
+ *   rolls back", "writes nothing to the credential audit stream on a
+ *   successful entry" and "drains no outbox on the way out of a
+ *   successful entry".
  *
  * **THE DOOR IS MOUNTED OR ABSENT**, never present-and-refusing, and it
  * is rate-limited before anything else on the route runs.
@@ -225,9 +272,19 @@ final class ConsoleEnter
      */
     public const string AUDIT_NOTE = 'console entry refused (POST /bfc/console/enter): ';
 
+    /**
+     * The dedup key prefix a successful entry's event carries. Keyed on
+     * the MINT — the same length-delimited issuer+`jti` digest the burn
+     * is keyed on — so one mint can produce at most one entry event, and
+     * a second attempt to record the same entry fails the insert and
+     * takes the whole entry with it.
+     */
+    public const string ENTRY_DEDUP_PREFIX = 'console-entry:';
+
     public function __construct(
         private readonly AssertionVerifier $verifier,
         private readonly LifecycleEventRecorder $recorder,
+        private readonly AppActionRecorder $actions,
     ) {}
 
     public function __invoke(#[SensitiveParameter] Request $request): Response
@@ -268,7 +325,7 @@ final class ConsoleEnter
             // from it.
             DelegatedActor::recordHandoff($assertion);
 
-            $this->spendAndRedeem($assertion, $token, $now);
+            $this->spendAndRedeem($assertion, $token, $now, $request->session());
 
             // Housekeeping, after the commit and never able to fail the
             // entry: see AssertionBurn::prune().
@@ -294,7 +351,20 @@ final class ConsoleEnter
     }
 
     /**
-     * Spend the mint and open the session, together or not at all.
+     * Spend the mint, open the session, and record the entry — together
+     * or not at all.
+     *
+     * THE THIRD STEP JOINED THIS TRANSACTION IN PR7, and it is inside it
+     * for the same reason the first two are: an entry event that
+     * committed while the redemption rolled back would record an
+     * operator who never got in, and an entry that committed while the
+     * event failed would admit one nobody recorded. {@see auditEntry()}
+     * throws, and the broad catch below turns that into the fail-closed
+     * path — the session compensated, the burn rolled back, no `303`.
+     * That is the same ruling {@see audit()} states for refusals, and it
+     * costs the same stated availability trade: a deployment whose
+     * database is unwritable cannot complete an entry, which it could
+     * not have done anyway.
      *
      * WHY THE COMPENSATION EXISTS, and why it is shaped by which
      * exception arrived rather than by a flag.
@@ -333,14 +403,23 @@ final class ConsoleEnter
      * and it is not reachable on demand.
      *
      * @throws AssertionRefused|ConsoleEntryRefused|DelegatedActorDeactivated
+     * @throws Throwable when the entry cannot be recorded, after the session is compensated
      */
-    private function spendAndRedeem(Assertion $assertion, #[SensitiveParameter] string $token, CarbonImmutable $now): void
+    private function spendAndRedeem(Assertion $assertion, #[SensitiveParameter] string $token, CarbonImmutable $now, Session $session): void
     {
         try {
-            DB::transaction(function () use ($assertion, $token, $now): void {
+            DB::transaction(function () use ($assertion, $token, $now, $session): void {
                 AssertionBurn::burn($assertion, $now);
 
-                $this->guard()->redeem($token);
+                $actor = $this->guard()->redeem($token);
+
+                // Inside the same transaction as the burn and the
+                // redemption, and after them: the event describes an
+                // operator who was actually admitted, and an entry that
+                // rolls back records nothing. It throws rather than
+                // swallowing, so this transaction — and with it the
+                // door — fails closed on an entry it could not record.
+                $this->auditEntry($assertion, $actor, $session);
             });
         } catch (AssertionRefused|ConsoleEntryRefused|DelegatedActorDeactivated $refused) {
             throw $refused;
@@ -349,6 +428,57 @@ final class ConsoleEnter
 
             throw $failure;
         }
+    }
+
+    /**
+     * Record the successful entry on the app-action stream (PRD D17):
+     * ONE `console-entered` event, typed as the delegated actor that was
+     * admitted, carrying the agency that actor's own handoff named.
+     *
+     * **BOTH HALVES OF THE ATTRIBUTION COME FROM THE REDEMPTION THAT
+     * JUST HAPPENED.** The actor is {@see ConsoleGuard::redeem()}'s own
+     * return value — the row it locked, checked and logged in — and the
+     * agency is read out of the session that same call began, through
+     * {@see ConsoleSession::claims()}, the atomic reader every other
+     * console surface reads a live session's claims through. Neither is
+     * asked of a guard, of `Auth::` or of the request a second time, and
+     * neither comes from the shadow-actor row's `last_handoff_*` copy,
+     * which is shared by every live session for the same subject and
+     * would let a concurrent handoff re-attribute this entry to another
+     * agency.
+     *
+     * There is deliberately no fallback when the claims cannot be read.
+     * A session this method's own caller opened one statement earlier
+     * whose claims do not parse is not a state to record a partial event
+     * for — it is a broken redemption, and the throw rolls the burn, the
+     * redemption and the event back together. The guard would refuse
+     * that session on its very next request anyway; this refuses to have
+     * served it at all.
+     *
+     * The dedup key is the MINT, not the event: one mint, one entry
+     * event, enforced by the outbox's unique index. It is derived from
+     * the assertion this endpoint verified — the same value
+     * {@see AssertionBurn::burn()} keys on, one statement earlier in
+     * this transaction — because it is a KEY and not an identity, and
+     * keying it on anything the session carries would let two mints for
+     * one operator collapse into one recorded entry.
+     */
+    private function auditEntry(Assertion $assertion, DelegatedActor $actor, Session $session): void
+    {
+        $claims = ConsoleSession::claims($session);
+
+        if (! $claims instanceof DelegatedClaims) {
+            throw new RuntimeException(
+                'A delegated session was opened whose own claims cannot be read; the entry is not recorded, and so not served.',
+            );
+        }
+
+        $this->actions->record(
+            action: ConsoleAction::ConsoleEntered,
+            actor: AppActionActor::delegated($actor, $claims->onBehalfOf),
+            reason: AppActionReason::ConsoleEntry,
+            dedupKey: self::ENTRY_DEDUP_PREFIX.AssertionBurn::mintHash($assertion->issuer, $assertion->id),
+        );
     }
 
     /**
