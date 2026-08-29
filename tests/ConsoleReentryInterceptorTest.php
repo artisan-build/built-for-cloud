@@ -329,14 +329,15 @@ it('announces every path on which it cannot complete a re-entry, naming the caus
         ->and($refused['events'][1]['detail']['cause'])->toBe('navigation_refused')
         ->and($refused['chromeElement']['textContent'])->toContain('could not be renewed automatically');
 
-    // 2. THIS DOCUMENT CANNOT NAME ITS OWN ORIGIN — a sandboxed iframe or
-    //    `about:blank`, where `location.origin` is the string "null". The
+    // 2. THIS DOCUMENT CANNOT NAME ITS OWN EFFECTIVE ORIGIN. The
     //    same-origin check can then never pass, so the interceptor is
     //    inert; that is a NEW limitation the same-origin fix introduced
     //    and it is disclosed at install time rather than absorbed.
     //    Two shapes of the same thing: `window.origin` reported as the
-    //    string "null" (a frame sandboxed without `allow-same-origin`),
-    //    and a runtime that does not expose `window.origin` at all.
+    //    string "null" (a frame sandboxed with `allow-scripts` and
+    //    without `allow-same-origin`), and a runtime that does not
+    //    expose `window.origin` at all. NOT `about:blank`, which
+    //    normally inherits its creator's origin.
     //
     //    THE FIRST OF THOSE IS MODELLED WITH `location.origin` STILL
     //    REPORTING A GOOD ORIGIN, which is what a browser does — so this

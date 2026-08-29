@@ -470,15 +470,19 @@
         }
     }
 
-    // A DOCUMENT THAT CANNOT NAME ITS OWN ORIGIN CANNOT VERIFY ANY
-    // RESPONSE. A sandboxed iframe and `about:blank` both report an
-    // opaque origin — the literal string `"null"` — so the same-origin
-    // gate can never pass and every response would be ignored. That is
-    // the right answer and it is a NEW limitation this check introduced;
-    // going quietly inert about it is not. The interceptor says so, once,
-    // at install time — where nothing an attacker controls has reached
-    // it yet — and then does not install at all, so there is no path
-    // left on which it could act on a response it cannot attribute.
+    // A DOCUMENT THAT CANNOT NAME ITS OWN EFFECTIVE ORIGIN CANNOT VERIFY
+    // ANY RESPONSE. That is a frame sandboxed with `allow-scripts` and
+    // WITHOUT `allow-same-origin`, whose `window.origin` is the literal
+    // string `"null"`, or a runtime that does not expose `window.origin`
+    // at all. `about:blank` is NOT in this set as a rule — a blank
+    // document normally inherits its creator's origin — see
+    // {@see pageOrigin()}. In either case the same-origin gate can never
+    // pass and every response would be ignored. That is the right
+    // answer and it is a NEW limitation this check introduced; going
+    // quietly inert about it is not. The interceptor says so, once, at
+    // install time — where nothing an attacker controls has reached it
+    // yet — and then does not install at all, so there is no path left
+    // on which it could act on a response it cannot attribute.
     if (pageOrigin() === null) {
         announce(null, CAUSE_ORIGIN_UNVERIFIABLE);
 
