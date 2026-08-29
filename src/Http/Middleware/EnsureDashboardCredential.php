@@ -64,11 +64,22 @@ use Throwable;
  *     dashboard credential to be unable to touch mutating surfaces;
  *     aliased bytes can, so the alias is what has to be refused.
  *
- *     The check is deliberately side-effect-free — a digest comparison
- *     and one existence query, no usage stamped, no client identity
- *     observed, no row resolved — and its answer is the ordinary 401,
- *     because telling a caller "these bytes are also something else" is
- *     the one thing an aliasing probe wants to learn.
+ *     The check is deliberately free of APPLICATION-STATE side effects
+ *     — a digest comparison and one existence query, no usage stamped,
+ *     no client identity observed, no row resolved — and its answer is
+ *     the ordinary 401, byte for byte.
+ *
+ *     What it is NOT is time-equalised, and that is a decision rather
+ *     than an oversight. A fallback collision returns before any query,
+ *     a legacy collision after one, and an ordinary unknown bearer
+ *     continues into unified-store resolution, so the three paths are
+ *     distinguishable by timing. To read that oracle an attacker must
+ *     already hold the bearer — and holding it, they can present it on
+ *     a legacy surface and learn the same fact directly and far more
+ *     reliably. It discloses nothing they cannot get more cheaply, and
+ *     constant-time lookup across two stores is a large change with its
+ *     own failure modes on a route whose contract is that it does not
+ *     fail.
  *
  *  3. **An authenticated unified-store credential.** The guard resolves
  *     that store only, and an expired, revoked or offboarded principal
@@ -201,11 +212,14 @@ final class EnsureDashboardCredential
      * Whether these bearer bytes are ALSO the configured fallback token
      * or a row in the legacy `api_tokens` store.
      *
-     * Side-effect-free by construction: a constant-time digest
-     * comparison, then one `exists()` query on a hashed column. Nothing
-     * is resolved, stamped or observed, so an aliasing probe learns
-     * nothing from timing a row it cannot see and nothing from the
-     * response, which is the ordinary 401.
+     * Free of application-state side effects by construction: a
+     * constant-time digest comparison, then one `exists()` query on a
+     * hashed column. Nothing is resolved, stamped or observed, and the
+     * response is the ordinary 401 byte for byte.
+     *
+     * The PATHS are not time-equalised, and deliberately so — see the
+     * class docblock for why the oracle discloses nothing an attacker
+     * holding the bearer cannot get more cheaply from a legacy surface.
      *
      * EVERY legacy row counts, revoked and expired included. A revoked
      * row is not usable on the legacy surfaces today, but the question
