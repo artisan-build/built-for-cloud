@@ -27,15 +27,15 @@ use Throwable;
  *
  * THE SECOND RULE, and the reason this class caches: the route it serves
  * is POLLED, up to sixty times a minute per credential. Work that is
- * merely acceptable once a request is not acceptable at that rate, so the
- * queue block is read at most once per
- * `built-for-cloud.vitals.queue_cache_seconds` and shared by every poll
- * inside that window, and the database path takes ONE aggregate pass over
- * the jobs table rather than the two counts and a `min` an earlier
- * revision ran (the failed-job count is a separate query, on a separate
- * table, either way). What the package cannot do portably is impose a
- * wall-clock deadline on the read itself — see
- * {@see self::queueSnapshot}.
+ * merely acceptable once a request is not acceptable at that rate, so a
+ * queue snapshot is shared by every poll inside a
+ * `built-for-cloud.vitals.queue_cache_seconds` window, and the database
+ * path takes ONE aggregate pass over the jobs table rather than the two
+ * counts and a `min` an earlier revision ran (the failed-job count is a
+ * separate query, on a separate table, either way). What the package
+ * cannot do portably is impose a wall-clock deadline on the read itself,
+ * and what the cache does NOT do is serialise concurrent misses — see
+ * {@see self::queueSnapshot} for both.
  *
  * The audit append is deliberately NOT inside the first rule; it lives in
  * {@see ConsoleVitals}, is transactional, and is the one thing that can
@@ -51,6 +51,14 @@ final class CollectVitals
     private const int DEFAULT_QUEUE_CACHE_SECONDS = 15;
 
     private const string CACHE_KEY = 'bfc:vitals:queue';
+
+    /**
+     * The version of the cached ARRAY SHAPE, not of the payload. It
+     * bumps when {@see self::snapshotFrom}'s expectations change, so an
+     * upgrade reads a new key instead of rejecting the old one on every
+     * poll until it expires.
+     */
+    private const int CACHE_SHAPE_VERSION = 1;
 
     /**
      * @param  string|null  $statedContractVersion  the `api_version` the
@@ -78,16 +86,47 @@ final class CollectVitals
             $degraded = true;
         }
 
+        // Computed BEFORE the payload is constructed: named arguments
+        // evaluate in written order, and `health` is written first, so a
+        // degradation raised while deriving the age would have been
+        // computed after the health it must affect.
+        $deployAgeSeconds = $deployedAt === null
+            ? null
+            : $this->age(CarbonImmutable::now()->getTimestamp() - $deployedAt->getTimestamp(), $degraded);
+
         return new VitalsPayload(
             apiVersion: BuiltForCloud::API_VERSION,
             bfcVersion: BuiltForCloud::VERSION,
             appVersion: $appVersion,
             health: Health::fromDegradation($degraded),
             deployedAt: $deployedAt?->toAtomString(),
-            deployAgeSeconds: $deployedAt === null ? null : CarbonImmutable::now()->getTimestamp() - $deployedAt->getTimestamp(),
+            deployAgeSeconds: $deployAgeSeconds,
             queue: $queue,
             headline: $headline,
         );
+    }
+
+    /**
+     * An age in seconds, or null when it falls outside the window this
+     * payload will report ({@see VitalsPayload::MAX_AGE_SECONDS}) — a
+     * deploy time from 1970, a corrupt `created_at`. Out of range is
+     * `null` plus `degraded`, never a clamp: a clamped age is a wrong
+     * number presented as a right one, and the schema's bound is read
+     * from the same constant so producer and instrument cannot drift.
+     *
+     * Signed on purpose. A `deployed_at` in the future reports a
+     * negative age rather than zero, because clock skew between the app
+     * and the vendor is something an operator should see.
+     */
+    private function age(int $seconds, bool &$degraded): ?int
+    {
+        if (abs($seconds) > VitalsPayload::MAX_AGE_SECONDS) {
+            $degraded = true;
+
+            return null;
+        }
+
+        return $seconds;
     }
 
     /**
@@ -163,23 +202,34 @@ final class CollectVitals
 
     /**
      * The cached read, and the honest statement of what caching does and
-     * does not bound here.
+     * does not do here. Three limits, all stated because an unstated one
+     * reads as covered:
      *
-     * IT BOUNDS FREQUENCY, and that is the amplification that mattered: a
-     * dashboard polling once a second no longer puts a queue query (or a
-     * redis/sqs round trip) on every request. It does NOT bound the
-     * DURATION of the one read per window. There is no portable way to
-     * impose a wall-clock deadline across the drivers Laravel supports —
-     * a statement timeout is per-vendor SQL, and the queue drivers'
-     * `size()` calls carry no timeout argument — so a genuinely hung
-     * dependency will hang one request per window rather than every
-     * request. Bounding that properly is a per-driver piece of work and
-     * is deliberately not attempted here; the cap on how often it can
-     * happen is what this PR carries.
-     *
-     * A cache store that is itself unavailable must not become the new
-     * failure mode, so a throwing cache falls through to reading
-     * directly.
+     *  1. **It reduces frequency; it does not bound it.**
+     *     `Cache::remember` is cache-aside, not a lock: concurrent
+     *     misses each run the read and each write the result. In the
+     *     steady state a window costs one read, which is the
+     *     amplification that mattered — a dashboard polling once a
+     *     second no longer puts a queue query on every request — but a
+     *     burst arriving on a cold key runs the read once per concurrent
+     *     request. Taking a lock would trade that for a new way for this
+     *     route to fail or stall, on a route whose whole contract is
+     *     that it does not.
+     *  2. **It does not bound the DURATION of a read.** There is no
+     *     portable wall-clock deadline across the drivers Laravel
+     *     supports — a statement timeout is per-vendor SQL, and the
+     *     queue drivers' `size()` calls take no timeout argument — so a
+     *     genuinely hung dependency hangs the requests that miss the
+     *     cache rather than every request. Bounding that properly is
+     *     per-driver work this PR deliberately does not attempt.
+     *  3. **A cache is not a trusted input.** Everything from the store
+     *     is validated before use and the whole reconstruction happens
+     *     inside the guard. An earlier revision read the cached members
+     *     OUTSIDE the try, so a stale, malformed or colliding value
+     *     turned a dependency problem into a 500 — breaking the one
+     *     promise this class exists to keep. A value that does not
+     *     validate is bypassed for a fresh read rather than trusted or
+     *     reported.
      *
      * @return array{QueueVitals, bool}
      */
@@ -193,8 +243,7 @@ final class CollectVitals
         }
 
         try {
-            /** @var array{pending: int|null, reserved: int|null, failed: int|null, oldest: int|null, degraded: bool} $cached */
-            $cached = Cache::remember(self::CACHE_KEY, $seconds, function (): array {
+            $cached = Cache::remember($this->cacheKey(), $seconds, function (): array {
                 [$queue, $queueDegraded] = $this->readQueue();
 
                 return [
@@ -205,19 +254,97 @@ final class CollectVitals
                     'degraded' => $queueDegraded,
                 ];
             });
+
+            $snapshot = $this->snapshotFrom($cached);
+
+            if ($snapshot !== null) {
+                return $snapshot;
+            }
         } catch (Throwable) {
-            return $this->readQueue();
+            // A cache store that is itself unavailable must not become
+            // the new failure mode.
+        }
+
+        return $this->readQueue();
+    }
+
+    /**
+     * Rebuild a snapshot from whatever the cache handed back, or null
+     * when that is not a snapshot this class wrote.
+     *
+     * Every member is checked: the four counts must be absent, null or
+     * int, and the degradation flag must be a boolean. Nothing is cast.
+     * A cached `"12"` is not a pending count — it is evidence that
+     * something else owns this key — and a value that fails here is
+     * bypassed rather than repaired, because repairing it would report a
+     * number this deployment never read.
+     *
+     * @return array{QueueVitals, bool}|null
+     */
+    private function snapshotFrom(mixed $cached): ?array
+    {
+        if (! is_array($cached) || ! is_bool($cached['degraded'] ?? null)) {
+            return null;
+        }
+
+        $counts = [];
+
+        foreach (['pending', 'reserved', 'failed', 'oldest'] as $member) {
+            $value = $cached[$member] ?? null;
+
+            if ($value !== null && ! is_int($value)) {
+                return null;
+            }
+
+            $counts[$member] = $value;
         }
 
         return [
             new QueueVitals(
-                pending: $cached['pending'],
-                reserved: $cached['reserved'],
-                failed: $cached['failed'],
-                oldestPendingAgeSeconds: $cached['oldest'],
+                pending: $counts['pending'],
+                reserved: $counts['reserved'],
+                failed: $counts['failed'],
+                oldestPendingAgeSeconds: $counts['oldest'],
             ),
             $cached['degraded'],
         ];
+    }
+
+    /**
+     * The snapshot's cache key: versioned, and namespaced by the things
+     * that change what a snapshot MEANS.
+     *
+     * A fixed global key was wrong in two ways at once. Two deployments
+     * sharing a cache prefix — the same Redis with the same
+     * `CACHE_PREFIX`, which is an ordinary staging arrangement — would
+     * serve each other's backlogs. And changing the queue an app reads
+     * would keep serving the previous queue's numbers until the window
+     * expired. The version segment makes a future change to the cached
+     * ARRAY SHAPE a new key rather than a value {@see self::snapshotFrom}
+     * has to reject on every poll of the upgrade window.
+     *
+     * The namespace is a digest of the deployment identity and the
+     * resolved queue configuration. It is a digest rather than the
+     * values themselves so the key stays a bounded, printable string
+     * whatever an operator put in those settings; none of the inputs is
+     * a secret.
+     */
+    private function cacheKey(): string
+    {
+        $connection = config('queue.default');
+        $connection = is_string($connection) ? $connection : '';
+
+        $namespace = [
+            (string) (config('built-for-cloud.cloud.application') ?? ''),
+            (string) (config('built-for-cloud.product') ?? ''),
+            app()->environment(),
+            $connection,
+            (string) (config('queue.connections.'.$connection.'.driver') ?? ''),
+            (string) (config('queue.connections.'.$connection.'.connection') ?? ''),
+            (string) (config('queue.connections.'.$connection.'.table') ?? ''),
+        ];
+
+        return self::CACHE_KEY.':v'.self::CACHE_SHAPE_VERSION.':'.hash('sha256', implode('|', $namespace));
     }
 
     /**
@@ -280,7 +407,9 @@ final class CollectVitals
                 pending: (int) ($row->pending ?? 0),
                 reserved: (int) ($row->reserved ?? 0),
                 failed: $failed,
-                oldestPendingAgeSeconds: is_numeric($oldest) ? CarbonImmutable::now()->getTimestamp() - (int) $oldest : null,
+                oldestPendingAgeSeconds: is_numeric($oldest)
+                ? $this->age(CarbonImmutable::now()->getTimestamp() - (int) $oldest, $degraded)
+                : null,
             ),
             $degraded,
         ];
@@ -334,8 +463,10 @@ final class CollectVitals
      * The app's headline stat, or null — and null is by far the most
      * common honest answer.
      *
-     * The vocabulary is an ENUM CLASS ({@see HeadlineLabel}), so its
-     * membership is settled at compile time and nothing here has to
+     * The vocabulary is a class CONSTANT naming an enum class
+     * ({@see DeclaresHeadlineStat::HEADLINE_VOCABULARY},
+     * {@see HeadlineLabel}), so both which vocabulary applies and what
+     * is in it are settled at compile time, and nothing here has to
      * trust a runtime list. What this method still decides, because a
      * type cannot:
      *
@@ -343,7 +474,10 @@ final class CollectVitals
      *    some other enum that also implements the marker;
      *  - the vocabulary is at most {@see DeclaresHeadlineStat::MAX_LABELS}
      *    cases, and every case is backed by a bounded identifier;
-     *  - the value is finite;
+     *  - the value is finite and within
+     *    {@see VitalsPayload::MAX_HEADLINE_MAGNITUDE} — the same
+     *    constant the conformance schema reads, so the bound cannot
+     *    drift between the producer and the instrument;
      *  - a stat reported alongside NO declared vocabulary is refused.
      *
      * Each of those drops the headline AND degrades: the app asked for
@@ -369,7 +503,7 @@ final class CollectVitals
                 return null;
             }
 
-            $vocabulary = $declaration->headlineVocabulary();
+            $vocabulary = $declaration::HEADLINE_VOCABULARY;
 
             if ($vocabulary === null || ! enum_exists($vocabulary) || ! is_a($vocabulary, HeadlineLabel::class, true)) {
                 $degraded = true;
@@ -393,7 +527,9 @@ final class CollectVitals
                 }
             }
 
-            if (! $stat->label instanceof $vocabulary || ! is_finite((float) $stat->value)) {
+            if (! $stat->label instanceof $vocabulary
+                || ! is_finite((float) $stat->value)
+                || abs((float) $stat->value) > VitalsPayload::MAX_HEADLINE_MAGNITUDE) {
                 $degraded = true;
 
                 return null;

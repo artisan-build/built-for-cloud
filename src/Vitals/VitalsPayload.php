@@ -39,6 +39,33 @@ final readonly class VitalsPayload
      */
     public const int VERSION = 1;
 
+    /**
+     * The largest magnitude a headline value may carry, and the widest
+     * age in seconds this payload will report.
+     *
+     * These exist as constants because the CONFORMANCE SCHEMA reads them
+     * ({@see ContractAssertions::metadataVitalsSchema}) instead of
+     * restating numbers of its own. An earlier revision wrote both
+     * bounds twice — once in the producer, once in the schema — and they
+     * promptly disagreed: the schema rejected magnitudes beyond 1e15
+     * that {@see CollectVitals} was happy to emit, and capped ages at
+     * ten years that it computed without limit. A bound written twice is
+     * a bound that will disagree with itself, so it is written once and
+     * read from here.
+     *
+     * The values themselves: a headline is a number a person reads off a
+     * dashboard, and 1e15 is past the point where a double stops
+     * counting in integers at all; a century is past any honest deploy
+     * age or queue-wait. Both are generous enough that no real value is
+     * refused, and both are bounds, which is what D15's "bounded
+     * scalars" asks for. A value outside either is reported as `null`
+     * with `degraded` health rather than clamped — a clamped number is a
+     * wrong number presented as a right one.
+     */
+    public const float MAX_HEADLINE_MAGNITUDE = 1.0e15;
+
+    public const int MAX_AGE_SECONDS = 3153600000;
+
     public function __construct(
         public int $apiVersion,
         public string $bfcVersion,
