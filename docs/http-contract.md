@@ -209,11 +209,21 @@ API listing shape.
   API's output: it is above all the **owner token** minted by
   [`POST /bfc/ownership/claim`](#post-bfcownershipclaim), which is the deployment owner's root
   authority and is exactly the party a console key names. Excluding it would also be no
-  boundary — an admin `api_tokens` row can mint itself an operator credential carrying
-  `console:key:write` in one request — and it would be incoherent with the CLI transport,
-  which already treats host access as sufficient for this verb. An operator who wants console
-  key custody held by a narrower credential should not issue admin `api_tokens` rows; the
-  unified store's per-verb-family abilities are the instrument for that.
+  boundary — **in an app that declares no mint ceiling**, an admin `api_tokens` row can mint
+  itself an operator credential carrying `console:key:write` in one request — and it would be
+  incoherent with the CLI transport, which already treats host access as sufficient for this
+  verb. An operator who wants console key custody held by a narrower credential should not
+  issue admin `api_tokens` rows; the unified store's per-verb-family abilities are the
+  instrument for that.
+
+  That qualifier does not weaken the decision, and the reason is worth stating rather than
+  leaving to be reconstructed. A declared mint ceiling is **not** a check on who is asking:
+  `refuseWideningPastCeilings` consults the declaration and the subject only, never the
+  credential that authorized the request. So under a ceiling omitting `console:key:write`, the
+  ability is unmintable by EVERYONE — admin token, break-glass and narrow operator credential
+  alike — and there is no privilege the legacy row holds that excluding it would take away.
+  The "exclusion buys nothing" argument therefore holds where there is no ceiling, and is moot
+  where there is one. Neither case produces a reason to exclude the legacy admin row.
 
   **Caveat — an app with a declared mint ceiling cannot mint `console:key:write` until it
   edits its own declaration.** This affects one specific kind of app: one whose credential
@@ -230,11 +240,18 @@ API listing shape.
     with an ability-widening message that names the ability. Diagnostic, and it points at the
     real fix. `bfc:credential:mint --local` refuses identically — the ceiling is enforced in
     the one mint action, so no transport routes around it.
-  - `POST /bfc/console/re-key`, presented with whatever operator credential the app CAN mint,
-    answers the uniform **403** described above, whose body is constant and says nothing about
-    why. That opacity is deliberate on this route and it is not going to distinguish this case
-    from a stolen bearer, so an operator who has not read this paragraph will read it as "my
-    credential is wrong" rather than "my declaration is short a name".
+  - `POST /bfc/console/re-key`, presented with an operator credential the app can still mint
+    **that does not carry `credential:admin`**, answers the uniform **403** described above,
+    whose body is constant and says nothing about why. That opacity is deliberate on this
+    route and it is not going to distinguish this case from a stolen bearer, so an operator
+    who has not read this paragraph will read it as "my credential is wrong" rather than "my
+    declaration is short a name".
+
+    The `credential:admin` exception is real and is a third way out: a ceiling written before
+    this release may well permit the break-glass name, and an operator credential carrying it
+    is both mintable under that ceiling and sufficient for this route — because the gate grants
+    `credential:admin` whatever ability a route names (see the inventory note above). Check the
+    declaration's `grantableAbilities()` before concluding the route is unreachable.
 
   **Two paths work meanwhile, neither of which needs a deploy:**
 
