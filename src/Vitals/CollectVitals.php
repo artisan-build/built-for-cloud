@@ -8,7 +8,9 @@ use ArtisanBuild\BuiltForCloud\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresHeadlineStat;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
+use ArtisanBuild\BuiltForCloud\MetadataShape;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Throwable;
 
@@ -23,29 +25,32 @@ use Throwable;
  * the dashboard's job", and a vitals endpoint that 500s when the queue is
  * unreachable is exactly the thing that defeats a fleet dashboard.
  *
- * The audit append is deliberately NOT inside that rule; it lives in
- * {@see ConsoleVitals} and is transactional, because an unrecorded
- * vendor read is a different kind of failure. See that controller.
+ * THE SECOND RULE, and the reason this class caches: the route it serves
+ * is POLLED, up to sixty times a minute per credential. Work that is
+ * merely acceptable once a request is not acceptable at that rate, so the
+ * queue block is read at most once per
+ * `built-for-cloud.vitals.queue_cache_seconds` and shared by every poll
+ * inside that window, and the database path takes ONE aggregate pass over
+ * the jobs table rather than the two counts and a `min` an earlier
+ * revision ran (the failed-job count is a separate query, on a separate
+ * table, either way). What the package cannot do portably is impose a
+ * wall-clock deadline on the read itself — see
+ * {@see self::queueSnapshot}.
+ *
+ * The audit append is deliberately NOT inside the first rule; it lives in
+ * {@see ConsoleVitals}, is transactional, and is the one thing that can
+ * fail this route. See that controller.
  */
 final class CollectVitals
 {
     /**
-     * Semver, with the optional pre-release and build metadata parts.
-     * An `app_version` that does not match is dropped rather than
-     * echoed: the config key is operator-authored, and a
-     * `metadata`-classified response cannot carry an unbounded string
-     * (D15). This is the same reasoning that keeps `product` — and with
-     * it `GET /bfc/meta` — on the `content` side of the classification.
+     * The default life of a cached queue snapshot. Long enough that a
+     * one-second dashboard poll costs one read per fifteen, short enough
+     * that a backlog forming is visible inside a render or two.
      */
-    private const string SEMVER = '/^(?=.{1,64}$)\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?(?:\+[0-9A-Za-z.]+)?$/D';
+    private const int DEFAULT_QUEUE_CACHE_SECONDS = 15;
 
-    /**
-     * The shape every member of an app's declared headline vocabulary
-     * must take. Deliberately the same bounded-identifier shape the
-     * conformance assertion enforces on the wire, so a vocabulary that
-     * would fail the assertion is refused before it can be reported.
-     */
-    private const string LABEL = '/^(?=.{1,64}$)[a-z0-9]+(?:[._:-][a-z0-9]+)*$/D';
+    private const string CACHE_KEY = 'bfc:vitals:queue';
 
     /**
      * @param  string|null  $statedContractVersion  the `api_version` the
@@ -86,10 +91,13 @@ final class CollectVitals
     }
 
     /**
-     * The app's own release, when it declares one AND the declaration is
-     * semver-shaped. A declared-but-unusable value degrades: the app
-     * stated something this endpoint refuses to forward, and silently
-     * reporting `null` would look identical to declaring nothing at all.
+     * The app's own release, when it declares one AND the declaration
+     * matches {@see MetadataShape::SEMVER} — the SAME pattern the
+     * conformance instrument enforces on the wire, so a value this
+     * endpoint would forward is never one the instrument would reject.
+     * A declared-but-unusable value degrades: the app stated something
+     * this endpoint refuses to forward, and silently reporting `null`
+     * would look identical to declaring nothing at all.
      */
     private function appVersion(bool &$degraded): ?string
     {
@@ -99,7 +107,7 @@ final class CollectVitals
             return null;
         }
 
-        if (is_string($declared) && preg_match(self::SEMVER, $declared) === 1) {
+        if (is_string($declared) && MetadataShape::isSemver($declared)) {
             return $declared;
         }
 
@@ -136,16 +144,97 @@ final class CollectVitals
     }
 
     /**
-     * The backlog. The `database` driver is the only one whose numbers
-     * the package reads directly — it is the only one whose storage the
-     * package can address without a driver-specific client — so every
-     * other driver reports `pending` from the connection's own `size()`
-     * and leaves the split and the enqueue age null. That is a
-     * limitation, not a fault, and does not degrade health; a read that
-     * THROWS does.
+     * The backlog, from a cached snapshot.
+     *
+     * The snapshot carries its own degradation flag, so a poll served
+     * from cache reports the same health as the poll that populated it —
+     * a cache hit must not launder a failed read into an `ok`.
      */
     private function queue(bool &$degraded): QueueVitals
     {
+        [$queue, $queueDegraded] = $this->queueSnapshot();
+
+        if ($queueDegraded) {
+            $degraded = true;
+        }
+
+        return $queue;
+    }
+
+    /**
+     * The cached read, and the honest statement of what caching does and
+     * does not bound here.
+     *
+     * IT BOUNDS FREQUENCY, and that is the amplification that mattered: a
+     * dashboard polling once a second no longer puts a queue query (or a
+     * redis/sqs round trip) on every request. It does NOT bound the
+     * DURATION of the one read per window. There is no portable way to
+     * impose a wall-clock deadline across the drivers Laravel supports —
+     * a statement timeout is per-vendor SQL, and the queue drivers'
+     * `size()` calls carry no timeout argument — so a genuinely hung
+     * dependency will hang one request per window rather than every
+     * request. Bounding that properly is a per-driver piece of work and
+     * is deliberately not attempted here; the cap on how often it can
+     * happen is what this PR carries.
+     *
+     * A cache store that is itself unavailable must not become the new
+     * failure mode, so a throwing cache falls through to reading
+     * directly.
+     *
+     * @return array{QueueVitals, bool}
+     */
+    private function queueSnapshot(): array
+    {
+        $seconds = config('built-for-cloud.vitals.queue_cache_seconds', self::DEFAULT_QUEUE_CACHE_SECONDS);
+        $seconds = is_numeric($seconds) ? (int) $seconds : self::DEFAULT_QUEUE_CACHE_SECONDS;
+
+        if ($seconds <= 0) {
+            return $this->readQueue();
+        }
+
+        try {
+            /** @var array{pending: int|null, reserved: int|null, failed: int|null, oldest: int|null, degraded: bool} $cached */
+            $cached = Cache::remember(self::CACHE_KEY, $seconds, function (): array {
+                [$queue, $queueDegraded] = $this->readQueue();
+
+                return [
+                    'pending' => $queue->pending,
+                    'reserved' => $queue->reserved,
+                    'failed' => $queue->failed,
+                    'oldest' => $queue->oldestPendingAgeSeconds,
+                    'degraded' => $queueDegraded,
+                ];
+            });
+        } catch (Throwable) {
+            return $this->readQueue();
+        }
+
+        return [
+            new QueueVitals(
+                pending: $cached['pending'],
+                reserved: $cached['reserved'],
+                failed: $cached['failed'],
+                oldestPendingAgeSeconds: $cached['oldest'],
+            ),
+            $cached['degraded'],
+        ];
+    }
+
+    /**
+     * The uncached read. The `database` driver is the only one whose
+     * numbers the package reads directly — it is the only one whose
+     * storage the package can address without a driver-specific client —
+     * so every other driver reports `pending` from the connection's own
+     * `size()` and leaves the split and the enqueue age null. That is a
+     * limitation, not a fault, and does not degrade health; a read that
+     * THROWS does.
+     *
+     * @return array{QueueVitals, bool}
+     */
+    private function readQueue(): array
+    {
+        $degraded = false;
+
         $connection = config('queue.default');
         $connection = is_string($connection) ? $connection : '';
         $driver = config('queue.connections.'.$connection.'.driver');
@@ -153,10 +242,13 @@ final class CollectVitals
         $failed = $this->attempt(fn (): ?int => $this->failedCount(), $degraded);
 
         if ($driver !== 'database') {
-            return new QueueVitals(
-                pending: $this->attempt(fn (): ?int => $this->connectionSize($connection), $degraded),
-                failed: $failed,
-            );
+            return [
+                new QueueVitals(
+                    pending: $this->attempt(fn (): ?int => $this->connectionSize($connection), $degraded),
+                    failed: $failed,
+                ),
+                $degraded,
+            ];
         }
 
         $table = config('queue.connections.'.$connection.'.table');
@@ -164,16 +256,34 @@ final class CollectVitals
         $database = config('queue.connections.'.$connection.'.connection');
         $database = is_string($database) && $database !== '' ? $database : null;
 
-        return new QueueVitals(
-            pending: $this->attempt(fn (): int => DB::connection($database)->table($table)->whereNull('reserved_at')->count(), $degraded),
-            reserved: $this->attempt(fn (): int => DB::connection($database)->table($table)->whereNotNull('reserved_at')->count(), $degraded),
-            failed: $failed,
-            oldestPendingAgeSeconds: $this->attempt(function () use ($database, $table): ?int {
-                $oldest = DB::connection($database)->table($table)->whereNull('reserved_at')->min('created_at');
+        // ONE aggregate pass over the jobs table, not three. The earlier
+        // revision ran two counts and a `min`, each its own scan, on
+        // every poll of a route the vendor polls continuously.
+        $row = $this->attemptRow(function () use ($database, $table): ?object {
+            $aggregate = DB::connection($database)->table($table)->selectRaw(
+                'sum(case when reserved_at is null then 1 else 0 end) as pending, '
+                .'sum(case when reserved_at is null then 0 else 1 end) as reserved, '
+                .'min(case when reserved_at is null then created_at else null end) as oldest'
+            )->first();
 
-                return is_numeric($oldest) ? CarbonImmutable::now()->getTimestamp() - (int) $oldest : null;
-            }, $degraded),
-        );
+            return $aggregate;
+        }, $degraded);
+
+        if ($row === null) {
+            return [new QueueVitals(failed: $failed), $degraded];
+        }
+
+        $oldest = $row->oldest ?? null;
+
+        return [
+            new QueueVitals(
+                pending: (int) ($row->pending ?? 0),
+                reserved: (int) ($row->reserved ?? 0),
+                failed: $failed,
+                oldestPendingAgeSeconds: is_numeric($oldest) ? CarbonImmutable::now()->getTimestamp() - (int) $oldest : null,
+            ),
+            $degraded,
+        ];
     }
 
     /**
@@ -224,13 +334,25 @@ final class CollectVitals
      * The app's headline stat, or null — and null is by far the most
      * common honest answer.
      *
-     * Four things drop the headline. Declaring no vocabulary, and
-     * reporting no stat, are ordinary: health is untouched. Reporting a
-     * stat the app's OWN declaration does not permit is not: a label
-     * outside the vocabulary, a vocabulary member that is not a bounded
-     * identifier, or a non-finite value each degrade, because the app
-     * asked for something the contract forbids and the operator should
-     * see that rather than an absent field.
+     * The vocabulary is an ENUM CLASS ({@see HeadlineLabel}), so its
+     * membership is settled at compile time and nothing here has to
+     * trust a runtime list. What this method still decides, because a
+     * type cannot:
+     *
+     *  - the case belongs to the vocabulary this app DECLARED, not to
+     *    some other enum that also implements the marker;
+     *  - the vocabulary is at most {@see DeclaresHeadlineStat::MAX_LABELS}
+     *    cases, and every case is backed by a bounded identifier;
+     *  - the value is finite;
+     *  - a stat reported alongside NO declared vocabulary is refused.
+     *
+     * Each of those drops the headline AND degrades: the app asked for
+     * something the contract forbids, and an operator should see that
+     * rather than an absent field. Declaring no vocabulary and reporting
+     * no stat is the ordinary case and degrades nothing.
+     *
+     * Everything runs inside the guard, because a declaration is app
+     * code and may throw.
      */
     private function headline(bool &$degraded): ?HeadlineStat
     {
@@ -247,22 +369,36 @@ final class CollectVitals
                 return null;
             }
 
-            $vocabulary = $declaration->headlineLabels();
-        } catch (Throwable) {
-            $degraded = true;
+            $vocabulary = $declaration->headlineVocabulary();
 
-            return null;
-        }
-
-        foreach ($vocabulary as $label) {
-            if (preg_match(self::LABEL, $label) !== 1) {
+            if ($vocabulary === null || ! enum_exists($vocabulary) || ! is_a($vocabulary, HeadlineLabel::class, true)) {
                 $degraded = true;
 
                 return null;
             }
-        }
 
-        if (! in_array($stat->label, $vocabulary, true) || ! is_finite((float) $stat->value)) {
+            $cases = $vocabulary::cases();
+
+            if ($cases === [] || count($cases) > DeclaresHeadlineStat::MAX_LABELS) {
+                $degraded = true;
+
+                return null;
+            }
+
+            foreach ($cases as $case) {
+                if (! is_string($case->value) || ! MetadataShape::isToken($case->value)) {
+                    $degraded = true;
+
+                    return null;
+                }
+            }
+
+            if (! $stat->label instanceof $vocabulary || ! is_finite((float) $stat->value)) {
+                $degraded = true;
+
+                return null;
+            }
+        } catch (Throwable) {
             $degraded = true;
 
             return null;
@@ -275,6 +411,20 @@ final class CollectVitals
      * @param  callable(): (int|null)  $read
      */
     private function attempt(callable $read, bool &$degraded): ?int
+    {
+        try {
+            return $read();
+        } catch (Throwable) {
+            $degraded = true;
+
+            return null;
+        }
+    }
+
+    /**
+     * @param  callable(): (object|null)  $read
+     */
+    private function attemptRow(callable $read, bool &$degraded): ?object
     {
         try {
             return $read();

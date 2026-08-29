@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Vitals;
 
+use ArtisanBuild\BuiltForCloud\MetadataShape;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
 
 /**
@@ -13,17 +14,19 @@ use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
  * What keeps free text out of it is the FIELD SET, not a filter: there is
  * no field here whose value an operator or an end user authors. The two
  * strings that could have carried one are bounded before they arrive —
- * `app_version` is refused unless it is semver-shaped
- * ({@see CollectVitals::appVersion}) and `headline.label` is refused
- * unless it is a member of the app's declared vocabulary
- * ({@see CollectVitals::headline}). `product`, which `GET /bfc/meta`
+ * `app_version` is refused unless it matches
+ * {@see MetadataShape::SEMVER} ({@see CollectVitals::appVersion}), and
+ * `headline.label` is a {@see HeadlineLabel} enum CASE, so its value
+ * cannot be runtime data at all ({@see CollectVitals::headline}). `product`, which `GET /bfc/meta`
  * reports and which is exactly such an operator-authored string, is
  * deliberately absent.
  *
  * That claim is checked rather than asserted in prose:
- * {@see ContractAssertions::assertBuiltForCloudMetadataShape} is pointed
- * at this payload in the test suite, and fails on any string that is not
- * an enum member, a bounded identifier, a semver or a timestamp.
+ * {@see ContractAssertions::assertBuiltForCloudMetadataSchema} is
+ * pointed at this payload in the test suite with the shipped
+ * {@see ContractAssertions::metadataVitalsSchema}, which is FAIL-CLOSED:
+ * it requires this exact key set, rejects any key it does not know, and
+ * pins each field's type, enum membership and numeric range.
  */
 final readonly class VitalsPayload
 {
@@ -63,7 +66,7 @@ final readonly class VitalsPayload
             'queue' => $this->queue->toArray(),
             'headline' => $this->headline === null ? null : [
                 'value' => $this->headline->value,
-                'label' => $this->headline->label,
+                'label' => $this->headline->label->value,
                 'unit' => $this->headline->unit?->value,
             ],
         ];

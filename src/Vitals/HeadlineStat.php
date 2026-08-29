@@ -4,28 +4,24 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Vitals;
 
-use ArtisanBuild\BuiltForCloud\Contracts\DeclaresHeadlineStat;
-
 /**
  * The one app-chosen headline number on the vitals payload (Console PRD
- * D9 + D15): a value, a label CODE, and an optional unit.
+ * D9 + D15): a value, a label CASE, and an optional unit.
  *
- * This class is a CARRIER and validates nothing — the constructor is
- * public and will hold any string in `$label` and any float in `$value`.
- * The bounds live in {@see CollectVitals::headline}, the only thing in
- * this package that ever reads one: it refuses a label outside the app's
- * declared vocabulary ({@see DeclaresHeadlineStat::headlineLabels}), a
- * vocabulary whose own members are not bounded identifiers, and a
- * non-finite value — dropping the headline and degrading the payload
- * rather than forwarding any of them. Constructing one here with a
- * sentence in `$label` is therefore possible and harmless; getting that
- * sentence onto the wire is not.
+ * `$label` is a {@see HeadlineLabel} — an enum case from the app's own
+ * declared vocabulary — rather than a string, so there is no
+ * constructor call that can put an arbitrary value in this field. What
+ * the type cannot decide, {@see CollectVitals::headline} does: that the
+ * case belongs to the vocabulary this app DECLARED (not some other
+ * enum), that the vocabulary's own cases are bounded identifiers, and
+ * that `$value` is finite. A failure of any of those drops the headline
+ * and degrades the payload; none of them reaches the wire.
  */
 final readonly class HeadlineStat
 {
     public function __construct(
         public int|float $value,
-        public string $label,
+        public HeadlineLabel $label,
         public ?HeadlineUnit $unit = null,
     ) {}
 }

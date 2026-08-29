@@ -8,25 +8,27 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresHeadlineStat;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\Subject;
+use ArtisanBuild\BuiltForCloud\Vitals\HeadlineLabel;
 use ArtisanBuild\BuiltForCloud\Vitals\HeadlineStat;
 use Illuminate\Http\Request;
 use Throwable;
 
 /**
- * A sink-shaped app declaration that declares a headline stat (Console PRD
- * D9/D15). Both halves are mutable per test so one fixture covers the
- * honest case, the out-of-vocabulary refusal, the unbounded-vocabulary
- * refusal and a declaration that throws.
+ * A sink-shaped app declaration that declares a headline stat (Console
+ * PRD D9/D15). Both halves are mutable per test so one fixture covers
+ * the honest case, a case from an undeclared enum, an unbounded
+ * vocabulary, a declaration that throws, and a stat reported with no
+ * vocabulary at all.
  *
- * The vocabulary here is a TEST vocabulary. The package deliberately ships
- * none: D15 puts it in the consuming app's repo.
+ * The vocabulary here is a TEST vocabulary. The package deliberately
+ * ships none: D15 puts it in the consuming app's repo.
  */
 final class HeadlineDeclaration implements CredentialDeclaration, DeclaresHeadlineStat
 {
     /**
-     * @var list<string>
+     * @var class-string<HeadlineLabel>|null
      */
-    public static array $labels = [];
+    public static ?string $vocabulary = null;
 
     public static ?HeadlineStat $stat = null;
 
@@ -34,7 +36,7 @@ final class HeadlineDeclaration implements CredentialDeclaration, DeclaresHeadli
 
     public static function reset(): void
     {
-        self::$labels = [];
+        self::$vocabulary = null;
         self::$stat = null;
         self::$throws = null;
     }
@@ -50,15 +52,15 @@ final class HeadlineDeclaration implements CredentialDeclaration, DeclaresHeadli
     }
 
     /**
-     * @return list<string>
+     * @return class-string<HeadlineLabel>|null
      */
-    public function headlineLabels(): array
+    public function headlineVocabulary(): ?string
     {
         if (self::$throws !== null) {
             throw self::$throws;
         }
 
-        return self::$labels;
+        return self::$vocabulary;
     }
 
     public function headlineStat(): ?HeadlineStat
