@@ -38,7 +38,7 @@ final class MetadataShapeLegacyApiTest extends TestCase
         $byName = $this->deleteJson('/api/credentials/ingest', [], ['Authorization' => 'Bearer '.$admin])
             ->assertOk();
 
-        $this->assertBuiltForCloudMetadataResponse($byName, 'DELETE /api/credentials/{name}');
+        $this->assertBuiltForCloudMetadataEndpoint($byName, 'DELETE /api/credentials/{name}');
 
         // DELETE /api/credentials/id/{id} — an empty 204 body, asserted
         // rather than assumed.
@@ -51,6 +51,6 @@ final class MetadataShapeLegacyApiTest extends TestCase
         $byId = $this->deleteJson('/api/credentials/id/'.$token->getKey(), [], ['Authorization' => 'Bearer '.$admin])
             ->assertNoContent();
 
-        $this->assertBuiltForCloudMetadataResponse($byId, 'DELETE /api/credentials/id/{id}');
+        $this->assertBuiltForCloudMetadataEndpoint($byId, 'DELETE /api/credentials/id/{id}');
     }
 }

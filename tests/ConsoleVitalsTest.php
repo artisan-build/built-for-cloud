@@ -6,7 +6,9 @@ use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
+use ArtisanBuild\BuiltForCloud\Contracts\DeclaresHeadlineStat;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\DefaultCredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
@@ -16,7 +18,12 @@ use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
 use ArtisanBuild\BuiltForCloud\Testing\MintedTestCredential;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ForeignHeadlineLabel;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HeadlineDeclaration;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\OversizedHeadlineLabel;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SinkHeadlineLabel;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnboundedHeadlineLabel;
+use ArtisanBuild\BuiltForCloud\Vitals\HeadlineLabel;
 use ArtisanBuild\BuiltForCloud\Vitals\HeadlineStat;
 use ArtisanBuild\BuiltForCloud\Vitals\HeadlineUnit;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -24,6 +31,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\Schema;
 
 uses(RefreshDatabase::class, WithCredentials::class, ContractAssertions::class);
 
@@ -69,11 +77,11 @@ function vitalsReader(): MintedTestCredential
 /**
  * Bind the headline-declaring fixture as the app's contract declaration.
  *
- * @param  list<string>  $labels
+ * @param  class-string<HeadlineLabel>|null  $vocabulary
  */
-function vitalsDeclareHeadline(array $labels, ?HeadlineStat $stat): void
+function vitalsDeclareHeadline(?string $vocabulary, ?HeadlineStat $stat): void
 {
-    HeadlineDeclaration::$labels = $labels;
+    HeadlineDeclaration::$vocabulary = $vocabulary;
     HeadlineDeclaration::$stat = $stat;
 
     app()->bind(CredentialDeclaration::class, HeadlineDeclaration::class);
@@ -113,6 +121,11 @@ it('serves the vitals payload to a credential carrying metadata:read', function 
         // `product` is the one string /bfc/meta carries that no
         // metadata-classified endpoint may: it is operator-authored.
         ->and($response->json())->not->toHaveKey('product');
+
+    // And certified against the shipped fail-closed schema, which pins
+    // the exact key set — an extra field appearing here is a failure,
+    // not something a lexical filter has to recognise as free text.
+    $this->assertBuiltForCloudMetadataEndpoint($response, 'GET /bfc/console/vitals');
 });
 
 it('reports the real queue backlog, oldest pending job included', function (): void {
@@ -253,14 +266,106 @@ it('refuses no credential, an unknown one and an expired or revoked one indistin
 
     // Nothing served: not one vitals read was audited.
     expect(CredentialAuditEvent::query()->where('event', LifecycleEventType::SensitiveRead->value)->count())->toBe(0);
+
+    // THE POSITIVE CONTROL, in this test rather than another file: a
+    // gate mutated to abort(401) unconditionally satisfies every
+    // assertion above, because "all four answers are identical 401s" is
+    // exactly what such a gate produces. A live reader must still read.
+    $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('api_version', BuiltForCloud::API_VERSION);
+});
+
+// --------------------------------------------------------- AC13/AC14 --
+
+/**
+ * D16 asks for EXCLUSIVITY, not membership: the dashboard credential is
+ * "least-privilege, read-audited, unable to touch content-classified or
+ * mutating surfaces". A credential that also holds `credential:admin`
+ * reads the dashboard AND mutates every operator surface, so inability
+ * has to be a property of the credential, not of the route.
+ */
+it('refuses a credential that holds metadata:read alongside another ability', function (): void {
+    $combined = $this->mintCredential([
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => 'combined',
+        'abilities' => [OperatorAbility::MetadataRead->value, OperatorAbility::ADMIN],
+    ]);
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $combined->bearerHeader()])->assertForbidden();
+
+    // The combination is refused HERE, on the dashboard read. It is not
+    // refused at mint, and the credential keeps every other authority it
+    // names — asserted so the boundary of this fix is a fact rather than
+    // a claim in a docblock.
+    $this->getJson('/bfc/credentials', ['Authorization' => $combined->bearerHeader()])->assertOk();
+
+    // A narrower combination is refused too: the rule is "exactly
+    // metadata:read", not "nothing admin-equivalent".
+    $alsoRead = $this->mintCredential([
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => 'combined-read',
+        'abilities' => [OperatorAbility::MetadataRead->value, OperatorAbility::CredentialRead->value],
+    ]);
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $alsoRead->bearerHeader()])->assertForbidden();
+
+    // Order does not matter — the check is on the SET.
+    $reordered = $this->mintCredential([
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => 'reordered',
+        'abilities' => [OperatorAbility::ADMIN, OperatorAbility::MetadataRead->value],
+    ]);
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reordered->bearerHeader()])->assertForbidden();
+
+    // Positive control: the exclusive credential still reads.
+    $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])->assertOk();
+});
+
+it('refuses a non-operator subject holding metadata:read, and admits an operator one', function (): void {
+    // The contract heads this route "operator credential"; until the
+    // exclusivity gate landed, nothing checked the subject at all.
+    foreach ([SubjectType::Application, SubjectType::ExternalConsumer, SubjectType::UserPrincipal] as $subjectType) {
+        $wrongSubject = $this->mintCredential([
+            'subject_type' => $subjectType,
+            'subject_ref' => 'subject-'.bin2hex(random_bytes(4)),
+            'abilities' => [OperatorAbility::MetadataRead->value],
+        ]);
+
+        $this->getJson('/bfc/console/vitals', ['Authorization' => $wrongSubject->bearerHeader()])
+            ->assertForbidden();
+    }
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])->assertOk();
+});
+
+it('audits an exclusivity refusal with the acting credential', function (): void {
+    $combined = $this->mintCredential([
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => 'combined',
+        'abilities' => [OperatorAbility::MetadataRead->value, OperatorAbility::ADMIN],
+    ]);
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $combined->bearerHeader()])->assertForbidden();
+
+    $denied = CredentialAuditEvent::query()
+        ->where('event', LifecycleEventType::DeniedAction->value)
+        ->get();
+
+    expect($denied)->toHaveCount(1)
+        ->and($denied[0]->actor_type)->toBe(AuditActorType::OperatorIntegration)
+        ->and($denied[0]->actor_ref)->toBe($combined->credential->id)
+        ->and((string) $denied[0]->note)->toContain('and nothing else')
+        ->and((string) $denied[0]->note)->not->toContain($combined->plaintext());
 });
 
 // ---------------------------------------------------------------- AC6 --
 
 it('renders a headline whose label is in the app declared vocabulary', function (): void {
     vitalsDeclareHeadline(
-        ['active-sessions', 'open-cases'],
-        new HeadlineStat(128, 'active-sessions', HeadlineUnit::Count),
+        SinkHeadlineLabel::class,
+        new HeadlineStat(128, SinkHeadlineLabel::ActiveSessions, HeadlineUnit::Count),
     );
 
     $response = $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
@@ -269,13 +374,16 @@ it('renders a headline whose label is in the app declared vocabulary', function 
     expect($response->json('headline'))->toBe(['value' => 128, 'label' => 'active-sessions', 'unit' => 'count'])
         ->and($response->json('health'))->toBe('ok');
 
-    $this->assertBuiltForCloudMetadataShape($response->json(), 'GET /bfc/console/vitals with a headline');
+    $this->assertBuiltForCloudMetadataEndpoint($response, 'GET /bfc/console/vitals');
 });
 
 it('refuses a headline label outside the app declared vocabulary', function (): void {
+    // The label is an enum case, so it cannot be free text — but it can
+    // still come from an enum this app never declared, which is the
+    // enum-typed shape of the same mistake.
     vitalsDeclareHeadline(
-        ['active-sessions'],
-        new HeadlineStat(7, 'Something The Operator Typed', HeadlineUnit::Count),
+        SinkHeadlineLabel::class,
+        new HeadlineStat(7, ForeignHeadlineLabel::SomeoneElsesLabel, HeadlineUnit::Count),
     );
 
     $response = $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
@@ -284,15 +392,15 @@ it('refuses a headline label outside the app declared vocabulary', function (): 
     expect($response->json('headline'))->toBeNull()
         ->and($response->json('health'))->toBe('degraded');
 
-    $this->assertBuiltForCloudMetadataShape($response->json(), 'GET /bfc/console/vitals with a refused headline');
+    $this->assertBuiltForCloudMetadataEndpoint($response, 'GET /bfc/console/vitals');
 });
 
 it('refuses a headline whose declared vocabulary is itself unbounded', function (): void {
     // A vocabulary is only a bound if its own members are bounded; an app
     // that declares free text as a "vocabulary" gets no headline.
     vitalsDeclareHeadline(
-        ['whatever the operator typed today'],
-        new HeadlineStat(7, 'whatever the operator typed today'),
+        UnboundedHeadlineLabel::class,
+        new HeadlineStat(7, UnboundedHeadlineLabel::Whatever),
     );
 
     $response = $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
@@ -305,11 +413,17 @@ it('refuses a headline whose declared vocabulary is itself unbounded', function 
 it('gives an app that declares no vocabulary no headline rather than a fabricated one', function (): void {
     // Declaring the interface with an EMPTY vocabulary, and reporting a
     // stat anyway: still nothing on the wire.
-    vitalsDeclareHeadline([], new HeadlineStat(1, 'anything'));
+    vitalsDeclareHeadline(null, new HeadlineStat(1, SinkHeadlineLabel::ActiveSessions));
 
-    expect($this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
-        ->assertOk()
-        ->json('headline'))->toBeNull();
+    $contradiction = $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
+        ->assertOk();
+
+    // Reporting a stat while declaring NO vocabulary is a contradiction
+    // in the app's own declaration, so it degrades as well as dropping
+    // the field — the operator should see that the app asked for
+    // something its declaration does not permit.
+    expect($contradiction->json('headline'))->toBeNull()
+        ->and($contradiction->json('health'))->toBe('degraded');
 
     // And an app that does not implement the interface at all — the
     // package ships no vocabulary of its own, so there is nothing to
@@ -323,6 +437,38 @@ it('gives an app that declares no vocabulary no headline rather than a fabricate
 
     expect($response->json('headline'))->toBeNull()
         ->and($response->json('health'))->toBe('ok');
+});
+
+it('refuses a vocabulary larger than the declared cap', function (): void {
+    vitalsDeclareHeadline(
+        OversizedHeadlineLabel::class,
+        new HeadlineStat(3, OversizedHeadlineLabel::Label1, HeadlineUnit::Count),
+    );
+
+    // Every case is a bounded identifier and the set is compile-time —
+    // the cap is about a vocabulary a reviewer can actually review, and
+    // it is enforced rather than described.
+    $response = $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
+        ->assertOk();
+
+    expect(count(OversizedHeadlineLabel::cases()))->toBe(DeclaresHeadlineStat::MAX_LABELS + 1)
+        ->and($response->json('headline'))->toBeNull()
+        ->and($response->json('health'))->toBe('degraded');
+});
+
+it('refuses a declared vocabulary that is not an enum at all', function (): void {
+    // The signature says `class-string<HeadlineLabel>`, and PHP does not
+    // enforce a generic in a docblock — so the guard is driven with a
+    // class name that satisfies the runtime type and nothing else.
+    HeadlineDeclaration::$vocabulary = HeadlineDeclaration::class;
+    HeadlineDeclaration::$stat = new HeadlineStat(3, SinkHeadlineLabel::ActiveSessions);
+    app()->bind(CredentialDeclaration::class, HeadlineDeclaration::class);
+
+    $response = $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
+        ->assertOk();
+
+    expect($response->json('headline'))->toBeNull()
+        ->and($response->json('health'))->toBe('degraded');
 });
 
 it('reports no headline and degrades when the app declaration throws', function (): void {
@@ -365,7 +511,7 @@ it('degrades honestly instead of erroring when the queue store is unreachable', 
         // unaffected: partial degradation stays partial.
         ->and($response->json('queue.failed'))->toBe(0);
 
-    $this->assertBuiltForCloudMetadataShape($response->json(), 'GET /bfc/console/vitals degraded');
+    $this->assertBuiltForCloudMetadataEndpoint($response, 'GET /bfc/console/vitals');
 });
 
 it('degrades rather than echoing an app version this endpoint cannot bound', function (): void {
@@ -377,7 +523,7 @@ it('degrades rather than echoing an app version this endpoint cannot bound', fun
     expect($response->json('app_version'))->toBeNull()
         ->and($response->json('health'))->toBe('degraded');
 
-    $this->assertBuiltForCloudMetadataShape($response->json(), 'GET /bfc/console/vitals with a refused app_version');
+    $this->assertBuiltForCloudMetadataEndpoint($response, 'GET /bfc/console/vitals');
 });
 
 it('degrades rather than erroring on an unparseable declared deploy time', function (): void {
@@ -412,7 +558,7 @@ it('reports what a non-database queue driver can tell it and nothing more', func
 });
 
 it('refuses a non-finite headline value', function (): void {
-    vitalsDeclareHeadline(['active-sessions'], new HeadlineStat(NAN, 'active-sessions', HeadlineUnit::Count));
+    vitalsDeclareHeadline(SinkHeadlineLabel::class, new HeadlineStat(NAN, SinkHeadlineLabel::ActiveSessions, HeadlineUnit::Count));
 
     $response = $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
         ->assertOk();
@@ -472,7 +618,20 @@ it('renders honestly for a caller stating a previous contract version', function
 
 // ---------------------------------------------------------------- AC9 --
 
-it('audits every vitals read with the actor typed, ids only', function (): void {
+it('audits every vitals read with the actor typed, and carries exactly the declared columns', function (): void {
+    // The earlier revision claimed this row was "ids only". It is not:
+    // the stream's standard provenance columns carry this instance's
+    // operator-authored product name, its cloud application name and its
+    // environment, on EVERY event. Rather than trust the claim, every
+    // populated column is asserted here, so what the row holds is a
+    // checked fact and the narrowed claim ("no request or response body,
+    // no presented secret, no credential material") is the one the
+    // docblock and the contract now make.
+    config([
+        'built-for-cloud.product' => 'Acme Patient Portal',
+        'built-for-cloud.cloud.application' => 'app-1234',
+    ]);
+
     $reader = vitalsReader();
 
     $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])->assertOk();
@@ -481,12 +640,32 @@ it('audits every vitals read with the actor typed, ids only', function (): void 
         ->where('event', LifecycleEventType::SensitiveRead->value)
         ->get();
 
-    expect($reads)->toHaveCount(1)
-        ->and($reads[0]->actor_type)->toBe(AuditActorType::OperatorIntegration)
-        ->and($reads[0]->actor_ref)->toBe($reader->credential->id)
-        ->and($reads[0]->credential_id)->toBe($reader->credential->id)
-        ->and((string) $reads[0]->note)->toContain('/bfc/console/vitals')
-        ->and((string) $reads[0]->note)->not->toContain($reader->plaintext());
+    expect($reads)->toHaveCount(1);
+
+    $row = $reads[0];
+
+    // Populated, and exactly these.
+    expect($row->actor_type)->toBe(AuditActorType::OperatorIntegration)
+        ->and($row->actor_ref)->toBe($reader->credential->id)
+        ->and($row->credential_id)->toBe($reader->credential->id)
+        ->and($row->provider)->toBe('Acme Patient Portal')
+        ->and($row->deployment)->toBe('app-1234')
+        ->and($row->environment)->toBe('testing')
+        ->and((string) $row->note)->toBe('console vitals read (GET /bfc/console/vitals)')
+        ->and($row->occurred_at)->not->toBeNull();
+
+    // Empty, and exactly these.
+    expect($row->code_id)->toBeNull()
+        ->and($row->superseded_by_credential_id)->toBeNull()
+        ->and($row->recipient)->toBeNull()
+        ->and($row->code_ttl_seconds)->toBeNull()
+        ->and($row->credential_expires_at)->toBeNull()
+        ->and($row->reason_code)->toBeNull();
+
+    // The narrowed claim, driven: no presented secret and no credential
+    // material anywhere on the row.
+    expect(json_encode($row->getAttributes()))->not->toContain($reader->plaintext())
+        ->and(json_encode($row->getAttributes()))->not->toContain($reader->credential->secret_hash);
 
     // A degraded read is audited exactly like a healthy one — the audit
     // records the READ, not the health.
@@ -549,7 +728,162 @@ it('registers both vitals limits', function (): void {
         ->and($byKey->has('bfc-vitals-cred|'.hash('sha256', 'probe-secret')))->toBeTrue()
         ->and($byKey->get('bfc-vitals-cred|'.hash('sha256', 'probe-secret'))->maxAttempts)->toBe(60)
         ->and($byKey->has('bfc-vitals-ip|9.9.9.9'))->toBeTrue()
-        ->and($byKey->get('bfc-vitals-ip|9.9.9.9')->maxAttempts)->toBe(120);
+        ->and($byKey->get('bfc-vitals-ip|9.9.9.9')->maxAttempts)->toBe(300);
+});
+
+// --------------------------------------------------------- polling --
+
+it('never drains the outbox from the polled read', function (): void {
+    // A drain is O(claimable rows) and may SEND MAIL. Hanging one off a
+    // route the vendor polls sixty times a minute per credential turns a
+    // dashboard into a database and mail amplifier, so this event is
+    // recorded with the drain suppressed.
+    //
+    // Driven through a real undelivered row: an ordinary mutating verb
+    // leaves one behind, and the vitals read must leave it exactly
+    // where it found it.
+    $admin = $this->mintCredential([
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => 'control-plane',
+        'abilities' => [OperatorAbility::ADMIN],
+    ]);
+
+    $this->postJson('/bfc/credentials', [
+        'subject_type' => 'external_consumer',
+        'subject_ref' => 'acme',
+    ], ['Authorization' => $admin->bearerHeader()])->assertCreated();
+
+    // Warm the reader first. A credential's FIRST presentation emits
+    // `first_used` — a genuine state transition that predates this route
+    // and legitimately drains — and it happens once per credential, not
+    // once per poll. What this test is about is the STEADY STATE: the
+    // second and every later poll.
+    $reader = vitalsReader();
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])->assertOk();
+
+    // Make every existing row claimable-but-undelivered again, and count
+    // what a drain would have to walk.
+    CredentialOutboxEntry::query()->update(['delivered_at' => null, 'claimed_at' => null, 'claim_token' => null]);
+
+    $before = CredentialOutboxEntry::query()->whereNull('delivered_at')->count();
+
+    expect($before)->toBeGreaterThan(0);
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])->assertOk();
+
+    // The vitals read added its OWN outbox row (the append is still
+    // transactional) and delivered nothing — including nothing that was
+    // already waiting.
+    expect(CredentialOutboxEntry::query()->whereNull('delivered_at')->count())->toBe($before + 1)
+        ->and(CredentialOutboxEntry::query()->whereNotNull('claimed_at')->count())->toBe(0);
+});
+
+it('serves repeat polls from one cached queue snapshot', function (): void {
+    $reader = vitalsReader();
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('queue.pending', 0);
+
+    // A job enqueued INSIDE the cache window is deliberately not visible
+    // yet: the snapshot is what bounds a one-second poll to one read per
+    // window, and a cache that revalidated per request would not bound
+    // anything.
+    DB::table('jobs')->insert([
+        'queue' => 'default', 'payload' => '{}', 'attempts' => 0,
+        'reserved_at' => null, 'available_at' => now()->getTimestamp(), 'created_at' => now()->getTimestamp(),
+    ]);
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('queue.pending', 0);
+
+    // Once the window passes, the next poll reads for real.
+    $this->travel(20)->seconds();
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('queue.pending', 1);
+});
+
+it('reports a cached degraded queue as degraded rather than laundering it', function (): void {
+    config([
+        'database.connections.unreachable' => ['driver' => 'sqlite', 'database' => '/nonexistent/bfc/queue.sqlite'],
+        'queue.connections.database.connection' => 'unreachable',
+    ]);
+
+    $reader = vitalsReader();
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('health', 'degraded');
+
+    // The second poll is served from the snapshot, and a cache hit must
+    // not turn a failed read into an `ok`.
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('health', 'degraded')
+        ->assertJsonPath('queue.pending', null);
+});
+
+it('reads without caching when the snapshot is turned off', function (): void {
+    config(['built-for-cloud.vitals.queue_cache_seconds' => 0]);
+
+    $reader = vitalsReader();
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('queue.pending', 0);
+
+    DB::table('jobs')->insert([
+        'queue' => 'default', 'payload' => '{}', 'attempts' => 0,
+        'reserved_at' => null, 'available_at' => now()->getTimestamp(), 'created_at' => now()->getTimestamp(),
+    ]);
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('queue.pending', 1);
+});
+
+// ---------------------------------------------------------- AC16/AC17 --
+
+it('throttles refused attempts, so the throttle is provably outside the gate', function (): void {
+    // Sixty unauthenticated reads share the `anonymous` credential
+    // bucket. If the throttle sat INSIDE the gate, a refused request
+    // would never reach it and the 61st would be another 401.
+    foreach (range(1, 60) as $ignored) {
+        $this->withServerVariables(['REMOTE_ADDR' => '10.8.0.1'])
+            ->getJson('/bfc/console/vitals')
+            ->assertUnauthorized();
+    }
+
+    $this->withServerVariables(['REMOTE_ADDR' => '10.8.0.1'])
+        ->getJson('/bfc/console/vitals')
+        ->assertStatus(429);
+
+    // A live reader from that address is unaffected: its own credential
+    // bucket is untouched, which also proves the 429 above came from the
+    // anonymous bucket rather than the IP one.
+    $this->withServerVariables(['REMOTE_ADDR' => '10.8.0.1'])
+        ->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
+        ->assertOk();
+});
+
+it('refuses to serve a read it cannot audit', function (): void {
+    $reader = vitalsReader();
+
+    // The positive control first: this credential reads fine while the
+    // audit store is there.
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])->assertOk();
+
+    // D16's ability is read-audited, so an unauditable vendor read is
+    // one this deployment must not serve. This is the ONE thing that can
+    // fail this route, and it is deliberate — see the controller.
+    Schema::drop('credential_audit_events');
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])
+        ->assertStatus(500);
 });
 
 // --------------------------------------------------------------- AC12 --
