@@ -45,10 +45,12 @@ use Symfony\Component\HttpFoundation\Request as SymfonyRequest;
  * THE RULE, exactly. Within the scanned roots, a parameter must carry
  * `#[SensitiveParameter]` when it is either:
  *
- *  - typed `string` (or `?string`) with a NAME ENDING IN `token`,
- *    case-insensitively — narrow on purpose, since `$tokenId` and
- *    `$tokenHash` are identifiers and digests, not secrets, and neither
- *    ends in `token`; or
+ *  - NAMED for a token — a name ending in `token`, case-insensitively
+ *    — where the declared type is `string`, `?string`, `mixed`, or
+ *    absent. Narrow on purpose, since `$tokenId` and `$tokenHash` are
+ *    identifiers and digests, not secrets, and neither ends in `token`;
+ *    `mixed` is included because the value read straight off a request
+ *    arrives that way and is no less the credential for it; or
  *  - typed as an HTTP **request** — anything that is-a
  *    `Symfony\Component\HttpFoundation\Request`. A request object
  *    carries whatever credential the client presented, which on these
@@ -67,6 +69,16 @@ use Symfony\Component\HttpFoundation\Request as SymfonyRequest;
  *    and the claim in the code that cites it is worded to match.
  *  - **Union and intersection types**, which are skipped rather than
  *    guessed at.
+ *  - **Anything that is not a filename-derived class, enum or
+ *    interface under `src/`.** The walk turns a file path into one
+ *    class name and reflects that, so a package FUNCTION, an ANONYMOUS
+ *    CLASS or a standalone TRAIT can introduce an assertion-bearing
+ *    frame that is never inspected. That is not closeable by
+ *    enumeration — PHP has more ways to make a frame than a
+ *    file-and-classname walk can reach — so it is NAMED rather than
+ *    chased: such a frame is caught by reviewing the diff that adds it,
+ *    not by this suite. A mutation-debt row records it, and the claims
+ *    this scan supports are worded to match.
  *  - **VENDOR frames**, which are the large residue and cannot be
  *    closed from here at all: `ParagonIE\Paseto\Parser::parse()`
  *    receives the token, and the whole framework pipeline holds the
@@ -182,20 +194,31 @@ final class AssertionParameterScan
     {
         $type = $parameter->getType();
 
+        if ($type === null) {
+            // An untyped parameter is judged on its name alone, which
+            // is all there is to go on.
+            return self::namedForAToken($parameter);
+        }
+
         if (! $type instanceof ReflectionNamedType) {
             return false;
         }
 
         $name = $type->getName();
 
-        if ($name === 'string') {
-            return str_ends_with(strtolower($parameter->getName()), 'token');
+        if ($name === 'string' || $name === 'mixed') {
+            return self::namedForAToken($parameter);
         }
 
         // A request object carries whatever the client presented. No
         // parameter name is consulted, deliberately: the frame this
         // rule exists for was called `$request`.
         return is_a($name, SymfonyRequest::class, true);
+    }
+
+    private static function namedForAToken(ReflectionParameter $parameter): bool
+    {
+        return str_ends_with(strtolower($parameter->getName()), 'token');
     }
 
     /**

@@ -45,10 +45,15 @@ a Laravel app receives — and `ParagonIE\Paseto` receives the token itself. Wha
 frame this package declares carries it unmarked, and the object those vendor frames hold no
 longer carries it.
 
+The scan covers filename-derived classes, enums and interfaces under `src/`; it does not cover
+package functions, anonymous classes or standalone traits. Such a frame is caught by review, not
+by the suite, and a debt row names it.
+
 *Pinned by* `tests/ConsoleEnterTest.php` ("does not route GET at the enter path, so an assertion
 can never ride a query string") and `tests/AssertionSecrecyTest.php` ("marks every frame in this
 package that holds console assertion bytes", "names an unmarked assertion frame when the walk
-meets one" and "takes the presented assertion out of the request before anything can throw").
+meets one", "names the shapes it cannot reach, so the claim beside it stays true" and "takes the
+presented assertion out of the request before any validation runs").
 
 ### 2. The signed state, and what it is not
 

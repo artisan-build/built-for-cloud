@@ -43,6 +43,14 @@ use ArtisanBuild\BuiltForCloud\Tests\CitationScan;
  * says which it is, in the diff. That is deliberate friction and it is
  * the whole property: absence has to be detectable.
  *
+ * The candidate walk matches `.md`, `.php` and `.inc`,
+ * case-insensitively. An earlier revision matched lower-case `.php`
+ * alone, so a `README.md` beside the guard — the likeliest place of all
+ * for somebody to write an uncited guarantee, since every document in
+ * this package is markdown — existed unclassified while this suite
+ * reported clean. That was the same shape a third time: a filter that
+ * could not see the thing that was missing.
+ *
  * THE RESIDUE, now small and named: a guarantee-bearing file OUTSIDE
  * the scanned surfaces entirely — a new top-level document nobody adds
  * to `$citedSurfaces`. Adding a surface is the human step; everything
@@ -157,33 +165,46 @@ it('names a candidate file that nobody classified', function (): void {
 
     mkdir($root.'/src', 0700, true);
 
-    file_put_contents($root.'/src/Listed.php', '<?php
+    $cited = "<?php\n\n/**\n * A claim.\n *   Pinned by `tests/T.php` — \"one\".\n */\n";
+    $uncited = "<?php\n\n/** Something is guaranteed, and nothing says what pins it. */\n";
 
-/**
- * A claim.
- *   Pinned by `tests/T.php` — "one".
- */
-');
-    file_put_contents($root.'/src/Exempt.php', '<?php
+    $files = [
+        $root.'/src/Listed.php' => $cited,
+        $root.'/src/Exempt.php' => $uncited,
+        $root.'/src/BrandNew.php' => $uncited,
+        // The extensions an earlier revision walked straight past: a
+        // markdown README beside the code — the likeliest place of all
+        // for an uncited guarantee, since every document in this
+        // package is markdown — an `.inc`, and an upper-case `.PHP`.
+        $root.'/src/README.md' => "# Something is guaranteed\n\nAnd nothing says what pins it.\n",
+        $root.'/src/Legacy.inc' => $uncited,
+        $root.'/src/Shouty.PHP' => $uncited,
+        // Not a candidate: no extension a guarantee travels in here.
+        $root.'/src/notes.txt' => "Something is guaranteed.\n",
+    ];
 
-/** A value object. */
-');
-    file_put_contents($root.'/src/BrandNew.php', '<?php
-
-/** Something is guaranteed, and nothing says what pins it. */
-');
+    foreach ($files as $path => $contents) {
+        file_put_contents($path, $contents);
+    }
 
     try {
         expect(CitationScan::candidatesIn($root, ['src']))
-            ->toBe(['src/BrandNew.php', 'src/Exempt.php', 'src/Listed.php'])
+            ->toBe([
+                'src/BrandNew.php',
+                'src/Exempt.php',
+                'src/Legacy.inc',
+                'src/Listed.php',
+                'src/README.md',
+                'src/Shouty.PHP',
+            ])
             ->and(CitationScan::unclassifiedIn(
                 $root,
                 ['src'],
                 ['src/Listed.php' => 1],
                 ['src/Exempt.php' => 'a value object'],
-            ))->toBe(['src/BrandNew.php']);
+            ))->toBe(['src/BrandNew.php', 'src/Legacy.inc', 'src/README.md', 'src/Shouty.PHP']);
     } finally {
-        array_map(unlink(...), [$root.'/src/Listed.php', $root.'/src/Exempt.php', $root.'/src/BrandNew.php']);
+        array_map(unlink(...), array_keys($files));
         rmdir($root.'/src');
         rmdir($root);
     }

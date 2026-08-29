@@ -50,14 +50,49 @@ it('marks every frame in this package that holds console assertion bytes', funct
         // fail-closed audit made it an exception path in the same round
         // that the name-matching scan was introduced.
         'ConsoleEnter::__invoke($request)',
-        'ConsoleEnter::assertionToken($request)',
+        'ConsoleEnter::assertionToken($presentedToken)',
         'ConsoleEnter::forgetPresentedAssertion($request)',
         'ConsoleEnter::spendAndRedeem($token)',
         'ConsoleGuard::redeem($assertionToken)',
         // Not an assertion, but the same rule and the same reason: this
         // request carries a live operator bearer token.
         'ConsoleKeyDelivery::optionalFrom($request)',
+        // UNTYPED parameters, which the first two revisions of the rule
+        // also could not see. PR3 marked them by hand; the enumeration
+        // now says so.
+        'DelegatedActorProvider::retrieveByToken($token)',
+        'DelegatedActorProvider::updateRememberToken($token)',
     ]);
+});
+
+it('names the shapes it cannot reach, so the claim beside it stays true', function (): void {
+    // NOT A PROOF — a statement of the bound, kept beside the scan so
+    // the claim it supports cannot quietly grow past it. The walk turns
+    // a file path into ONE class name and reflects that, so a package
+    // function, an anonymous class or a standalone trait can introduce
+    // an assertion-bearing frame that is never inspected. PHP has more
+    // ways to make a frame than a file-and-classname walk can reach.
+    $root = sys_get_temp_dir().'/bfc-frame-shapes-'.bin2hex(random_bytes(6));
+
+    mkdir($root.'/Console', 0700, true);
+
+    // A file whose name derives no class at all: a package function
+    // taking the token, invisible to the walk.
+    file_put_contents(
+        $root.'/Console/helpers.php',
+        "<?php\n\nnamespace ArtisanBuild\\BuiltForCloud\\Console;\n\nfunction leak(string \$token): void {}\n",
+    );
+
+    try {
+        // The file is walked and yields nothing, because there is no
+        // class of that name to reflect. That is the residue, named.
+        expect(AssertionParameterScan::classesIn($root, ['Console']))->toBe([])
+            ->and(AssertionParameterScan::framesIn([]))->toBe([]);
+    } finally {
+        unlink($root.'/Console/helpers.php');
+        rmdir($root.'/Console');
+        rmdir($root);
+    }
 });
 
 it('names an unmarked assertion frame when the walk meets one', function (): void {
@@ -81,19 +116,27 @@ it('names an unmarked assertion frame when the walk meets one', function (): voi
         ]);
 });
 
-it('takes the presented assertion out of the request before anything can throw', function (): void {
+it('takes the presented assertion out of the request before any validation runs', function (): void {
     // The wide exposure is not the stack frame — PHP prints an object
     // argument as `Object(Illuminate\Http\Request)` and none of its
     // contents. It is a rich error reporter serializing request INPUT
     // alongside the trace, which no attribute touches. So the
-    // credential is removed from the request object as soon as it is
-    // read, and every failure path unwinds without it.
+    // credential is removed in the THIRD statement of the endpoint,
+    // preceded only by the two reads that make it possible.
+    //
+    // Both directions are driven, because the REFUSAL path is the one
+    // an earlier revision got wrong: the missing-field check used to
+    // run first, so a refusal unwound with the field still present.
     $seen = [];
 
     Route::middleware([StartSession::class])->post('/console-enter-probe', function (Request $request) use (&$seen): array {
         $seen['before'] = $request->input('assertion');
 
-        app(ConsoleEnter::class)($request);
+        try {
+            app(ConsoleEnter::class)($request);
+        } catch (Throwable $failure) {
+            $seen['threw'] = $failure::class;
+        }
 
         $seen['after'] = $request->input('assertion');
 
@@ -106,4 +149,15 @@ it('takes the presented assertion out of the request before anything can throw',
 
     expect($seen['before'])->toBe($handoff['assertion'])
         ->and($seen['after'])->toBeNull();
+
+    // …and on the refusal path, where the value is present, is not a
+    // string, and is refused before anything else looks at it.
+    $seen = [];
+
+    $this->post('/console-enter-probe', ['assertion' => ['not', 'a', 'string'], 'state' => $handoff['state']])
+        ->assertOk();
+
+    expect($seen['before'])->toBe(['not', 'a', 'string'])
+        ->and($seen['after'])->toBeNull()
+        ->and($seen)->not->toHaveKey('threw');
 });

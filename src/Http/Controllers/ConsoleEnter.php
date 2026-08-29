@@ -20,6 +20,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\DelegatedActorDeactivated;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
+use ArtisanBuild\BuiltForCloud\Tests\AssertionParameterScan;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -46,14 +47,15 @@ use Throwable;
  *   enter path, so an assertion can never ride a query string".
  *
  * **THE BYTES ARE MARKED, AND THEN THEY ARE REMOVED.** Every frame in
- * this package that can hold the presented token — a `string` named for
- * one, and the `Request` that carries the submitted form — is marked
- * `#[SensitiveParameter]`, enumerated rather than remembered. And the
- * credential is taken OUT of the request object as soon as it has been
- * read, before anything that can throw runs, because a rich error
- * reporter serializes request INPUT regardless of which frames hold
- * what. {@see forgetPresentedAssertion()} states what that reaches and
- * what it does not.
+ * this package that can hold the presented token — a parameter named
+ * for one, and the `Request` that carries the submitted form — is
+ * marked `#[SensitiveParameter]`, enumerated rather than remembered.
+ * And the credential is taken OUT of the request object in the THIRD
+ * STATEMENT of {@see __invoke()}, preceded only by the two reads that
+ * make it possible and by nothing this endpoint throws from, because a
+ * rich error reporter serializes request INPUT regardless of which
+ * frames hold what. {@see forgetPresentedAssertion()} states that
+ * ordering precisely and says what it reaches and what it does not.
  *
  * THE CLAIM IS NARROWER THAN "NO FRAME LEAKS THE CREDENTIAL", and it
  * has to be: the `Request` object travels through the whole framework
@@ -63,10 +65,20 @@ use Throwable;
  * bearer token a Laravel application receives. What IS enforced: no
  * frame THIS PACKAGE declares carries the credential unmarked, and the
  * object those vendor frames hold no longer carries it either.
+ *
+ * AND THE SCAN HAS A SHAPE IT CANNOT REACH, stated rather than chased:
+ * it walks FILENAME-DERIVED classes, enums and interfaces under `src/`,
+ * so a package FUNCTION, an ANONYMOUS CLASS or a standalone TRAIT could
+ * introduce an assertion-bearing frame without ever being inspected.
+ * PHP has more ways to make a frame than a file-and-class walk can
+ * reach; that one is caught by reviewing a diff, not by this suite, and
+ * a mutation-debt row names it.
  *   Pinned by `tests/AssertionSecrecyTest.php` — "marks every frame in
  *   this package that holds console assertion bytes", "names an
- *   unmarked assertion frame when the walk meets one" and "takes the
- *   presented assertion out of the request before anything can throw".
+ *   unmarked assertion frame when the walk meets one", "names the
+ *   shapes it cannot reach, so the claim beside it stays true" and
+ *   "takes the presented assertion out of the request before any
+ *   validation runs".
  *
  * **THE MINTING PATH IS {@see ConsoleGuard::redeem()}, AND ONLY THAT.**
  * This controller writes no session state of its own. It hands the
@@ -220,18 +232,24 @@ final class ConsoleEnter
 
     public function __invoke(#[SensitiveParameter] Request $request): Response
     {
+        // THE FIRST THREE STATEMENTS, in this order, and the order is
+        // the point. Read the two fields; take the credential out of
+        // the request. Nothing else precedes the removal — not the
+        // clock, not the missing-field check, not one line of
+        // validation — so every throwing path in this endpoint unwinds
+        // with the request already scrubbed.
+        // See forgetPresentedAssertion(), which states that ordering
+        // precisely and what it does and does not reach.
+        $presentedToken = $request->input(self::ASSERTION_FIELD);
+        $state = $request->input(ConsoleEntryState::FIELD);
+
+        $this->forgetPresentedAssertion($request);
+
         $now = CarbonImmutable::now();
         $mintId = null;
 
         try {
-            $token = $this->assertionToken($request);
-            $state = $request->input(ConsoleEntryState::FIELD);
-
-            // Both fields are in hand, so the credential comes OUT of the
-            // request object before anything that can throw runs. See
-            // forgetPresentedAssertion() for why that matters more than
-            // the attribute above does.
-            $this->forgetPresentedAssertion($request);
+            $token = $this->assertionToken($presentedToken);
 
             $assertion = $this->verifier->verify($token);
             $mintId = $assertion->id;
@@ -336,21 +354,31 @@ final class ConsoleEnter
     /**
      * The presented assertion, as a non-empty string.
      *
+     * It takes the VALUE rather than the request, because by the time
+     * it runs the request no longer carries one: {@see __invoke()}
+     * reads both fields and scrubs the credential before any validation
+     * happens, so even the missing-field refusal below unwinds with the
+     * request already clean.
+     *
+     * `mixed`, because that is what `Request::input()` returns and
+     * pretending otherwise would move the type check somewhere it does
+     * not belong. The parameter is still named for what it holds, which
+     * is what {@see AssertionParameterScan}
+     * requires of an untyped or `mixed` frame.
+     *
      * The LENGTH bound is the verifier's own
      * ({@see AssertionVerifier::MAX_TOKEN_LENGTH}) and is left there
      * deliberately: one place decides what a token may look like.
      *
      * @throws ConsoleEntryRefused
      */
-    private function assertionToken(#[SensitiveParameter] Request $request): string
+    private function assertionToken(#[SensitiveParameter] mixed $presentedToken): string
     {
-        $token = $request->input(self::ASSERTION_FIELD);
-
-        if (! is_string($token) || $token === '') {
+        if (! is_string($presentedToken) || $presentedToken === '') {
             throw ConsoleEntryRefused::because(ConsoleEntryRefusalReason::MissingAssertion);
         }
 
-        return $token;
+        return $presentedToken;
     }
 
     /**
@@ -367,11 +395,20 @@ final class ConsoleEnter
      * `#[SensitiveParameter]` does nothing about that; removing the
      * value does.
      *
-     * It runs as soon as both fields have been read and before anything
-     * that can throw, so every failure path below — the verifier's, the
-     * burn's, and the fail-closed audit's, which is the one that made
-     * this reachable — unwinds with the credential already gone from
-     * the object.
+     * WHEN IT RUNS, exactly — because an earlier revision of this
+     * sentence said "before anything that can throw" and that was
+     * FALSE: the clock and the missing-field check ran first. It is now
+     * the THIRD STATEMENT of {@see __invoke()}, and the only things
+     * preceding it are the two `Request::input()` reads that make it
+     * possible. Everything in this endpoint that throws — the
+     * missing-field refusal, verification, the state binding, the burn,
+     * the redemption and the fail-closed audit — runs after it.
+     *
+     * That is a claim about this endpoint's throwing paths, not about
+     * PHP: a fatal error or a timeout can land anywhere, and the two
+     * `input()` calls are still calls. What is claimed, and what the
+     * test drives, is that no path this code takes reaches a `throw`
+     * with the credential still in the request.
      *
      * WHAT IT DOES NOT REACH, named rather than left to be found:
      *

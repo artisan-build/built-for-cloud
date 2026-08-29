@@ -2080,9 +2080,15 @@ an operator gets in.
   carrier is a form POST, where nothing does), and any credential held in a shape the scan's two
   rules do not name.
 
+  The scan itself covers filename-derived classes, enums and interfaces under `src/`; it does
+  **not** cover package functions, anonymous classes or standalone traits, which PHP can also make
+  a frame from. Such a frame is caught by reviewing the diff that adds it, not by this suite, and
+  a debt row names it.
+
   *Pinned by* `tests/AssertionSecrecyTest.php` ("marks every frame in this package that holds
-  console assertion bytes", "names an unmarked assertion frame when the walk meets one" and
-  "takes the presented assertion out of the request before anything can throw").
+  console assertion bytes", "names an unmarked assertion frame when the walk meets one", "names
+  the shapes it cannot reach, so the claim beside it stays true" and "takes the presented
+  assertion out of the request before any validation runs").
 
 **What it does NOT guarantee, stated rather than implied.** The signed state closes open
 redirect and stops a state being moved between mints. It does **not** close forced login: an

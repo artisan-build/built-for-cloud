@@ -85,6 +85,32 @@ final class CitationScan
     public const string MARKER = 'Pinned by';
 
     /**
+     * The file extensions a guarantee can plausibly live in, matched
+     * case-INSENSITIVELY.
+     *
+     * `md` is first for a reason: the contract and every release note
+     * are markdown, and a `README.md` sitting beside the guard is an
+     * entirely likely place for somebody to write a guarantee. An
+     * earlier revision matched lower-case `.php` and nothing else, so
+     * such a file — and a `.PHP` or an `.inc` — EXISTED UNCLASSIFIED
+     * while the new-file tripwire reported clean. That is the same
+     * shape as the two defects before it: a filter that could not see
+     * the thing that was missing.
+     *
+     * @var list<string>
+     */
+    public const array CANDIDATE_EXTENSIONS = ['md', 'php', 'inc'];
+
+    /**
+     * Where a Pest or PHPUnit title can be DECLARED. Deliberately
+     * narrower than the candidate set: a markdown file declares no
+     * tests, and walking it for `it(` would be noise.
+     *
+     * @var list<string>
+     */
+    private const array TEST_EXTENSIONS = ['php'];
+
+    /**
      * Every title quoted by a citation in one file, in the order they
      * appear, with line wrapping and docblock markers normalised away.
      *
@@ -127,7 +153,7 @@ final class CitationScan
         foreach ($paths as $path) {
             $target = $root.'/'.$path;
 
-            foreach (is_dir($target) ? self::phpFiles($target, $path) : [$path => $target] as $relative => $file) {
+            foreach (is_dir($target) ? self::filesIn($target, $path, self::CANDIDATE_EXTENSIONS) : [$path => $target] as $relative => $file) {
                 $titles = self::citedTitlesIn((string) file_get_contents($file));
 
                 if ($titles !== []) {
@@ -150,7 +176,7 @@ final class CitationScan
     {
         $titles = [];
 
-        foreach (self::phpFiles($testsRoot, '') as $file) {
+        foreach (self::filesIn($testsRoot, '', self::TEST_EXTENSIONS) as $file) {
             $contents = (string) file_get_contents($file);
 
             preg_match_all("/\\bit\\(\\s*'((?:[^'\\\\]|\\\\.)*)'/", $contents, $single);
@@ -226,7 +252,7 @@ final class CitationScan
         foreach ($paths as $path) {
             $target = $root.'/'.$path;
 
-            foreach (is_dir($target) ? array_keys(iterator_to_array(self::phpFiles($target, $path))) : [$path] as $relative) {
+            foreach (is_dir($target) ? array_keys(iterator_to_array(self::filesIn($target, $path, self::CANDIDATE_EXTENSIONS))) : [$path] as $relative) {
                 $candidates[] = $relative;
             }
         }
@@ -364,9 +390,14 @@ final class CitationScan
     }
 
     /**
+     * Every file under a root whose extension is in the given set,
+     * matched case-insensitively so a `.PHP` or a `.MD` is not a way
+     * past this walk.
+     *
+     * @param  list<string>  $extensions
      * @return iterable<string, string>
      */
-    private static function phpFiles(string $root, string $prefix): iterable
+    private static function filesIn(string $root, string $prefix, array $extensions): iterable
     {
         $files = new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
@@ -374,7 +405,7 @@ final class CitationScan
 
         /** @var SplFileInfo $file */
         foreach ($files as $file) {
-            if ($file->isFile() && $file->getExtension() === 'php') {
+            if ($file->isFile() && in_array(strtolower($file->getExtension()), $extensions, true)) {
                 $relative = substr($file->getPathname(), strlen($root) + 1);
 
                 yield ($prefix === '' ? $relative : $prefix.'/'.$relative) => $file->getPathname();
