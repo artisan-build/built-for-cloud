@@ -58,6 +58,12 @@ use ArtisanBuild\BuiltForCloud\Tests\CitationScan;
  */
 $citedSurfaces = [
     'src/Console',
+    // The app-action audit stream (Console PRD D17). A whole new
+    // directory of guarantee-bearing files, so it is added as a SURFACE
+    // rather than file by file: everything under it must be classified
+    // from the day it appears, which is the property that failed for the
+    // enter endpoint's release note.
+    'src/Audit',
     // The enter endpoint's guarantees live on the controller and in its
     // release note, both outside src/Console — so both are named
     // explicitly rather than left uncheckable (Console PRD D12/D13).
@@ -74,8 +80,15 @@ $citedSurfaces = [
  * and a file that is expected to have them and has none at all.
  */
 $expectedCitations = [
-    'docs/http-contract.md' => 40,
-    'release-notes/console-enter.md' => 18,
+    'docs/http-contract.md' => 75,
+    'src/Audit/AppAction.php' => 5,
+    'src/Audit/AppActionActor.php' => 7,
+    'src/Audit/AppActionEvent.php' => 14,
+    'src/Audit/AppendOnlyBuilder.php' => 2,
+    'src/Audit/AppActionOutboxEntry.php' => 9,
+    'src/Audit/AppActionRecorder.php' => 7,
+    'src/Audit/AppActorType.php' => 1,
+    'release-notes/console-enter.md' => 28,
     'release-notes/unified-store-guard.md' => 8,
     'src/Console/AssertionBurn.php' => 6,
     'src/Console/AssertionVerifier.php' => 2,
@@ -85,7 +98,7 @@ $expectedCitations = [
     'src/Console/ConsoleSession.php' => 2,
     'src/Console/DelegatedActor.php' => 6,
     'src/Console/DelegatedActorProvider.php' => 4,
-    'src/Http/Controllers/ConsoleEnter.php' => 16,
+    'src/Http/Controllers/ConsoleEnter.php' => 24,
 ];
 
 /**
@@ -98,6 +111,10 @@ $expectedCitations = [
  * or in the floor above.
  */
 $exemptFromCitation = [
+    'src/Audit/AppActionEventBuilder.php' => 'a two-line binding of the shared AppendOnlyBuilder to one model; it adds and overrides nothing, and every claim is on the base',
+    'src/Audit/AppActionLedgerBuilder.php' => 'a two-line binding of the shared AppendOnlyBuilder to one model; it adds and overrides nothing, and every claim is on the base',
+    'src/Audit/AppActionReason.php' => 'a bounded enum: the closed app-action reason vocabulary, whose doc-to-code check is HttpContractDocTest\'s',
+    'src/Audit/ConsoleAction.php' => 'a bounded enum: the package\'s own action vocabulary, whose one case is driven by ConsoleEnterAuditTest',
     'src/Console/ActingPrincipal.php' => 'a readonly value object: the resolved principal, carrying no rule of its own',
     'src/Console/ActingPrincipalResolver.php' => 'D14 precedence, whose guarantees are stated and cited on ConsoleGuard',
     'src/Console/Assertion.php' => 'the verified claim set; every property rule is the verifier\'s and is cited there',

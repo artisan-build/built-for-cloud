@@ -199,7 +199,14 @@ assertion with byte-identical responses", "types the actor on every refusal, and
 only when it verified", "records every refusal it serves, one row per refused entry" and "does
 not serve a refusal it could not record").
 
-A **successful** entry writes no event to this stream. The credential lifecycle stream is
-credential-scoped, and PRD D17 gives actor-typed app-action events their own new stream, which is
-a later deliverable. What a successful entry leaves is the shadow-actor row's refreshed
-`last_handoff_*` copy and its `updated_at`.
+A **successful** entry writes no event to *this* stream — the credential lifecycle stream is
+credential-scoped, and PRD D17 gives actor-typed app-action events their own. **That stream has
+since shipped**, and this paragraph said it was "a later deliverable" for one release too long:
+a successful entry now writes one `console-entered` event to the app-action stream, typed as the
+delegated actor that was admitted, inside the same transaction as the burn and the redemption.
+Its contract is in
+[the app-action audit stream](../docs/http-contract.md#the-app-action-audit-stream). What a
+successful entry also leaves is the shadow-actor row's refreshed `last_handoff_*` copy and its
+`updated_at`.
+
+*Pinned by* `tests/ConsoleEnterAuditTest.php` ("records one app-action event for a successful entry, through the real door" and "records no entry event when the entry transaction rolls back").

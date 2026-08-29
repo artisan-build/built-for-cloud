@@ -58,6 +58,9 @@ Additive unless marked otherwise:
   working; callers that assumed an empty body must read the new shape.
 - New unified-store verb routes: `GET /bfc/credentials`, `POST /bfc/credentials`,
   `DELETE /bfc/credentials/{id}`.
+- New `capabilities` entry `app-action-audit-emit`, and the app-action audit stream's schema and
+  emission (Console PRD D17). Additive: no request or response shape changes, and the stream has
+  no read transport — see [the app-action audit stream](#the-app-action-audit-stream).
 - New rotation routes (PRD 1.7): `POST /bfc/credentials/{id}/rotate` and
   `POST /api/credentials/id/{id}/rotate` — rotate-by-id, the primary verb, on both stores.
   Unified-store summary rows gained the nullable `rotated_at` field (rotation provenance).
@@ -436,7 +439,7 @@ Public (`bfc-public` throttle). Identifies the instance.
   "product": "Sink",
   "bfc_version": "0.4.0",
   "api_version": 2,
-  "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials", "console-keys", "console-vitals"],
+  "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials", "console-keys", "console-vitals", "app-action-audit-emit"],
   "claimed": true
 }
 ```
@@ -458,6 +461,14 @@ dashboard is the vendor's, and nothing in this release renders anything.
 delegated-session machinery: the `bfc-console` guard, the `bfc_delegated_actors` table and the
 re-entry `401`. It is absent when `built-for-cloud.console.enabled` is off, which is the
 default, because the capability describes this deployment and not the package.
+
+`app-action-audit-emit` means this deployment **records** app-action audit events: the
+`bfc_app_action_events` table, its transactional outbox, and the emission point an app calls. The
+verb is deliberate — see [the app-action audit stream](#the-app-action-audit-stream) — because
+**this release provides no read transport for that stream**, and a capability named
+`app-action-audit` would read as one. It is unconditional, unlike the two Console capabilities
+below: what it names is schema and an emission point every install carries whether or not the
+Console is enabled. Whether the DOOR emits is what `console-enter` already says.
 
 `console-enter` means this deployment serves
 [`POST /bfc/console/enter`](#post-bfcconsoleenter) — it is the entry that finally says an
@@ -2108,9 +2119,24 @@ signed no state, whatever state is presented" and "refuses a state lifted from a
 mint").
 
 **A successful entry writes no event to the credential lifecycle stream.** That stream is
-credential-scoped; actor-typed app-action events are a separate, later stream (Console PRD D17).
-What a successful entry does leave is the shadow-actor row's refreshed `last_handoff_*` copy and
-its `updated_at`. Verification FAILURES are audited in full, which is what D13 requires.
+credential-scoped. A successful entry is audited on the
+[app-action stream](#the-app-action-audit-stream) instead — one `console-entered` event, typed as
+the delegated actor that was admitted, written inside the same transaction as the burn and the
+redemption. It fails **closed**: an entry that cannot be recorded is not served, and one whose
+transaction rolls back leaves no event. What a successful entry also leaves is the shadow-actor
+row's refreshed `last_handoff_*` copy and its `updated_at`. Verification FAILURES are audited in
+full on the credential stream, which is what D13 requires.
+
+**What that event attests, and what it does not.** It says the REDEMPTION COMMITTED: the mint was
+spent and the delegated principal was written into the request's session, in one transaction with
+the event. It does **not** say the operator ended up with a usable session. The guard writes the
+session in memory and Laravel's `StartSession` persists it to the session store after the
+controller returns — after this transaction has committed — so a session-store failure in that
+window leaves a permanent event for an entry whose session never became durable, and no rollback
+can reach back through a committed transaction to undo it. The fail-closed property runs one way
+only, and this is the sentence that says so rather than leaving a reader to infer the symmetry.
+
+*Pinned by* `tests/ConsoleEnterAuditTest.php` ("records one app-action event for a successful entry, through the real door", "records no entry event when the entry transaction rolls back" and "writes nothing to the credential audit stream on a successful entry").
 
 **Storage.** One row per redeemed mint in `bfc_console_assertion_burns`, keyed on a digest of
 issuer + `jti`. It holds no secret — a `jti` is a mint identifier, worthless without the signed
@@ -2120,6 +2146,173 @@ successful entry. The margin points one way on purpose: a row dropped while its 
 still be presented would un-spend a mint.
 
 *Pinned by* `tests/ConsoleEnterTest.php` ("sits exactly on the prune boundary: one second inside keeps a burn row, one second past drops it").
+
+---
+
+## The app-action audit stream
+
+Console PRD D17. A **new** append-only stream recording what principals DO in a converted app —
+separate from the credential lifecycle stream, which stays credential-work only and is **not**
+extended by this release.
+
+### There is no read transport for this stream
+
+**This release provides no way to read the app-action stream over HTTP.** There is no endpoint,
+no listing, no export, and nothing in `capabilities` that grants one. The rows exist in the
+consuming app's own database and are reachable only by that app's own code. A read surface —
+`metadata`-classified, ability-gated — is a later deliverable and is named nowhere in this
+contract as something you can call today. This sentence is here because a stream described in
+detail and never said to be unreadable reads exactly like one you can query.
+
+`GET /bfc/meta` advertises `app-action-audit-emit`, and the verb is the point: this deployment
+**records** app-action events. It does not say they can be fetched.
+
+### Storage
+
+One row per action in `bfc_app_action_events`, plus one row in `bfc_app_action_outbox`, written
+in the **same database transaction** as the action itself. An action that rolls back takes both
+rows with it: the stream is transactional, or it is fiction. An emission attempted outside a
+transaction is refused rather than opening one of its own.
+
+**`bfc_app_action_outbox` is an immutable dedup ledger, not an operational outbox.** The table is
+named for the outbox PATTERN D17 names, and the pattern is what the write side does; the delivery
+half does not exist. **No drainer ships for this stream in this release**, because no consumer
+exists to deliver to — nothing drains it, nothing marks it, nothing reads it — and the
+delivery-bookkeeping columns the credential outbox carries (`attempts`, `claimed_at`,
+`claim_token`, `delivered_at`, `delivered_recipients`, `last_error`) are deliberately absent
+rather than present and unwritten. It is also not the replayable history: the EVENT table is
+append-only and complete, and a future consumer can be built against that. And it is not an
+ORDERED hand-off — the only ordering it carries is a nullable `created_at` at one-second
+resolution, which cannot sequence two rows written in the same second.
+
+What it does give is dedup, durably. `dedup_key` is UNIQUE, and that index is what makes
+**exactly one event per action** a database property of what the emission point writes: a second emission
+of the same logical action fails the insert and takes the transaction — the action included —
+with it. `event_id` is unique too, so "one ledger row per event" is a database property as well.
+
+**`dedup_key` stores a sha256 digest, never a caller's string.** It is a hash over a
+length-delimited encoding of the action's vocabulary, the action's name and the caller's own
+natural key. Two reasons, and both matter to a consumer reading this schema later: a caller's
+string written verbatim into a wide column would be an **app-content channel** into a stream
+whose entire premise is that no app content enters it, and an app could pass a request value
+straight in; and namespacing by vocabulary and action removes the global collision domain in
+which two unrelated apps choosing the same natural key would silently suppress each other's
+events.
+
+**And the ledger is append-only exactly as strongly as the event it dedupes** — model guards, the
+enumerated bulk-operation refusals, and the same database triggers. That is not symmetry for its
+own sake: a unique index only rejects a duplicate while the row it collides with still EXISTS, so
+a deletable ledger row would let the duplicate this stream promises to refuse be re-admitted by
+deleting the evidence of the first one.
+
+**Storage is unbounded.** One event row and one ledger row per app action, forever, pruned by
+nothing — see [Retention](#retention) — and the cost is stated here rather than discovered later.
+
+The event columns, all of them:
+
+| column | shape |
+|---|---|
+| `id` | uuid; `HasUuids` generates it and the model does not make it fillable, so no `create()` through the model can supply one |
+| `action` | the backing value of a case from the app's own compile-time action enum, a bounded identifier |
+| `action_vocabulary` | the enum class that case came from, so two apps' identical slugs stay distinguishable |
+| `reason` | one member of the closed vocabulary below |
+| `actor_type` | `local_user`, `api_token` or `delegated_actor` |
+| `actor_ref` | the principal's identifier; for a delegated actor the TYPE-QUALIFIED `bfc-console:{id}` form |
+| `on_behalf_of` | the agency a delegated operator acts for (D4), or null; never present for the other two actor types |
+| `occurred_at`, `created_at` | timestamps |
+
+**There is no free-text column.** The schema carries no `note` and nothing of that kind, and that
+part is structural: there is nowhere in this table for prose to go. The one string that is not
+identifier-shaped is `on_behalf_of`, and D4 requires it.
+
+**WHAT THESE COLUMNS CONTAIN IS A GUARANTEE ABOUT WHAT THE PACKAGE WRITES, NOT ABOUT THE TABLE.**
+Read the table above as a description of the rows the package's emission point produces, because
+that is what it is. `AppActionEvent` is a public Eloquent model in the consuming app's own
+database: `insert()`, `saveQuietly()`, `withoutEvents()`, a raw `DB::table(...)` write and any
+Eloquent builder spelling that forwards through `__call()` all reach these tables without firing
+a model event. **An app holding the model can write its own database directly, and the package
+neither prevents nor detects that.** Three revisions of this section claimed otherwise, each by
+enumerating one more spelling the previous one had missed; an enumeration of a framework's surface
+does not terminate, so the claim is narrowed instead of the enumeration extended.
+
+The package does keep two tripwires, and they are worth having because they catch the ordinary
+mistake — a consuming app reaching for `create()` because the emission point was not obvious. The
+model refuses, on `creating`, an action that is not a bounded-identifier case of a real declared
+vocabulary, a `delegated_actor` named by a bare id, an `on_behalf_of` on any other actor type, and
+a write with no transaction open; the models' shared Eloquent builder refuses an enumerated set of
+bulk mutation spellings. **Neither is a boundary and no guarantee here depends on either being
+complete.** A write that satisfies both still gets **no ledger row** — one cannot be written from
+`creating`, because the event id it would reference is not inserted yet — so "exactly one event per
+action" is likewise a property of the emission point and of nothing else.
+
+**And `on_behalf_of` is caller-supplied on every path, this package's included.** On the package's
+own two paths it originates as an issuer-minted claim, bounded to 120 characters and rejected for
+control characters by the assertion verifier: `POST /bfc/console/enter` passes the claims of the
+session its redemption has just begun, and every other emission passes the request's one resolved
+acting principal. Nothing downstream of those re-checks it, and a consuming app calling the actor
+factory itself supplies whatever it likes. What IS enforced is that the column accompanies a
+delegated actor and no other. **Escape it at every sink.**
+
+### The actor vocabulary
+
+The three principals D17 names, and it is a **separate** vocabulary from the credential stream's
+`actor_type`. The two sets are disjoint on purpose: the credential stream has no delegated actor
+and never will, and an app action is never performed by a CLI operator or a credential holder. A
+shared enum would hand a reader of either stream members that stream cannot produce.
+
+- `local_user` — the host application's own authenticated human, named by the app's own primary key.
+- `api_token` — a credential acting on its own behalf, named by its opaque credential id.
+- `delegated_actor` — a delegated human admitted through the Console door, named by the
+  type-qualified `bfc-console:{id}` form and never the bare integer. `bfc_delegated_actors` is an
+  ordinary auto-increment table in the same id space `users` occupies, so a bare `7` would read as
+  user 7. This is the only actor type that carries `on_behalf_of`.
+
+Attribution, on emissions the package makes during a request, comes from the **one** acting
+principal it resolves per request (D14) — not from asking a guard, `Auth::` or the request a
+second time. On a route guarded by the app's own guard while a delegated session is also live, the
+acting principal is the local user, and that is what the event names. `POST /bfc/console/enter` is
+the deliberate exception and passes the admitted actor directly, because the request's acting
+principal was resolved before the delegated session existed.
+
+### The reason vocabulary
+
+Bounded, closed, and shipped by the package: an app cannot add a member. It is **exactly the five
+app-action reasons** `console_entry`, `requested`, `scheduled`, `remediation`, `offboarding`
+(closed set). It is deliberately coarse — the ACTION carries the specificity, and a reason
+vocabulary that grew a case whenever one did not quite fit would be free text with extra steps.
+
+### Retention
+
+**App-action events are never pruned by this package.** This is attribution history, the same
+decision already taken for the shadow-actor row: nothing here deletes a row, there is no prune
+command, no scheduled sweep and no retention setting. The storage cost is therefore unbounded and
+grows with the app's activity forever.
+
+**Append-only has three tripwires, and none of them is a boundary.** Model events on `updating`
+and `deleting` cover INSTANCE operations (`$row->update()`, `$row->delete()`). Bulk operations fire
+no model events at all, so they are refused by the models' shared Eloquent builder — an enumerated
+set covering `update`, `delete`, `truncate`, `upsert`, the increment/decrement family and the
+event-free insert spellings. Database triggers abort raw row-level UPDATE and DELETE on sqlite,
+mysql/mariadb and pgsql.
+
+**The residue, named rather than claimed away**, because each layer has a real edge. Raw
+`TRUNCATE TABLE` is DDL and no row trigger sees it. A raw INSERT — `DB::table(...)` or
+`Model::query()->insert(...)`, which fires no model events — skips the model layer, and the
+triggers guard UPDATE and DELETE, not INSERT. `deleteQuietly()` and `withoutEvents()` mute the
+model layer outright. The builder's refusal list is a fixed enumeration of method names, and a
+spelling not on it forwards straight through `__call()`. A driver this package writes no triggers
+for (sqlsrv) has the model and builder layers and nothing beneath them. A connection with schema
+access can DROP the triggers; direct file access to a SQLite database rewrites anything. TRUNCATE
+and DROP enforcement, where an operator wants it, is a **database-privilege** matter — revoke DDL
+from the app's connection — not something a model guard can give. **Append-only here is a strong
+convention with three tripwires under it, not a cryptographic property: an app, or a compromised
+instance, can tamper with its own history, and this package will neither prevent nor detect it.**
+
+*Pinned by* `tests/AppActionAuditTest.php` ("rejects update and delete on an app-action event at the model layer", "rejects update and delete on a ledger row at the model layer", "refuses every enumerated bulk mutation on the app-action stream, on both models", "rejects truncate on the app-action stream, on both the static and the query-builder paths", "rejects raw update and delete on the app-action table at the database layer on sqlite", "rejects raw update and delete on the ledger table at the database layer on sqlite", "finds no enumerated deletion spelling against the app-action stream anywhere in src", "keeps the two audit vocabularies disjoint, so neither stream can hand a reader the other's actor type", "leaves neither the event nor its ledger row behind when the action rolls back", "refuses a second emission of the same logical action, and takes the transaction with it", "refuses a second ledger row for one event", "stores a digest rather than the caller's natural key", "refuses a direct model write that carries runtime prose as its action", "refuses a direct model write that names a delegated actor by a bare id", "refuses a direct model write that fabricates an agency for a local user" and "leaves the credential stream's shape untouched").
+
+*Pinned by* `tests/RecorderTransactionGuardTest.php` ("refuses to record an app action outside a database transaction").
+
+*Pinned by* `tests/HttpContractDocTest.php` ("the documented app action reason vocabulary matches the code").
 
 ---
 
@@ -2344,6 +2537,7 @@ documented in their own sections above.
 ### Still RESERVED (not implemented)
 
 Nothing in the `/bfc/console/*` namespace is a reserved name any more: `re-key`, `vitals` and
-`enter` are all live routes, documented above. Everything else Console-related — the chrome and
-its layout, the switcher, the app-action audit stream, the fleet dashboard — remains held behind
-the Console PRD's decision D6.
+`enter` are all live routes, documented above. The app-action audit stream's SCHEMA and EMISSION
+have landed ([above](#the-app-action-audit-stream)); its **read transport has not**, and is not a
+name this contract offers. Everything else Console-related — the chrome and its layout, the
+switcher, the fleet dashboard — remains held behind the Console PRD's decision D6.

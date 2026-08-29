@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
+use ArtisanBuild\BuiltForCloud\Audit\AppActionReason;
 use ArtisanBuild\BuiltForCloud\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
@@ -167,6 +168,105 @@ final class HttpContractDocTest extends TestCase
             );
             $this->assertNotContains($mcp, OperatorAbility::adminEquivalent());
         }
+    }
+
+    /**
+     * The app-action stream's REASON vocabulary is closed, and the
+     * document is the only place a consumer can read what is in it — so
+     * the document is checked against the enum rather than trusted.
+     *
+     * This is the same mechanism as the admin-equivalent check above,
+     * and it exists for the same reason: this build shipped false
+     * contract sentences in two consecutive rounds, and prose review is
+     * not a mechanism. A reason added to the enum and not to the
+     * document, or listed in the document and never in the code, reds
+     * this test.
+     *
+     * WHAT IT PINS, exactly: the reason values the contract's "exactly
+     * the N app-action reasons" sentence lists, their ORDER, and the
+     * spelled count word beside them. That is all.
+     *
+     * WHAT IT DOES NOT PIN, named because an unlisted gap reads as a
+     * covered one:
+     *
+     * 1. **That the reasons mean what the document says they mean.** The
+     *    per-case descriptions live on the enum and are not compared to
+     *    anything; a value whose meaning drifted while its name stayed
+     *    would pass.
+     * 2. **That an emitter picks the right one.** Nothing here ties a
+     *    reason to the action that carries it. `console-entered` is
+     *    driven as `console_entry` behaviourally, in
+     *    `tests/ConsoleEnterAuditTest.php`, and no other emitter exists
+     *    to check.
+     */
+    public function test_the_documented_app_action_reason_vocabulary_matches_the_code(): void
+    {
+        $matched = preg_match(
+            '/exactly\s+the\s+(\w+)\s+app-action\s+reasons\*{0,2}\s*(.+?)\(closed set\)/s',
+            $this->contractDoc(),
+            $matches,
+        );
+
+        $this->assertSame(
+            1,
+            $matched,
+            'docs/http-contract.md no longer states the app-action reason vocabulary in the form this test pins. '
+            .'Restore the sentence, or update this test deliberately — do not delete the check.',
+        );
+
+        [, $spelledCount, $listed] = $matches;
+
+        $expected = array_map(
+            static fn (AppActionReason $reason): string => $reason->value,
+            AppActionReason::cases(),
+        );
+
+        preg_match_all('/`([a-z][a-z0-9_]*)`/', $listed, $found);
+
+        $this->assertSame(
+            $expected,
+            $found[1],
+            'The reasons docs/http-contract.md lists for the app-action stream do not match AppActionReason. '
+            .'The document is the contract, and this vocabulary is closed: a mismatch here is a false statement '
+            .'about what an app may record.',
+        );
+
+        $this->assertArrayHasKey(
+            $spelledCount,
+            self::SPELLED_COUNTS,
+            "The contract spells the app-action reason count as \"{$spelledCount}\", which this test cannot read. Extend SPELLED_COUNTS.",
+        );
+
+        $this->assertSame(
+            count($expected),
+            self::SPELLED_COUNTS[$spelledCount],
+            'docs/http-contract.md says the app-action reason vocabulary has "'.$spelledCount.'" members; '
+            .'AppActionReason has '.count($expected).'.',
+        );
+    }
+
+    /**
+     * The stream is described in detail and has NO read transport, so
+     * the document has to say so — a description without that sentence
+     * reads as one you can query.
+     *
+     * An occurrence check over the whole file, deliberately: what is
+     * pinned is that the sentence EXISTS, not where it sits. The
+     * absence of a route is pinned separately and behaviourally, by
+     * `tests/AppActionAuditTest.php`.
+     */
+    public function test_the_contract_states_the_app_action_stream_has_no_read_transport(): void
+    {
+        $doc = $this->contractDoc();
+
+        $this->assertStringContainsString('## The app-action audit stream', $doc);
+        $this->assertStringContainsString(
+            '**This release provides no way to read the app-action stream over HTTP.**',
+            $doc,
+        );
+        $this->assertStringContainsString('`app-action-audit-emit`', $doc);
+        $this->assertStringContainsString('`bfc_app_action_events`', $doc);
+        $this->assertStringContainsString('**App-action events are never pruned by this package.**', $doc);
     }
 
     /**
