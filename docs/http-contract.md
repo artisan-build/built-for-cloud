@@ -1910,6 +1910,14 @@ one.
   which is the session-store boundary below; and a change to `redeem()`'s **own body**, which
   the token tests cover instead.
 
+  One residue deserves naming rather than a category, because it is the one the public-surface
+  scan cannot reach: **an already-enumerated public method could be modified to call the private
+  writer.** `actor()`, `setUser()` or `logout()` could be edited to call `beginSession()`, and
+  both scans would stay green — the file set is unchanged, and so is the set of public method
+  names. The scans enumerate which files can write and which methods exist; neither reads what
+  an existing method does. Reviewing a diff that touches one of those methods is the control,
+  and it is a human one.
+
   *Pinned by* `tests/ConsoleSessionWriterScanTest.php` ("has exactly one file in src/ that can
   write a delegated session key"; "keeps the one writer unreachable from outside the guard";
   "has exactly the public surface it is meant to have on the one class that can write";

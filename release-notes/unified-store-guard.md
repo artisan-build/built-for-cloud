@@ -257,6 +257,16 @@ not every PHP or Laravel write form), a key assembled at runtime,
 reflection into the private writer, anything outside `src/`, and a change
 to `redeem()`'s own body.
 
+And one worth naming rather than filing under a category, because it is
+the residue the public-surface scan cannot reach: **an already-enumerated
+public method could be modified to call the private writer.** `actor()`,
+`setUser()` or `logout()` could be edited to call `beginSession()` and
+both scans would stay green — the file set is unchanged, and so is the
+set of public method names. The scans enumerate which files can write and
+which methods exist; neither reads what an existing method does.
+Reviewing a diff that touches one of those methods is the control, and it
+is a human one.
+
 *Pinned by* `tests/ConsoleSessionWriterScanTest.php` — "has exactly one
 file in src/ that can write a delegated session key", "keeps the one
 writer unreachable from outside the guard", "has exactly the public

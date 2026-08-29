@@ -82,6 +82,15 @@ use Throwable;
  *  - **anything outside `src/`**, which is the session-store boundary.
  *  - **a change to {@see redeem()}'s own body** — the token tests cover
  *    that, not these scans.
+ *  - **a change to an ALREADY-ENUMERATED public method.** This is the
+ *    residue the public-surface scan cannot reach, and it is worth
+ *    naming precisely: {@see actor()}, {@see setUser()} or
+ *    {@see logout()} could be edited to call {@see beginSession()}, and
+ *    both scans would stay green — the file set is unchanged, and so is
+ *    the set of public method NAMES. The scans enumerate which files can
+ *    write and which methods exist; neither reads what an existing
+ *    method does. Reviewing a diff that touches one of these methods is
+ *    the control, and it is a human one.
  *
  *   Pinned by `tests/ConsoleSessionWriterScanTest.php` — "has exactly one
  *   file in src/ that can write a delegated session key", "keeps the one
