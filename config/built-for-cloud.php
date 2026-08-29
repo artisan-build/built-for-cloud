@@ -176,16 +176,58 @@ return [
     | that extended expiry would quietly stretch every assertion past the
     | TTL bound the previous key just enforced.
     |
-    | The session clocks (D7's sliding idle and absolute cap) are NOT
-    | here: they belong to the delegated guard, not to the assertion.
+    | `clock_skew_seconds` is spent TWICE, for the same reason and in
+    | the same direction: once on the assertion's not-yet-valid rule,
+    | and once on the delegated session's issued-at marker, which is
+    | that same `iat` and may therefore sit a few seconds ahead of this
+    | server's clock without anything being wrong.
+    |
+    | `reentry_url` — where the chrome sends an operator whose delegated
+    | session has been invalidated, emitted in the structured re-entry
+    | 401 (D7). NULLABLE AND UNSET BY DEFAULT, and when it is unset the
+    | 401 carries NO `reentry_url` key at all rather than an invented or
+    | empty one: an app that cannot reach its issuer degrades honestly
+    | (the operator is logged out and told why) instead of being pointed
+    | somewhere nobody chose. A value that is not an absolute http(s)
+    | URL is treated as unset for the same reason.
+    |
+    | `enabled` — whether this deployment runs the Console AT ALL. It
+    | gates the `bfc-console` guard and provider entries the package
+    | injects, and it is OFF by default for two reasons. Delegated entry
+    | is a subscription feature (D18), so most installs never want it;
+    | and the injection carries a HARD FAILURE when the reserved provider
+    | name `bfc-console-actors` is already taken by the app, which — run
+    | unconditionally at boot — would turn a package upgrade into a boot
+    | failure for every HTTP request and every artisan command,
+    | including in apps that have the package's routes and migrations
+    | switched off. A deployment that has not asked for the Console must
+    | not be able to fail booting because of it. When the Console IS
+    | enabled, the collision still fails loudly: at that point the guard
+    | is load-bearing and there is no safe way to proceed.
+    |
+    | Turning it on also turns on the delegated-principal behaviour of
+    | the package's session gates (`bfc.admin` accepts a delegated admin
+    | on a route the console guard actually governs; `bfc.auth` refuses a
+    | delegated session outright) — see
+    | release-notes/unified-store-guard.md.
+    |
+    | The SESSION clocks are deliberately NOT config keys. The sliding
+    | idle window is Laravel's own `session.lifetime` (120 minutes by
+    | default) and this package does not touch it; the absolute
+    | assertion-age cap is a constant on ConsoleSessionClock, because it
+    | is the worst-case revocation window the fleet promises for a
+    | delegated operator and not a per-app knob. An app that wants a
+    | tighter delegated session shortens `session.lifetime`.
     |
     */
 
     'console' => [
+        'enabled' => env('BUILT_FOR_CLOUD_CONSOLE_ENABLED', false),
         'issuer' => env('BUILT_FOR_CLOUD_CONSOLE_ISSUER'),
         'audience' => env('BUILT_FOR_CLOUD_CONSOLE_AUDIENCE'),
         'assertion_max_ttl_seconds' => env('BUILT_FOR_CLOUD_CONSOLE_ASSERTION_MAX_TTL', 120),
         'clock_skew_seconds' => env('BUILT_FOR_CLOUD_CONSOLE_CLOCK_SKEW', 5),
+        'reentry_url' => env('BUILT_FOR_CLOUD_CONSOLE_REENTRY_URL'),
     ],
 
     /*
