@@ -469,25 +469,43 @@ final class ContractScan
      *
      * Both are consequences of reading one match instead of all of
      * them, so this reads all of them. A declaration is in-section when
-     * it falls inside any span. Boundaries are uncommented `## ` lines,
-     * for the same reason: a commented-out heading does not end a
-     * section.
+     * it falls inside any span.
      *
      * `###` and deeper subsections are not boundaries, so a declaration
      * under one of them is inside the section it belongs to.
+     *
+     * **WHERE BOUNDARIES ARE LOOKED FOR, AND THE CLASS THIS DOES NOT
+     * COVER.** They are located in {@see structuralText()} — the
+     * document with HTML comments and fenced code blocks blanked. Those
+     * two are removed because both have actually defeated this: a
+     * commented-out heading created a section that did not exist, and
+     * so did a fenced sample of one.
+     *
+     * **What counts as a boundary is a line opening with `## ` in that
+     * text, wherever it sits.** A Markdown container this does not
+     * blank does not stop one being read as a boundary, and does not
+     * make one out of a line that is indented or otherwise not at the
+     * start of its line. The consequence for a reader: **a green run is
+     * not evidence that the declaration stands under a heading a person
+     * would call the versioning section** — it is evidence that it
+     * stands between two such lines. Somebody who needs the stronger
+     * fact has to look at the document.
+     *
+     * That is deliberately a CLASS and not a list of containers.
+     * Section location has been wrong four times, each fix closing the
+     * container somebody thought of and meeting the next one; naming
+     * the class is where that stops. A list would also be wrong — the
+     * first draft of this paragraph named four containers and two of
+     * them behave the other way, which is the same defect one level
+     * further in.
      *
      * @return list<array{0: int, 1: int}>
      */
     private static function sectionIntervals(string $doc): array
     {
-        preg_match_all('/^## .*$/m', $doc, $matches, PREG_OFFSET_CAPTURE);
+        preg_match_all('/^## .*$/m', self::structuralText($doc), $matches, PREG_OFFSET_CAPTURE);
 
-        $comments = self::commentSpans($doc);
-
-        $headings = array_values(array_filter(
-            $matches[0],
-            static fn (array $heading): bool => ! self::within((int) $heading[1], $comments),
-        ));
+        $headings = $matches[0];
 
         $intervals = [];
 
@@ -534,7 +552,88 @@ final class ContractScan
      */
     private static function withoutComments(string $doc): string
     {
-        foreach (self::commentSpans($doc) as [$from, $to]) {
+        return self::blank($doc, self::commentSpans($doc));
+    }
+
+    /**
+     * The document as this parse reads its STRUCTURE: comments and
+     * fenced code blocks blanked, everything else where it was.
+     *
+     * **A `## ` LINE INSIDE A FENCE WAS A SECTION BOUNDARY.** A fenced
+     * sample of the versioning heading created a section that does not
+     * exist, so a declaration after it was judged in-section and the
+     * pair passed; a real heading following a fenced one had the same
+     * problem from the other side. Boundaries are structure, and a line
+     * inside a code sample is not structure.
+     *
+     * That is the fourth thing section location has been wrong about —
+     * absent, first-match-only, comment-blind, fence-blind — and each
+     * fix closed the container somebody thought of and met the next.
+     * So this removes the two containers that have actually defeated it
+     * and {@see sectionIntervals()} names the rest as a class rather
+     * than continuing the list.
+     */
+    private static function structuralText(string $doc): string
+    {
+        return self::blank($doc, array_merge(self::commentSpans($doc), self::fenceSpans($doc)));
+    }
+
+    /**
+     * Every fenced code block, from an opening fence line to the next
+     * line closing it with the same character and at least as many of
+     * them, or to the end of the document.
+     *
+     * @return list<array{0: int, 1: int}>
+     */
+    private static function fenceSpans(string $doc): array
+    {
+        if (preg_match_all('/^[ \t]*(`{3,}|~{3,})[^\n]*$/m', $doc, $matches, PREG_OFFSET_CAPTURE | PREG_SET_ORDER) === false) {
+            return [];
+        }
+
+        $spans = [];
+        $index = 0;
+
+        while ($index < count($matches)) {
+            $open = $matches[$index];
+            $marker = (string) $open[1][0];
+            $close = null;
+
+            for ($next = $index + 1; $next < count($matches); $next++) {
+                $candidate = (string) $matches[$next][1][0];
+
+                if ($candidate[0] === $marker[0] && strlen($candidate) >= strlen($marker)) {
+                    $close = $matches[$next];
+                    $index = $next;
+
+                    break;
+                }
+            }
+
+            $spans[] = [
+                (int) $open[0][1],
+                $close === null
+                    ? strlen($doc)
+                    : (int) $close[0][1] + strlen((string) $close[0][0]),
+            ];
+
+            $index++;
+        }
+
+        return $spans;
+    }
+
+    /**
+     * The document with the given spans replaced by spaces.
+     *
+     * **Byte for byte**, so every offset outside the blanked spans is
+     * exactly where it was and the scans that read them stay correct.
+     *
+     * @param  list<array{0: int, 1: int}>  $spans
+     */
+    private static function blank(string $doc, array $spans): string
+    {
+        foreach ($spans as [$from, $to]) {
             $doc = substr_replace($doc, str_repeat(' ', $to - $from), $from, $to - $from);
         }
 

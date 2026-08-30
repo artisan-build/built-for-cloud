@@ -82,7 +82,7 @@ compared to anything, and neither is a version spelled in a release note.
 where the document declares it", "names a version pair that drifted one that is undeclared and a
 declaration left behind", "refuses a release window inside a comment a duplicate one and one that
 goes backwards", "refuses a decoy release window and one outside the versioning section" and "finds
-the versioning section past a commented heading and a repeated one").
+the versioning section past a commented a repeated and a fenced heading").
 
 The rules a consumer may rely on:
 

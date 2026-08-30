@@ -809,8 +809,10 @@ final class HttpContractDocTest extends TestCase
     }
 
     /**
-     * G1 and G6: the heading scan, over the inputs that defeated its
-     * first revision in both directions.
+     * G1, G6 and H1: the heading scan, over each input that has
+     * defeated it — a commented-out heading, a repeated one, a
+     * commented declaration beside a standing one, and a heading inside
+     * a code fence.
      *
      * **THE SECTION SCAN WAS A FIX, AND THE FIX HAD A BUG.** Reading
      * one `preg_match` for the heading — the first anywhere in the
@@ -822,7 +824,7 @@ final class HttpContractDocTest extends TestCase
      * outside the single span computed and was rejected while standing
      * exactly where the contract asks.
      */
-    public function test_finds_the_versioning_section_past_a_commented_heading_and_a_repeated_one(): void
+    public function test_finds_the_versioning_section_past_a_commented_a_repeated_and_a_fenced_heading(): void
     {
         $window = '**RELEASE WINDOW: this document describes `bfc_version` 0.6.0; '
             .'`BuiltForCloud::VERSION` is 0.5.0 until the tag lands.**';
@@ -856,6 +858,32 @@ final class HttpContractDocTest extends TestCase
 
         $this->assertSame([], ContractScan::versionPairBreaksIn(
             $heading.PHP_EOL.PHP_EOL.'### Changelog'.PHP_EOL.PHP_EOL.$window.$body,
+            '0.5.0',
+        ));
+
+        // H1. A FENCED SAMPLE OF THE HEADING IS NOT A HEADING. A code
+        // fence containing the versioning heading created a section
+        // that does not exist, so a declaration after it passed — the
+        // commented-heading defect in another container. Boundaries are
+        // located with comments and fences blanked, so both directions
+        // have to be driven: the fenced heading must not create a
+        // section, and a real heading after a fenced one must still be
+        // found.
+        $fence = '```md'.PHP_EOL.$heading.PHP_EOL.'```';
+
+        $this->assertSame(
+            $outside,
+            ContractScan::versionPairBreaksIn($fence.PHP_EOL.PHP_EOL.$window.$body, '0.5.0'),
+        );
+
+        $this->assertSame([], ContractScan::versionPairBreaksIn(
+            $fence.PHP_EOL.PHP_EOL.$heading.PHP_EOL.PHP_EOL.$window.$body,
+            '0.5.0',
+        ));
+
+        // Tilde fences are the same container spelled differently.
+        $this->assertSame($outside, ContractScan::versionPairBreaksIn(
+            '~~~'.PHP_EOL.$heading.PHP_EOL.'~~~'.PHP_EOL.PHP_EOL.$window.$body,
             '0.5.0',
         ));
 
