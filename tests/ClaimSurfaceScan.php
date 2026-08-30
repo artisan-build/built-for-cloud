@@ -85,11 +85,15 @@ use SplFileInfo;
  *    claim shorter than {@see PHRASE_WORDS} words.** Both are outside
  *    the map entirely, so a two-site guarantee narrowed at one of them
  *    reds nothing.
- *  - **A run of one word repeated is reported; a longer cycle is
- *    reported nowhere.** Where a cycle yields several distinct windows
- *    each continues another with the same site list, so none is
- *    maximal and the run vanishes from the map — a claim written that
- *    way is unpinned rather than pinned short.
+ *  - **A cycle producing one distinct window is reported; one
+ *    producing several distinct windows is reported nowhere.** Where
+ *    there are several, each continues another with the same site
+ *    list, so none is maximal and the run vanishes from the map — a
+ *    claim written that way is unpinned rather than pinned short. The
+ *    axis is the number of DISTINCT WINDOWS, not the length of the run
+ *    or the period of the cycle: exactly {@see PHRASE_WORDS} words of a
+ *    two-word cycle is one window and is reported, and the same cycle
+ *    two words longer is two windows and is not. Both are driven.
  *  - **Whether a claim is TRUE.** Nothing here reads a claim, only
  *    where its words recur, so an entry in the map is evidence about
  *    duplication and about nothing else.

@@ -472,14 +472,34 @@ it('walks a run of repeated words to a finite phrase instead of running forever'
         'docs/c.md' => $repeated,
     ]))->toBe([$repeated => ['docs/a.md', 'docs/b.md', 'docs/c.md']]);
 
-    // The same shape with the cycle spread across two words. It
-    // terminates, and it reports NOTHING — asserted because the two
-    // cases differ and the difference is not guessable. A run of ONE
-    // repeated word yields a single window, which has nothing to
-    // continue it and is reported. A longer cycle yields several, each
-    // continuing another with the same site list, so none is maximal
-    // and the run vanishes. The residue is worded from these two, not
-    // from the first alone.
+    // THE AXIS IS THE NUMBER OF DISTINCT WINDOWS, and it is driven on
+    // both sides of the boundary because the residue was worded twice
+    // from whichever side happened to be fixtured and was wrong twice.
+    //
+    // A two-word cycle exactly PHRASE_WORDS long is ONE window: nothing
+    // continues it, so it is maximal and it is reported.
+    $atTheBoundary = trim(str_repeat('never always ', 5));
+
+    expect(count(ClaimSurfaceScan::words($atTheBoundary)))->toBe(ClaimSurfaceScan::PHRASE_WORDS)
+        ->and(ClaimSurfaceScan::restatedClaimsIn([
+            'docs/a.md' => $atTheBoundary,
+            'docs/b.md' => $atTheBoundary,
+            'docs/c.md' => $atTheBoundary,
+        ]))->toBe([$atTheBoundary => ['docs/a.md', 'docs/b.md', 'docs/c.md']]);
+
+    // Two words longer is TWO distinct windows, each continuing the
+    // other with the same site list, so neither is maximal and the run
+    // is reported nowhere.
+    $pastTheBoundary = trim(str_repeat('never always ', 6));
+
+    expect(ClaimSurfaceScan::restatedClaimsIn([
+        'docs/a.md' => $pastTheBoundary,
+        'docs/b.md' => $pastTheBoundary,
+        'docs/c.md' => $pastTheBoundary,
+    ]))->toBe([]);
+
+    // And further along the same axis, so the boundary reads as a rule
+    // rather than as an accident of one length.
     $alternating = trim(str_repeat('never always ', 8));
 
     expect(ClaimSurfaceScan::restatedClaimsIn([
