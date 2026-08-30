@@ -63,27 +63,40 @@ use SplFileInfo;
  * round 1 — recorded so the omission is not later "fixed".)
  *
  * WHAT IT DOES NOT RECOGNISE. Each entry names a CLASS of thing and
- * nothing else — no counts, no quantifiers, no facts about this
- * codebase that can go stale — because a disclaimer is also a claim,
- * and the class it names is the only part of it that cannot drift.
- * Each is driven in `tests/ClaimSurfaceTest.php`.
+ * then says what follows from it — those are the two halves a residue
+ * needs. What it must not carry is the falsifiable third: a count, a
+ * quantifier, or a fact about this codebase that can go stale. **Strip
+ * what can go stale; keep what tells the reader what the gap means.**
+ * And check each entry against what this actually does: a bullet can
+ * be quantifier-free and still name a limitation that is not one, or
+ * one that is narrower than it sounds. Each below is driven in
+ * `tests/ClaimSurfaceTest.php`.
  *
  *  - **A claim whose SUBJECT is rewritten at every site, where the
  *    rewritten words fall outside the absolute-bearing region of the
- *    run.** First, because it is the sharpest thing this misses and
- *    because it is the correction shape the class was built for; such a
- *    rewrite can leave the map byte-identical.
- *    {@see restatedClaimsIn()} has the mechanism.
+ *    run.** Such a rewrite leaves the map byte-identical, so the suite
+ *    stays green through it — and this is the correction shape the
+ *    class was built for, which makes it the sharpest thing it misses.
+ *    A narrowing round cannot lean on this map for that case.
  *  - **A restatement that is not word-for-word.** The same promise in
- *    different words shares no window.
+ *    different words shares no window, so a claim paraphrased at its
+ *    second site is reported nowhere and its sites are not listed.
  *  - **A claim at fewer sites than {@see RESTATEMENT_SITES}**, and **a
- *    claim shorter than {@see PHRASE_WORDS} words.**
- *  - **A run whose words cycle**, which is reported nowhere.
+ *    claim shorter than {@see PHRASE_WORDS} words.** Both are outside
+ *    the map entirely, so a two-site guarantee narrowed at one of them
+ *    reds nothing.
+ *  - **A run of one word repeated is reported; a longer cycle is
+ *    reported nowhere.** Where a cycle yields several distinct windows
+ *    each continues another with the same site list, so none is
+ *    maximal and the run vanishes from the map — a claim written that
+ *    way is unpinned rather than pinned short.
  *  - **Whether a claim is TRUE.** Nothing here reads a claim, only
- *    where its words recur.
+ *    where its words recur, so an entry in the map is evidence about
+ *    duplication and about nothing else.
  *  - **A file outside the surfaces it is handed.** Choosing them is the
- *    human step, which is the residue `tests/CitationScan.php` names
- *    for the same reason.
+ *    human step — the residue `tests/CitationScan.php` names for the
+ *    same reason — so a guarantee written somewhere nobody added is
+ *    invisible here however many times it is restated.
  *
  * The thresholds are numbers somebody chose and the vocabulary is a
  * list somebody wrote; a claim written just outside either is not on

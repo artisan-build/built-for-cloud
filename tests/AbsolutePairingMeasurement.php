@@ -45,18 +45,22 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
  * absolute-word detector does with the two halves.
  *
  * WHAT THESE COUNTS DO NOT COVER. Each entry names a CLASS of thing
- * and nothing else:
+ * and then what follows from it, and carries no count or quantifier of
+ * its own:
  *
- *  - **A residue paragraph phrased outside {@see RESIDUE}**, which is
- *    counted as unpaired.
+ *  - **A residue paragraph phrased outside {@see RESIDUE}.** Counted as
+ *    unpaired, so the unpaired figure is an upper bound on what a gate
+ *    would actually have demanded rather than an exact price.
  *  - **A block that states more than one thing.** The split is a
  *    convention, not a parse of English, so annotating such a block
- *    satisfies the count without addressing what else it says.
+ *    satisfies this count while leaving whatever else it says
+ *    unaddressed — the count would not notice.
  *  - **Corrections outside the enumerated PR7 list**, which is not a
- *    sample of a larger population.
+ *    sample of a larger population, so nothing here supports a claim
+ *    about corrections in general.
  *  - **The rest of the paragraph each correction rewrote.**
- *    {@see CORRECTIONS} stores one chosen phrase from it and says what
- *    choosing costs.
+ *    {@see CORRECTIONS} stores one chosen phrase from it, and a
+ *    different phrase from the same paragraph would move the figures.
  */
 final class AbsolutePairingMeasurement
 {

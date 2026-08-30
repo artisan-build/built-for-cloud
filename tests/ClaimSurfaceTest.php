@@ -473,11 +473,13 @@ it('walks a run of repeated words to a finite phrase instead of running forever'
     ]))->toBe([$repeated => ['docs/a.md', 'docs/b.md', 'docs/c.md']]);
 
     // The same shape with the cycle spread across two words. It
-    // terminates, and it reports NOTHING — asserted because it is a
-    // second thing this walk does that nobody would guess: every window
-    // in a fully cyclic run can be continued by another window with the
-    // same site list, so every one of them is non-maximal and none is
-    // reported. A claim written as a cycle is invisible here.
+    // terminates, and it reports NOTHING — asserted because the two
+    // cases differ and the difference is not guessable. A run of ONE
+    // repeated word yields a single window, which has nothing to
+    // continue it and is reported. A longer cycle yields several, each
+    // continuing another with the same site list, so none is maximal
+    // and the run vanishes. The residue is worded from these two, not
+    // from the first alone.
     $alternating = trim(str_repeat('never always ', 8));
 
     expect(ClaimSurfaceScan::restatedClaimsIn([

@@ -87,32 +87,50 @@ use Throwable;
  * are meant to be read together.
  *
  * **WHAT THIS WALK DOES NOT COVER.** Each entry names a CLASS of
- * thing, and deliberately nothing else — no counts, no quantifiers, no
- * statements about what the codebase happens to contain today. Seven
- * completeness overclaims have been withdrawn from this PR and one of
- * them was inside a sentence written to disclose a limitation: a
- * disclaimer is also a claim, and the only part of it that cannot go
- * stale is the class it names.
+ * thing, then says what follows from it — what is not enforced, and
+ * what a reader should therefore not rely on. Those are the two halves
+ * a residue needs. What it must not carry is the falsifiable third: a
+ * count, a quantifier, or a fact about the codebase that can go stale.
+ * Overclaims withdrawn from this PR were all of that third kind, and
+ * one of them was inside a sentence written to disclose a limitation —
+ * a disclaimer is also a claim. **Strip what can go stale; keep what
+ * tells the reader what the gap means.**
+ *
+ * And check each entry against what the walk DOES. One bullet here
+ * named a limitation that was not one — it said this package cannot
+ * enumerate a host application's routes, while {@see classify()} takes
+ * whatever routes it is handed and a fixture in
+ * `tests/AppActionAuditTest.php` registers one and watches it be
+ * reported. It has been deleted rather than reworded: being
+ * quantifier-free is not the same as being true.
  *
  *  - **Indirectly named classes and tables.** A name built at runtime,
  *    read from config, resolved through a container alias, or
- *    concatenated into a query string. Closing this means data-flow
+ *    concatenated into a query string is not matched, so a route
+ *    reaching the stream that way is reported {@see UNRELATED} and
+ *    this scan is no evidence about it. Closing it means data-flow
  *    analysis, which is a new instrument needing its own proof.
- *  - **Classes outside this package.** The names the walk resolves are
- *    the ones under `src/`, so a read reached through a collaborator
- *    the host application supplies is not followed. Driven in
+ *  - **Classes outside this package.** The names resolved are those
+ *    under `src/`, so a read reached through a collaborator the host
+ *    application supplies is not followed and the route carrying it is
+ *    reported {@see UNRELATED}. Driven in
  *    `tests/AppActionAuditTest.php` — "names a route that reads the
  *    app-action stream under a name that mentions neither".
  *  - **Closure actions.** A route whose action is a closure has no
- *    class to walk from and is classified {@see UNRELATED}.
- *  - **Middleware attached to package routes**, and **views a route
- *    renders**. The walk starts at the action class, so neither is
- *    considered a path to the stream.
- *  - **Host application routes.** This package cannot enumerate them.
- *  - **What a route RETURNS.** A route that reaches the models to count
- *    them and serves no row is reported as {@see READS} — deliberately,
- *    because "it only counts" is a claim about a response body this
- *    walk cannot check.
+ *    class to walk from, so it is reported {@see UNRELATED} whatever
+ *    it does, and **nothing here or elsewhere refuses one**: a closure
+ *    route reading the stream would pass this scan silently. A reader
+ *    wanting that closed has to read the route registrations.
+ *  - **Middleware a route declares, and views a route renders.** The
+ *    walk begins at the action class and follows the names in its
+ *    code, so neither is examined as a path to the stream. **A read
+ *    placed in middleware reaches the rows and is reported nowhere
+ *    here**, and a green run says nothing about either surface.
+ *  - **What a route RETURNS.** A route that reaches the models to
+ *    count them and serves no row is reported as {@see READS} —
+ *    deliberately, because "it only counts" is a claim about a response
+ *    body this walk cannot check, so the error is in the loud
+ *    direction.
  */
 final class AppActionReadTransportScan
 {
