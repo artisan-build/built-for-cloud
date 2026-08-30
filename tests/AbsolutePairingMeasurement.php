@@ -44,14 +44,19 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
  * narrow, with what replaced each. The check on them is what an
  * absolute-word detector does with the two halves.
  *
- * THE RESIDUE. `RESIDUE` is a list of markers somebody thought of, and
- * a residue paragraph phrased some other way is counted as unpaired
- * here. The block split is a convention, not a parse of English: a
- * docblock stating four things is one block, and annotating it would
- * satisfy this count while leaving three of the four unaddressed. Five
- * corrections is what the PR7 list enumerated, not a sample of some
- * larger population, and each is represented by one CHOSEN phrase out
- * of a rewritten paragraph — {@see CORRECTIONS} says what that costs.
+ * WHAT THESE COUNTS DO NOT COVER. Each entry names a CLASS of thing
+ * and nothing else:
+ *
+ *  - **A residue paragraph phrased outside {@see RESIDUE}**, which is
+ *    counted as unpaired.
+ *  - **A block that states more than one thing.** The split is a
+ *    convention, not a parse of English, so annotating such a block
+ *    satisfies the count without addressing what else it says.
+ *  - **Corrections outside the enumerated PR7 list**, which is not a
+ *    sample of a larger population.
+ *  - **The rest of the paragraph each correction rewrote.**
+ *    {@see CORRECTIONS} stores one chosen phrase from it and says what
+ *    choosing costs.
  */
 final class AbsolutePairingMeasurement
 {

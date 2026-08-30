@@ -2670,8 +2670,10 @@ This sentence is held against what the package's routes REACH, not against how t
 Every registered route is classified by whether its action can arrive at the event or ledger
 tables — through the classes it names in code, transitively, stopping at the one emission door —
 so a listing mounted under a name that mentions neither the stream nor auditing is still reported.
-The bound is that the walk follows this package's own class names: a route that reads through a
-collaborator the application supplies is outside it.
+What the walk does not cover, as classes rather than as a count: classes outside this package;
+names built at runtime, read from config or resolved through a container alias; middleware attached
+to a route, and views it renders, neither of which is walked; and closure actions, which have no
+class to walk from.
 *Pinned by* `tests/AppActionAuditTest.php` ("advertises the app-action emit capability without
 promising a way to read the stream", "names a route that reads the app-action stream under a name
 that mentions neither", "follows a read one class past the route, and stops at the emission door",

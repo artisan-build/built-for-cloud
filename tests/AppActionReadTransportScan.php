@@ -86,48 +86,33 @@ use Throwable;
  * a verb somebody adds, which is what the surface pin is for; the two
  * are meant to be read together.
  *
- * **THE RESIDUE, named rather than implied.** This is a textual walk
- * over class names and table names, so:
+ * **WHAT THIS WALK DOES NOT COVER.** Each entry names a CLASS of
+ * thing, and deliberately nothing else — no counts, no quantifiers, no
+ * statements about what the codebase happens to contain today. Seven
+ * completeness overclaims have been withdrawn from this PR and one of
+ * them was inside a sentence written to disclose a limitation: a
+ * disclaimer is also a claim, and the only part of it that cannot go
+ * stale is the class it names.
  *
- *  - **An indirectly named class or table is not followed.** A helper
- *    that builds its class name from a string, reads it from config,
- *    resolves it out of the container by an alias, or queries
- *    `DB::table('bfc_app_'.'action_events')` reaches the stream and is
- *    not seen here. Closing that means data-flow analysis, which is a
- *    new instrument making a new claim and needing its own proof; this
- *    package has already withdrawn one general instrument for that
- *    reason.
- *  - **The walk follows PACKAGE class names only.** The names it can
- *    resolve are the classes under `src/`, so a package route
- *    delegating to a collaborator the host application supplies reads
- *    the stream through a class this walk cannot follow, and is
- *    reported {@see UNRELATED}. That bound is asserted where it lands,
- *    in `tests/AppActionAuditTest.php` — "names a route that reads the
- *    app-action stream under a name that mentions neither" — over a
- *    fixture route that does exactly this. It is the right scope for
- *    the sentence being held, which is about what this release ships,
- *    and it is still a bound rather than a boundary.
- *  - **A route whose action is a CLOSURE** has no class to walk from
- *    and is classified {@see UNRELATED}. No package route uses one
- *    today — read off the route group by hand, and **nothing checks
- *    that it stays true**, which makes this a caveat resting on a fact
- *    with no test behind it rather than on a property.
- *  - **MIDDLEWARE AND BLADE VIEWS ARE NOT WALKED.** The walk starts at
- *    a route's ACTION class, so the nine middleware classes every
- *    package route carries, and any view a route renders, are not
- *    considered as paths to the stream at all. A read placed in
- *    middleware reaches the rows and is reported nowhere here. That is
- *    a real gap and a bigger change than this scan; it is a debt row,
- *    not a thing this class quietly covers.
- *  - **A HOST APPLICATION's own routes** are not this package's to
- *    enumerate. The contract's sentence is about what this release
- *    ships; an app that writes its own listing over its own tables has
- *    built a read transport, and says so in its own code.
- *  - **Nothing here reads what a route RETURNS.** A route that reaches
- *    the models to count them, and serves no row, is reported as
- *    {@see READS} — deliberately, because "it only counts" is a claim
- *    about a response body that this walk cannot check and a later
- *    revision can quietly widen.
+ *  - **Indirectly named classes and tables.** A name built at runtime,
+ *    read from config, resolved through a container alias, or
+ *    concatenated into a query string. Closing this means data-flow
+ *    analysis, which is a new instrument needing its own proof.
+ *  - **Classes outside this package.** The names the walk resolves are
+ *    the ones under `src/`, so a read reached through a collaborator
+ *    the host application supplies is not followed. Driven in
+ *    `tests/AppActionAuditTest.php` — "names a route that reads the
+ *    app-action stream under a name that mentions neither".
+ *  - **Closure actions.** A route whose action is a closure has no
+ *    class to walk from and is classified {@see UNRELATED}.
+ *  - **Middleware attached to package routes**, and **views a route
+ *    renders**. The walk starts at the action class, so neither is
+ *    considered a path to the stream.
+ *  - **Host application routes.** This package cannot enumerate them.
+ *  - **What a route RETURNS.** A route that reaches the models to count
+ *    them and serves no row is reported as {@see READS} — deliberately,
+ *    because "it only counts" is a claim about a response body this
+ *    walk cannot check.
  */
 final class AppActionReadTransportScan
 {

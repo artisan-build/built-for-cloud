@@ -62,36 +62,32 @@ use SplFileInfo;
  * tooling. This docblock is the right home for it. (Ed's ruling, rework
  * round 1 — recorded so the omission is not later "fixed".)
  *
- * WHAT IT DOES NOT RECOGNISE. Each of these is driven in
- * `tests/ClaimSurfaceTest.php` rather than only described:
+ * WHAT IT DOES NOT RECOGNISE. Each entry names a CLASS of thing and
+ * nothing else — no counts, no quantifiers, no facts about this
+ * codebase that can go stale — because a disclaimer is also a claim,
+ * and the class it names is the only part of it that cannot drift.
+ * Each is driven in `tests/ClaimSurfaceTest.php`.
  *
- *  - **THE SUBJECT OF A CLAIM, CHANGED AT EVERY SITE, WHEN IT SITS
- *    OUTSIDE THE ABSOLUTE-BEARING REGION OF THE RUN.** This is first
- *    because it is the sharpest thing the instrument does not see, and
- *    because it is *the correction shape the class was built for* —
- *    PR8 kept the absolute word and changed what the sentence was
- *    about. Such a rewrite can leave this map byte-identical.
- *    {@see restatedClaimsIn()} has the mechanism and
- *    `tests/ClaimSurfaceTest.php` drives it.
+ *  - **A claim whose SUBJECT is rewritten at every site, where the
+ *    rewritten words fall outside the absolute-bearing region of the
+ *    run.** First, because it is the sharpest thing this misses and
+ *    because it is the correction shape the class was built for; such a
+ *    rewrite can leave the map byte-identical.
+ *    {@see restatedClaimsIn()} has the mechanism.
  *  - **A restatement that is not word-for-word.** The same promise in
- *    different words at its second site shares no window and is
- *    reported nowhere.
- *  - **A claim at two sites**, which is where the threshold falls, and
- *    **a claim shorter than {@see PHRASE_WORDS} words**, which is where
- *    the window does.
- *  - **A run whose words cycle**: every window in it can be continued,
- *    so none is maximal and none is reported.
- *  - **Whether any of it is TRUE.** Nothing here reads a claim, only
- *    where its words recur. Two sites can share ten words inside
- *    sentences that say opposite things.
+ *    different words shares no window.
+ *  - **A claim at fewer sites than {@see RESTATEMENT_SITES}**, and **a
+ *    claim shorter than {@see PHRASE_WORDS} words.**
+ *  - **A run whose words cycle**, which is reported nowhere.
+ *  - **Whether a claim is TRUE.** Nothing here reads a claim, only
+ *    where its words recur.
  *  - **A file outside the surfaces it is handed.** Choosing them is the
- *    human step — the residue `tests/CitationScan.php` names for the
- *    same reason. The migration that carried the surviving claim is
- *    inside them because of it.
+ *    human step, which is the residue `tests/CitationScan.php` names
+ *    for the same reason.
  *
- * The thresholds above are numbers somebody chose, and the vocabulary
- * is a list somebody wrote; the next claim written just outside either
- * is not on it.
+ * The thresholds are numbers somebody chose and the vocabulary is a
+ * list somebody wrote; a claim written just outside either is not on
+ * it.
  */
 final class ClaimSurfaceScan
 {
@@ -155,13 +151,11 @@ final class ClaimSurfaceScan
      *
      *  - A restated sentence is clipped at both ends and across any
      *    interior stretch of ten words with no absolute in it.
-     *  - **A subject changed at every site, far enough from the nearest
-     *    absolute, leaves this map byte-identical.** That is the
-     *    correction shape this class was built for, so it is the sharpest
-     *    thing it does not see: the reviewer's
-     *    `the package database table holding … can never contain caller
-     *    supplied prose` is reported from `table` onward, and rewriting
-     *    the three words before it changes nothing here.
+     *  - **A subject changed at every site, where the changed words fall
+     *    outside that region, leaves this map byte-identical.** That is
+     *    the correction shape this class was built for, so it is the
+     *    sharpest thing it does not see. Driven over the reviewer's
+     *    input in `tests/ClaimSurfaceTest.php`.
      *
      * The chain is followed by SITE LIST, not by text: two claims that
      * happen to overlap have different site lists and stay apart, and a
