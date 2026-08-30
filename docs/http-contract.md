@@ -1886,8 +1886,10 @@ verifies until the request confirms it", "retires the last active key on an expl
 and says nothing verifies", "asks for no confirmation to retire a pending key or one of two
 active keys" and "cannot be raced into leaving the ring with no active key").
 
-The rule is enforced against the ring under a row lock, so two retirements racing for the last two
-active keys cannot each read a ring where the other key was still verifying.
+The rule is decided with the key ring locked (`SELECT … FOR UPDATE`), so **on a database that
+honours row locks** two retirements racing for the last two active keys cannot each read a ring in
+which the other was still verifying. That qualifier is the whole of what the sentence claims: the
+lock is taken, and what it buys is the database's to provide.
 
 **The audit.** One `revoked` lifecycle event per retirement, in the same transaction as the state
 change, with the actor typed and ids only — the key id and what still verifies in the bounded
