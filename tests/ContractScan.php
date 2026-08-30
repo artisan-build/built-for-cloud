@@ -97,17 +97,39 @@ final class ContractScan
 {
     /**
      * The release-window declaration, in the one shape this parse
-     * recognises. A fixed sentence rather than a comment, so the reader
-     * a release window actually affects — a consumer whose deployment
-     * reports a lower `bfc_version` than this document describes — is
-     * told, and the machine reads the same words they do.
+     * recognises: the complete bolded sentence, opening a line.
      *
-     * Every space in it is `\s+`, so the sentence may wrap; nothing
-     * else about it may vary, and a declaration written any other way
-     * is not recognised and therefore not present.
+     * **ANCHORED, BECAUSE THE FIRST REVISION WAS NOT.** It matched
+     * `RELEASE WINDOW:` anywhere in a line, so
+     * `NOT A RELEASE WINDOW: this document describes …` contained the
+     * substring and read as a standing declaration. Three words in
+     * front of it defeated the check, which for an instrument whose
+     * whole job is catching drift is worse than not having one. The
+     * pattern now requires the `**` that opens the sentence, and
+     * requires it at the start of a line.
+     *
+     * Whitespace inside it is `\s+`, so the sentence may wrap across
+     * lines. The words, the back-quoted names and the `**` delimiters
+     * are literal.
      */
-    public const string RELEASE_WINDOW = '/RELEASE\s+WINDOW:\s+this\s+document\s+describes\s+`bfc_version`'
-        .'\s+([0-9A-Za-z.\-]+);\s+`BuiltForCloud::VERSION`\s+is\s+([0-9A-Za-z.\-]+)\s+until\s+the\s+tag\s+lands\./';
+    public const string RELEASE_WINDOW = '/(?:^|\n)\*\*RELEASE\s+WINDOW:\s+this\s+document\s+describes'
+        .'\s+`bfc_version`\s+([0-9A-Za-z.\-]+);\s+`BuiltForCloud::VERSION`\s+is\s+([0-9A-Za-z.\-]+)'
+        .'\s+until\s+the\s+tag\s+lands\.\*\*/';
+
+    /**
+     * The heading the declaration must stand under.
+     *
+     * **F2: THE CONTRACT SAID "in this section" AND THE SCAN READ THE
+     * WHOLE FILE**, so the exact declaration moved under any other
+     * heading kept the pin green. Two ways to make them agree — narrow
+     * the sentence to "in this file", or scan the section. This is the
+     * second, because the first makes a true sentence out of a weaker
+     * promise, and the point of the pair is that the document's own
+     * words are the checked thing.
+     *
+     * A section runs from this heading to the next line beginning `## `.
+     */
+    public const string DECLARATION_SECTION = '## Versioning and compatibility';
 
     /**
      * Every `### METHOD /path` heading — the machine-checkable
@@ -310,25 +332,48 @@ final class ContractScan
     }
 
     /**
-     * The release-window declaration, as `pending` and `tagged`, or
-     * null when the document carries none.
+     * The one declaration this document carries, as `pending` and
+     * `tagged` — or null, which covers a document with none, one with
+     * more than one, and one whose declaration is commented out or
+     * stands outside {@see DECLARATION_SECTION}.
+     * {@see versionPairBreaksIn()} tells those apart; this does not.
      *
      * The declaration is a SENTENCE and not a comment, because a
      * consumer reading this document during a release window needs to
      * know that the deployment they are talking to may report a lower
      * `bfc_version` than the document describes. Making it machine-read
-     * as well costs a fixed shape and nothing else.
+     * as well costs a fixed shape.
      *
      * @return array{pending: string, tagged: string}|null
      */
     public static function releaseWindowIn(string $doc): ?array
     {
-        $windows = self::releaseWindowsIn($doc);
+        $declared = self::declaredWindowsIn($doc);
 
-        return count($windows) === 1 && ! $windows[0]['commented'] ? [
-            'pending' => $windows[0]['pending'],
-            'tagged' => $windows[0]['tagged'],
+        return count($declared) === 1 ? [
+            'pending' => $declared[0]['pending'],
+            'tagged' => $declared[0]['tagged'],
         ] : null;
+    }
+
+    /**
+     * The occurrences that COUNT as declarations: in the section, and
+     * not commented out.
+     *
+     * **F5: the duplicate check used to count commented occurrences
+     * too**, so one standing declaration beside a commented copy of
+     * itself read as two and was rejected — a false rejection inside
+     * the scan's own stated grammar, which defines a declaration as one
+     * that is not commented.
+     *
+     * @return list<array{pending: string, tagged: string, commented: bool, in_section: bool}>
+     */
+    public static function declaredWindowsIn(string $doc): array
+    {
+        return array_values(array_filter(
+            self::releaseWindowsIn($doc),
+            static fn (array $window): bool => ! $window['commented'] && $window['in_section'],
+        ));
     }
 
     /**
@@ -355,31 +400,26 @@ final class ContractScan
      * recognises**, and the contract says so rather than promising
      * visibility.
      *
-     * THE RECOGNISED-FORM RESIDUE, which is what that costs. Each of
-     * these is a document a reader may or may not see a declaration in,
-     * and this parse takes no position on any of them:
+     * WHAT THE GRAMMAR DOES NOT COVER. Each entry names a CLASS of
+     * spelling, and nothing else — no counts, no quantifiers, no claims
+     * about how any renderer behaves, which is the surface that made
+     * the earlier `visible` wording wrong:
      *
-     *  - **Entity-encoded or otherwise re-spelled text.** `RELEASE
-     *    WINDOW: … `bfc_version` 0&#46;6&#46;0` renders as a
-     *    declaration and is not one here. Two such lines render as two
-     *    and count as none, so the duplicate check is over the grammar
-     *    and not over the page.
-     *  - **A declaration inside a fenced code block**, which renders as
-     *    a sample rather than as a statement, and is counted here as a
-     *    declaration.
-     *  - **A declaration inside raw HTML** — a `<details>` a reader
-     *    must open, a `title=` attribute, a `hidden` div — which is
-     *    counted here as a declaration whatever the page does with it.
-     *  - **Whether the sentence renders at all**, on any renderer.
+     *  - **A declaration whose characters are spelled some other way**
+     *    — entity-encoded, or any re-spelling that is not the literal
+     *    sentence. Not recognised, in either direction.
+     *  - **A declaration inside a fenced code block.** Recognised.
+     *  - **A declaration inside raw HTML.** Recognised.
+     *  - **Whether the sentence renders, anywhere.** Outside this
+     *    entirely.
      *
      * The unclosed comment is recognised because it costs one pattern
-     * and needs no renderer: an unterminated `<!--` opens a comment
-     * that the HTML tokenizer runs to the end of input, so this parse
-     * treats what follows the same way rather than reading a
-     * declaration out of it. That is a rule about the bytes; it is
-     * still not a statement about what any particular reader sees.
+     * and needs no renderer: an unterminated `<!--` opens a comment the
+     * HTML tokenizer runs to end of input, so this parse treats what
+     * follows the same way rather than reading a declaration out of it.
+     * That is a rule about the bytes, not a statement about a reader.
      *
-     * @return list<array{pending: string, tagged: string, commented: bool}>
+     * @return list<array{pending: string, tagged: string, commented: bool, in_section: bool}>
      */
     public static function releaseWindowsIn(string $doc): array
     {
@@ -401,6 +441,8 @@ final class ContractScan
             $comments[] = [$unclosed[0][1], strlen($doc)];
         }
 
+        [$sectionFrom, $sectionTo] = self::sectionBounds($doc);
+
         $windows = [];
 
         foreach ($matches as $match) {
@@ -419,10 +461,33 @@ final class ContractScan
                 'pending' => $match[1][0],
                 'tagged' => $match[2][0],
                 'commented' => $commented,
+                'in_section' => $offset >= $sectionFrom && $offset < $sectionTo,
             ];
         }
 
         return $windows;
+    }
+
+    /**
+     * Where {@see DECLARATION_SECTION} starts and ends, as offsets into
+     * the document. A document without that heading has an empty
+     * section, so every declaration in it is outside one.
+     *
+     * @return array{0: int, 1: int}
+     */
+    private static function sectionBounds(string $doc): array
+    {
+        if (preg_match('/^'.preg_quote(self::DECLARATION_SECTION, '/').'\s*$/m', $doc, $heading, PREG_OFFSET_CAPTURE) !== 1) {
+            return [0, 0];
+        }
+
+        $from = $heading[0][1];
+
+        if (preg_match('/^## /m', $doc, $next, PREG_OFFSET_CAPTURE, $from + strlen($heading[0][0])) === 1) {
+            return [$from, $next[0][1]];
+        }
+
+        return [$from, strlen($doc)];
     }
 
     /**
@@ -515,7 +580,8 @@ final class ContractScan
     public static function versionPairBreaksIn(string $doc, string $constant): array
     {
         $mentions = array_values(array_unique(self::releaseVersionMentionsIn($doc)));
-        $declared = self::releaseWindowsIn($doc);
+        $found = self::releaseWindowsIn($doc);
+        $declared = self::declaredWindowsIn($doc);
         $window = self::releaseWindowIn($doc);
         $breaks = [];
 
@@ -524,9 +590,14 @@ final class ContractScan
                 .'recognised form, so which pair it declares has no answer'];
         }
 
-        if ($declared !== [] && $declared[0]['commented']) {
-            return ['the release-window declaration is inside an HTML comment, so no consumer of this '
-                .'file is handed it'];
+        if ($declared === [] && $found !== []) {
+            $commented = array_filter($found, static fn (array $w): bool => $w['commented']);
+
+            return [$commented !== []
+                ? 'the release-window declaration is inside an HTML comment, so no consumer of this '
+                    .'file is handed it'
+                : 'the release-window declaration stands outside "'.self::DECLARATION_SECTION
+                    .'", where this document says it stands'];
         }
 
         if ($mentions === []) {
