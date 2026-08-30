@@ -1880,9 +1880,11 @@ literal confirmation").
   request did not confirm it.** Retiring it is permitted; arriving at it by accident is what this
   refuses. Nothing was retired. Send `confirm_last_active_key: true` to proceed.
 - **429** — beyond the operator write limits.
-- **500** — `{"message": "..."}` — a database fault, most plausibly a lock-wait timeout: the ring
-  is locked for the last-active-key decision, so a concurrent retirement can time this one out.
-  The transaction rolled back and retrying is safe.
+- **500** — `{"message": "..."}` — a database fault. On a driver that honours the row lock this
+  route REQUESTS for the last-active-key decision, a lock-wait timeout is the plausible one, since
+  a concurrent retirement holding those rows can time this one out; on a driver that ignores the
+  request there is no such wait to time out. Either way the transaction rolled back, nothing was
+  written, and retrying is safe.
 
 **What is stable across repeats, precisely.** `key_id`, `status` and `retired_at` are fixed by the
 retirement itself and do not move again. **`active_key_ids` is not** — it reports the ring **as of
@@ -1908,10 +1910,12 @@ and says nothing verifies", "asks for no confirmation to retire a pending key or
 active keys" and "refuses the second of two sequential retirements once it is the last active
 key").
 
-The rule is decided with the key ring locked (`SELECT … FOR UPDATE`), so **on a database that
-honours row locks** two retirements racing for the last two active keys cannot each read a ring in
-which the other was still verifying. That qualifier is the whole of what the sentence claims: the
-lock is taken, and what it buys is the database's to provide.
+The rule is decided under a row lock this route **requests** over the ring (`SELECT … FOR UPDATE`),
+and a request is all it is: what it buys is the DRIVER'S to provide. On one that honours row locks,
+two concurrent retirements of the last two active keys cannot each read a ring in which the other
+was still verifying. On one that ignores the request, nothing here bounds concurrent retirement at
+all. That is a claim about what this route asks the database for — not about what any particular
+database then does.
 
 **The audit.** One `revoked` lifecycle event per retirement, in the same transaction as the state
 change, with the actor typed and ids only — the key id and what still verifies in the bounded

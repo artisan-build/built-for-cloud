@@ -58,11 +58,22 @@ use Throwable;
  * changes nothing about whether entry is possible and asks for no
  * confirmation.
  *
- * **The ring is locked for the decision.** "Is this the last active key"
- * is read before it is written, and two concurrent retirements of the
- * last two active keys would otherwise each read a ring where the other
- * key was still verifying, confirm nothing, and leave the deployment
- * with no key between them.
+ * **The decision REQUESTS a row lock on the ring, and a request is all
+ * it is.** "Is this the last active key" is read before it is written,
+ * so `lockForUpdate()` is asked for over the whole ring — and what that
+ * request buys is the DRIVER'S to provide. On one that honours row
+ * locks, two concurrent retirements of the last two active keys cannot
+ * each read a ring in which the other was still verifying, confirm
+ * nothing, and leave the deployment with no key between them. On one
+ * that does not — SQLite compiles the clause away and issues no such
+ * SQL — the request is a no-op, and nothing here bounds concurrent
+ * retirement at all.
+ *
+ * State it that way rather than "the ring is locked", which is a claim
+ * about the call site written as a claim about the query. This
+ * package's own suite runs on the driver where it is a no-op, so no
+ * green result here is evidence either way; the concurrent case is
+ * tracked as debt rather than asserted.
  *
  * ## Retirement is idempotent, and says which call did it
  *
@@ -90,7 +101,7 @@ use Throwable;
  * `retired_at`, so relying on it produced the one outcome the
  * requirement exists to prevent: a key that had stopped verifying, a
  * caller holding an exception, and no event naming the retirement. The
- * check therefore runs before the lock and before any read.
+ * check therefore runs before the lock request and before any read.
  *   Pinned by `tests/ConsoleKeyRetirementTransactionTest.php` — "refuses
  *   to retire outside a database transaction, leaving the key verifying"
  *   and "refuses an already-retired key outside a transaction too, so
@@ -116,7 +127,7 @@ final readonly class RetireConsoleKey
      */
     public function __invoke(string $keyId, ?AuditActor $actor, bool $confirmLastActiveKey = false): ConsoleKeyRetired
     {
-        // FIRST, before the lock, before any read, and before anything
+        // FIRST, before the lock request, before any read, and before anything
         // can be written. Leaning on the recorder's identical check was
         // not the same thing and the difference was the whole defect:
         // the recorder is reached only AFTER `retired_at` has been
@@ -141,9 +152,11 @@ final readonly class RetireConsoleKey
             throw ConsoleKeyRefused::because(ConsoleKeyRefusal::UnknownKeyId);
         }
 
-        // The whole ring, LOCKED: the last-active-key decision below is
-        // a read that a write depends on, and a concurrent retirement
-        // must not be able to change the answer in between.
+        // The whole ring, with a row lock REQUESTED: the
+        // last-active-key decision below is a read that a write depends
+        // on. Whether a concurrent retirement can change the answer in
+        // between is the driver's answer, not this line's — see the
+        // class docblock.
         $ring = ConsoleKey::query()->lockForUpdate()->orderBy('key_id')->get();
 
         $key = $ring->firstWhere('key_id', $keyId);
@@ -236,10 +249,10 @@ final readonly class RetireConsoleKey
     }
 
     /**
-     * Every key id verifying at one instant, read from the LOCKED rows
-     * rather than by a second query — a re-read would be a second
-     * reading of the ring that the lock above exists to make
-     * unnecessary.
+     * Every key id verifying at one instant, read from the rows already
+     * fetched rather than by a second query — a re-read would be a
+     * second reading of the ring, which is the thing the lock request
+     * above is there to make unnecessary on a driver that honours it.
      *
      * @param  Collection<int, ConsoleKey>  $ring
      * @return list<string>

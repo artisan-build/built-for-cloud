@@ -500,6 +500,68 @@ it('asks for no confirmation to retire a pending key or one of two active keys',
     expect(retirementActiveIds())->toBe(['k2']);
 });
 
+it('still requires confirmation when the only other key on the ring is pending', function (): void {
+    // THE RESTRICTIVE DIRECTION, and the gap every other AC3 test left
+    // open: they all use a pending key as the retirement TARGET, so
+    // none of them ever holds a pending key as COVER while the last
+    // active one is retired.
+    //
+    // The mutation it closes is one predicate wide. `activeIdsIn()`
+    // filters on `isActiveAt()`; drop its pending half — read it as
+    // `! isRetiredAt()` — and the ring below looks like TWO active keys,
+    // the confirmation is skipped, and the retirement silently ends
+    // delegated entry. A pending key verifies nothing, so it is no cover
+    // at all, and the rule has to see that.
+    retirementClaimedDeployment();
+
+    $writer = retirementWriter();
+    $only = retirementFiledKey('k1', $writer);
+
+    // Filed and NOT activated: on the ring, verifying nothing.
+    $pending = ConsoleKey::query()->create([
+        'key_id' => 'k2-pending',
+        'public_key' => ConsoleKeyring::normalizePublicKey(consoleKeypair()->getPublicKey()->toHexString()),
+    ]);
+
+    expect($pending->activated_at)->toBeNull()
+        // TWO rows on the ring, ONE of them verifying. That gap is the
+        // whole test, so it is asserted before anything is concluded.
+        ->and(ConsoleKey::query()->count())->toBe(2)
+        ->and(retirementActiveIds())->toBe(['k1']);
+
+    $this->postJson(retirementUrl('k1'), [], ['Authorization' => $writer->bearerHeader()])
+        ->assertStatus(409)
+        ->assertJsonStructure(['message']);
+
+    // Nothing retired, and k1 still verifies.
+    expect(retirementActiveIds())->toBe(['k1'])
+        ->and(ConsoleKey::query()->whereNotNull('retired_at')->count())->toBe(0)
+        ->and(consoleVerify(consoleMint($only, consoleClaims(), 'k1'))->keyId)->toBe('k1');
+
+    // The CLI answers the same, on the same ring.
+    [$status, $output] = retirementRunCli('k1');
+
+    expect($status)->toBe(1)
+        ->and($output)->toContain('--confirm-last-active-key')
+        ->and(retirementActiveIds())->toBe(['k1']);
+
+    // And with the confirmation it proceeds — leaving a ring of two
+    // filed keys, NEITHER of which verifies. That is the state the
+    // refusal above exists to make somebody choose.
+    $this->postJson(retirementUrl('k1'), ['confirm_last_active_key' => true], [
+        'Authorization' => $writer->bearerHeader(),
+    ])
+        ->assertOk()
+        ->assertJsonPath('console_key_retired.active_key_ids', []);
+
+    expect(retirementActiveIds())->toBe([])
+        ->and(ConsoleKey::query()->count())->toBe(2)
+        // The pending key is untouched by any of it, and still pending:
+        // a retirement elsewhere on the ring never activates anything.
+        ->and($pending->refresh()->activated_at)->toBeNull()
+        ->and($pending->retired_at)->toBeNull();
+});
+
 it('refuses the second of two sequential retirements once it is the last active key', function (): void {
     // SEQUENTIAL, and the title says so. The inputs are request one,
     // commit, request two — there are no overlapping transactions here,
