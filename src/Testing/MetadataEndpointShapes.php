@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Testing;
 
 use ArtisanBuild\BuiltForCloud\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyFiled;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyRetired;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresHeadlineStat;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
@@ -174,6 +175,28 @@ final class MetadataEndpointShapes
                             // {@see ConsoleKeyFiled::toArray} emits
                             // `toRfc3339String()`.
                             'activated_at' => ['type' => 'rfc3339_timestamp', 'nullable' => true],
+                            'active_key_ids' => ['type' => 'list', 'of' => ['type' => 'console_key_id']],
+                        ],
+                    ],
+                ],
+            ],
+            // The retirement's answer. `newly_retired` is genuinely
+            // either boolean — that is the whole of how an idempotent
+            // verb says which call did the work — and `retired_at` is
+            // never null on this shape, because the object is only
+            // constructed for a key whose retirement has committed.
+            'POST /bfc/console/keys/{key_id}/retire' => [
+                'type' => 'object',
+                'fields' => [
+                    'console_key_retired' => [
+                        'type' => 'object',
+                        'fields' => [
+                            'key_id' => ['type' => 'console_key_id'],
+                            'status' => ['type' => 'enum', 'values' => ['retired']],
+                            // {@see ConsoleKeyRetired::toArray} emits
+                            // `toRfc3339String()`.
+                            'retired_at' => ['type' => 'rfc3339_timestamp'],
+                            'newly_retired' => ['type' => 'bool'],
                             'active_key_ids' => ['type' => 'list', 'of' => ['type' => 'console_key_id']],
                         ],
                     ],

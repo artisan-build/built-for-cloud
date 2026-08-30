@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\Actions\FileConsoleKey;
+use ArtisanBuild\BuiltForCloud\Actions\RetireConsoleKey;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyDelivery;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyFiled;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyRetired;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyring;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
@@ -16,9 +19,17 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 /**
- * The re-key verb (Console PRD D12): the retrofit path that gives an
- * ALREADY-CLAIMED deployment a countersigning key — or a replacement one
- * — without re-onboarding it.
+ * The two console key-custody verbs (Console PRD D12): the re-key that
+ * gives an ALREADY-CLAIMED deployment a countersigning key — or a
+ * replacement one — without re-onboarding it, and the retirement that
+ * finishes the rotation the re-key opened.
+ *
+ * They share a controller because they share everything that decides how
+ * they answer: one gate (`console:key:write`), one uniform
+ * pre-authorization refusal, one actor reading, one refusal envelope.
+ * The rules each verb enforces are in its own action.
+ *
+ * ## The re-key
  *
  * It exists because the claim-time exchange only helps deployments that
  * have not claimed yet, and by the time the Console ships the fleet is
@@ -46,13 +57,42 @@ use Illuminate\Support\Facades\DB;
  * with nobody's decision. `credential:admin` — the explicit break-glass
  * — still satisfies it ({@see OperatorAbility::adminEquivalent}).
  *
- * Every pre-authorization refusal on this route is normalized to one
+ * Every pre-authorization refusal on these routes is normalized to one
  * status and body by {@see UniformConsoleKeyRefusal}; the audit stream
  * keeps the distinction.
+ *
+ * ## The retirement
+ *
+ * {@see self::retire()} is the operator path over
+ * {@see ConsoleKeyring::retire()}, which until this release was
+ * reachable only from PHP running inside the app — so a fleet that had
+ * re-keyed could start trusting the incoming key over HTTP and never
+ * stop trusting the outgoing one.
+ *
+ * **The same gate, and that is a decision rather than an inheritance.**
+ * Retirement ends a signing authority where filing begins one, and it is
+ * tempting to read "ending" as the more consequential half. It is not,
+ * on this ring: whoever holds `console:key:write` can already file and
+ * activate a key of its own and enter this deployment as a delegated
+ * admin, which is strictly more than denying entry. A separate ability
+ * would also have meant no credential in the field could retire
+ * anything until it was reissued — leaving the rotation half-finished
+ * on exactly the deployments this verb exists for.
  */
 final class ManageConsoleKeys
 {
-    public function __construct(private readonly FileConsoleKey $fileConsoleKey) {}
+    /**
+     * The response key a retirement answers under. Deliberately NOT
+     * {@see ConsoleKeyDelivery::FIELD}: that name is the shape of a
+     * DELIVERY, and a consumer branching on it must not find a retired
+     * key wearing it.
+     */
+    public const string RETIRED_FIELD = 'console_key_retired';
+
+    public function __construct(
+        private readonly FileConsoleKey $fileConsoleKey,
+        private readonly RetireConsoleKey $retireConsoleKey,
+    ) {}
 
     /**
      * File and activate a new countersigning key.
@@ -91,6 +131,47 @@ final class ManageConsoleKeys
         }
 
         return response()->json([ConsoleKeyDelivery::FIELD => $filed->toArray()], 201);
+    }
+
+    /**
+     * Stop trusting one filed key.
+     *
+     * The `kid` rides the PATH — the verb acts on a row that already
+     * exists, the way `POST /bfc/credentials/{id}/rotate` does, where
+     * the re-key's flat body carries a key that does not exist yet. A
+     * `kid` is bounded to `[A-Za-z0-9._-]`, so it needs no encoding to
+     * be a path segment and cannot carry a separator.
+     *
+     * The body carries one optional boolean,
+     * `confirm_last_active_key`. Anything other than a literal `true` is
+     * absence: a caller confirming the end of delegated entry says so,
+     * and a truthy string is not that. Absence is the safe reading, and
+     * the refusal it produces names what to send.
+     */
+    public function retire(Request $request, string $keyId): JsonResponse
+    {
+        $actor = $this->actor($request);
+
+        try {
+            $retired = DB::transaction(
+                fn (): ConsoleKeyRetired => ($this->retireConsoleKey)(
+                    $keyId,
+                    $actor,
+                    $request->input('confirm_last_active_key') === true,
+                ),
+            );
+        } catch (ConsoleKeyRefused $refused) {
+            // The transaction rolled back — no row changed — so the
+            // refusal audits on its own.
+            $this->retireConsoleKey->recordRefusal($refused, $actor, $keyId);
+
+            return $this->refusalResponse($refused);
+        }
+
+        // 200, not 201 and not 204: nothing was created, and the body is
+        // the point — `newly_retired` and what still verifies are what
+        // an operator reads to know where the rotation stands.
+        return response()->json([self::RETIRED_FIELD => $retired->toArray()]);
     }
 
     /**

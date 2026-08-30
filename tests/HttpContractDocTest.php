@@ -1024,7 +1024,7 @@ final class HttpContractDocTest extends TestCase
     {
         $expected = [
             'tokens', 'ownership', 'onboarding', 'webhooks', 'credentials',
-            'console-keys', 'console-vitals', 'app-action-audit-emit',
+            'console-keys', 'console-key-retire', 'console-vitals', 'app-action-audit-emit',
             'console-guard', 'console-enter', 'console-chrome-assets',
         ];
 

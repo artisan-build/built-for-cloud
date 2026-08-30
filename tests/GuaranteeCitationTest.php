@@ -115,6 +115,7 @@ $expectedCitations = [
     'src/Console/ConsoleEntryState.php' => 8,
     'src/Console/ConsoleGuard.php' => 17,
     'src/Console/ConsoleReturnTo.php' => 2,
+    'src/Console/ConsoleKeyRetired.php' => 1,
     'src/Console/ConsoleSession.php' => 2,
     'src/Console/DelegatedActor.php' => 6,
     'src/Console/ConsoleChrome.php' => 6,

@@ -82,6 +82,20 @@ final class MetaController
             // mounted under, so the capability and the route can never
             // disagree.
             //
+            // `console-key-retire` says this deployment serves the
+            // RETIREMENT verb, `POST /bfc/console/keys/{key_id}/retire`
+            // — and it is a name of its own rather than a widening of
+            // `console-keys` because widening it would say nothing a
+            // control plane can act on. `console-keys` is already
+            // reported by every deployment that serves the delivery
+            // surfaces, including releases where retirement was
+            // reachable only from PHP inside the app, so a control plane
+            // reading it cannot tell whether the verb it wants to call
+            // exists. This one can only be read as "the retire verb is
+            // here". The verb is in the name for the same reason it is
+            // in `app-action-audit-emit`: it says what this deployment
+            // will DO, not what it holds.
+            //
             // `app-action-audit-emit` says this deployment RECORDS
             // app-action audit events (Console PRD D17): the
             // `bfc_app_action_events` table, its outbox, and the
@@ -113,7 +127,7 @@ final class MetaController
     {
         $capabilities = [
             'tokens', 'ownership', 'onboarding', 'webhooks', 'credentials',
-            'console-keys', 'console-vitals', 'app-action-audit-emit',
+            'console-keys', 'console-key-retire', 'console-vitals', 'app-action-audit-emit',
         ];
 
         if (ConsoleGuardConfiguration::enabled()) {

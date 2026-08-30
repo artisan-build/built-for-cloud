@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud;
 
 use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
 use ArtisanBuild\BuiltForCloud\Commands\ConsoleReKeyCommand;
+use ArtisanBuild\BuiltForCloud\Commands\ConsoleRetireKeyCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CreateAdminCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialActivateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialListCommand;
@@ -397,6 +398,32 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 'bfc.credential.admin:'.OperatorAbility::ConsoleKeyWrite->value,
             ]);
 
+        // The retirement verb (Console PRD D12): the other half of
+        // make-before-break, and until this release the half with no
+        // operator path at all — the keyring primitive it drives took a
+        // PHP caller and nothing else, so a rotation driven over the
+        // wire could only ever be started, never finished.
+        //
+        // The `kid` rides the PATH because the verb acts on a row that
+        // already exists — the shape `/bfc/credentials/{id}/rotate`
+        // uses — where the re-key's flat body carries a key that does
+        // not exist yet.
+        //
+        // The SAME stack as the re-key, layer for layer, and the same
+        // ability. Retirement ends a signing authority where filing
+        // begins one, which sounds like the more consequential half and
+        // is not: a credential holding `console:key:write` can already
+        // file and activate a key of its own and enter as a delegated
+        // admin, which is more than denying entry. A separate ability
+        // would have meant no credential already in the field could
+        // finish a rotation without being reissued first.
+        $router->post('/bfc/console/keys/{key_id}/retire', [ManageConsoleKeys::class, 'retire'])
+            ->middleware([
+                'throttle:bfc-operator-write',
+                UniformConsoleKeyRefusal::class,
+                'bfc.credential.admin:'.OperatorAbility::ConsoleKeyWrite->value,
+            ]);
+
         // THE DOOR (Console PRD D12/D13): `POST /bfc/console/enter`,
         // at a fixed `/bfc/console/*` path like every other package
         // surface, an ordinary member of the routes family — and
@@ -626,6 +653,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     {
         $this->commands([
             ConsoleReKeyCommand::class,
+            ConsoleRetireKeyCommand::class,
             CreateAdminCommand::class,
             CredentialActivateCommand::class,
             CredentialListCommand::class,
