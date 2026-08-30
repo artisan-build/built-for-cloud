@@ -754,8 +754,11 @@ it('keeps retirement a separate operation that ends only the retired key (AC5)',
         ], ['Authorization' => $writer->bearerHeader()])->assertCreated();
     }
 
-    // Retirement is a keyring operation, deliberately NOT reachable from
-    // the re-key verb: no HTTP path in this release retires a key.
+    // Retirement is a SEPARATE operation, deliberately not something the
+    // re-key verb does — it has its own verb and its own tests
+    // (`tests/ConsoleKeyRetirementTest.php`). Driven here through the
+    // primitive, because what this test is about is that filing retires
+    // nothing and that a retirement ends exactly one key.
     (new ConsoleKeyring)->retire('k1');
 
     expect(keyCustodyActiveIds())->toBe(['k2'])

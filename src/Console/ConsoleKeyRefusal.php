@@ -7,7 +7,8 @@ namespace ArtisanBuild\BuiltForCloud\Console;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
 
 /**
- * Why a countersigning-key delivery was refused (Console PRD D12).
+ * Why a countersigning-key delivery or retirement was refused
+ * (Console PRD D12).
  *
  * The property every one of these defends is the same: **whoever
  * controls a filed key controls who may enter this deployment as an
@@ -22,6 +23,11 @@ use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
  * is the party that has to fix the delivery, and telling them "that key
  * id is taken" rather than "no" is what makes the retrofit path (D12's
  * re-key) operable. Neither message ever echoes delivered key material.
+ *
+ * The two retirement reasons below are here rather than in a vocabulary
+ * of their own because they answer on the same route family, through the
+ * same carrier, under the same gate. Splitting them off would have been
+ * a second enum whose only difference was which verb raised it.
  */
 enum ConsoleKeyRefusal: string
 {
@@ -100,16 +106,56 @@ enum ConsoleKeyRefusal: string
     case Unclaimed = 'deployment_not_claimed';
 
     /**
+     * No key with that id is on this ring — never filed, or filed under
+     * a different id.
+     *
+     * A MALFORMED key id answers this too, deliberately. A `kid` outside
+     * {@see ConsoleKeyring::KEY_ID_PATTERN} cannot be on the ring by
+     * construction, so "that key is not here" is the true answer as well
+     * as the useful one, and it keeps unvalidated caller text out of a
+     * second refusal path that would have to describe it.
+     */
+    case UnknownKeyId = 'console_key_not_on_file';
+
+    /**
+     * The key named is the last one still verifying, and the caller did
+     * not say it meant to end delegated entry.
+     *
+     * Retiring it is PERMITTED — a deployment is entitled to stop
+     * trusting the vendor's Console, and a surface that refused outright
+     * would leave no operator path to do it — but it is not something to
+     * arrive at by retiring one key too many during a rotation. The
+     * consequence is total: with nothing verifying, every assertion is
+     * refused and no operator can be handed to this deployment until a
+     * fresh key is filed and activated. It cannot be undone by re-filing
+     * the retired key's bytes either
+     * ({@see self::MaterialAlreadyFiled}), so recovery needs a NEW
+     * keypair from the vendor.
+     *
+     * So the affirmative flag is the whole gate: without it this
+     * refuses, with it the retirement proceeds and is audited like any
+     * other.
+     */
+    case LastActiveKey = 'console_last_active_key';
+
+    /**
      * The status the HTTP transports answer with. `409` for the taken
      * `kid` — a conflict with existing state, exactly as the ownership
-     * claim answers a second claimant — and `422` for material this
-     * server will never accept however often it is re-sent.
+     * claim answers a second claimant — `422` for material this
+     * server will never accept however often it is re-sent, and `404`
+     * for a verb addressed to a key that is not on the ring.
      */
     public function status(): int
     {
         return match ($this) {
             self::InvalidMaterial => 422,
             self::KeyIdInUse, self::MaterialAlreadyFiled, self::Unclaimed, self::ConcurrentDelivery => 409,
+            // A verb addressed to a key id that names no row, exactly as
+            // the credential verbs answer an id that never existed.
+            self::UnknownKeyId => 404,
+            // A conflict with the ring's current state, and one the
+            // caller resolves by deciding rather than by retrying.
+            self::LastActiveKey => 409,
             // Not 401: the caller authenticated fine. What it presented
             // simply does not carry this authority.
             self::NotAuthorized => 403,
@@ -130,6 +176,8 @@ enum ConsoleKeyRefusal: string
             self::NotAuthorized => 'This claim code does not carry console key-custody authority. Ask the operator to issue a code with console_key_authority, which files exactly one key.',
             self::Unclaimed => 'This deployment has not been claimed, so there is no owner to countersign for. Claim ownership first; the ownership claim can deliver a console key in the same request.',
             self::ConcurrentDelivery => 'Another console key delivery landed at the same moment and claimed this key id or this key material. Nothing was written by this request; re-read the keyring and deliver again under a fresh key id.',
+            self::UnknownKeyId => 'No console key with that key id is on file for this deployment. Nothing was changed.',
+            self::LastActiveKey => 'That is the last console key still verifying, so retiring it ends delegated entry to this deployment: no assertion will verify and no operator can be handed here until a freshly generated key is filed and activated. Nothing was retired. File the replacement first, or repeat this request with confirm_last_active_key (--confirm-last-active-key on the command) if ending entry is what you mean to do.',
         };
     }
 }

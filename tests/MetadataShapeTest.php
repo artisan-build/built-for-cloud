@@ -546,6 +546,30 @@ it('holds the classification on the console key-custody row', function (): void 
     $this->assertBuiltForCloudMetadataEndpoint($filed, 'POST /bfc/console/re-key');
 });
 
+it('holds the classification on the console key-retirement row', function (): void {
+    OwnershipClaim::query()->create(['token_hash' => OwnershipClaim::hashToken('metadata-retire-owner')]);
+    $this->postJson('/bfc/ownership/claim', ['token' => 'metadata-retire-owner'])->assertCreated();
+
+    $writer = metadataOperator(OperatorAbility::ConsoleKeyWrite);
+
+    // Two keys, so the retirement below is not the last-active-key case
+    // and answers its ordinary success shape. The capital is deliberate:
+    // a `kid` is bounded in `[A-Za-z0-9._-]`, a charset of its own.
+    foreach (['K1.metadata-outgoing', 'K2.metadata-incoming'] as $keyId) {
+        $this->postJson('/bfc/console/re-key', [
+            'key_id' => $keyId,
+            'public_key' => consoleKeypair()->getPublicKey()->toHexString(),
+        ], ['Authorization' => $writer->bearerHeader()])->assertCreated();
+    }
+
+    $this->assertBuiltForCloudMetadataEndpoint(
+        $this->postJson('/bfc/console/keys/K1.metadata-outgoing/retire', [], [
+            'Authorization' => $writer->bearerHeader(),
+        ])->assertOk(),
+        'POST /bfc/console/keys/{key_id}/retire',
+    );
+});
+
 it('holds the classification on the personal-surface row', function (): void {
     config(['built-for-cloud.credentials.declaration' => SelfServiceDeclaration::class]);
 

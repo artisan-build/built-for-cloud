@@ -104,8 +104,9 @@ The rules a consumer may rely on:
 Additive unless marked otherwise.
 
 **Everything the Console adds in 0.6.0 is additive, so `api_version` stays 2. What carries the
-signal is `bfc_version` 0.6.0 plus the `capabilities` entries** — `console-keys`, `console-vitals`,
-`console-guard`, `console-enter`, `console-chrome-assets` and `app-action-audit-emit`.
+signal is `bfc_version` 0.6.0 plus the `capabilities` entries** — `console-keys`,
+`console-key-retire`, `console-vitals`, `console-guard`, `console-enter`, `console-chrome-assets`
+and `app-action-audit-emit`.
 
 **What "additive" covers here, stated as what actually shipped rather than as one paradigm case**,
 because a reader applying rule 1 to their own change needs the real list:
@@ -235,9 +236,14 @@ with the three things that WOULD have moved the major and none of which happened
   (the new `console:key:write` ability, operator write limits) files and activates a key on an
   already-claimed deployment without re-onboarding, with `bfc:console:re-key --local` as its
   CLI transport. Filing is make-before-break: it activates the new key and retires nothing, so
-  both keys verify during the overlap; retirement stays a separate, later operation with no
-  HTTP verb in this release. The lifecycle stream's `delivered` / `activated` / `denied_action`
-  events now also carry console-key events (`credential_id` null, the key id in the note). No
+  both keys verify during the overlap. Retirement is the separate, later operation that finishes
+  it, and it now has an operator path of its own: new route
+  `POST /bfc/console/keys/{key_id}/retire` under the SAME `console:key:write` ability and the
+  same operator write limits, with `bfc:console:retire-key --local` as its CLI transport, and a
+  new `capabilities` entry `console-key-retire`. Retiring the LAST key that still verifies ends
+  delegated entry and is refused (`409`) unless the request confirms it. The lifecycle stream's
+  `delivered` / `activated` / `revoked` / `denied_action` events now also carry console-key
+  events (`credential_id` null, the key id in the note). No
   surface here returns key material, and none has any use for a private key — but see the
   HONEST LIMIT under [Console key custody](#console-key-custody): a 32-byte Ed25519 seed cannot
   be told apart from a public key by inspection, so "no private key is stored" is a property of
@@ -317,18 +323,20 @@ API listing shape.
   revoked bearers all answer `401` with one body; a bearer that authenticates but lacks the
   route's ability answers `403`. The split is safe because a caller reaching the `403` has
   already proved it holds a live credential, so nothing about credential existence leaks — and
-  it is useful, because "wrong ability" and "bad token" need different fixes. The one exception
-  is [`POST /bfc/console/re-key`](#post-bfcconsolere-key), where what the split would reveal is
-  worth more to an attacker than the diagnostic is to an operator; it answers one uniform `403`
-  to every pre-authorization failure alike.
+  it is useful, because "wrong ability" and "bad token" need different fixes. The exceptions are
+  the two console key-custody verbs — [`POST /bfc/console/re-key`](#post-bfcconsolere-key) and
+  [`POST /bfc/console/keys/{key_id}/retire`](#post-bfcconsolekeyskey_idretire) — where what the
+  split would reveal is worth more to an attacker than the diagnostic is to an operator; each
+  answers one uniform `403` to every pre-authorization failure alike.
 - **Operator routes** (the `/bfc/credentials`, `/bfc/invitations` and `/bfc/subjects` verbs)
   additionally accept a unified-store `operator` credential, authorized **per verb family**
   (GATE-3.7 least privilege). The ability vocabulary: `credential:read` (the listing — an
   audited sensitive read), `credential:mint` (mint + invitations), `credential:rotate`
   (rotate + the hmac activate cutover, same family), `credential:revoke`, `subject:offboard`,
   `audit:read` (vocabulary now; the first audit-read surface will enforce it), and
-  `console:key:write` (file a console countersigning key —
-  [`POST /bfc/console/re-key`](#post-bfcconsolere-key); its own name, and deliberately not the
+  `console:key:write` (write this deployment's console key ring — file a countersigning key with
+  [`POST /bfc/console/re-key`](#post-bfcconsolere-key), retire one with
+  [`POST /bfc/console/keys/{key_id}/retire`](#post-bfcconsolekeyskey_idretire); its own name, and deliberately not the
   `credential:rotate` family, so no already-issued credential gained the power to install a
   delegated-admin trust root on upgrade — **note the declared-mint-ceiling caveat below if your
   app implements one**). The MCP
@@ -397,12 +405,12 @@ API listing shape.
     with an ability-widening message that names the ability. Diagnostic, and it points at the
     real fix. `bfc:credential:mint --local` refuses identically — the ceiling is enforced in
     the one mint action, so no transport routes around it.
-  - `POST /bfc/console/re-key`, presented with an operator credential the app can still mint
-    **that does not carry `credential:admin`**, answers the uniform **403** described above,
-    whose body is constant and says nothing about why. That opacity is deliberate on this
-    route and it is not going to distinguish this case from a stolen bearer, so an operator
-    who has not read this paragraph will read it as "my credential is wrong" rather than "my
-    declaration is short a name".
+  - Either console key-custody verb — the re-key or the retirement — presented with an operator
+    credential the app can still mint **that does not carry `credential:admin`**, answers the
+    uniform **403** described above, whose body is constant and says nothing about why. That
+    opacity is deliberate on those routes and it is not going to distinguish this case from a
+    stolen bearer, so an operator who has not read this paragraph will read it as "my credential
+    is wrong" rather than "my declaration is short a name".
 
     The `credential:admin` exception is real and is a third way out: a ceiling written before
     this release may well permit the break-glass name, and an operator credential carrying it
@@ -415,8 +423,8 @@ API listing shape.
   1. an admin token — the **owner token** from
      [`POST /bfc/ownership/claim`](#post-bfcownershipclaim), or any admin `api_tokens` row —
      which is admin-equivalent on this route (see the paragraph above); or
-  2. the CLI transport, `bfc:console:re-key --local`, whose authority is host access and which
-     consults no ability at all.
+  2. the CLI transports, `bfc:console:re-key --local` and `bfc:console:retire-key --local`,
+     whose authority is host access and which consult no ability at all.
 
   **The fix** is to add `console:key:write` to the declaration's `grantableAbilities()` for the
   operator subject and redeploy. Do that deliberately: it is the grant of a
@@ -475,6 +483,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/me/credentials` | `content` | the `delivery` single reveal, plus free-text name/subject fields |
 | `DELETE /bfc/me/credentials/{id}` | `metadata` | empty `204` body |
 | `POST /bfc/console/re-key` | `metadata` | key ids from a bounded charset, a fixed status enum and a timestamp — no free text, and never any key material |
+| `POST /bfc/console/keys/{key_id}/retire` | `metadata` | a key id from a bounded charset, a fixed status enum, a boolean and a timestamp — no free text, and never any key material |
 | `POST /bfc/console/enter` | `content` | its success is a `303`, not a body: the `Set-Cookie` it establishes IS a single reveal of a live delegated session credential, and the `Location` echoes the return path the issuer signed |
 | `GET /bfc/console/chrome.js` | `content` | not a JSON body at all — a static JavaScript asset shipped inside the package. `metadata` is a claim about a bounded JSON shape, and a response with no such shape cannot make one; nothing in the body comes from this deployment's data |
 | `GET /bfc/console/vitals` | `metadata` | bounded integers, a fixed health enum, a semver-validated `app_version`, a timestamp, and a headline label drawn from the app's declared vocabulary — no free text anywhere, and deliberately no `product` |
@@ -536,7 +545,7 @@ Public (`bfc-public` throttle). Identifies the instance.
   "product": "Sink",
   "bfc_version": "0.6.0",
   "api_version": 2,
-  "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials", "console-keys", "console-vitals", "app-action-audit-emit"],
+  "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials", "console-keys", "console-key-retire", "console-vitals", "app-action-audit-emit"],
   "claimed": true
 }
 ```
@@ -555,13 +564,22 @@ legacy credential API is mounted.** That surface is gated on `built-for-cloud.cr
 to every route under [the legacy credential API](#the-legacy-credential-api-api_tokens-store). The
 entries below are the ones that do carry a predicate, and each states it.
 
-`console-keys` means this instance serves the countersigning-key surfaces below: the optional
-claim-time key exchange and `POST /bfc/console/re-key`. It deliberately does **not** say
+`console-keys` means this instance serves the countersigning-key DELIVERY surfaces below: the
+optional claim-time key exchange and `POST /bfc/console/re-key`. It deliberately does **not** say
 `console` — key custody is not the Console, and a control plane that read `console` as "this
 deployment can be entered" would be reading a promise this capability does not make. The delegated
 guard, the enter endpoint and the delegated-actor table all DO exist as of this release, each
 advertised under its own name below; `console-keys` says nothing about any of them, and an instance
 can report it while reporting none of them.
+
+`console-key-retire` means this instance serves
+[`POST /bfc/console/keys/{key_id}/retire`](#post-bfcconsolekeyskey_idretire), the operator path
+that stops this deployment trusting a filed key. It is unconditional, like `console-keys`, and it
+is a **separate name** rather than something `console-keys` was widened to include. Widening would
+have said nothing a consumer could act on: `console-keys` is reported by every deployment serving
+the delivery surfaces, releases that shipped no retire verb at all included, so a control plane
+reading it cannot tell whether the verb it wants to call is there. This name can only be read one
+way.
 
 `console-vitals` means this instance serves [`GET /bfc/console/vitals`](#get-bfcconsolevitals).
 It is named for the one surface it serves, not for the dashboard that reads it: the fleet
@@ -1640,7 +1658,8 @@ credential death with reason `offboarding`. A repeat offboard appends nothing.
 The Console (Console PRD D12) signs a short-lived delegated-entry assertion with the PRIVATE
 half of a **per-deployment** Ed25519 keypair. This deployment holds only the PUBLIC half, on a
 key ring addressed by key id (`kid`). Two surfaces put a key on that ring — the claim-time
-exchange documented on the claim envelopes above, and the re-key verb below.
+exchange documented on the claim envelopes above, and the re-key verb below — and one takes a key
+off it, [the retire verb](#post-bfcconsolekeyskey_idretire).
 
 What the ring will hold, and what it will not:
 
@@ -1683,6 +1702,18 @@ so each surface answers "who may do this" explicitly:
 | `POST /bfc/onboarding/exchange` | the code must have been issued with `console_key_authority` (below), and must not have spent it. A routine `scope=consume` code carries none. |
 | `POST /bfc/console/re-key` | an operator credential holding **`console:key:write`**, or the `credential:admin` break-glass, or a legacy admin token. `credential:rotate` is **not** sufficient. An app with a declared mint ceiling cannot mint that ability until it names it — see the caveat under [Authentication](#authentication); the owner/admin token and the CLI verb both work meanwhile. |
 | `bfc:console:re-key --local` | **host access.** No credential check — see the CLI paragraph below. |
+| `POST /bfc/console/keys/{key_id}/retire` | the same as the re-key: an operator credential holding **`console:key:write`**, the `credential:admin` break-glass, or a legacy admin token. |
+| `bfc:console:retire-key --local` | **host access.** No credential check. |
+
+**Retiring is gated the same as filing, and that is a decision.** Ending a signing authority
+reads like the more consequential half, and on this ring it is not: whoever can file a key can
+activate one of its own and enter as a delegated admin, which is more than denying entry. A
+stricter ability would also have meant no credential already in the field could finish a
+rotation without being reissued first — leaving the outgoing key trusted on exactly the
+deployments the retire verb exists for.
+*Pinned by* `tests/ConsoleKeyRetirementTest.php` ("gates retirement on console:key:write and
+refuses every other credential" and "answers one identical refusal to every pre-authorization
+failure").
 
 `POST /bfc/onboarding/issue` accepts an optional boolean `console_key_authority` (default
 `false`). A code issued with it may deliver exactly ONE console key; the authority is spent by
@@ -1699,11 +1730,20 @@ burns — leaves the claim code entirely untouched.
 **Make-before-break.** Filing a key ACTIVATES it and retires nothing. From the moment a delivery
 commits, the outgoing key and the incoming key both verify, so a re-key is safe to run against a
 deployment that is serving traffic — assertions already in flight under the outgoing key keep
-working. **Retirement is a separate, later operation** (there is no HTTP verb for it in this
-release; it is a keyring operation on the instance), performed once every assertion minted under
-the outgoing key has expired — which D12 bounds at the deployment's configured maximum assertion
-TTL, so the safe wait is short and known. Collapsing activation and retirement into one call is
-what turns a rotation into an outage.
+working. **Retirement is a separate, later operation** with its own verb,
+[`POST /bfc/console/keys/{key_id}/retire`](#post-bfcconsolekeyskey_idretire), performed once every
+assertion minted under the outgoing key has expired — which D12 bounds at the deployment's
+configured maximum assertion TTL, so the safe wait is short and known. Collapsing activation and
+retirement into one call is what turns a rotation into an outage, which is why they are two verbs
+and not one flag.
+
+**Retirement is permanent, and nothing brings a key back.** A retired key verifies nothing again;
+its bytes cannot be re-filed under a fresh key id (`409`, above); and there is no un-retire verb.
+Recovering from a retirement means a freshly generated keypair from the vendor, delivered through
+the re-key verb. Plan the order accordingly: file and activate the incoming key, confirm both are
+verifying, then retire the outgoing one.
+*Pinned by* `tests/ConsoleKeyCustodyTest.php` ("refuses to re-file a retired key's material under
+a new key id (AC16)").
 
 The success object, identical on all three surfaces (the two claim envelopes and the verb):
 
@@ -1789,6 +1829,95 @@ the command grants nothing host access did not already carry — what it adds is
 an audit row (actor type `cli_operator`). An operator who wants console key custody gated by
 credential rather than by shell should turn off the `commands` surface (PRD 1.14) and use the
 route. Nothing about this transport's shape should be copied to a verb that handles a secret.
+
+### POST /bfc/console/keys/{key_id}/retire
+
+*Admin token or operator credential carrying `console:key:write`* — rate-limited as an operator
+write (`bfc-operator-write`). Stop trusting one filed key, permanently. This is the second half of
+a make-before-break rotation: the re-key files and activates the incoming key and retires nothing,
+and this verb ends the outgoing one once every assertion minted under it has expired.
+
+The `kid` rides the path, because the verb acts on a key that already exists — the shape
+[`POST /bfc/credentials/{id}/rotate`](#post-bfccredentialsidrotate) uses — where the re-key's flat
+body carries a key that does not. A `kid` is bounded to `[A-Za-z0-9._-]`, so it is a path segment
+without encoding and can carry no separator.
+
+**Request** — the body is optional and carries at most one field:
+`{"confirm_last_active_key": true}`. Anything other than the literal boolean `true` is read as
+absence, which is the safe reading; see the last-active-key rule below.
+
+- **200** — `{"console_key_retired": {"key_id": "k1", "status": "retired", "retired_at":
+  "2026-08-30T12:00:00+00:00", "newly_retired": true, "active_key_ids": ["k2"]}}`. The key
+  verifies nothing from `retired_at` onward. `active_key_ids` is every key id still verifying,
+  sorted, and never includes the retired one — an **empty list means nothing verifies and no
+  operator can be handed to this deployment** until a fresh key is filed and activated.
+- **200 on a repeat** — **this verb is idempotent, and says which call did the work.** Retiring an
+  already-retired key answers `200` with the same object, `newly_retired: false`, and the
+  **original** `retired_at` rather than this request's instant. So a client retrying after a
+  dropped connection gets the state it asked for and can still tell whether it is what produced
+  it. No second audit event is written; one retirement, one event.
+- **403** — `{"message": "This request is not permitted to write console countersigning keys."}`
+  — **every** pre-authorization failure, byte for byte, exactly as on the re-key verb and for the
+  same reason: the `401`/`403` split would tell a caller holding a stolen or stale bearer whether
+  it is the credential that can take the deployment. The audit stream keeps the distinction.
+- **404** — `{"message": "..."}` — no key with that id is on file. A **malformed** key id answers
+  this too: a `kid` outside the documented charset cannot be on the ring, so "that key is not
+  here" is both the true answer and the one that keeps unvalidated text out of a second refusal
+  path. Nothing was changed.
+- **409** — `{"message": "..."}` — **the key named is the last one still verifying, and the
+  request did not confirm it.** Retiring it is permitted; arriving at it by accident is what this
+  refuses. Nothing was retired. Send `confirm_last_active_key: true` to proceed.
+- **429** — beyond the operator write limits.
+- **500** — `{"message": "..."}` — a database fault, most plausibly a lock-wait timeout: the ring
+  is locked for the last-active-key decision, so a concurrent retirement can time this one out.
+  The transaction rolled back and retrying is safe.
+
+**Retiring the LAST ACTIVE key: permitted, confirmed, and never by accident.** A deployment with
+no key that verifies can verify no assertion, so nobody can be handed to it — and because a
+retired key's bytes can never be re-filed, recovery needs a **freshly generated keypair from the
+vendor**, not the one just retired. Refusing it outright was the other candidate and was rejected:
+a deployment is entitled to stop trusting the vendor's Console, and a surface that refused would
+leave no operator path to that at all — which is the gap this verb exists to close, reopened one
+key later. So the affirmative confirmation is the whole gate. It bites only where the retirement
+would actually end verification: retiring a pending key, or one of two active keys, changes
+nothing about whether entry is possible and asks for nothing.
+*Pinned by* `tests/ConsoleKeyRetirementTest.php` ("refuses to retire the last key that still
+verifies until the request confirms it", "retires the last active key on an explicit confirmation
+and says nothing verifies", "asks for no confirmation to retire a pending key or one of two
+active keys" and "cannot be raced into leaving the ring with no active key").
+
+The rule is enforced against the ring under a row lock, so two retirements racing for the last two
+active keys cannot each read a ring where the other key was still verifying.
+
+**The audit.** One `revoked` lifecycle event per retirement, in the same transaction as the state
+change, with the actor typed and ids only — the key id and what still verifies in the bounded
+note, `credential_id` null, and never any key material. It is the same stream the filing half
+writes `delivered` and `activated` to, so one rotation reads as one contiguous story; `revoked`
+rather than a name of its own because retirement is the only revocation a console key has. A
+refused retirement appends `denied_action` naming the reason, and a malformed key id is never
+written into a note.
+*Pinned by* `tests/ConsoleKeyRetirementTest.php` ("audits one retirement to the lifecycle stream
+with the actor typed and no key material", "writes no second audit event when an already-retired
+key is retired again", "audits a refused retirement without writing a malformed key id" and
+"records nothing when the retirement transaction rolls back").
+
+**The CLI transport** is `bfc:console:retire-key {key_id} --local`, with
+`--confirm-last-active-key` where the rule above applies:
+
+```
+php artisan bfc:console:retire-key k1 --local
+```
+
+It runs the same action and produces the same EFFECT. **It does not have the same authority.**
+The command performs no credential check at all: its authority is HOST ACCESS, the same standing
+`bfc:console:re-key` and `bfc:create-admin` already have here, and anyone who can run artisan can
+write the keyring row through `tinker` anyway. It exits `0` for a retirement and `0` for a repeat
+— the state the operator asked for holds either way, and which call produced it is in the printed
+line and in `retired_at`, not in the status — and `1` for a refusal.
+*Pinned by* `tests/ConsoleKeyRetirementTest.php` ("exits zero for a retirement and for a repeat,
+and one for a refusal, on the cli transport").
+
+---
 
 ---
 
@@ -3113,8 +3242,8 @@ documented in their own sections above.
 
 ### Still RESERVED (not implemented)
 
-Nothing in the `/bfc/console/*` namespace is a reserved name any more: `re-key`, `vitals`,
-`enter` and `chrome.js` are all live routes, documented above. The app-action audit stream's
+Nothing in the `/bfc/console/*` namespace is a reserved name any more: `re-key`,
+`keys/{key_id}/retire`, `vitals`, `enter` and `chrome.js` are all live routes, documented above. The app-action audit stream's
 SCHEMA and EMISSION have landed ([above](#the-app-action-audit-stream)); its **read transport
 has not**, and is not a name this contract offers. The chrome and its single layout have landed
 ([above](#the-console-chrome)). Everything else Console-related — the switcher and its roster,

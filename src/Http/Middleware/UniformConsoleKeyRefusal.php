@@ -13,7 +13,8 @@ use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 
 /**
  * One refusal for every pre-authorization failure on the console key
- * surface (Console PRD D12, rework A5).
+ * surfaces (Console PRD D12, rework A5) — the re-key and the
+ * retirement, which share a gate and therefore share this.
  *
  * {@see EnsureCredentialAdmin} answers `401` for a missing, unknown or
  * dead bearer and `403` for a live credential lacking the route's
@@ -21,8 +22,8 @@ use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
  * documented: a caller who reaches the `403` has already proved it holds
  * a live credential, so nothing about credential existence leaks.
  *
- * This route is the exception, and the reason is what a probe would buy
- * here rather than any general principle. A filed console key is a
+ * These routes are the exception, and the reason is what a probe would
+ * buy here rather than any general principle. A filed console key is a
  * standing authority to enter this deployment as an admin, so the
  * interesting question for someone holding a stolen or stale bearer is
  * not "does this string name a row" but "is this the credential that can
@@ -37,18 +38,19 @@ use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
  * which is the only place it was ever a leak.
  *
  * Scope, precisely, because an earlier revision of this paragraph got it
- * wrong: it normalizes `401` and `403` **wherever on this route they come
- * from** — thrown by the gate, or RETURNED by anything downstream of it,
- * the controller included. It is not gate-specific, and it was never a
- * claim that a returned status is exempt.
+ * wrong: it normalizes `401` and `403` **wherever on a route it is
+ * mounted on they come from** — thrown by the gate, or RETURNED by
+ * anything downstream of it, the controller included. It is not
+ * gate-specific, and it was never a claim that a returned status is
+ * exempt.
  *
  * A `429` from the throttle in front of it is untouched (a rate limit
  * that lied about being a rate limit would be unusable), and so is every
- * other status: the controller's own refusals are `409` and `422`, which
- * pass through with their distinct messages because they describe the
- * DELIVERY, not who was asking.
+ * other status: the controller's own refusals are `404`, `409` and
+ * `422`, which pass through with their distinct messages because they
+ * describe the KEY the verb names, not who was asking.
  *
- * That is a standing constraint on this route, not an accident of
+ * That is a standing constraint on these routes, not an accident of
  * today's code: nothing behind this middleware may use `401` or `403` to
  * mean anything other than "not authorized here", because the viewer
  * will only ever see the one uniform body. A future controller path that

@@ -1,0 +1,220 @@
+<?php
+
+declare(strict_types=1);
+
+namespace ArtisanBuild\BuiltForCloud\Actions;
+
+use ArtisanBuild\BuiltForCloud\AuditActor;
+use ArtisanBuild\BuiltForCloud\Commands\ConsoleRetireKeyCommand;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleKey;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyRefusal;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyRetired;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyring;
+use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
+use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
+use ArtisanBuild\BuiltForCloud\LifecycleEventType;
+use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\DB;
+use Throwable;
+
+/**
+ * The ONE place a filed countersigning key stops being trusted through
+ * an operator surface (Console PRD D12) — the other half of the
+ * make-before-break rotation {@see FileConsoleKey} opens, and the caller
+ * whose auditing {@see ConsoleKeyring::retire()}'s docblock defers to.
+ *
+ * It exists because that primitive is reachable only from PHP inside the
+ * app. A deployment that has re-keyed could file and activate the
+ * incoming key over HTTP or the CLI and then had no operator path to
+ * stop trusting the outgoing one, which left every rotation permanently
+ * half-finished — two keys verifying, forever, with the older one's
+ * private half wherever it had been.
+ *
+ * Two transports reach this — {@see ManageConsoleKeys::retire} and
+ * {@see ConsoleRetireKeyCommand} — with the same arguments, so their
+ * EFFECTS are identical. Their AUTHORITY is not, and is not this class's
+ * business: each proves its own, above.
+ *
+ * ## Retiring the LAST ACTIVE key is permitted, and never by accident
+ *
+ * A deployment with nothing verifying can verify no assertion, so no
+ * operator can be handed to it until a fresh key is filed and activated
+ * — and the retired key's bytes can never be re-filed, so recovery needs
+ * a new keypair from the vendor rather than the one just retired.
+ *
+ * That is not a reason to refuse it. Ending delegated entry is a thing a
+ * deployment is entitled to decide, and a surface that refused outright
+ * would leave the only path to it inside a PHP console — which is the
+ * gap this class was written to close, reopened one key later. So it is
+ * permitted behind an affirmative `$confirmLastActiveKey`, and refused
+ * as {@see ConsoleKeyRefusal::LastActiveKey} without one.
+ *
+ * The check bites ONLY where the retirement would actually end
+ * verification: retiring a pending key, or one of two active keys,
+ * changes nothing about whether entry is possible and asks for no
+ * confirmation.
+ *
+ * **The ring is locked for the decision.** "Is this the last active key"
+ * is read before it is written, and two concurrent retirements of the
+ * last two active keys would otherwise each read a ring where the other
+ * key was still verifying, confirm nothing, and leave the deployment
+ * with no key between them.
+ *
+ * ## Retirement is idempotent, and says which call did it
+ *
+ * Retiring an already-retired key answers exactly as the first call did,
+ * except that `newly_retired` is false and `retired_at` is the FIRST
+ * call's instant. That is the same shape the credential revoke verb
+ * takes, and it is what a retry after a dropped connection needs: the
+ * state the caller asked for holds, and the answer says so without
+ * pretending this call is what produced it.
+ *
+ * One consequence, stated because it is the honest reading: **a repeat
+ * writes no second audit event.** One retirement, one event — an event
+ * per CALL would record retirements that never happened.
+ *
+ * Every call REQUIRES the caller's open transaction, exactly as
+ * {@see FileConsoleKey} and {@see LifecycleEventRecorder} do: the audit
+ * row is the record of the state change and must live or die with it.
+ */
+final readonly class RetireConsoleKey
+{
+    public function __construct(
+        private ConsoleKeyring $keyring,
+        private LifecycleEventRecorder $recorder,
+    ) {}
+
+    /**
+     * Stop trusting one filed key, auditing the transition.
+     *
+     * MUST be called inside the caller's transaction (the recorder
+     * enforces this and throws otherwise).
+     *
+     * @throws ConsoleKeyRefused when no key is on file under that id, or when it is the last active key and the caller did not confirm
+     */
+    public function __invoke(string $keyId, ?AuditActor $actor, bool $confirmLastActiveKey = false): ConsoleKeyRetired
+    {
+        // A malformed id cannot name a row, so it takes the same answer
+        // rather than a second refusal path that would have to describe
+        // unvalidated caller text.
+        if (! ConsoleKeyring::isValidKeyId($keyId)) {
+            throw ConsoleKeyRefused::because(ConsoleKeyRefusal::UnknownKeyId);
+        }
+
+        // The whole ring, LOCKED: the last-active-key decision below is
+        // a read that a write depends on, and a concurrent retirement
+        // must not be able to change the answer in between.
+        $ring = ConsoleKey::query()->lockForUpdate()->orderBy('key_id')->get();
+
+        $key = $ring->firstWhere('key_id', $keyId);
+
+        if (! $key instanceof ConsoleKey) {
+            throw ConsoleKeyRefused::because(ConsoleKeyRefusal::UnknownKeyId);
+        }
+
+        // ONE reading of the clock decides both halves, so a key cannot
+        // be active for the count and retired for the check.
+        $at = CarbonImmutable::now();
+
+        if ($key->isRetiredAt($at)) {
+            return $this->retired($key, newlyRetired: false);
+        }
+
+        $activeIds = $this->activeIdsIn($ring, $at);
+
+        if (! $confirmLastActiveKey && $activeIds === [$keyId]) {
+            throw ConsoleKeyRefused::because(ConsoleKeyRefusal::LastActiveKey);
+        }
+
+        $retired = $this->keyring->retire($keyId);
+
+        $remaining = array_values(array_filter($activeIds, static fn (string $id): bool => $id !== $keyId));
+
+        // ONE event, in the caller's own transaction, with the actor
+        // typed. `credential_id` stays NULL: that column names a row in
+        // the credential stores and a console key is neither — the same
+        // shape the filing events use, with the identity in the bounded
+        // note.
+        //
+        // `revoked` rather than an event of its own: retirement is the
+        // only revocation a console key has, and the filing half of this
+        // rotation already rides this stream, so an operator reading one
+        // rotation reads it as one contiguous story.
+        $this->recorder->record(
+            event: LifecycleEventType::Revoked,
+            actor: $actor,
+            note: 'console countersigning key retired: '.$retired->key_id
+                .'; keys still verifying: '.($remaining === [] ? 'none' : implode(', ', $remaining)),
+        );
+
+        return $this->retired($retired, newlyRetired: true);
+    }
+
+    /**
+     * Audit a REFUSED retirement, on its own transaction and
+     * best-effort, for the reasons {@see FileConsoleKey::recordRefusal}
+     * states: the refusal is why the caller's transaction rolled back,
+     * and an unreachable audit store must not turn a clean refusal into
+     * a 500.
+     *
+     * `$keyId` is written only when it is well-formed, so unvalidated
+     * caller text never reaches a row that renders in an operator's
+     * console.
+     */
+    public function recordRefusal(ConsoleKeyRefused $refused, ?AuditActor $actor, ?string $keyId = null): void
+    {
+        $named = $keyId !== null && ConsoleKeyring::isValidKeyId($keyId)
+            ? ' (key id '.$keyId.')'
+            : '';
+
+        try {
+            DB::transaction(function () use ($refused, $actor, $named): void {
+                $this->recorder->record(
+                    event: LifecycleEventType::DeniedAction,
+                    actor: $actor,
+                    note: 'console countersigning key retirement refused: '.$refused->reason->value.$named,
+                );
+            });
+        } catch (Throwable) {
+            // Best effort, exactly as the operator gate's own denial
+            // audit is ({@see EnsureCredentialAdmin}).
+        }
+    }
+
+    /**
+     * The result shape, reading what still verifies from the ring rather
+     * than from the pre-retirement snapshot.
+     */
+    private function retired(ConsoleKey $key, bool $newlyRetired): ConsoleKeyRetired
+    {
+        $active = array_map(
+            static fn (ConsoleKey $key): string => $key->key_id,
+            $this->keyring->active(),
+        );
+
+        return new ConsoleKeyRetired($key->key_id, $key->retired_at, $newlyRetired, array_values($active));
+    }
+
+    /**
+     * Every key id verifying at one instant, read from the LOCKED rows
+     * rather than by a second query — a re-read would be a second
+     * reading of the ring that the lock above exists to make
+     * unnecessary.
+     *
+     * @param  Collection<int, ConsoleKey>  $ring
+     * @return list<string>
+     */
+    private function activeIdsIn(Collection $ring, CarbonImmutable $at): array
+    {
+        return array_values(array_map(
+            static fn (ConsoleKey $key): string => $key->key_id,
+            array_filter(
+                $ring->all(),
+                static fn (ConsoleKey $key): bool => $key->isActiveAt($at),
+            ),
+        ));
+    }
+}
