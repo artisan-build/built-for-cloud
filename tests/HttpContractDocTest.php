@@ -809,6 +809,73 @@ final class HttpContractDocTest extends TestCase
     }
 
     /**
+     * G1 and G6: the heading scan, over the inputs that defeated its
+     * first revision in both directions.
+     *
+     * **THE SECTION SCAN WAS A FIX, AND THE FIX HAD A BUG.** Reading
+     * one `preg_match` for the heading — the first anywhere in the
+     * file, commented or not — broke both ways: a commented-out
+     * heading was found first and a declaration was judged to sit
+     * inside a section that does not exist, admitting the very class of
+     * input the declaration grammar had just been taught to refuse; and
+     * a declaration under the SECOND of two matching headings fell
+     * outside the single span computed and was rejected while standing
+     * exactly where the contract asks.
+     */
+    public function test_finds_the_versioning_section_past_a_commented_heading_and_a_repeated_one(): void
+    {
+        $window = '**RELEASE WINDOW: this document describes `bfc_version` 0.6.0; '
+            .'`BuiltForCloud::VERSION` is 0.5.0 until the tag lands.**';
+
+        $heading = ContractScan::DECLARATION_SECTION;
+        $body = PHP_EOL.PHP_EOL.'{"bfc_version": "0.6.0"}'.PHP_EOL;
+
+        $outside = ['the release-window declaration stands outside "## Versioning and compatibility", '
+            .'where this document says it stands'];
+
+        // THE FALSE ACCEPT. The only heading in this document is
+        // commented out, so there is no section for the declaration to
+        // stand in, and the pair must not pass.
+        $commentedHeading = '<!--'.PHP_EOL.$heading.PHP_EOL.'-->'.PHP_EOL.PHP_EOL.$window.$body;
+
+        $this->assertSame($outside, ContractScan::versionPairBreaksIn($commentedHeading, '0.5.0'));
+
+        // THE FALSE REJECT. The declaration stands under the second of
+        // two matching headings, which is inside a section by any
+        // reading of the contract.
+        $repeatedHeading = $heading.PHP_EOL.PHP_EOL.'Nothing here.'.PHP_EOL.PHP_EOL
+            .'## Something else'.PHP_EOL.PHP_EOL
+            .$heading.PHP_EOL.PHP_EOL.$window.$body;
+
+        $this->assertSame([], ContractScan::versionPairBreaksIn($repeatedHeading, '0.5.0'));
+
+        // The two neighbouring cases, so the fix is read as widening
+        // the search rather than as accepting anything: no heading at
+        // all still fails, and a `###` subsection is not a boundary.
+        $this->assertSame($outside, ContractScan::versionPairBreaksIn($window.$body, '0.5.0'));
+
+        $this->assertSame([], ContractScan::versionPairBreaksIn(
+            $heading.PHP_EOL.PHP_EOL.'### Changelog'.PHP_EOL.PHP_EOL.$window.$body,
+            '0.5.0',
+        ));
+
+        // G6. A declaration commented out INLINE beside a standing one
+        // is not the anchored sentence, so it was never removed as a
+        // declaration and the versions inside it read as the document
+        // spelling a second release — a false rejection whose
+        // diagnostic pointed nowhere near the cause. Commented regions
+        // are blanked before versions are read, so both spellings of a
+        // commented copy behave the same way.
+        $inline = $heading.PHP_EOL.PHP_EOL.$window.PHP_EOL.PHP_EOL.'<!-- '.$window.' -->'.$body;
+        $block = $heading.PHP_EOL.PHP_EOL.$window.PHP_EOL.PHP_EOL
+            .'<!--'.PHP_EOL.$window.PHP_EOL.'-->'.$body;
+
+        $this->assertSame(['0.6.0'], ContractScan::releaseVersionMentionsIn($inline));
+        $this->assertSame([], ContractScan::versionPairBreaksIn($inline, '0.5.0'));
+        $this->assertSame([], ContractScan::versionPairBreaksIn($block, '0.5.0'));
+    }
+
+    /**
      * F1 and F2: three words in front of the sentence, the sentence
      * mid-line, and the sentence under a different heading.
      *

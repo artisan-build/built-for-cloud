@@ -401,17 +401,23 @@ final class ContractScan
      * visibility.
      *
      * WHAT THE GRAMMAR DOES NOT COVER. Each entry names a CLASS of
-     * spelling, and nothing else — no counts, no quantifiers, no claims
-     * about how any renderer behaves, which is the surface that made
-     * the earlier `visible` wording wrong:
+     * spelling and then what follows from it. None carries a count, a
+     * quantifier, or a claim about how a renderer behaves — that last
+     * was the surface which made the earlier `visible` wording wrong.
      *
      *  - **A declaration whose characters are spelled some other way**
      *    — entity-encoded, or any re-spelling that is not the literal
-     *    sentence. Not recognised, in either direction.
-     *  - **A declaration inside a fenced code block.** Recognised.
-     *  - **A declaration inside raw HTML.** Recognised.
+     *    sentence. Not recognised in either direction, so such a line
+     *    neither declares a window nor counts toward a duplicate, and
+     *    a document carrying only one is treated as declaring nothing.
+     *  - **A declaration inside a fenced code block.** Recognised, so a
+     *    sample of the sentence in documentation-about-the-documentation
+     *    declares a window and a second one is a duplicate.
+     *  - **A declaration inside raw HTML.** Recognised, whatever the
+     *    element does with it.
      *  - **Whether the sentence renders, anywhere.** Outside this
-     *    entirely.
+     *    entirely: a green run is evidence about the bytes in this file
+     *    and about nothing a reader sees.
      *
      * The unclosed comment is recognised because it costs one pattern
      * and needs no renderer: an unterminated `<!--` opens a comment the
@@ -427,41 +433,19 @@ final class ContractScan
             return [];
         }
 
-        $comments = [];
-
-        // Closed comments, then one unclosed opener, which runs to the
-        // end of the file.
-        if (preg_match_all('/<!--.*?-->/s', $doc, $found, PREG_OFFSET_CAPTURE) !== false) {
-            foreach ($found[0] as $comment) {
-                $comments[] = [$comment[1], $comment[1] + strlen($comment[0])];
-            }
-        }
-
-        if (preg_match('/<!--(?!.*?-->)/s', $doc, $unclosed, PREG_OFFSET_CAPTURE) === 1) {
-            $comments[] = [$unclosed[0][1], strlen($doc)];
-        }
-
-        [$sectionFrom, $sectionTo] = self::sectionBounds($doc);
+        $comments = self::commentSpans($doc);
+        $sections = self::sectionIntervals($doc);
 
         $windows = [];
 
         foreach ($matches as $match) {
-            $offset = $match[0][1];
-            $commented = false;
-
-            foreach ($comments as [$from, $to]) {
-                if ($offset >= $from && $offset < $to) {
-                    $commented = true;
-
-                    break;
-                }
-            }
+            $offset = (int) $match[0][1];
 
             $windows[] = [
                 'pending' => $match[1][0],
                 'tagged' => $match[2][0],
-                'commented' => $commented,
-                'in_section' => $offset >= $sectionFrom && $offset < $sectionTo,
+                'commented' => self::within($offset, $comments),
+                'in_section' => self::within($offset, $sections),
             ];
         }
 
@@ -469,25 +453,108 @@ final class ContractScan
     }
 
     /**
-     * Where {@see DECLARATION_SECTION} starts and ends, as offsets into
-     * the document. A document without that heading has an empty
-     * section, so every declaration in it is outside one.
+     * Every span running from a {@see DECLARATION_SECTION} heading to
+     * the next top-level heading, as offset pairs.
      *
-     * @return array{0: int, 1: int}
+     * **A LIST, AND BUILT FROM UNCOMMENTED HEADINGS ONLY.** The first
+     * revision took one `preg_match` — the first heading anywhere in
+     * the file, whether or not it was commented out — and broke both
+     * ways. A commented-out heading was found first, so a declaration
+     * was judged to sit inside a section that does not exist and the
+     * pair passed: the same class of input the declaration grammar had
+     * just been taught to refuse, admitted one level up. And a
+     * declaration under the SECOND of two matching headings fell
+     * outside the one span that had been computed, so it was rejected
+     * while standing exactly where the contract asks.
+     *
+     * Both are consequences of reading one match instead of all of
+     * them, so this reads all of them. A declaration is in-section when
+     * it falls inside any span. Boundaries are uncommented `## ` lines,
+     * for the same reason: a commented-out heading does not end a
+     * section.
+     *
+     * `###` and deeper subsections are not boundaries, so a declaration
+     * under one of them is inside the section it belongs to.
+     *
+     * @return list<array{0: int, 1: int}>
      */
-    private static function sectionBounds(string $doc): array
+    private static function sectionIntervals(string $doc): array
     {
-        if (preg_match('/^'.preg_quote(self::DECLARATION_SECTION, '/').'\s*$/m', $doc, $heading, PREG_OFFSET_CAPTURE) !== 1) {
-            return [0, 0];
+        preg_match_all('/^## .*$/m', $doc, $matches, PREG_OFFSET_CAPTURE);
+
+        $comments = self::commentSpans($doc);
+
+        $headings = array_values(array_filter(
+            $matches[0],
+            static fn (array $heading): bool => ! self::within((int) $heading[1], $comments),
+        ));
+
+        $intervals = [];
+
+        foreach ($headings as $index => $heading) {
+            if (rtrim((string) $heading[0]) !== self::DECLARATION_SECTION) {
+                continue;
+            }
+
+            $intervals[] = [
+                (int) $heading[1],
+                isset($headings[$index + 1]) ? (int) $headings[$index + 1][1] : strlen($doc),
+            ];
         }
 
-        $from = $heading[0][1];
+        return $intervals;
+    }
 
-        if (preg_match('/^## /m', $doc, $next, PREG_OFFSET_CAPTURE, $from + strlen($heading[0][0])) === 1) {
-            return [$from, $next[0][1]];
+    /**
+     * Every HTML comment span in the document: the closed ones, and one
+     * unterminated opener, which runs to the end of the file.
+     *
+     * @return list<array{0: int, 1: int}>
+     */
+    private static function commentSpans(string $doc): array
+    {
+        $spans = [];
+
+        if (preg_match_all('/<!--.*?-->/s', $doc, $found, PREG_OFFSET_CAPTURE) !== false) {
+            foreach ($found[0] as $comment) {
+                $spans[] = [(int) $comment[1], (int) $comment[1] + strlen((string) $comment[0])];
+            }
         }
 
-        return [$from, strlen($doc)];
+        if (preg_match('/<!--(?!.*?-->)/s', $doc, $unclosed, PREG_OFFSET_CAPTURE) === 1) {
+            $spans[] = [(int) $unclosed[0][1], strlen($doc)];
+        }
+
+        return $spans;
+    }
+
+    /**
+     * The document with every HTML comment span blanked, keeping the
+     * offsets of everything else where they were.
+     */
+    private static function withoutComments(string $doc): string
+    {
+        foreach (self::commentSpans($doc) as [$from, $to]) {
+            $doc = substr_replace($doc, str_repeat(' ', $to - $from), $from, $to - $from);
+        }
+
+        return $doc;
+    }
+
+    /**
+     * Whether an offset falls inside any of the given spans.
+     *
+     * @param  list<array{0: int, 1: int}>  $spans
+     */
+    private static function within(int $offset, array $spans): bool
+    {
+        foreach ($spans as [$from, $to]) {
+            if ($offset >= $from && $offset < $to) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -652,6 +719,19 @@ final class ContractScan
      */
     private static function classifyVersions(string $doc): array
     {
+        // Commented regions first, then the declaration sentence. Both
+        // are removed for the same reason: neither is the document
+        // stating a release.
+        //
+        // **THE COMMENT PASS CLOSES A FALSE REJECTION.** A declaration
+        // commented out INLINE — `<!-- **RELEASE WINDOW: … **-->` on
+        // one line — is not the anchored sentence, so it was never
+        // removed as a declaration, and the two versions inside it were
+        // read as the document spelling a second release. A document
+        // with one standing declaration and a commented-out copy beside
+        // it was rejected, with a diagnostic about version counts that
+        // pointed nowhere near the cause.
+        $doc = self::withoutComments($doc);
         $doc = (string) preg_replace(self::RELEASE_WINDOW, ' ', $doc);
 
         preg_match_all(
