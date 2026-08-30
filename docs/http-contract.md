@@ -61,17 +61,8 @@ Two discriminators, reported by [`GET /bfc/meta`](#get-bfcmeta):
   text, has to spell the same one; the previous wording here claimed the example was the only such
   place, and the changelog below spelled it three more times.
 
-**RELEASE WINDOW: this document describes `bfc_version` 0.6.0; `BuiltForCloud::VERSION` is 0.5.0
-until the tag lands.** This document is written with the release it is part of, and the constant is
-bumped when that release is tagged — so during the window a deployment reports the lower number
-while this document describes the higher one. Branch on `capabilities` rather than on the version
-if you are integrating against a deployment inside one. The line above is machine-read: while the
-two differ, exactly one such line must stand in this section **in that exact form**, naming both
-halves correctly and with the pending version ahead of the tagged one; once the tag lands and the
-two agree it has to go.
-
 **What is checked is the form, not what a reader sees.** The check is a text scan over this file:
-it reads the sentence above spelled exactly that way and outside an HTML comment, and it takes no
+it reads a release-window declaration spelled exactly that way and outside an HTML comment, and it takes no
 position on how any renderer displays it. A declaration written some other way — entity-encoded,
 inside a fenced block, inside raw HTML — is not one it recognises, in either direction. **If you
 are relying on knowing whether a release window is open, read this section rather than trusting

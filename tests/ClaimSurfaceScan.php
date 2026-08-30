@@ -33,7 +33,7 @@ use SplFileInfo;
  * their evidence:
  *
  *  - **What the counts reject is a GATE.** Over the guarantee-bearing
- *    surfaces the withdrawn instrument finds 406 of 1,239 prose blocks
+ *    surfaces the withdrawn instrument finds 406 of 1,238 prose blocks
  *    carrying its vocabulary and 296 of those carrying neither a
  *    citation nor a residue note, so requiring every occurrence to be
  *    paired means writing 296 annotations, most onto sentences already
