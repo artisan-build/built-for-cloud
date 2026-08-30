@@ -809,8 +809,19 @@ final class HttpContractDocTest extends TestCase
     }
 
     /**
-     * F1 and F2: three words in front of the sentence, and the sentence
-     * under a different heading.
+     * F1 and F2: three words in front of the sentence, the sentence
+     * mid-line, and the sentence under a different heading.
+     *
+     * **THE DEFEATING INPUTS ARE SPELLED OUT, NOT ASSEMBLED.** The
+     * first revision of this test built its decoy with
+     * `ltrim($window, '*')`, which drove the anchor but left the input
+     * nowhere in the file as text: a reader could not see what was
+     * being refused, a grep for it found only the docblock describing
+     * it, and the string it produced kept a trailing `**` that the
+     * reported defeating input does not have. An anchor described in a
+     * comment and exercised through a helper is asserted rather than
+     * watched failing, which is the distinction this package's whole
+     * convention rests on.
      */
     public function test_refuses_a_decoy_release_window_and_one_outside_the_versioning_section(): void
     {
@@ -819,18 +830,45 @@ final class HttpContractDocTest extends TestCase
 
         $body = PHP_EOL.PHP_EOL.'{"bfc_version": "0.6.0"}'.PHP_EOL;
 
+        $tooManyVersions = ['the document spells more than one release version (0.6.0, 0.5.0), '
+            .'so which one the constant should be compared to has no answer'];
+
         // F1. The pattern matched `RELEASE WINDOW:` anywhere in a line,
-        // so a sentence that says the opposite carried it. Three words
-        // defeated the check — for an instrument whose job is catching
-        // drift, worse than not having one.
-        $decoy = ContractScan::DECLARATION_SECTION.PHP_EOL.PHP_EOL.'NOT A '.ltrim($window, '*').$body;
+        // so a sentence that says the OPPOSITE carried the substring
+        // and read as a standing declaration. Three words defeated the
+        // check — for an instrument whose job is catching drift, worse
+        // than not having one.
+        //
+        // Verbatim, as reported.
+        $decoy = ContractScan::DECLARATION_SECTION.PHP_EOL.PHP_EOL
+            .'NOT A RELEASE WINDOW: this document describes `bfc_version` 0.6.0; '
+            .'`BuiltForCloud::VERSION` is 0.5.0 until the tag lands.'.$body;
 
         $this->assertSame([], ContractScan::releaseWindowsIn($decoy));
+        $this->assertSame($tooManyVersions, ContractScan::versionPairBreaksIn($decoy, '0.5.0'));
+
+        // The same sentence, correctly delimited, but starting partway
+        // along a line rather than opening one. The anchor requires
+        // both halves — the `**` and the line boundary — so this is
+        // driven separately from the decoy above rather than assumed to
+        // follow from it.
+        $midLine = ContractScan::DECLARATION_SECTION.PHP_EOL.PHP_EOL
+            .'See the versioning rules above. '.$window.$body;
+
+        $this->assertSame([], ContractScan::releaseWindowsIn($midLine));
+        $this->assertSame($tooManyVersions, ContractScan::versionPairBreaksIn($midLine, '0.5.0'));
+
+        // THE POSITIVE CONTROL, over the same words on the same body:
+        // opening a line and delimited, it IS a declaration. Without
+        // this the two assertions above would be satisfied by a pattern
+        // that matched nothing at all.
+        $valid = ContractScan::DECLARATION_SECTION.PHP_EOL.PHP_EOL.$window.$body;
+
         $this->assertSame(
-            ['the document spells more than one release version (0.6.0, 0.5.0), so which one the '
-                .'constant should be compared to has no answer'],
-            ContractScan::versionPairBreaksIn($decoy, '0.5.0'),
+            [['pending' => '0.6.0', 'tagged' => '0.5.0', 'commented' => false, 'in_section' => true]],
+            ContractScan::releaseWindowsIn($valid),
         );
+        $this->assertSame([], ContractScan::versionPairBreaksIn($valid, '0.5.0'));
 
         // F2. The declaration exactly as written, under some other
         // heading. The contract says it stands in the versioning
