@@ -176,6 +176,21 @@ it('retires a filed key over HTTP and stops it verifying', function (): void {
     // leaves behind and the state this verb exists to end.
     expect(retirementActiveIds())->toBe(['k1', 'k2']);
 
+    // A pending key too, so "other keys are unchanged" is checked
+    // against a row in every lifecycle state rather than only the one
+    // that happens to be verifying.
+    $pending = ConsoleKey::query()->create([
+        'key_id' => 'k3-pending',
+        'public_key' => ConsoleKeyring::normalizePublicKey(consoleKeypair()->getPublicKey()->toHexString()),
+    ]);
+
+    $untouched = ConsoleKey::query()
+        ->whereIn('key_id', ['k2', 'k3-pending'])
+        ->orderBy('key_id')
+        ->get()
+        ->map(static fn (ConsoleKey $key): array => $key->only(['key_id', 'public_key', 'activated_at', 'retired_at']))
+        ->all();
+
     $response = $this->postJson(retirementUrl('k1'), [], [
         'Authorization' => $writer->bearerHeader(),
     ]);
@@ -192,6 +207,25 @@ it('retires a filed key over HTTP and stops it verifying', function (): void {
         ->and(consoleRefusal(consoleMint($outgoing, consoleClaims(), 'k1'))->reason)
         ->toBe(AssertionRefusalReason::RetiredKey)
         ->and(consoleVerify(consoleMint($incoming, consoleClaims(), 'k2'))->keyId)->toBe('k2');
+
+    // "Other keys are UNCHANGED" — the wording the CLI description and
+    // the contract now use, and it is checked field by field rather than
+    // inferred from what still verifies. The earlier wording was "other
+    // filed keys keep verifying", which is false of the pending row
+    // below and of any already-retired one.
+    expect(ConsoleKey::query()
+        ->whereIn('key_id', ['k2', 'k3-pending'])
+        ->orderBy('key_id')
+        ->get()
+        ->map(static fn (ConsoleKey $key): array => $key->only(['key_id', 'public_key', 'activated_at', 'retired_at']))
+        ->all())->toEqual($untouched);
+
+    // And the retired ROW is retained rather than removed, which is what
+    // keeps its material permanently unre-filable.
+    expect(ConsoleKey::query()->count())->toBe(3)
+        ->and(ConsoleKey::query()->where('key_id', 'k1')->sole()->public_key)
+        ->toBe(ConsoleKeyring::normalizePublicKey($outgoing->getPublicKey()->toHexString()))
+        ->and($pending->refresh()->retired_at)->toBeNull();
 });
 
 it('retires a filed key on the cli transport with identical effect', function (): void {
@@ -466,12 +500,18 @@ it('asks for no confirmation to retire a pending key or one of two active keys',
     expect(retirementActiveIds())->toBe(['k2']);
 });
 
-it('cannot be raced into leaving the ring with no active key', function (): void {
-    // The decision is a read the write depends on, so it is taken with
-    // the ring LOCKED. What is driven here is the property that decision
-    // protects, at the layer a single-connection test can observe it:
-    // the SECOND retirement re-reads the ring after the first committed,
-    // sees itself as the last active key, and refuses.
+it('refuses the second of two sequential retirements once it is the last active key', function (): void {
+    // SEQUENTIAL, and the title says so. The inputs are request one,
+    // commit, request two — there are no overlapping transactions here,
+    // so nothing about CONCURRENT retirement is established by this test
+    // passing. What it does establish: the last-active-key rule is read
+    // from the ring at each call rather than from anything cached, so a
+    // retirement that was fine a moment ago is refused once the ring has
+    // moved under it.
+    //
+    // The concurrent case needs a driver that honours row locks and is
+    // tracked as mutation debt (`console-key-retire-ring-lock`), not
+    // claimed by this title.
     retirementClaimedDeployment();
 
     $writer = retirementWriter();
@@ -484,10 +524,6 @@ it('cannot be raced into leaving the ring with no active key', function (): void
         ->assertStatus(409);
 
     expect(retirementActiveIds())->toBe(['k2']);
-
-    // The lock itself is a statement about a concurrency this suite's
-    // sqlite connection cannot stage; it is named in the debt ledger
-    // rather than claimed here.
 });
 
 // --------------------------------------------------- AC4 — the audit --
@@ -606,27 +642,12 @@ it('records nothing when the retirement transaction rolls back', function (): vo
         ->and(CredentialAuditEvent::query()->count())->toBe($before);
 });
 
-it('refuses to retire outside a transaction, so no audit row can outlive its state change', function (): void {
-    retirementClaimedDeployment();
-
-    $writer = retirementWriter();
-    retirementFiledKey('k1', $writer);
-    retirementFiledKey('k2', $writer);
-
-    // RefreshDatabase wraps this test in a transaction, so the guard is
-    // driven through the recorder's own contract rather than by trying
-    // to escape one: the action never opens a transaction of its own,
-    // which is what makes the caller's the one that governs.
-    $reflection = new ReflectionMethod(RetireConsoleKey::class, '__invoke');
-
-    expect($reflection->getNumberOfParameters())->toBe(3);
-
-    $source = (string) file_get_contents(dirname(__DIR__).'/src/Actions/RetireConsoleKey.php');
-    $invoke = substr($source, (int) strpos($source, 'public function __invoke'));
-    $invoke = substr($invoke, 0, (int) strpos($invoke, 'public function recordRefusal'));
-
-    expect($invoke)->not->toContain('DB::transaction');
-});
+// The outside-a-transaction case is NOT here. RefreshDatabase wraps
+// every test in this file in a transaction, so `transactionLevel()` is
+// never 0 and the case is unreachable — which is how the first version
+// of that check came to be a reflection scan over the action's source,
+// green for a weaker reason than its title claimed. It is driven for
+// real, against the ring, in `tests/ConsoleKeyRetirementTransactionTest.php`.
 
 // ------------------------------------------ AC5 — idempotency ---------
 
@@ -663,6 +684,76 @@ it('is idempotent, answering a repeat with the original instant and no new event
         ->assertJsonPath('console_key_retired.newly_retired', false)
         ->assertJsonPath('console_key_retired.retired_at', $retiredAt)
         ->assertJsonPath('console_key_retired.active_key_ids', ['k2']);
+});
+
+it('reports the ring as of each response while the key id status and retired_at stay fixed', function (): void {
+    // THE NARROWED CLAIM, driven by running the case it describes. An
+    // earlier revision of the contract said a repeat answers "the same
+    // object", which is false the moment the ring moves under it — and
+    // the first version of the idempotency test could not see that,
+    // because nothing changed between its two calls.
+    retirementClaimedDeployment();
+
+    $writer = retirementWriter();
+    retirementFiledKey('k1', $writer);
+    retirementFiledKey('k2', $writer);
+
+    $this->freezeTime();
+
+    $first = $this->postJson(retirementUrl('k1'), [], ['Authorization' => $writer->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('console_key_retired.active_key_ids', ['k2']);
+
+    $retiredAt = $first->json('console_key_retired.retired_at');
+
+    // The ring MOVES between the two calls.
+    $this->travel(120)->seconds();
+    retirementFiledKey('k3', $writer);
+
+    $repeat = $this->postJson(retirementUrl('k1'), [], ['Authorization' => $writer->bearerHeader()])->assertOk();
+
+    // Fixed by the retirement: three fields that do not move again.
+    $repeat->assertJsonPath('console_key_retired.key_id', 'k1')
+        ->assertJsonPath('console_key_retired.status', 'retired')
+        ->assertJsonPath('console_key_retired.retired_at', $retiredAt)
+        ->assertJsonPath('console_key_retired.newly_retired', false);
+
+    // NOT fixed, and deliberately: it answers "what verifies now".
+    $repeat->assertJsonPath('console_key_retired.active_key_ids', ['k2', 'k3']);
+
+    expect($repeat->json('console_key_retired.active_key_ids'))
+        ->not->toBe($first->json('console_key_retired.active_key_ids'));
+});
+
+it('ignores unknown body fields and reads only the literal confirmation', function (): void {
+    // The contract says `confirm_last_active_key` is the only field this
+    // route INTERPRETS, not that a body carrying anything else is
+    // refused. Run the case the sentence describes, in both directions.
+    retirementClaimedDeployment();
+
+    $writer = retirementWriter();
+    retirementFiledKey('k1', $writer);
+
+    // Unknown siblings ride along and change nothing: the confirmation
+    // is absent, so the last-active-key rule still refuses.
+    $this->postJson(retirementUrl('k1'), [
+        'confirm_last_active_key' => false,
+        'unexpected' => 'anything',
+        'key_id' => 'k9',
+    ], ['Authorization' => $writer->bearerHeader()])->assertStatus(409);
+
+    expect(retirementActiveIds())->toBe(['k1']);
+
+    // And with the literal confirmation present, the same unknown
+    // siblings do not stop it either.
+    $this->postJson(retirementUrl('k1'), [
+        'confirm_last_active_key' => true,
+        'unexpected' => 'anything',
+    ], ['Authorization' => $writer->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('console_key_retired.newly_retired', true);
+
+    expect(retirementActiveIds())->toBe([]);
 });
 
 it('writes no second audit event when an already-retired key is retired again', function (): void {

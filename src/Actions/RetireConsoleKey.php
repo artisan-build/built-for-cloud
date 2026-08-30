@@ -18,6 +18,7 @@ use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
+use LogicException;
 use Throwable;
 
 /**
@@ -65,12 +66,16 @@ use Throwable;
  *
  * ## Retirement is idempotent, and says which call did it
  *
- * Retiring an already-retired key answers exactly as the first call did,
- * except that `newly_retired` is false and `retired_at` is the FIRST
- * call's instant. That is the same shape the credential revoke verb
- * takes, and it is what a retry after a dropped connection needs: the
- * state the caller asked for holds, and the answer says so without
- * pretending this call is what produced it.
+ * Retiring an already-retired key answers `newly_retired: false` and the
+ * FIRST call's `retired_at`. That is the same shape the credential
+ * revoke verb takes, and it is what a retry after a dropped connection
+ * needs: the state the caller asked for holds, and the answer says so
+ * without pretending this call is what produced it.
+ *
+ * The answer is not a frozen copy of the first one — {@see ConsoleKeyRetired}
+ * says which parts move and why. `activeKeyIds` is read fresh on every
+ * call, so a repeat reports the ring as it stands rather than as it
+ * stood.
  *
  * One consequence, stated because it is the honest reading: **a repeat
  * writes no second audit event.** One retirement, one event — an event
@@ -79,6 +84,19 @@ use Throwable;
  * Every call REQUIRES the caller's open transaction, exactly as
  * {@see FileConsoleKey} and {@see LifecycleEventRecorder} do: the audit
  * row is the record of the state change and must live or die with it.
+ *
+ * **And the check is HERE, not borrowed from the recorder.** The
+ * recorder's identical guard runs after this action has already saved
+ * `retired_at`, so relying on it produced the one outcome the
+ * requirement exists to prevent: a key that had stopped verifying, a
+ * caller holding an exception, and no event naming the retirement. The
+ * check therefore runs before the lock and before any read.
+ *   Pinned by `tests/ConsoleKeyRetirementTransactionTest.php` — "refuses
+ *   to retire outside a database transaction, leaving the key verifying"
+ *   and "refuses an already-retired key outside a transaction too, so
+ *   the idempotent path cannot slip past the guard".
+ *
+ * @throws LogicException outside a transaction
  */
 final readonly class RetireConsoleKey
 {
@@ -93,10 +111,29 @@ final readonly class RetireConsoleKey
      * MUST be called inside the caller's transaction (the recorder
      * enforces this and throws otherwise).
      *
+     * @throws LogicException outside a transaction, before anything is read or written
      * @throws ConsoleKeyRefused when no key is on file under that id, or when it is the last active key and the caller did not confirm
      */
     public function __invoke(string $keyId, ?AuditActor $actor, bool $confirmLastActiveKey = false): ConsoleKeyRetired
     {
+        // FIRST, before the lock, before any read, and before anything
+        // can be written. Leaning on the recorder's identical check was
+        // not the same thing and the difference was the whole defect:
+        // the recorder is reached only AFTER `retired_at` has been
+        // saved, so a caller with no transaction open got a key that had
+        // stopped verifying, an exception, and no event anywhere naming
+        // the retirement. That is the property AC4 asks for, inverted.
+        //
+        // It applies to the already-retired path too, which writes
+        // nothing and could be argued out of it. Exempting that path
+        // would make "does this call need a transaction" depend on ring
+        // state the caller cannot see before calling.
+        if (DB::transactionLevel() === 0) {
+            throw new LogicException(
+                'A console key retirement records inside the transaction that performs it, never outside one.',
+            );
+        }
+
         // A malformed id cannot name a row, so it takes the same answer
         // rather than a second refusal path that would have to describe
         // unvalidated caller text.

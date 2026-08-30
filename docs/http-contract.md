@@ -1658,8 +1658,15 @@ credential death with reason `offboarding`. A repeat offboard appends nothing.
 The Console (Console PRD D12) signs a short-lived delegated-entry assertion with the PRIVATE
 half of a **per-deployment** Ed25519 keypair. This deployment holds only the PUBLIC half, on a
 key ring addressed by key id (`kid`). Two surfaces put a key on that ring — the claim-time
-exchange documented on the claim envelopes above, and the re-key verb below — and one takes a key
-off it, [the retire verb](#post-bfcconsolekeyskey_idretire).
+exchange documented on the claim envelopes above, and the re-key verb below. One surface stops a
+filed key verifying while RETAINING its row, [the retire verb](#post-bfcconsolekeyskey_idretire) —
+**no surface in this contract removes a key from the ring.** The retained row is what keeps a
+retired key's material permanently unre-filable, because the uniqueness rule below is a rule about
+rows that are on the ring. A retirement changes the retired key and **leaves every other key
+unchanged** — which is not the same as "every other key keeps verifying", and deliberately not
+worded that way: a filed key that is pending, or already retired, goes on doing what it was doing.
+*Pinned by* `tests/ConsoleKeyRetirementTest.php` ("retires a filed key over HTTP and stops it
+verifying").
 
 What the ring will hold, and what it will not:
 
@@ -1842,9 +1849,14 @@ The `kid` rides the path, because the verb acts on a key that already exists —
 body carries a key that does not. A `kid` is bounded to `[A-Za-z0-9._-]`, so it is a path segment
 without encoding and can carry no separator.
 
-**Request** — the body is optional and carries at most one field:
-`{"confirm_last_active_key": true}`. Anything other than the literal boolean `true` is read as
-absence, which is the safe reading; see the last-active-key rule below.
+**Request** — the body is optional. `confirm_last_active_key` is the only field this route
+INTERPRETS: `{"confirm_last_active_key": true}`. Anything other than the literal boolean `true` is
+read as absence, which is the safe reading; see the last-active-key rule below. Unknown sibling
+keys are **ignored, not refused** — compatibility rule 1 runs both ways, so a consumer sending a
+field a later release defines is not broken by an older one. Nothing here rejects a body for
+carrying more than it needs to.
+*Pinned by* `tests/ConsoleKeyRetirementTest.php` ("ignores unknown body fields and reads only the
+literal confirmation").
 
 - **200** — `{"console_key_retired": {"key_id": "k1", "status": "retired", "retired_at":
   "2026-08-30T12:00:00+00:00", "newly_retired": true, "active_key_ids": ["k2"]}}`. The key
@@ -1852,10 +1864,10 @@ absence, which is the safe reading; see the last-active-key rule below.
   sorted, and never includes the retired one — an **empty list means nothing verifies and no
   operator can be handed to this deployment** until a fresh key is filed and activated.
 - **200 on a repeat** — **this verb is idempotent, and says which call did the work.** Retiring an
-  already-retired key answers `200` with the same object, `newly_retired: false`, and the
-  **original** `retired_at` rather than this request's instant. So a client retrying after a
-  dropped connection gets the state it asked for and can still tell whether it is what produced
-  it. No second audit event is written; one retirement, one event.
+  already-retired key answers `200` with `newly_retired: false` and the **original** `retired_at`
+  rather than this request's instant. So a client retrying after a dropped connection gets the
+  state it asked for and can still tell whether it is what produced it. No second audit event is
+  written; one retirement, one event.
 - **403** — `{"message": "This request is not permitted to write console countersigning keys."}`
   — **every** pre-authorization failure, byte for byte, exactly as on the re-key verb and for the
   same reason: the `401`/`403` split would tell a caller holding a stolen or stale bearer whether
@@ -1872,6 +1884,15 @@ absence, which is the safe reading; see the last-active-key rule below.
   is locked for the last-active-key decision, so a concurrent retirement can time this one out.
   The transaction rolled back and retrying is safe.
 
+**What is stable across repeats, precisely.** `key_id`, `status` and `retired_at` are fixed by the
+retirement itself and do not move again. **`active_key_ids` is not** — it reports the ring **as of
+each response**, so a repeat issued after another key was filed and activated answers a longer list
+than the first did. That is the field doing its job rather than drifting: it is what an operator
+reads to see what verifies NOW, and a frozen copy of a ring that has since changed would be the
+misleading answer.
+*Pinned by* `tests/ConsoleKeyRetirementTest.php` ("reports the ring as of each response while the
+key id status and retired_at stay fixed").
+
 **Retiring the LAST ACTIVE key: permitted, confirmed, and never by accident.** A deployment with
 no key that verifies can verify no assertion, so nobody can be handed to it — and because a
 retired key's bytes can never be re-filed, recovery needs a **freshly generated keypair from the
@@ -1884,7 +1905,8 @@ nothing about whether entry is possible and asks for nothing.
 *Pinned by* `tests/ConsoleKeyRetirementTest.php` ("refuses to retire the last key that still
 verifies until the request confirms it", "retires the last active key on an explicit confirmation
 and says nothing verifies", "asks for no confirmation to retire a pending key or one of two
-active keys" and "cannot be raced into leaving the ring with no active key").
+active keys" and "refuses the second of two sequential retirements once it is the last active
+key").
 
 The rule is decided with the key ring locked (`SELECT … FOR UPDATE`), so **on a database that
 honours row locks** two retirements racing for the last two active keys cannot each read a ring in

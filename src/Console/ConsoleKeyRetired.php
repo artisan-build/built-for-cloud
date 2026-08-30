@@ -15,14 +15,25 @@ use Carbon\CarbonInterface;
  * It carries the key id, the instant it stopped verifying, whether THIS
  * call is what stopped it, and every key id still verifying afterwards.
  *
- * `newlyRetired` is the field that makes an idempotent verb honest. A
- * repeat retirement answers exactly as the first did except here, and
- * `retiredAt` is then the FIRST call's instant rather than this one's —
- * so a caller can tell "I retired it" from "it was already retired"
- * without comparing a timestamp against its own clock.
+ * `newlyRetired` is the field that makes an idempotent verb honest. On
+ * a repeat it is false and `retiredAt` is the FIRST call's instant
+ * rather than this one's — so a caller can tell "I retired it" from "it
+ * was already retired" without comparing a timestamp against its own
+ * clock.
  *
- * `activeKeyIds` is what an operator reads to see what the retirement
- * left behind. An empty list is the deliberate end of delegated entry
+ * **Three of the four are fixed by the retirement and one is not, and
+ * the difference is deliberate.** `keyId`, the `retired` status and
+ * `retiredAt` never move again. `activeKeyIds` is read at the moment
+ * each response is built, so a repeat issued after another key was filed
+ * and activated reports a LONGER list than the first did. That is the
+ * field doing its job: it answers "what verifies now", which is what an
+ * operator retiring a key is actually looking at, and a frozen copy of a
+ * ring that has since changed would be the misleading answer.
+ *   Pinned by `tests/ConsoleKeyRetirementTest.php` — "reports the ring
+ *   as of each response while the key id status and retired_at stay
+ *   fixed".
+ *
+ * An empty `activeKeyIds` is the deliberate end of delegated entry
  * ({@see RetireConsoleKey} refuses to produce one by accident).
  *
  * It holds no {@see ConsoleKey} model and no key material, for the

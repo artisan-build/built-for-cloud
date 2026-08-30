@@ -61,7 +61,13 @@ final class ConsoleRetireKeyCommand extends Command
         {--confirm-last-active-key : Retire it even if it is the last key still verifying, ending delegated entry until a fresh key is filed}
         {--local : Run against the local database, zero Cloud dependency}';
 
-    protected $description = 'Stop trusting a filed console countersigning key, permanently; other filed keys keep verifying';
+    // "other keys are unchanged", NOT "other keys keep verifying": the
+    // latter is false whenever the other filed keys are pending or
+    // already retired, which is exactly the case that leaves nothing
+    // verifying at all. And the row is RETAINED — retirement takes
+    // nothing off the ring, which is what keeps the material
+    // permanently unre-filable.
+    protected $description = 'Stop a filed console countersigning key verifying, permanently, retaining its row; other keys are unchanged';
 
     public function handle(RetireConsoleKey $retireConsoleKey): int
     {
