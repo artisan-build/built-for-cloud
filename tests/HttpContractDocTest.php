@@ -533,6 +533,457 @@ final class HttpContractDocTest extends TestCase
     }
 
     /**
+     * **THE PAIR, HELD WITHOUT REQUIRING THE TAG TO HAVE HAPPENED.**
+     *
+     * `bfc_version` in this document and `BuiltForCloud::VERSION` in the
+     * code are the same fact written twice, and nothing compared them:
+     * every test in this suite compares a response to the CONSTANT and
+     * none of them to the DOCUMENT, so the two read 0.6.0 and 0.5.0 for
+     * a whole release and the suite stayed green.
+     *
+     * A plain equality assertion is the wrong instrument. The pair is
+     * unequal ON PURPOSE for the length of a release window — the
+     * document is written with the release it describes, the constant is
+     * bumped when the tag is cut, and the tag follows the merge — so
+     * asserting equality would red the suite for the entire window and
+     * force the tag to happen before the merge, which is not how this
+     * package releases.
+     *
+     * So what is required is that a difference be DECLARED. While the
+     * two differ the document carries a line naming both halves, and it
+     * has to name the right two, in the form the scan recognises. Four
+     * things are then findings — either side changed alone, no
+     * declaration, a stale one once the tag lands, and more than one —
+     * and all four are driven in the test below this one. What that
+     * does NOT amount to is "drift cannot happen": the check reads a
+     * documented sentence in a documented form, and
+     * {@see ContractScan::releaseWindowsIn()} names the spellings that
+     * fall outside it.
+     *
+     * @see ContractScan::versionPairBreaksIn()
+     */
+    public function test_the_documented_release_and_the_constant_differ_only_where_the_document_declares_it(): void
+    {
+        $doc = $this->contractDoc();
+
+        // THE FLOOR FIRST. A parse that recognised no version at all
+        // would report no breaks, so the enumeration is asserted before
+        // anything is concluded from it — and the foreign bucket with
+        // it, because a version EXCLUDED from the comparison is the one
+        // way a mention could vanish from it quietly.
+        $this->assertNotEmpty(ContractScan::releaseVersionMentionsIn($doc));
+        $this->assertSame(['app_version: 1.4.2'], ContractScan::foreignVersionMentionsIn($doc));
+
+        $this->assertSame(
+            [],
+            ContractScan::versionPairBreaksIn($doc, BuiltForCloud::VERSION),
+            'docs/http-contract.md and BuiltForCloud::VERSION disagree in a way nothing declares.',
+        );
+
+        // The wider half of the same property: EVERY spelling of the
+        // release agrees, in prose as well as in the examples. The
+        // examples check above this one could not see the changelog's
+        // three prose mentions, and a document contradicting itself
+        // about its own release discriminator is the defect PR8 fixed by
+        // hand between two examples in this same file.
+        $this->assertSame(
+            [ContractScan::releaseVersionMentionsIn($doc)[0]],
+            array_values(array_unique(ContractScan::releaseVersionMentionsIn($doc))),
+            'docs/http-contract.md spells more than one release version: '
+            .implode(', ', array_unique(ContractScan::releaseVersionMentionsIn($doc))),
+        );
+    }
+
+    /**
+     * Proven able to fail, over fixture documents carrying each offence
+     * — including the one the shipped pair is in today, so the check is
+     * demonstrated on a real mismatch rather than only on the clean
+     * case.
+     */
+    public function test_names_a_version_pair_that_drifted_one_that_is_undeclared_and_a_declaration_left_behind(): void
+    {
+        $declared = <<<'MD'
+            ## Versioning and compatibility
+
+            **RELEASE WINDOW: this document describes `bfc_version` 0.6.0; `BuiltForCloud::VERSION` is 0.5.0
+            until the tag lands.**
+
+            ```json
+            {"bfc_version": "0.6.0", "app_version": "1.4.2"}
+            ```
+
+            The Console lands in 0.6.0.
+            MD;
+
+        // 1. THE SHIPPED SHAPE: a declared window over a real mismatch.
+        //    The wrap is deliberate — the declaration is a sentence in a
+        //    wrapped document, and a parse that only read it on one line
+        //    would be satisfied by a document nobody can write.
+        $this->assertSame(['pending' => '0.6.0', 'tagged' => '0.5.0'], ContractScan::releaseWindowIn($declared));
+        $this->assertSame([], ContractScan::versionPairBreaksIn($declared, '0.5.0'));
+
+        // 2. THE TAG LANDS. The two now agree and the declaration is
+        //    stale, which is its own finding: a window that never closes
+        //    is a licence to differ.
+        $this->assertSame(
+            ['the document and BuiltForCloud::VERSION both read 0.6.0, so the release window is over '
+                .'and its declaration must be removed'],
+            ContractScan::versionPairBreaksIn($declared, '0.6.0'),
+        );
+
+        // 3. SILENT DRIFT, which is what the criterion exists for: the
+        //    same document with no declaration at all.
+        $undeclared = ContractScan::DECLARATION_SECTION.PHP_EOL.PHP_EOL
+            .'```json'.PHP_EOL.'{"bfc_version": "0.6.0"}'.PHP_EOL.'```'.PHP_EOL;
+
+        $this->assertNull(ContractScan::releaseWindowIn($undeclared));
+        $this->assertSame(
+            ['the document describes 0.6.0 and BuiltForCloud::VERSION reads 0.5.0, and nothing '
+                .'declares the difference'],
+            ContractScan::versionPairBreaksIn($undeclared, '0.5.0'),
+        );
+
+        // 4. A DECLARATION THAT NAMES THE WRONG PAIR — the way a
+        //    declaration could otherwise become a rubber stamp. Both
+        //    halves are reported, not the first one found.
+        $stale = str_replace(
+            ['`bfc_version` 0.6.0;', 'is 0.5.0'],
+            ['`bfc_version` 0.7.0;', 'is 0.4.0'],
+            $declared,
+        );
+
+        $this->assertSame(
+            [
+                'the release-window declaration names 0.7.0 as pending while the document describes 0.6.0',
+                'the release-window declaration names 0.4.0 as tagged while BuiltForCloud::VERSION reads 0.5.0',
+            ],
+            ContractScan::versionPairBreaksIn($stale, '0.5.0'),
+        );
+
+        // 5. THE DOCUMENT CONTRADICTING ITSELF, in prose against an
+        //    example — the half `releaseVersionExamplesIn()` cannot see,
+        //    because it reads `"bfc_version": "…"` and nothing else.
+        $contradictory = '```json'.PHP_EOL.'{"bfc_version": "0.6.0"}'.PHP_EOL.'```'
+            .PHP_EOL.PHP_EOL.'The Console lands in 0.5.0.'.PHP_EOL;
+
+        $this->assertSame(['0.6.0'], ContractScan::releaseVersionExamplesIn($contradictory));
+        $this->assertSame(['0.6.0', '0.5.0'], ContractScan::releaseVersionMentionsIn($contradictory));
+        $this->assertSame(
+            ['the document spells more than one release version (0.6.0, 0.5.0), so which one the '
+                .'constant should be compared to has no answer'],
+            ContractScan::versionPairBreaksIn($contradictory, '0.6.0'),
+        );
+
+        // 6. THE EXCLUSION IS A LIST, NOT A FILTER. `app_version` is the
+        //    consuming application's release and is supposed to differ,
+        //    so it is classified out — and returned, so a reader can
+        //    see what was left out of the comparison.
+        $this->assertSame(['app_version: 1.4.2'], ContractScan::foreignVersionMentionsIn($declared));
+
+        // 7. AND HERE IS WHAT THAT EXCLUSION COSTS, asserted rather
+        //    than left as a sentence. A semver under a key that is not
+        //    exactly `bfc_version` is compared to nothing, so a
+        //    document can describe another package's release and stay
+        //    green. That is why the shipped check asserts the foreign
+        //    SET rather than trusting the release set alone.
+        $foreign = '{"bfc_version": "0.6.0", "scalpels_version": "0.7.0"}';
+
+        $this->assertSame(['0.6.0'], ContractScan::releaseVersionMentionsIn($foreign));
+        $this->assertSame([], ContractScan::versionPairBreaksIn($foreign, '0.6.0'));
+        $this->assertSame(['scalpels_version: 0.7.0'], ContractScan::foreignVersionMentionsIn($foreign));
+    }
+
+    /**
+     * A declaration inside a comment, closed or unclosed, two of them
+     * at once, and one that points the wrong way.
+     *
+     * **THESE ARE FACTS ABOUT THE FILE, NOT ABOUT A RENDERED PAGE**, and
+     * the distinction is the whole of what this round settled. The
+     * commented cases are recognised because text inside `<!-- … -->`,
+     * terminated or not, is inside a comment for every consumer of the
+     * bytes. Nothing here asks whether a reader would SEE a
+     * declaration: an entity-encoded one renders as a declaration and
+     * is not one in the grammar, and that is named as residue on
+     * {@see ContractScan::releaseWindowsIn()} rather than chased with a
+     * decoder — a claim about rendering enforced by a regex over
+     * Markdown is the defect this PR exists to stop, and each variant
+     * closed reveals the next.
+     */
+    public function test_refuses_a_release_window_inside_a_comment_a_duplicate_one_and_one_that_goes_backwards(): void
+    {
+        $window = '**RELEASE WINDOW: this document describes `bfc_version` %s; '
+            .'`BuiltForCloud::VERSION` is %s until the tag lands.**';
+
+        // Every fixture below opens with the heading the declaration
+        // must stand under, because the scan reads that section and not
+        // the whole file — which is what the contract says.
+        $section = ContractScan::DECLARATION_SECTION.PHP_EOL.PHP_EOL;
+
+        $body = PHP_EOL.PHP_EOL.'{"bfc_version": "0.6.0"}'.PHP_EOL;
+
+        // Commented out: parsed, and refused as no declaration at all,
+        // so the difference below it is undeclared rather than licensed.
+        $commented = $section.'<!--'.PHP_EOL.sprintf($window, '0.6.0', '0.5.0').PHP_EOL.'-->'.$body;
+
+        $this->assertNull(ContractScan::releaseWindowIn($commented));
+        $this->assertSame(
+            [['pending' => '0.6.0', 'tagged' => '0.5.0', 'commented' => true, 'in_section' => true]],
+            ContractScan::releaseWindowsIn($commented),
+        );
+        $this->assertSame(
+            ['the release-window declaration is inside an HTML comment, so no consumer of this file '
+                .'is handed it'],
+            ContractScan::versionPairBreaksIn($commented, '0.5.0'),
+        );
+
+        // E1: AND THE OPENER WITHOUT A TERMINATOR, which comments out
+        // the rest of the file. The first revision required `-->` and
+        // so reported this one as a standing declaration.
+        $unclosed = $section.'<!--'.PHP_EOL.sprintf($window, '0.6.0', '0.5.0').$body;
+
+        $this->assertNull(ContractScan::releaseWindowIn($unclosed));
+        $this->assertSame(
+            ['the release-window declaration is inside an HTML comment, so no consumer of this file '
+                .'is handed it'],
+            ContractScan::versionPairBreaksIn($unclosed, '0.5.0'),
+        );
+
+        // Duplicated: the first names the true pair, so a parse that
+        // stopped at the first match called this clean.
+        $duplicated = $section.sprintf($window, '0.6.0', '0.5.0').PHP_EOL.PHP_EOL
+            .sprintf($window, '0.9.9', '0.1.0').$body;
+
+        $this->assertNull(ContractScan::releaseWindowIn($duplicated));
+        $this->assertCount(2, ContractScan::releaseWindowsIn($duplicated));
+        $this->assertSame(
+            ['the document carries 2 release-window declarations in the recognised form, so which '
+                .'pair it declares has no answer'],
+            ContractScan::versionPairBreaksIn($duplicated, '0.5.0'),
+        );
+
+        // E2: AND THE BOUND ON THAT, ASSERTED RATHER THAN DESCRIBED. A
+        // second declaration spelled `0&#46;6&#46;0` renders as a
+        // second declaration and is not one in this grammar, so the
+        // document below reads as having exactly one. Deliberate: the
+        // alternative is a Markdown renderer in a test suite, and every
+        // encoding closed would reveal another. What stands behind the
+        // check is the documented form, and the contract now says that
+        // instead of promising visibility.
+        $encoded = $section.sprintf($window, '0.6.0', '0.5.0').PHP_EOL.PHP_EOL
+            .'**RELEASE WINDOW: this document describes `bfc_version` 0&#46;9&#46;9; '
+            .'`BuiltForCloud::VERSION` is 0&#46;1&#46;0 until the tag lands.**'.$body;
+
+        $this->assertCount(1, ContractScan::releaseWindowsIn($encoded));
+        $this->assertSame([], ContractScan::versionPairBreaksIn($encoded, '0.5.0'));
+
+        // Backwards: internally consistent and honest about both
+        // halves, and tagging it would move the package down a version.
+        $backwards = $section.sprintf($window, '0.5.0', '0.6.0').PHP_EOL.PHP_EOL
+            .'{"bfc_version": "0.5.0"}'.PHP_EOL;
+
+        $this->assertSame(
+            ['the release-window declaration has 0.5.0 pending behind 0.6.0 tagged, so tagging it '
+                .'would go backwards'],
+            ContractScan::versionPairBreaksIn($backwards, '0.6.0'),
+        );
+
+        // A visible, single, forward declaration over the same body is
+        // clean, so the three assertions above are read as findings
+        // rather than as a check that refuses everything.
+        $this->assertSame(
+            [],
+            ContractScan::versionPairBreaksIn($section.sprintf($window, '0.6.0', '0.5.0').$body, '0.5.0'),
+        );
+
+        // F5: A COMMENTED COPY BESIDE A STANDING ONE IS NOT A
+        // DUPLICATE. The grammar says a declaration is one that is not
+        // commented, and the duplicate count used to include commented
+        // occurrences anyway — a false rejection inside the scan's own
+        // stated rule.
+        $withCommentedCopy = $section.sprintf($window, '0.6.0', '0.5.0').PHP_EOL.PHP_EOL
+            .'<!--'.PHP_EOL.sprintf($window, '0.6.0', '0.5.0').PHP_EOL.'-->'.$body;
+
+        $this->assertCount(2, ContractScan::releaseWindowsIn($withCommentedCopy));
+        $this->assertCount(1, ContractScan::declaredWindowsIn($withCommentedCopy));
+        $this->assertSame([], ContractScan::versionPairBreaksIn($withCommentedCopy, '0.5.0'));
+    }
+
+    /**
+     * G1, G6 and H1: the heading scan, over each input that has
+     * defeated it — a commented-out heading, a repeated one, a
+     * commented declaration beside a standing one, and a heading inside
+     * a code fence.
+     *
+     * **THE SECTION SCAN WAS A FIX, AND THE FIX HAD A BUG.** Reading
+     * one `preg_match` for the heading — the first anywhere in the
+     * file, commented or not — broke both ways: a commented-out
+     * heading was found first and a declaration was judged to sit
+     * inside a section that does not exist, admitting the very class of
+     * input the declaration grammar had just been taught to refuse; and
+     * a declaration under the SECOND of two matching headings fell
+     * outside the single span computed and was rejected while standing
+     * exactly where the contract asks.
+     */
+    public function test_finds_the_versioning_section_past_a_commented_a_repeated_and_a_fenced_heading(): void
+    {
+        $window = '**RELEASE WINDOW: this document describes `bfc_version` 0.6.0; '
+            .'`BuiltForCloud::VERSION` is 0.5.0 until the tag lands.**';
+
+        $heading = ContractScan::DECLARATION_SECTION;
+        $body = PHP_EOL.PHP_EOL.'{"bfc_version": "0.6.0"}'.PHP_EOL;
+
+        $outside = ['the release-window declaration stands outside "## Versioning and compatibility", '
+            .'where this document says it stands'];
+
+        // THE FALSE ACCEPT. The only heading in this document is
+        // commented out, so there is no section for the declaration to
+        // stand in, and the pair must not pass.
+        $commentedHeading = '<!--'.PHP_EOL.$heading.PHP_EOL.'-->'.PHP_EOL.PHP_EOL.$window.$body;
+
+        $this->assertSame($outside, ContractScan::versionPairBreaksIn($commentedHeading, '0.5.0'));
+
+        // THE FALSE REJECT. The declaration stands under the second of
+        // two matching headings, which is inside a section by any
+        // reading of the contract.
+        $repeatedHeading = $heading.PHP_EOL.PHP_EOL.'Nothing here.'.PHP_EOL.PHP_EOL
+            .'## Something else'.PHP_EOL.PHP_EOL
+            .$heading.PHP_EOL.PHP_EOL.$window.$body;
+
+        $this->assertSame([], ContractScan::versionPairBreaksIn($repeatedHeading, '0.5.0'));
+
+        // The two neighbouring cases, so the fix is read as widening
+        // the search rather than as accepting anything: no heading at
+        // all still fails, and a `###` subsection is not a boundary.
+        $this->assertSame($outside, ContractScan::versionPairBreaksIn($window.$body, '0.5.0'));
+
+        $this->assertSame([], ContractScan::versionPairBreaksIn(
+            $heading.PHP_EOL.PHP_EOL.'### Changelog'.PHP_EOL.PHP_EOL.$window.$body,
+            '0.5.0',
+        ));
+
+        // H1. A FENCED SAMPLE OF THE HEADING IS NOT A HEADING. A code
+        // fence containing the versioning heading created a section
+        // that does not exist, so a declaration after it passed — the
+        // commented-heading defect in another container. Boundaries are
+        // located with comments and fences blanked, so both directions
+        // have to be driven: the fenced heading must not create a
+        // section, and a real heading after a fenced one must still be
+        // found.
+        $fence = '```md'.PHP_EOL.$heading.PHP_EOL.'```';
+
+        $this->assertSame(
+            $outside,
+            ContractScan::versionPairBreaksIn($fence.PHP_EOL.PHP_EOL.$window.$body, '0.5.0'),
+        );
+
+        $this->assertSame([], ContractScan::versionPairBreaksIn(
+            $fence.PHP_EOL.PHP_EOL.$heading.PHP_EOL.PHP_EOL.$window.$body,
+            '0.5.0',
+        ));
+
+        // Tilde fences are the same container spelled differently.
+        $this->assertSame($outside, ContractScan::versionPairBreaksIn(
+            '~~~'.PHP_EOL.$heading.PHP_EOL.'~~~'.PHP_EOL.PHP_EOL.$window.$body,
+            '0.5.0',
+        ));
+
+        // G6. A declaration commented out INLINE beside a standing one
+        // is not the anchored sentence, so it was never removed as a
+        // declaration and the versions inside it read as the document
+        // spelling a second release — a false rejection whose
+        // diagnostic pointed nowhere near the cause. Commented regions
+        // are blanked before versions are read, so both spellings of a
+        // commented copy behave the same way.
+        $inline = $heading.PHP_EOL.PHP_EOL.$window.PHP_EOL.PHP_EOL.'<!-- '.$window.' -->'.$body;
+        $block = $heading.PHP_EOL.PHP_EOL.$window.PHP_EOL.PHP_EOL
+            .'<!--'.PHP_EOL.$window.PHP_EOL.'-->'.$body;
+
+        $this->assertSame(['0.6.0'], ContractScan::releaseVersionMentionsIn($inline));
+        $this->assertSame([], ContractScan::versionPairBreaksIn($inline, '0.5.0'));
+        $this->assertSame([], ContractScan::versionPairBreaksIn($block, '0.5.0'));
+    }
+
+    /**
+     * F1 and F2: three words in front of the sentence, the sentence
+     * mid-line, and the sentence under a different heading.
+     *
+     * **THE DEFEATING INPUTS ARE SPELLED OUT, NOT ASSEMBLED.** The
+     * first revision of this test built its decoy with
+     * `ltrim($window, '*')`, which drove the anchor but left the input
+     * nowhere in the file as text: a reader could not see what was
+     * being refused, a grep for it found only the docblock describing
+     * it, and the string it produced kept a trailing `**` that the
+     * reported defeating input does not have. An anchor described in a
+     * comment and exercised through a helper is asserted rather than
+     * watched failing, which is the distinction this package's whole
+     * convention rests on.
+     */
+    public function test_refuses_a_decoy_release_window_and_one_outside_the_versioning_section(): void
+    {
+        $window = '**RELEASE WINDOW: this document describes `bfc_version` 0.6.0; '
+            .'`BuiltForCloud::VERSION` is 0.5.0 until the tag lands.**';
+
+        $body = PHP_EOL.PHP_EOL.'{"bfc_version": "0.6.0"}'.PHP_EOL;
+
+        $tooManyVersions = ['the document spells more than one release version (0.6.0, 0.5.0), '
+            .'so which one the constant should be compared to has no answer'];
+
+        // F1. The pattern matched `RELEASE WINDOW:` anywhere in a line,
+        // so a sentence that says the OPPOSITE carried the substring
+        // and read as a standing declaration. Three words defeated the
+        // check — for an instrument whose job is catching drift, worse
+        // than not having one.
+        //
+        // Verbatim, as reported.
+        $decoy = ContractScan::DECLARATION_SECTION.PHP_EOL.PHP_EOL
+            .'NOT A RELEASE WINDOW: this document describes `bfc_version` 0.6.0; '
+            .'`BuiltForCloud::VERSION` is 0.5.0 until the tag lands.'.$body;
+
+        $this->assertSame([], ContractScan::releaseWindowsIn($decoy));
+        $this->assertSame($tooManyVersions, ContractScan::versionPairBreaksIn($decoy, '0.5.0'));
+
+        // The same sentence, correctly delimited, but starting partway
+        // along a line rather than opening one. The anchor requires
+        // both halves — the `**` and the line boundary — so this is
+        // driven separately from the decoy above rather than assumed to
+        // follow from it.
+        $midLine = ContractScan::DECLARATION_SECTION.PHP_EOL.PHP_EOL
+            .'See the versioning rules above. '.$window.$body;
+
+        $this->assertSame([], ContractScan::releaseWindowsIn($midLine));
+        $this->assertSame($tooManyVersions, ContractScan::versionPairBreaksIn($midLine, '0.5.0'));
+
+        // THE POSITIVE CONTROL, over the same words on the same body:
+        // opening a line and delimited, it IS a declaration. Without
+        // this the two assertions above would be satisfied by a pattern
+        // that matched nothing at all.
+        $valid = ContractScan::DECLARATION_SECTION.PHP_EOL.PHP_EOL.$window.$body;
+
+        $this->assertSame(
+            [['pending' => '0.6.0', 'tagged' => '0.5.0', 'commented' => false, 'in_section' => true]],
+            ContractScan::releaseWindowsIn($valid),
+        );
+        $this->assertSame([], ContractScan::versionPairBreaksIn($valid, '0.5.0'));
+
+        // F2. The declaration exactly as written, under some other
+        // heading. The contract says it stands in the versioning
+        // section; the scan read the whole file, so moving it kept the
+        // pin green.
+        $moved = ContractScan::DECLARATION_SECTION.PHP_EOL.PHP_EOL.'Nothing here.'.PHP_EOL.PHP_EOL
+            .'## Appendix'.PHP_EOL.PHP_EOL.$window.$body;
+
+        $this->assertSame(
+            [['pending' => '0.6.0', 'tagged' => '0.5.0', 'commented' => false, 'in_section' => false]],
+            ContractScan::releaseWindowsIn($moved),
+        );
+        $this->assertSame(
+            ['the release-window declaration stands outside "## Versioning and compatibility", '
+                .'where this document says it stands'],
+            ContractScan::versionPairBreaksIn($moved, '0.5.0'),
+        );
+    }
+
+    /**
      * **The version signal, checked rather than asserted.**
      *
      * `api_version` stays 2 across this release, so what tells a

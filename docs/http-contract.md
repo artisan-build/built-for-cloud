@@ -56,8 +56,33 @@ Two discriminators, reported by [`GET /bfc/meta`](#get-bfcmeta):
   type changes, or the semantics of an existing field change. It does **not** bump for additive
   changes.
 - **`bfc_version`** (string, semver — the value in the [`GET /bfc/meta`](#get-bfcmeta) example
-  below, which is the one place this document spells the current release) — the package release,
-  for feature detection at finer grain than the major, alongside the `capabilities` array.
+  below) — the package release, for feature detection at finer grain than the major, alongside the
+  `capabilities` array. Every place this document spells that release, in an example or in running
+  text, has to spell the same one; the previous wording here claimed the example was the only such
+  place, and the changelog below spelled it three more times.
+
+**RELEASE WINDOW: this document describes `bfc_version` 0.6.0; `BuiltForCloud::VERSION` is 0.5.0
+until the tag lands.** This document is written with the release it is part of, and the constant is
+bumped when that release is tagged — so during the window a deployment reports the lower number
+while this document describes the higher one. Branch on `capabilities` rather than on the version
+if you are integrating against a deployment inside one. The line above is machine-read: while the
+two differ, exactly one such line must stand in this section **in that exact form**, naming both
+halves correctly and with the pending version ahead of the tagged one; once the tag lands and the
+two agree it has to go.
+
+**What is checked is the form, not what a reader sees.** The check is a text scan over this file:
+it reads the sentence above spelled exactly that way and outside an HTML comment, and it takes no
+position on how any renderer displays it. A declaration written some other way — entity-encoded,
+inside a fenced block, inside raw HTML — is not one it recognises, in either direction. **If you
+are relying on knowing whether a release window is open, read this section rather than trusting
+that the check would have caught its absence.** What is compared against it is this document's own
+`bfc_version`, spelled bare or under that exact key; a version given under any other key is not
+compared to anything, and neither is a version spelled in a release note.
+*Pinned by* `tests/HttpContractDocTest.php` ("the documented release and the constant differ only
+where the document declares it", "names a version pair that drifted one that is undeclared and a
+declaration left behind", "refuses a release window inside a comment a duplicate one and one that
+goes backwards", "refuses a decoy release window and one outside the versioning section" and "finds
+the versioning section past a commented a repeated and a fenced heading").
 
 The rules a consumer may rely on:
 
@@ -2641,6 +2666,20 @@ detail and never said to be unreadable reads exactly like one you can query.
 
 `GET /bfc/meta` advertises `app-action-audit-emit`, and the verb is the point: this deployment
 **records** app-action events. It does not say they can be fetched.
+
+This sentence is held against what the package's routes REACH, not against how they are spelled.
+Every registered route is classified by whether its action can arrive at the event or ledger
+tables — through the classes it names in code, transitively, stopping at the one emission door —
+so a listing mounted under a name that mentions neither the stream nor auditing is still reported.
+What the walk does not cover, as classes rather than as a count: classes outside this package;
+names built at runtime, read from config or resolved through a container alias; middleware attached
+to a route, and views it renders, neither of which is walked; and closure actions, which have no
+class to walk from.
+*Pinned by* `tests/AppActionAuditTest.php` ("advertises the app-action emit capability without
+promising a way to read the stream", "names a route that reads the app-action stream under a name
+that mentions neither", "follows a read one class past the route, and stops at the emission door",
+"pins the emission door's public surface, so a verb cannot be ADDED to it unnoticed" and "runs no
+read against the stream on either of the emission door's verbs").
 
 ### Storage
 
