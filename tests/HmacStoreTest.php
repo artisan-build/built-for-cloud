@@ -141,6 +141,27 @@ it('fails loudly, naming the version, when a ciphertext key-version is in no rin
         ->toThrow(HmacKeyUnreadable::class, $encrypted->keyVersion);
 });
 
+it('refuses a wrong version even while the ciphertext is decryptable by a ring key', function (): void {
+    // The version SELECTS the key; it is never a hint. A row claiming a
+    // version that matches no ring key must fail loudly even when the
+    // ciphertext itself would decrypt under one of them — the opposite
+    // behaviour ("try the whole ring, return whatever decrypts") is the
+    // mac-roulette this method exists to prevent, and a test that only
+    // reads correctly-stamped rows cannot tell the two apart.
+    $keyring = app(HmacKeyring::class);
+
+    $oldKey = (string) config('app.key');
+    $encryptedUnderOld = $keyring->encrypt('decryptable-but-mislabelled');
+
+    // Staged rotation: the old key STAYS in the ring, so the ciphertext
+    // is decryptable — but the row carries a version nothing stamps.
+    config()->set('app.key', 'base64:'.base64_encode(random_bytes(32)));
+    config()->set('app.previous_keys', [$oldKey]);
+
+    expect(fn (): string => $keyring->decrypt($encryptedUnderOld->ciphertext, str_repeat('0', 16)))
+        ->toThrow(HmacKeyUnreadable::class);
+});
+
 it('reports an APP_KEY cutover in progress exactly while any hmac row carries a non-primary key-version', function (): void {
     $keyring = app(HmacKeyring::class);
 
