@@ -365,3 +365,49 @@ it('aborts the sweep when the lock lease cannot be renewed — ownership lost mi
     // remain to cross, and a re-run resumes them.
     expect(app(HmacKeyring::class)->cutoverInProgress())->toBeTrue();
 });
+
+it('does not clobber a row that was re-keyed with a fresh key while the sweep was reading it', function (): void {
+    // The per-row update is guarded on the version the sweep READ, so a
+    // concurrent re-key (the exchange generates a NEW signing key) that
+    // lands between the sweep's read and its write is never overwritten
+    // by a stale rewrite of the OLD key — the fresher write stands. The
+    // race is staged deterministically: the moment the sweep's chunk
+    // SELECT returns, the row is re-keyed under the write-primary with a
+    // DIFFERENT plaintext, exactly the interleaving the guard exists
+    // for. (The lock normally forbids this interleaving; the guard is
+    // what stands when a writer is not lock-held, and it is asserted
+    // here on its own.)
+    $originalKey = bin2hex(random_bytes(32));
+    $row = Credential::factory()->hmac($originalKey)->create();
+
+    stageAppKeyRotation();
+
+    $concurrentKey = bin2hex(random_bytes(32));
+    $rekeyed = false;
+
+    DB::listen(function ($query) use (&$rekeyed, $row, $concurrentKey): void {
+        if (! $rekeyed && str_contains($query->sql, 'select * from "credentials"')) {
+            $rekeyed = true;
+
+            // The winning concurrent writer: a fresh key, encrypted and
+            // stamped under the write-primary before the sweep writes.
+            $encrypted = app(HmacKeyring::class)->encrypt($concurrentKey);
+            Credential::query()->whereKey($row->id)->update([
+                'secret_ciphertext' => $encrypted->ciphertext,
+                'secret_key_version' => $encrypted->keyVersion,
+            ]);
+        }
+    });
+
+    expect(Artisan::call('bfc:hmac:rewrap', ['--chunk' => 1]))->toBe(0);
+
+    /** @var Credential $row */
+    $row = $row->refresh();
+    $keyring = app(HmacKeyring::class);
+
+    // The concurrent re-key WON: what is stored decrypts to the fresh
+    // key under the write version — the sweep refused to overwrite it.
+    expect($row->secret_key_version)->toBe($keyring->writeVersion())
+        ->and($keyring->decrypt((string) $row->secret_ciphertext, $row->secret_key_version))->toBe($concurrentKey)
+        ->and($keyring->cutoverInProgress())->toBeFalse();
+});
