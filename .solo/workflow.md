@@ -25,16 +25,21 @@ via Packagist (`^0.1`). This is a **library** (no app shell).
 - command: `composer install --no-interaction`.
 - post-install: none required (library; no .env, no app DB).
 
-## Harness map (role → runtime; decorrelate by ROLE/FRAMING, not lineage)
-- implementer: **Claude — Solo `agent_tool_id 3`.**
-  ⚠️ **Do NOT use OpenCode (id 2) on this machine** — it hangs on a Kitty graphics probe under the Solo
-  PTY and never becomes ready (same failure the scalpels_app profile documents). Corrected 2026-08-23.
-- adversarial reviewer: **Codex, one-shot via `codex exec` in a Bash call — NOT a Solo agent** (its
-  interactive TUI dies under the Solo PTY here). Security framing (command-injection, secret handling,
-  auth/privilege), which keeps the reviewer off the implementer's model lineage. Invoke as:
-  `codex exec --sandbox danger-full-access --cd <worktree> "$(cat brief.md)" </dev/null > <outfile> 2>&1`
-  (background it and poll the outfile). ⚠️ **`</dev/null` is MANDATORY** — without it `codex exec` reads
-  stdin forever and hangs, looking exactly like a slow review.
+## Harness map (role → runtime)
+
+**Resolve every role through `~/Herd/brain/playbooks/resolve-agent-role.md` against
+`~/Herd/brain/agents.json`.** That file is the fleet-wide authority; this profile does not restate it.
+
+The copied runtime bindings, hardcoded Solo `agent_tool_id`s, and obsolete claims that OpenCode and
+Codex could not run under Solo's PTY were removed on 2026-08-31. Fleet bindings change, ids drift when
+tools are re-added, and both runtimes have since run successfully under Solo.
+
+- Decorrelate review by **role and framing, not model lineage**. The adversarial reviewer focuses on
+  command injection, secret handling, authentication, and privilege boundaries.
+- Spawn every harness in the intended worktree: **opencode** takes the worktree path as its last
+  positional argument, **codex** takes `-C <path>`, and **claude** takes `--add-dir <path>`.
+- When invoking `codex exec` in a Bash call, redirect stdin with `</dev/null`. Without it, a
+  backgrounded process appends stdin to the prompt and hangs on a pipe that never closes.
 
 ## Toolchain conformance — the ride-along rule (STANDING, all projects)
 
