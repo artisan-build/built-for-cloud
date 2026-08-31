@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
+use Illuminate\Contracts\Debug\ExceptionHandler as ExceptionHandlerContract;
+use Illuminate\Foundation\Exceptions\Handler;
+use Illuminate\Http\Exceptions\HttpResponseException;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Route;
 use Livewire\LivewireManager;
@@ -19,6 +23,12 @@ final class ConsoleOptionalLivewireTest extends TestCase
         );
 
         config(['built-for-cloud.console.reentry_url' => 'https://scalpels.test/console/enter']);
+
+        /** @var Handler $handler */
+        $handler = $this->app->make(ExceptionHandlerContract::class);
+        $handler->renderable(
+            static fn (HttpResponseException $exception): JsonResponse => new JsonResponse(['replaced' => true], 599),
+        );
 
         Route::middleware([StartSession::class, 'bfc.console'])
             ->post('/console-plain', fn (): array => ['unexpected' => true]);

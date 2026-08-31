@@ -12,6 +12,7 @@ use Closure;
 use Illuminate\Auth\Middleware\Authenticate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Livewire\LivewireManager;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -119,7 +120,14 @@ final class EnsureConsoleSession
             $request->getRequestUri(),
         ]);
 
-        return (new JsonResponse($payload, 401, ['BFC-Console-Reentry' => '1']))->throwResponse();
+        $response = new JsonResponse($payload, 401, ['BFC-Console-Reentry' => '1']);
+
+        if (app()->bound(LivewireManager::class)
+            && app(LivewireManager::class)->isLivewireRequest()) {
+            $response->throwResponse();
+        }
+
+        return $response;
     }
 
     private function reentryUrl(): ?string
