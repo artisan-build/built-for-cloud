@@ -108,10 +108,19 @@ it('does not distinguish a revoked credential from an unknown one', function ():
 it('denies the fallback token on the bfc guard and resolves no credential', function (): void {
     config(['built-for-cloud.fallback_token' => 'the-fallback-secret']);
 
+    // A resolvable row must be present: the denial is only meaningful when
+    // authenticating the fallback secret would have resolved something.
+    $minted = $this->mintCredential();
+
     $this->getJson('/bfc-guarded', ['Authorization' => 'Bearer the-fallback-secret'])
         ->assertUnauthorized();
 
     expect(Credential::query()->whereNotNull('last_used_at')->count())->toBe(0);
+
+    // The row itself stays fully resolvable — the denial is about the
+    // presented secret, not a dead store.
+    $this->getJson('/bfc-guarded', ['Authorization' => $minted->bearerHeader()])
+        ->assertOk();
 
     // The legacy registry keeps its fallback behaviour for legacy consumers.
     expect((new TokenRegistry)->resolve('the-fallback-secret'))->toBe(TokenRegistry::FALLBACK);
