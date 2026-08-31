@@ -40,6 +40,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
 use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
+use ArtisanBuild\BuiltForCloud\Exceptions\UnsupportedSessionDriver;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleEnter;
@@ -122,6 +123,10 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        if (config('session.driver') === 'database') {
+            throw UnsupportedSessionDriver::database();
+        }
+
         // Surface selection (PRD 1.14, fleet F2): each family below is
         // mounted only when its `built-for-cloud.surfaces.*` key says so
         // — whole families, never single routes (the claim surfaces are

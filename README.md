@@ -23,6 +23,14 @@ The service provider is auto-discovered. Publish the config if you want to tweak
 php artisan vendor:publish --tag=built-for-cloud-config
 ```
 
+### Session drivers
+
+Built for Cloud supports Laravel's non-database session drivers, including `cookie`, `redis`, `file`,
+and `array`. Laravel Cloud injects `cookie` by default, and `redis` is the recommended step up when a
+more robust session store is needed. The package refuses to boot with `database` sessions because
+they are intended for local development and hobby sites and cannot safely store delegated Console
+actor identifiers in Laravel's numeric `sessions.user_id` column.
+
 ## API tokens
 
 Tokens are stored **hashed** in an `api_tokens` table (this package ships the migration). A token
