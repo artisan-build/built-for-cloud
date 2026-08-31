@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\Audit\AppActionActor;
 use ArtisanBuild\BuiltForCloud\Audit\AppActionEvent;
+use ArtisanBuild\BuiltForCloud\Audit\AppActionOutboxEntry;
 use ArtisanBuild\BuiltForCloud\Audit\AppActionReason;
 use ArtisanBuild\BuiltForCloud\Audit\AppActionRecorder;
 use ArtisanBuild\BuiltForCloud\Audit\AppActorType;
@@ -67,4 +68,31 @@ it('refuses a direct model write made outside a transaction', function (): void 
     // case is reachable here — so the table does not exist to read. The
     // refusal happening BEFORE any SQL is the property, and a read that
     // could only ever fail would be a check dressed up as one.
+});
+
+it('leaves no event behind when an emission outside a transaction is refused', function (): void {
+    // The schema is created in-situ for THIS test alone, so the refusal
+    // can be checked against what it actually left behind and not only
+    // against the exception it throws. (The tests above run without a
+    // schema on purpose, and a shared beforeEach would change the ground
+    // they were written on.) Testbench rebuilds the in-memory database
+    // per test, so the migration leaves nothing behind for the next one.
+    $this->artisan('migrate');
+
+    expect(DB::transactionLevel())->toBe(0);
+
+    expect(fn (): mixed => app(AppActionRecorder::class)->record(
+        action: ConsoleAction::ConsoleEntered,
+        actor: AppActionActor::localUser((new User)->forceFill(['id' => 7])),
+        reason: AppActionReason::ConsoleEntry,
+    ))->toThrow(LogicException::class, 'transaction');
+
+    // The refusal happens BEFORE the savepoint exists and before any SQL
+    // runs, so nothing can have been written — asserted, not assumed,
+    // because a recorder that "helpfully" opened a transaction of its
+    // own would commit an event no action ever performed, and on a
+    // migrated database that commit would be invisible to the tests
+    // above.
+    expect(AppActionEvent::query()->count())->toBe(0)
+        ->and(AppActionOutboxEntry::query()->count())->toBe(0);
 });
