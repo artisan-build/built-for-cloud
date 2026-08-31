@@ -80,6 +80,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
+use Livewire\LivewireManager;
 use Throwable;
 
 final class BuiltForCloudServiceProvider extends ServiceProvider
@@ -232,6 +233,12 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             // than a generic one. It enforces no clock of its own —
             // ConsoleGuard does that on every route.
             $router->aliasMiddleware('bfc.console', EnsureConsoleSession::class);
+
+            // Livewire remains optional; its provider is what supplies this binding.
+            if ($this->app->bound(LivewireManager::class)) {
+                $this->app->make(LivewireManager::class)
+                    ->addPersistentMiddleware(EnsureConsoleSession::class);
+            }
 
             if ($this->surfaceEnabled('routes')) {
                 $this->mountRoutes($router);

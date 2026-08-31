@@ -119,7 +119,7 @@ final class EnsureConsoleSession
             $request->getRequestUri(),
         ]);
 
-        return new JsonResponse($payload, 401, ['BFC-Console-Reentry' => '1']);
+        return (new JsonResponse($payload, 401, ['BFC-Console-Reentry' => '1']))->throwResponse();
     }
 
     private function reentryUrl(): ?string
