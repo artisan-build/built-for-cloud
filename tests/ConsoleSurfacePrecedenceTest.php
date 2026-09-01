@@ -34,6 +34,11 @@ uses(RefreshDatabase::class);
  * `bfc.ability`) are unaffected and are deliberately not touched: they
  * never consult a session principal at all, so there is no principal for
  * a delegated session to disagree with.
+ *
+ * Co-resident cases below are DEFENCE IN DEPTH. They construct the state
+ * manually because successful authentication now evicts the other guard;
+ * D14 still has to fail safely if a restored session or future login path
+ * bypasses that runtime eviction.
  */
 beforeEach(function (): void {
     // The mounted personal surface needs an app declaration that can
@@ -140,7 +145,7 @@ it('refuses the admin gate after a console refusal rather than falling back to a
     $this->getJson('/admin-only')->assertStatus(403);
 });
 
-// ─── The admin gate CONSUMES the resolved principal, exactly ────────────────
+// ─── Defence in depth: manually constructed D14 precedence ─────────────────
 
 it('admits a delegated actor whose own handoff carried the admin role', function (): void {
     $actor = consoleActor(role: ConsoleRole::Admin);

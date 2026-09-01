@@ -11,8 +11,10 @@ use ArtisanBuild\BuiltForCloud\Exceptions\AssertionRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\DelegatedActorDeactivated;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RecordingExceptionHandler;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ThrowingSessionHandler;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
 use Illuminate\Auth\Events\Authenticated;
 use Illuminate\Auth\Events\Login;
+use Illuminate\Auth\SessionGuard;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Session\Session;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -62,6 +64,52 @@ it('writes the session state and the login together, so neither can exist withou
     foreach (ConsoleSession::keys() as $key) {
         expect(session()->exists($key))->toBeTrue();
     }
+});
+
+it('evicts a co-resident local principal after successful Console entry', function (): void {
+    $user = User::query()->create([
+        'name' => 'Local User',
+        'email' => 'local@example.com',
+        'password' => 'irrelevant',
+    ]);
+
+    /** @var SessionGuard $localGuard */
+    $localGuard = Auth::guard('web');
+    $localGuard->login($user);
+
+    expect(session()->has($localGuard->getName()))->toBeTrue();
+
+    consoleRedeem();
+
+    expect(session()->has($localGuard->getName()))->toBeFalse()
+        ->and(Auth::guard('web')->user())->toBeNull();
+});
+
+it('leaves the delegated session alive when Console login dispatches its Login event', function (): void {
+    $actor = consoleRedeem();
+
+    expect(session()->has(consoleGuardSessionKey()))->toBeTrue()
+        ->and(ConsoleSession::hasState(app(Session::class)))->toBeTrue()
+        ->and(consoleGuard()->actor()?->getKey())->toBe($actor->getKey());
+});
+
+it('evicts the delegated principal after a successful local login', function (): void {
+    consoleRedeem();
+
+    $user = User::query()->create([
+        'name' => 'Local User',
+        'email' => 'local@example.com',
+        'password' => 'irrelevant',
+    ]);
+
+    /** @var SessionGuard $localGuard */
+    $localGuard = Auth::guard('web');
+    $localGuard->login($user);
+
+    expect(session()->has(consoleGuardSessionKey()))->toBeFalse()
+        ->and(ConsoleSession::hasState(app(Session::class)))->toBeFalse()
+        ->and($localGuard->user()?->getAuthIdentifier())->toBe($user->getAuthIdentifier())
+        ->and(session()->get($localGuard->getName()))->toBe($user->getAuthIdentifier());
 });
 
 // ─── A deactivated actor cannot be logged in by the handoff API ─────────────
@@ -285,7 +333,7 @@ it('compensates on any throwable from the login path, not only on a Login listen
         ->and(ConsoleSession::hasState(app(Session::class)))->toBeFalse();
 });
 
-it('does not touch a co-resident session when the refusal happens before any session write', function (): void {
+it('leaves a co-resident local login intact when redemption fails before any session write', function (): void {
     // A contained actor is refused at the locked read, BEFORE anything
     // is written, so the compensation does not run and an unrelated
     // local session in the same browser survives. Compensation is for
@@ -293,12 +341,21 @@ it('does not touch a co-resident session when the refusal happens before any ses
     $actor = consoleActor();
     $actor->deactivate();
 
-    session()->put('unrelated_state', 'still-here');
+    $user = User::query()->create([
+        'name' => 'Local User',
+        'email' => 'local@example.com',
+        'password' => 'irrelevant',
+    ]);
+
+    /** @var SessionGuard $localGuard */
+    $localGuard = Auth::guard('web');
+    $localGuard->login($user);
 
     expect(fn (): DelegatedActor => consoleRedeem())
         ->toThrow(DelegatedActorDeactivated::class);
 
-    expect(session()->get('unrelated_state'))->toBe('still-here')
+    expect(session()->get($localGuard->getName()))->toBe($user->getAuthIdentifier())
+        ->and($localGuard->user()?->getAuthIdentifier())->toBe($user->getAuthIdentifier())
         ->and(session()->has(consoleGuardSessionKey()))->toBeFalse();
 });
 

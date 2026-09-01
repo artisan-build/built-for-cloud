@@ -526,9 +526,11 @@ it('never carries a delegated attribution on a non-delegated resolution', functi
         ->and($local->delegatedSessionPresent())->toBeFalse();
 });
 
-it('never carries a co-resident actor claims on a non-delegated resolution', function (): void {
+it('keeps manually constructed co-resident claims out as defence in depth', function (): void {
     $actor = consoleActor(role: ConsoleRole::Admin, onBehalfOf: 'Acme Agency');
 
+    // Successful authentication no longer produces this state. Construct
+    // it directly so D14 still fails safely if runtime eviction is bypassed.
     // The actor being PRESENT on a local resolution is exactly what the
     // broad local-only refusal answers on — and what the admin gate's
     // exactness depends on NOT leaking into claims: `delegated` false
