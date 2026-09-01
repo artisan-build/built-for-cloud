@@ -5,6 +5,7 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
 use ArtisanBuild\BuiltForCloud\Actions\OffboardSubject;
 use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesCredentialVerbs;
@@ -147,9 +148,15 @@ it('contains the whole account in one action: every credential state, codes, inv
         'last_activity' => now()->getTimestamp(),
     ]);
 
-    offboardViaHttp(['subject_type' => 'external_consumer', 'subject_ref' => 'acme'])
-        ->assertOk()
-        ->assertExactJson(['offboarded' => true, 'fully_contained' => true]);
+    // Database sessions are now refused by the global HTTP guard, so drive
+    // the shared action directly to keep its database-session sweep covered.
+    $result = app(OffboardSubject::class)(
+        OffboardOptions::fromInput(['subject_type' => 'external_consumer', 'subject_ref' => 'acme']),
+        AuditActor::operatorIntegration('offboard-test'),
+    );
+
+    expect($result->applied)->toBeTrue()
+        ->and($result->fullyContained())->toBeTrue();
 
     // Every credential in every lifecycle state is dead — active, grace,
     // pending bearer, pending hmac, and the legacy row.
@@ -606,18 +613,24 @@ it('contains the accounts accepted integration invitations created (Fix 1)', fun
     ]);
 
     // The integration offboards its subject (version 2, target derived).
-    offboardViaHttp([
+    // Use the shared action because this fixture deliberately selects the
+    // database session driver, which no HTTP request may now reach.
+    $result = app(OffboardSubject::class)(OffboardOptions::fromInput([
         'integration_namespace' => 'github-sponsors',
         'event_id' => 'evt-offboard-2',
         'entitlement_version' => 2,
         'external_subject' => 'sponsor-x',
-    ])->assertStatus(202);
+    ]), AuditActor::operatorIntegration('offboard-test'));
+
+    expect($result->acknowledged)->toBeTrue();
 
     // The created account is dead: registry row, sessions, reset tokens,
     // and any credential bound to them — full containment.
     expect(OffboardedSubject::userIsOffboarded((string) $created->getKey()))->toBeTrue()
         ->and(DB::table('sessions')->count())->toBe(0)
         ->and(DB::table('password_reset_tokens')->count())->toBe(0);
+
+    config(['session.driver' => 'array']);
 
     $this->getJson('/offboard-guarded', ['Authorization' => $boundCredential->bearerHeader()])->assertUnauthorized();
 
