@@ -13,8 +13,9 @@ use LogicException;
 
 /**
  * The package's emission point for the app-action audit stream (Console
- * PRD D17): one call appends the event row AND its dedup ledger row, in
- * the caller's own transaction.
+ * PRD D17): one call appends the event row AND its dedup ledger row on
+ * the default database connection. They share the action's transaction
+ * only when the action uses that same connection.
  *
  * **THIS CLASS IS THE BOUNDARY THE STREAM'S GUARANTEES ARE ABOUT.**
  * Every one of them — a bounded action from a compile-time vocabulary, a
@@ -50,10 +51,11 @@ use LogicException;
  * **THE STREAM IS TRANSACTIONAL OR IT IS FICTION** — the same ruling
  * {@see LifecycleEventRecorder} already carries, and for the same
  * reason: an event written outside the action's transaction is a record
- * that can outlive the thing it records. This class opens no transaction
- * of its own, because one it opened would commit independently of the
- * caller's, which is precisely the failure the requirement exists to
- * prevent.
+ * that can outlive the thing it records. This class opens no outer
+ * transaction of its own, because one it opened would commit
+ * independently of the caller's, which is precisely the failure the
+ * requirement exists to prevent. It also accepts no connection: the
+ * facade calls and both audit models below resolve the default connection.
  *
  * **THE TWO ROWS ARE ATOMIC WITH EACH OTHER, AND THAT IS ENFORCED
  * RATHER THAN ASKED FOR.** The pair is written inside a SAVEPOINT
@@ -82,15 +84,20 @@ use LogicException;
  * that fire model events, and not a boundary.
  *
  * **WHAT IS STILL THE CALLER'S TO CLOSE.** All the guard can establish
- * is that A transaction is open — never that the business action
- * happened in THAT one. An app that commits its own write, opens a
- * second transaction and only then calls `record()` gets a pair atomic
- * with each other and with nothing else, and no check here can see it.
- * So: **the event and the ledger row are always atomic with each other;
- * they are atomic with the ACTION only when the caller performs both
- * inside one transaction it opened.** The package's own emitter does —
- * `ConsoleEnter` writes the entry and its event together — and that is a
- * property of the caller, not of this class.
+ * is that A transaction is open on the default connection — never that
+ * the business action happened in THAT one, or even on that connection.
+ * If an action transaction uses another connection and no default
+ * transaction is open, this recorder refuses the emission. If an
+ * independent default transaction is open, the guard passes and the pair
+ * is written there; it can then commit or roll back independently of the
+ * action, and no check here can see the mismatch. So: **the event and the
+ * ledger row are always atomic with each other; they are atomic with the
+ * ACTION only when the caller performs both inside one transaction on the
+ * default connection.** Sharing a physical database under different
+ * connection names is not enough. Arranging this is the consumer's
+ * responsibility. The package's own emitter does — `ConsoleEnter` writes
+ * the entry and its event together on the default connection — and that
+ * is a property of the caller, not of this class.
  *   Pinned by `tests/RecorderTransactionGuardTest.php` — "refuses to
  *   record an app action outside a database transaction" and "refuses a
  *   direct model write made outside a transaction". Both live there
@@ -133,8 +140,10 @@ use LogicException;
 final class AppActionRecorder
 {
     /**
-     * Append one app-action event and its dedup ledger row, inside the
-     * caller's transaction.
+     * Append one app-action event and its dedup ledger row inside the
+     * transaction already open on the default database connection. They
+     * share the action's transaction only when the action uses that same
+     * connection.
      *
      * `$naturalKey` is the caller's own name for THIS action — an
      * invoice id, a mint digest — and it is the CONDITION on the only

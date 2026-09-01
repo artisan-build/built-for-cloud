@@ -10,10 +10,13 @@ use Illuminate\Support\Facades\Schema;
 /**
  * The app-action stream's DEDUP LEDGER (Console PRD D17): for each
  * successful `AppActionRecorder` emission, one row here and one event
- * row, inserted in the SAME transaction as the action they record.
- * Nothing in the package updates or prunes either; an app writing or
- * deleting its own rows can still make the pair incomplete, which the
- * limits below state in full.
+ * row, inserted in the SAME transaction as the action they record only
+ * when the action and the default-connection audit models share a
+ * connection. The recorder does not select or compare the action's
+ * connection; arranging that precondition is the consumer's
+ * responsibility. Nothing in the package updates or prunes either row;
+ * an app writing or deleting its own rows can still make the pair
+ * incomplete, which the limits below state in full.
  *
  * The table is named for the outbox PATTERN D17 names, and the pattern is
  * what the write side does. The delivery half does not exist — nothing

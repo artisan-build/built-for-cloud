@@ -195,12 +195,13 @@ use Throwable;
  * that it is not extended.
  *
  * IT IS EMITTED INSIDE {@see spendAndRedeem()}'s TRANSACTION — the same
- * one that holds the burn and the redemption — so an entry that rolls
- * back records nothing, and the door cannot admit an operator without
- * recording that it did. It fails CLOSED for the same reason the
- * refusal audit does: if the event cannot be written, the transaction
- * fails, the session is compensated, and no `303` is served. An
- * unrecorded entry is not served.
+ * one that holds the burn and the redemption. All three use the default
+ * database connection, satisfying the app-action stream's connection
+ * precondition, so an entry that rolls back records nothing, and the door
+ * cannot admit an operator without recording that it did. It fails CLOSED
+ * for the same reason the refusal audit does: if the event cannot be
+ * written, the transaction fails, the session is compensated, and no
+ * `303` is served. An unrecorded entry is not served.
  *
  * THAT PROPERTY RUNS ONE WAY, and the other direction is named rather
  * than left to be inferred. The event attests that the REDEMPTION
@@ -415,11 +416,11 @@ final class ConsoleEnter
 
                 $actor = $this->guard()->redeem($token);
 
-                // Inside the same transaction as the burn and the
-                // redemption, and after them: the event describes an
-                // operator who was actually admitted, and an entry that
-                // rolls back records nothing. It throws rather than
-                // swallowing, so this transaction — and with it the
+                // Inside the same default-connection transaction as the
+                // burn and the redemption, and after them: the event
+                // describes an operator who was actually admitted, and an
+                // entry that rolls back records nothing. It throws rather
+                // than swallowing, so this transaction — and with it the
                 // door — fails closed on an entry it could not record.
                 $this->auditEntry($assertion, $actor, $session);
             });

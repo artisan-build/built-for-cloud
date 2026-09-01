@@ -40,6 +40,11 @@ use LogicException;
  * digest dedup key — is a property of **what the package writes through
  * the recorder**. None
  * of them is a property of what a row in this table can contain.
+ * "Transactional" has a connection precondition: this model and the
+ * recorder use the default database connection, so the event shares the
+ * action's transaction only when the action uses that same connection.
+ * {@see AppActionRecorder} states the mismatch behavior and the
+ * consumer's responsibility in full.
  *
  * **THE RESIDUE, and it is the load-bearing sentence: an app holding
  * this model can write its own database directly, and the package
@@ -61,9 +66,9 @@ use LogicException;
  * a bounded-identifier case of a real {@see AppAction} vocabulary, an
  * actor type outside {@see AppActorType}, a delegated actor whose ref
  * carries no type qualifier, an `on_behalf_of` on any other actor type,
- * and a write with no transaction open. **No claim in this package
- * depends on that list being complete**, and it demonstrably is not: it
- * validates the SHAPE of what it is handed, so a ref of
+ * and a write with no default-connection transaction open. **No claim in
+ * this package depends on that list being complete**, and it demonstrably
+ * is not: it validates the SHAPE of what it is handed, so a ref of
  * `bfc-console:not-an-id` satisfies the qualifier check, and any write
  * that does not fire `creating` skips it entirely.
  *   Pinned by `tests/AppActionAuditTest.php` — "refuses a direct model

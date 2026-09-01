@@ -2388,7 +2388,9 @@ mint").
 credential-scoped. A successful entry is audited on the
 [app-action stream](#the-app-action-audit-stream) instead — one `console-entered` event, typed as
 the delegated actor that was admitted, written inside the same transaction as the burn and the
-redemption. It fails **closed**: an entry that cannot be recorded is not served, and one whose
+redemption. All three writes use the default database connection, which is the precondition that
+makes this one transaction rather than three operations against independently committing
+connections. It fails **closed**: an entry that cannot be recorded is not served, and one whose
 transaction rolls back leaves no event. What a successful entry also leaves is the shadow-actor
 row's refreshed `last_handoff_*` copy and its `updated_at`. Verification FAILURES are audited in
 full on the credential stream, which is what D13 requires.
@@ -2832,27 +2834,35 @@ read against the stream on either of the emission door's verbs").
 ### Storage
 
 For each successful emission, one row in `bfc_app_action_events` and one row in
-`bfc_app_action_outbox`, written in the transaction **already open on the caller's connection**. An
-emission attempted outside a transaction is refused rather than opening one of its own — the
-emission point never opens a transaction of its own, because one it opened would commit
-independently of the caller's.
+`bfc_app_action_outbox`, written through the audit models' **default Laravel database connection**.
+The same-transaction guarantee applies only when the action uses that same connection and is
+performed inside the transaction that contains the emission. Two connection names are two
+connection instances for this purpose, even when they point at the same physical database.
+
+The recorder neither accepts nor discovers the action's connection. Its transaction guard checks
+only the default connection. If the action runs in a transaction on another connection and no
+default-connection transaction is open, the emission is refused. If an independent transaction is
+already open on the default connection, the recorder writes there and cannot detect the mismatch:
+the event and ledger can then commit or roll back independently of the action.
 
 **The two rows are always atomic with each other**, and that is enforced rather than requested: the
-pair is written inside a SAVEPOINT within the caller's transaction, so a failed ledger insert takes
-the event row with it before the error reaches the caller. **An app that catches a recorder failure
-and commits anyway still cannot end up with an event that has no ledger row.**
+pair is written inside a SAVEPOINT within the default-connection transaction, so a failed ledger
+insert takes the event row with it before the error reaches the caller. **An app that catches a
+recorder failure and commits anyway still cannot end up with an event that has no ledger row.**
 
 **Whether the pair is atomic with the ACTION is the calling application's to arrange**, and this is
 the sentence to read before relying on the stream. All the emission point can check is that *a*
-transaction is open; nothing available to it can tell whether the business write happened in that
-same one. An app that commits its invoice update, opens a second transaction and only then records
-gets two rows that are atomic with each other and with nothing else.
+transaction is open on the default connection; it cannot tell whether the business write happened
+in that transaction or on that connection. An app that commits its invoice update, opens a second
+transaction and only then records gets two rows that are atomic with each other and with nothing
+else.
 
 **What a consuming app must do to get the guarantee: perform the action and the emission inside ONE
-transaction it opened itself.** Do that and a rolled-back action takes both rows with it, so nothing
-is ever recorded about something that did not happen — the stream is transactional, or it is
-fiction. This package's own emitter is written that way: `POST /bfc/console/enter` writes the entry
-and its event in one transaction, and serves no entry it could not record.
+transaction it opened itself, on the default connection used by the audit models.** Do that and a
+rolled-back action takes both rows with it, so nothing is ever recorded about something that did
+not happen — the stream is transactional, or it is fiction. This package's own emitter is written
+that way: `POST /bfc/console/enter` writes the entry and its event on the default connection in one
+transaction, and serves no entry it could not record.
 *Pinned by* `tests/ConsoleEnterAuditTest.php` ("records no entry event when the entry transaction
 rolls back" and "does not serve an entry it could not record").
 
@@ -2870,9 +2880,9 @@ resolution, which cannot sequence two rows written in the same second.
 
 What it does give is dedup, durably. `dedup_key` is UNIQUE, and that index is what makes **one
 event per CALLER-IDENTIFIED action** a database property of what the emission point writes: a
-second emission of the same logical action fails the insert and takes the transaction — the action
-included — with it. `event_id` is unique too, so "one ledger row per event" is a database property
-as well.
+second emission of the same logical action fails the insert and takes the default-connection
+transaction — including the action when it meets the same-connection precondition above — with it.
+`event_id` is unique too, so "one ledger row per event" is a database property as well.
 
 **Caller-identified is a condition, and it is the whole of the difference.** The emission point
 hashes a natural key the CALLER supplies — its own name for this action: an invoice id, a mint
