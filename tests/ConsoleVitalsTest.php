@@ -163,6 +163,35 @@ it('reports the real queue backlog, oldest pending job included', function (): v
         ->and($response->json('health'))->toBe('ok');
 });
 
+it('ages the oldest pending job per request, not per snapshot', function (): void {
+    // The cached snapshot stores the job's raw created_at TIMESTAMP; the
+    // age is derived on every poll from the current clock. A refactor
+    // that cached the DERIVED age instead would look identical on a
+    // single read — the number is right on the first poll — and would
+    // then freeze: every later poll would report the age as of the
+    // snapshot. Two polls across a time jump are what can see it.
+    config(['built-for-cloud.vitals.queue_cache_seconds' => 300]);
+
+    DB::table('jobs')->insert([
+        ['queue' => 'default', 'payload' => '{}', 'attempts' => 0, 'reserved_at' => null, 'available_at' => now()->getTimestamp(), 'created_at' => now()->subSeconds(90)->getTimestamp()],
+    ]);
+
+    $first = $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
+        ->assertOk()
+        ->json('queue.oldest_pending_age_seconds');
+
+    $this->travel(60)->seconds();
+
+    $second = $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
+        ->assertOk()
+        ->json('queue.oldest_pending_age_seconds');
+
+    // The SAME cached snapshot, sixty seconds later: the age grew, so
+    // the number was derived per request from the stored timestamp.
+    expect($first)->toBeGreaterThanOrEqual(90)
+        ->and($second)->toBeGreaterThanOrEqual($first + 55);
+});
+
 // ---------------------------------------------------------------- AC2 --
 
 /**
