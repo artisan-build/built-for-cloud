@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Audit;
 
+use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Credential;
@@ -58,7 +59,7 @@ enum AppActorType: string
 
     /**
      * A token from the legacy `api_tokens` store
-     * ({@see \ArtisanBuild\BuiltForCloud\ApiToken}), identified by its
+     * ({@see ApiToken}), identified by its
      * model key in that store's UUID id space.
      */
     case LegacyApiToken = 'legacy_api_token';

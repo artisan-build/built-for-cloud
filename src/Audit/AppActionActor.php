@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Audit;
 
-use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipal;
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;

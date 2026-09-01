@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\Audit\AppAction;
 use ArtisanBuild\BuiltForCloud\Audit\AppActionActor;
 use ArtisanBuild\BuiltForCloud\Audit\AppActionEvent;
@@ -12,7 +13,6 @@ use ArtisanBuild\BuiltForCloud\Audit\AppActorType;
 use ArtisanBuild\BuiltForCloud\Audit\AppendOnlyBuilder;
 use ArtisanBuild\BuiltForCloud\Audit\ConsoleAction;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
