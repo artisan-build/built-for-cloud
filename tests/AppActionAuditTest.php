@@ -664,7 +664,9 @@ it('names a delegated actor by its type-qualified identity, where a user with th
 
 // ─── AC7: attribution comes from the ONE acting principal (D14) ─────────────
 
-it('attributes to the acting principal and not to the delegated session co-resident on the same request', function (): void {
+it('keeps co-resident attribution precedence as defence in depth', function (): void {
+    // Successful authentication now evicts the other guard. This state is
+    // constructed manually so restored or bypassed sessions still fail safe.
     // The route is guarded by the APP's own guard while a delegated
     // session is also live, so the two sources genuinely disagree: the
     // acting principal is the local user, and asking the console guard

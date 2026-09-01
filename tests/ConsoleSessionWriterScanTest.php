@@ -31,7 +31,7 @@ it('has exactly one file in src/ that can write a delegated session key', functi
         ->toBe([DelegatedSessionWriterScan::PERMITTED_WRITER => ['->put(']]);
 });
 
-it('has exactly three files in src/ that name a delegated session key at all', function (): void {
+it('has exactly four files in src/ that name a delegated session key at all', function (): void {
     // Readers count too: a second place deciding what a delegated claim
     // means is the divergence hazard this package has already deleted
     // twice (DelegatedClaims::isAdmin(), DelegatedClaims::fromAssertion()).
@@ -43,6 +43,8 @@ it('has exactly three files in src/ that name a delegated session key at all', f
             'Console/ConsoleSession.php',
             // D7's clock, which reads the issued-at marker and nothing else.
             'Console/ConsoleSessionClock.php',
+            // The eviction listener clears every key but interprets none.
+            'Listeners/EvictConsolePrincipal.php',
         ]);
 });
 

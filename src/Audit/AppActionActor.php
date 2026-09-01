@@ -184,9 +184,8 @@ final readonly class AppActionActor
      * actor — the delegated actor on the same request is reported by
      * {@see ActingPrincipal::$delegatedActor} and is deliberately not
      * what attributes.
-     *   Pinned by `tests/AppActionAuditTest.php` — "attributes to the
-     *   acting principal and not to the delegated session co-resident on
-     *   the same request".
+     *   Pinned by `tests/AppActionAuditTest.php` — "keeps co-resident
+     *   attribution precedence as defence in depth".
      *
      * A resolution with no principal — nobody acting, or a delegated
      * session that was REFUSED — throws. An app action is a thing

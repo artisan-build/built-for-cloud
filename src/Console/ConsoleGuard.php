@@ -270,6 +270,7 @@ final class ConsoleGuard implements Guard
         private readonly SessionGuard $inner,
         private readonly Session $session,
         private readonly AssertionVerifier $verifier,
+        private readonly ?SessionGuard $localGuard,
     ) {}
 
     /**
@@ -509,6 +510,11 @@ final class ConsoleGuard implements Guard
                 }
 
                 $begun = true;
+
+                if ($this->localGuard instanceof SessionGuard) {
+                    $this->session->forget($this->localGuard->getName());
+                    $this->localGuard->forgetUser();
+                }
 
                 $this->beginSession($assertion);
 

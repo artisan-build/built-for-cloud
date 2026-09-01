@@ -63,8 +63,11 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\VerifyHmacSignature;
+use ArtisanBuild\BuiltForCloud\Listeners\EvictConsolePrincipal;
 use ArtisanBuild\BuiltForCloud\Listeners\QueueOwnershipWebhook;
 use Illuminate\Auth\AuthManager;
+use Illuminate\Auth\Events\Login;
+use Illuminate\Auth\SessionGuard;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
@@ -183,7 +186,13 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // user table.
         ConsoleGuardConfiguration::apply($this->app->make(Repository::class));
 
-        Auth::resolved(function (AuthManager $auth): void {
+        if (ConsoleGuardConfiguration::servesDelegatedEntry()) {
+            Event::listen(Login::class, EvictConsolePrincipal::class);
+        }
+
+        $localGuardName = config('auth.defaults.guard');
+
+        Auth::resolved(function (AuthManager $auth) use ($localGuardName): void {
             $auth->extend('bfc', function (Application $app, string $name, array $config): CredentialGuard {
                 /** @var array<string, mixed> $config */
                 return new CredentialGuard($app, $name, $config);
@@ -205,12 +214,17 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             // job, which is the framework's own.
             $auth->extend(
                 ConsoleGuardConfiguration::DRIVER,
-                function (Application $app, string $name, array $config) use ($auth): ConsoleGuard {
+                function (Application $app, string $name, array $config) use ($auth, $localGuardName): ConsoleGuard {
                     /** @var array<string, mixed> $config */
+                    $localGuard = is_string($localGuardName) && $localGuardName !== $name
+                        ? $auth->guard($localGuardName)
+                        : null;
+
                     return new ConsoleGuard(
                         $auth->createSessionDriver($name, $config),
                         $app->make(Session::class),
                         $app->make(AssertionVerifier::class),
+                        $localGuard instanceof SessionGuard ? $localGuard : null,
                     );
                 },
             );
