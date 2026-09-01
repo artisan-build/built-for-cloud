@@ -129,7 +129,7 @@ return new class extends Migration
     private function guardPgsql(): void
     {
         DB::unprepared(<<<'SQL'
-            CREATE FUNCTION credential_audit_events_reject_mutation() RETURNS trigger AS $$
+            CREATE OR REPLACE FUNCTION credential_audit_events_reject_mutation() RETURNS trigger AS $$
             BEGIN
                 RAISE EXCEPTION 'credential_audit_events is append-only';
             END;
