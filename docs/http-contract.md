@@ -91,11 +91,11 @@ The rules a consumer may rely on:
 
 ### Changelog
 
-**api_version 2** (bfc **0.6.1**, this release). All changes since version 1, in one inventory.
+**api_version 2** (bfc **0.6.2**, this release). All changes since version 1, in one inventory.
 Additive unless marked otherwise.
 
-**Everything the Console adds in 0.6.1 is additive, so `api_version` stays 2. What carries the
-signal is `bfc_version` 0.6.1 plus the `capabilities` entries** — `console-keys`,
+**Everything the Console adds in 0.6.2 is additive, so `api_version` stays 2. What carries the
+signal is `bfc_version` 0.6.2 plus the `capabilities` entries** — `console-keys`,
 `console-key-retire`, `console-vitals`, `console-guard`, `console-enter`, `console-chrome-assets`
 and `app-action-audit-emit`.
 
@@ -534,7 +534,7 @@ Public (`bfc-public` throttle). Identifies the instance.
 ```json
 {
   "product": "Sink",
-  "bfc_version": "0.6.1",
+  "bfc_version": "0.6.2",
   "api_version": 2,
   "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials", "console-keys", "console-key-retire", "console-vitals", "app-action-audit-emit"],
   "claimed": true
@@ -2008,7 +2008,7 @@ field.
 {
   "version": 1,
   "api_version": 2,
-  "bfc_version": "0.6.1",
+  "bfc_version": "0.6.2",
   "app_version": "1.4.2",
   "health": "ok",
   "deployed_at": "2026-08-29T09:14:00+00:00",
