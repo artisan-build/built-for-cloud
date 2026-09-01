@@ -224,6 +224,23 @@ it('degrades honestly when the deployment has configured no re-entry url', funct
         ->and($observed['chromeElement']['textContent'])->toContain('could not be renewed automatically');
 });
 
+it('degrades without throwing when the page carries no chrome element at all', function (): void {
+    // A page can carry the interceptor without the #bfc-console-chrome
+    // element (an app mounts the script before it mounts the badge, or
+    // not at all). The announcement must then skip the badge and STILL
+    // dispatch — an absent element is a degrade, never a TypeError out
+    // of the page's own fetch.
+    $observed = bfcInterceptorScenario('fetch-no-chrome-element');
+
+    expect($observed['topAssigned'])->toBeNull()
+        ->and($observed['frameAssigned'])->toBeNull()
+        ->and($observed['chromeElement'])->toBeNull()
+        ->and($observed['events'])->toBe([[
+            'type' => 'bfc:console-reentry-unavailable',
+            'detail' => ['reason' => 'session_invalidated', 'return_to' => '/orders', 'cause' => 'no_destination'],
+        ]]);
+});
+
 it('refuses a re-entry url whose scheme is not http or https', function (): void {
     // The server already refuses to emit one, so this is the client's
     // own floor: a `javascript:` destination is treated exactly as an

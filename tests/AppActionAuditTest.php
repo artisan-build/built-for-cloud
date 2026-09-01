@@ -15,6 +15,7 @@ use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
+use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\Tests\AppActionReadTransportScan;
@@ -528,6 +529,27 @@ it('stamps every app-action event with a package-generated uuid', function (): v
         ->toBe(collect([$first->id, $second->id])->sort()->values()->all());
 });
 
+it('ignores an id supplied through mass assignment, generating its own', function (): void {
+    // `id` is deliberately off the fillable list: a caller cannot pick
+    // the event id, because a package-generated id is the AC3 claim and
+    // a fillable id would hand the stream's identity to whoever writes
+    // the row. HasUuids only generates when the attribute is empty, so
+    // the fillable list is what keeps that sentence true.
+    $event = AppActionEvent::query()->create([
+        'id' => '00000000-0000-0000-0000-000000000000',
+        'action' => SinkAppAction::InvoiceVoided->value,
+        'action_vocabulary' => SinkAppAction::class,
+        'reason' => AppActionReason::Requested->value,
+        'actor_type' => AppActorType::LocalUser->value,
+        'actor_ref' => '7',
+        'occurred_at' => now(),
+    ]);
+
+    expect($event->id)->not->toBe('00000000-0000-0000-0000-000000000000')
+        ->and($event->id)->toMatch('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/')
+        ->and(AppActionEvent::query()->findOrFail($event->id)->id)->toBe($event->id);
+});
+
 // ─── AC4: two vocabularies, disjoint ────────────────────────────────────────
 
 it('keeps the two audit vocabularies disjoint, so neither stream can hand a reader the other\'s actor type', function (): void {
@@ -580,6 +602,23 @@ it('cannot construct a local user or api token actor that carries an agency at a
     expect((new ReflectionMethod(AppActionActor::class, 'localUser'))->getNumberOfParameters())->toBe(1)
         ->and((new ReflectionMethod(AppActionActor::class, 'apiToken'))->getNumberOfParameters())->toBe(1)
         ->and((new ReflectionMethod(AppActionActor::class, '__construct'))->isPrivate())->toBeTrue();
+});
+
+it('records an api_token actor as api_token with the credential id and no agency', function (): void {
+    // No package emitter currently reaches for this factory — a
+    // credential-authenticated emission has no path yet — so the claim
+    // is pinned at the factory-to-row level: what this actor records is
+    // api_token, named by the credential's own id, with nowhere for an
+    // agency to have come from.
+    $credential = Credential::factory()->create();
+
+    $event = recordAppAction(AppActionActor::apiToken($credential));
+
+    $stored = AppActionEvent::query()->findOrFail($event->id);
+
+    expect($stored->actor_type)->toBe(AppActorType::ApiToken)
+        ->and($stored->actor_ref)->toBe((string) $credential->id)
+        ->and($stored->on_behalf_of)->toBeNull();
 });
 
 // ─── AC6: the delegated actor is type-qualified ─────────────────────────────

@@ -65,7 +65,23 @@ final class EnsureCredentialAbility
         }
 
         $guardName = (string) config('built-for-cloud.credentials.guard', 'bfc');
-        $guard = $this->auth->guard($guardName);
+
+        // A configured guard NAME with no guard registered behind it is
+        // an operator misconfiguration, and still a request that cannot
+        // be authenticated: it fails closed with the ordinary 401 rather
+        // than raising out of the AuthManager — the same ruling the
+        // vitals gate carries and is tested under. The diagnostic cost is
+        // stated rather than hidden: the operator has to look at
+        // `auth.guards` to tell this 401 from an unauthenticated one.
+        if (! is_array(config('auth.guards.'.$guardName))) {
+            abort(401);
+        }
+
+        try {
+            $guard = $this->auth->guard($guardName);
+        } catch (Throwable) {
+            abort(401);
+        }
 
         if (! $guard instanceof CredentialGuard) {
             throw new InvalidArgumentException(

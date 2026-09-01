@@ -26,6 +26,81 @@ use RuntimeException;
 
 uses(RefreshDatabase::class, DetectsSecretLeaks::class);
 
+it('locks the claim codes before the durable row when burning first use', function (): void {
+    // The deadlock-avoidance property is an ORDER property: exchange
+    // acquires code-then-durable, and the burn must acquire in the SAME
+    // order or two opposing transactions can each hold one lock and wait
+    // on the other forever. SQLite compiles lockForUpdate() to nothing,
+    // so what is observable here — and what a refactor could silently
+    // reorder — is the SEQUENCE of statements the burn issues inside its
+    // transaction: the codes read must precede the first durable
+    // reference.
+    [$claimCode, $durable] = burnExchange('ordered@example.test');
+
+    $queries = [];
+
+    DB::listen(function (QueryExecuted $query) use (&$queries): void {
+        $queries[] = $query->sql;
+    });
+
+    expect(app(TokenRegistry::class)->resolve($durable))->toBe('ordered@example.test');
+
+    // The resolving read — the api_tokens lookup by token hash — is the
+    // last durable query OUTSIDE the burn's transaction. Everything the
+    // burn does follows it, and the order property is: the very next
+    // table the burn touches is the CLAIM CODES, and the durable row is
+    // only written after them. (RefreshDatabase makes the burn's
+    // transaction a nested savepoint whose statements Laravel does not
+    // log, so the sequence is anchored on the resolving read instead of
+    // a begin marker.)
+    $resolvingRead = null;
+
+    foreach ($queries as $index => $sql) {
+        if (preg_match('/^\s*select\b/i', $sql) === 1
+            && str_contains($sql, 'api_tokens')
+            && str_contains($sql, 'token_hash')) {
+            $resolvingRead = $index;
+        }
+    }
+
+    expect($resolvingRead)->not->toBeNull('The resolve never read the durable row.');
+
+    $firstCodes = null;
+
+    foreach ($queries as $index => $sql) {
+        if ($index > $resolvingRead && str_contains($sql, 'onboarding_tokens')) {
+            $firstCodes = $index;
+
+            break;
+        }
+    }
+
+    expect($firstCodes)->not->toBeNull('The burn never read the claim codes.');
+
+    // No durable reference may come between the resolving read and the
+    // codes read — a durable-first acquisition would put one there.
+    $between = array_slice($queries, (int) $resolvingRead + 1, (int) $firstCodes - (int) $resolvingRead - 1);
+
+    expect(
+        array_filter($between, fn (string $sql): bool => str_contains($sql, 'api_tokens')),
+    )->toBe([]);
+
+    // And the durable write comes only after the codes read.
+    $firstDurableWrite = null;
+
+    foreach ($queries as $index => $sql) {
+        if ($index > $firstCodes
+            && preg_match('/^\s*update\b/i', $sql) === 1
+            && str_contains($sql, 'api_tokens')) {
+            $firstDurableWrite = $index;
+
+            break;
+        }
+    }
+
+    expect($firstDurableWrite)->not->toBeNull('The burn never wrote the durable row.');
+});
+
 it('consumes the claim code exactly once when two resolutions race at the affected-rows gate', function (): void {
     [$claimCode, $durable] = burnExchange('race@example.test');
 

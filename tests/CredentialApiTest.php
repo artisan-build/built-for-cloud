@@ -21,6 +21,7 @@ use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
+use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -427,6 +428,38 @@ final class CredentialApiTest extends TestCase
         $this->assertSame('expired', $this->listingRowFor('lapsed', $headers)['status']);
         $this->assertSame('active', $this->listingRowFor('live', $headers)['status']);
         $this->assertSame('active', $this->listingRowFor('admin', $headers)['status']);
+    }
+
+    public function test_the_expiry_boundary_matches_resolution_exactly_at_now(): void
+    {
+        // The status boundary is `! isAfter(now())` — deliberately wider
+        // than "in the past" — so a row expiring EXACTLY now reports
+        // `expired` at the same instant `scopeResolvable` stops resolving
+        // it (whose comparison is `> now()`). The listing can therefore
+        // never call a row `active` while auth is refusing it, or vice
+        // versa. Frozen to a whole second so the DB round-trip cannot
+        // shift the boundary by a sub-second sliver.
+        $this->travelTo(CarbonImmutable::parse('2026-09-01 12:00:00'));
+
+        $headers = $this->credentialAdminHeaders();
+
+        $boundary = ApiToken::factory()->create([
+            'name' => 'boundary',
+            'expires_at' => now(),
+        ]);
+        $future = ApiToken::factory()->create([
+            'name' => 'future',
+            'expires_at' => now()->addSecond(),
+        ]);
+
+        $this->assertSame('expired', $this->listingRowFor('boundary', $headers)['status']);
+        $this->assertSame('active', $this->listingRowFor('future', $headers)['status']);
+
+        // The pairing IS the property: at the boundary instant, status
+        // and resolution agree — refused means expired, accepted means
+        // active.
+        $this->assertFalse(ApiToken::query()->whereKey($boundary->id)->resolvable()->exists());
+        $this->assertTrue(ApiToken::query()->whereKey($future->id)->resolvable()->exists());
     }
 
     // PR5 — the default declaration declares NO cadence: every row lists null and the top-level
