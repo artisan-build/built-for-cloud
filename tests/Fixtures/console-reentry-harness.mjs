@@ -278,6 +278,17 @@ const scenarios = {
         }),
         withChromeElement: true,
     },
+    'fetch-no-chrome-element': {
+        status: 401,
+        headers: REENTRY_HEADERS,
+        body: JSON.stringify({
+            version: 1,
+            error: 'console_reentry_required',
+            reason: 'session_invalidated',
+            return_to: '/orders',
+        }),
+        withChromeElement: false,
+    },
     'fetch-hostile-reentry-url': {
         status: 401,
         headers: REENTRY_HEADERS,
