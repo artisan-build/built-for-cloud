@@ -22,7 +22,8 @@ enum ConsoleAction: string implements AppAction
      * A delegated session was opened at this deployment's door: the
      * assertion verified, the mint was spent, and the operator was
      * logged in. Emitted inside the SAME transaction as the burn and the
-     * redemption, so an entry that rolled back records nothing.
+     * redemption; all three use the default database connection, so an
+     * entry that rolled back records nothing.
      */
     case ConsoleEntered = 'console-entered';
 }

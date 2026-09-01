@@ -15,17 +15,19 @@ use LogicException;
 /**
  * **THE DEDUP LEDGER.** For each successful {@see AppActionRecorder}
  * emission, one event row and one row here are inserted in the SAME
- * database transaction as the action they record. The package never
- * updates or prunes either of them; app-owned direct writes and
- * deletions can still make the pair incomplete, which the residue below
- * states in full.
+ * database transaction as the action they record only when the action
+ * and these default-connection audit models share a connection. The
+ * recorder does not select or compare the action's connection; arranging
+ * that precondition is the consumer's responsibility. The package never
+ * updates or prunes either row; app-owned direct writes and deletions can
+ * still make the pair incomplete, which the residue below states in full.
  *
  * The table is named for the outbox PATTERN D17 names, and the pattern is
- * what the WRITE side does — same-transaction insert, consumed later. But
- * calling the thing an outbox would claim the delivery half, and there is
- * no delivery half: nothing drains it, nothing marks it, nothing reads
- * it. What ships is a ledger, and it is described as one so that a reader
- * of the schema is not told there is machinery behind it.
+ * what the WRITE side does — same-connection, same-transaction insert,
+ * consumed later. But calling the thing an outbox would claim the delivery
+ * half, and there is no delivery half: nothing drains it, nothing marks it,
+ * nothing reads it. What ships is a ledger, and it is described as one so
+ * that a reader of the schema is not told there is machinery behind it.
  *
  * **WHY IT IS A ROW AND NOT A COLUMN.** `dedup_key` is UNIQUE, and that
  * index is what makes one event per CALLER-IDENTIFIED action hold of

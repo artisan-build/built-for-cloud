@@ -203,7 +203,8 @@ A **successful** entry writes no event to *this* stream — the credential lifec
 credential-scoped, and PRD D17 gives actor-typed app-action events their own. **That stream has
 since shipped**, and this paragraph said it was "a later deliverable" for one release too long:
 a successful entry now writes one `console-entered` event to the app-action stream, typed as the
-delegated actor that was admitted, inside the same transaction as the burn and the redemption.
+delegated actor that was admitted, inside the same default-connection transaction as the burn and
+the redemption.
 Its contract is in
 [the app-action audit stream](../docs/http-contract.md#the-app-action-audit-stream). What a
 successful entry also leaves is the shadow-actor row's refreshed `last_handoff_*` copy and its
