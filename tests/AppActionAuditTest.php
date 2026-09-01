@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\Audit\AppActorType;
 use ArtisanBuild\BuiltForCloud\Audit\AppendOnlyBuilder;
 use ArtisanBuild\BuiltForCloud\Audit\ConsoleAction;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
+use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
@@ -601,6 +602,23 @@ it('cannot construct a local user or api token actor that carries an agency at a
     expect((new ReflectionMethod(AppActionActor::class, 'localUser'))->getNumberOfParameters())->toBe(1)
         ->and((new ReflectionMethod(AppActionActor::class, 'apiToken'))->getNumberOfParameters())->toBe(1)
         ->and((new ReflectionMethod(AppActionActor::class, '__construct'))->isPrivate())->toBeTrue();
+});
+
+it('records an api_token actor as api_token with the credential id and no agency', function (): void {
+    // No package emitter currently reaches for this factory — a
+    // credential-authenticated emission has no path yet — so the claim
+    // is pinned at the factory-to-row level: what this actor records is
+    // api_token, named by the credential's own id, with nowhere for an
+    // agency to have come from.
+    $credential = Credential::factory()->create();
+
+    $event = recordAppAction(AppActionActor::apiToken($credential));
+
+    $stored = AppActionEvent::query()->findOrFail($event->id);
+
+    expect($stored->actor_type)->toBe(AppActorType::ApiToken)
+        ->and($stored->actor_ref)->toBe((string) $credential->id)
+        ->and($stored->on_behalf_of)->toBeNull();
 });
 
 // ─── AC6: the delegated actor is type-qualified ─────────────────────────────
