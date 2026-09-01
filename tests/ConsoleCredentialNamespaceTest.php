@@ -5,6 +5,7 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Route;
 
@@ -108,7 +109,7 @@ it('refuses the reserved namespace BEFORE any user provider is asked, not merely
     // is ever issued for a reserved-namespace user_id.
     $askedQueries = [];
 
-    DB::listen(function (Illuminate\Database\Events\QueryExecuted $query) use (&$askedQueries): void {
+    DB::listen(function (QueryExecuted $query) use (&$askedQueries): void {
         $askedQueries[] = $query->sql;
     });
 
