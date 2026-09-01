@@ -528,6 +528,27 @@ it('stamps every app-action event with a package-generated uuid', function (): v
         ->toBe(collect([$first->id, $second->id])->sort()->values()->all());
 });
 
+it('ignores an id supplied through mass assignment, generating its own', function (): void {
+    // `id` is deliberately off the fillable list: a caller cannot pick
+    // the event id, because a package-generated id is the AC3 claim and
+    // a fillable id would hand the stream's identity to whoever writes
+    // the row. HasUuids only generates when the attribute is empty, so
+    // the fillable list is what keeps that sentence true.
+    $event = AppActionEvent::query()->create([
+        'id' => '00000000-0000-0000-0000-000000000000',
+        'action' => SinkAppAction::InvoiceVoided->value,
+        'action_vocabulary' => SinkAppAction::class,
+        'reason' => AppActionReason::Requested->value,
+        'actor_type' => AppActorType::LocalUser->value,
+        'actor_ref' => '7',
+        'occurred_at' => now(),
+    ]);
+
+    expect($event->id)->not->toBe('00000000-0000-0000-0000-000000000000')
+        ->and($event->id)->toMatch('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/')
+        ->and(AppActionEvent::query()->findOrFail($event->id)->id)->toBe($event->id);
+});
+
 // ─── AC4: two vocabularies, disjoint ────────────────────────────────────────
 
 it('keeps the two audit vocabularies disjoint, so neither stream can hand a reader the other\'s actor type', function (): void {
