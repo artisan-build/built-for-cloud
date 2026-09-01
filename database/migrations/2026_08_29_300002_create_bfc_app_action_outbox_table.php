@@ -149,7 +149,7 @@ return new class extends Migration
     private function guardPgsql(): void
     {
         DB::unprepared(<<<'SQL'
-            CREATE FUNCTION bfc_app_action_outbox_reject_mutation() RETURNS trigger AS $$
+            CREATE OR REPLACE FUNCTION bfc_app_action_outbox_reject_mutation() RETURNS trigger AS $$
             BEGIN
                 RAISE EXCEPTION 'bfc_app_action_outbox is append-only';
             END;

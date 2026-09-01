@@ -11,6 +11,20 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: built_for_cloud_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d built_for_cloud_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -25,7 +39,7 @@ jobs:
           # v4 primitives); setup-php's default extension set ships
           # neither, so the console assertion verifier would fail to
           # install here while working fine on Laravel Cloud.
-          extensions: gmp, sodium
+          extensions: gmp, sodium, pdo_pgsql
           tools: composer:v2
           coverage: none
 
@@ -51,6 +65,11 @@ jobs:
 
       - name: Run Tests
         run: composer test
+        env:
+          BFC_POSTGRES_DATABASE: built_for_cloud_test
+          BFC_POSTGRES_HOST: 127.0.0.1
+          BFC_POSTGRES_PASSWORD: postgres
+          BFC_POSTGRES_USERNAME: postgres
 
   lowest:
     name: tests (lowest deps)
