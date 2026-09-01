@@ -40,7 +40,6 @@ use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
 use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
-use ArtisanBuild\BuiltForCloud\Exceptions\UnsupportedSessionDriver;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleEnter;
@@ -59,6 +58,7 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureSupportedSessionDriver;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
@@ -68,10 +68,12 @@ use Illuminate\Auth\AuthManager;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Contracts\Http\Kernel as HttpKernelContract;
 use Illuminate\Contracts\Session\Session;
 use Illuminate\Contracts\View\View as ViewContract;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
+use Illuminate\Foundation\Http\Kernel as HttpKernel;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Router;
@@ -89,6 +91,11 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__.'/../config/built-for-cloud.php', 'built-for-cloud');
+
+        $this->callAfterResolving(
+            HttpKernelContract::class,
+            static fn (HttpKernel $kernel) => $kernel->prependMiddleware(EnsureSupportedSessionDriver::class),
+        );
 
         $this->app->singleton(UsageReporter::class, NullUsageReporter::class);
 
@@ -123,10 +130,6 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-        if (config('session.driver') === 'database') {
-            throw UnsupportedSessionDriver::database();
-        }
-
         // Surface selection (PRD 1.14, fleet F2): each family below is
         // mounted only when its `built-for-cloud.surfaces.*` key says so
         // — whole families, never single routes (the claim surfaces are
