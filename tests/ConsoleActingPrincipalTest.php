@@ -6,6 +6,7 @@ use ArtisanBuild\BuiltForCloud\Console\ActingPrincipal;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuard;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleReentryReason;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleRole;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedClaims;
@@ -523,6 +524,28 @@ it('never carries a delegated attribution on a non-delegated resolution', functi
         ->and($local->onBehalfOf)->toBeNull()
         ->and($local->delegated)->toBeFalse()
         ->and($local->delegatedSessionPresent())->toBeFalse();
+});
+
+it('never carries a co-resident actor claims on a non-delegated resolution', function (): void {
+    $actor = consoleActor(role: ConsoleRole::Admin, onBehalfOf: 'Acme Agency');
+
+    // The actor being PRESENT on a local resolution is exactly what the
+    // broad local-only refusal answers on — and what the admin gate's
+    // exactness depends on NOT leaking into claims: `delegated` false
+    // must imply no role, or a gate branching on the role instead of on
+    // the resolution would admit a delegated principal a route never
+    // scoped itself to (FLEET-C-02).
+    $local = ActingPrincipal::local('web', actingUser(), $actor);
+
+    expect($local->delegated)->toBeFalse()
+        ->and($local->delegatedSessionPresent())->toBeTrue()
+        ->and($local->role)->toBeNull()
+        ->and($local->attribution)->toBeNull()
+        ->and($local->displayName)->toBeNull()
+        ->and($local->onBehalfOf)->toBeNull();
+
+    expect(ActingPrincipal::none($actor)->role)->toBeNull()
+        ->and(ActingPrincipal::refused(ConsoleReentryReason::SessionInvalidated)->role)->toBeNull();
 });
 
 // ─── AC31: logout must not poison the cached guard for the next request ─────
