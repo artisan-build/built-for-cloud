@@ -228,3 +228,19 @@ it('still rejects a mismatched local principal when the session guard is the loc
     $this->getJson('/token-route', ['Authorization' => $minted->bearerHeader()])
         ->assertStatus(401);
 });
+
+it('ability gate × configured guard name with no guard behind it → bounded 401, not a 500', function (): void {
+    // An app can point built-for-cloud.credentials.guard at a name that
+    // has no entry under auth.guards (a typo, a renamed guard). The
+    // AuthManager raises out of guard() on exactly that case, and the
+    // gate must turn a configuration error into the same fail-closed
+    // 401 an unauthenticated request gets — the same ruling the vitals
+    // gate carries and is tested under. Driven on the standalone shape
+    // (the MCP wiring: bfc.ability alone, no auth:bfc in front), which
+    // is the stack this middleware governs.
+    config(['auth.guards.bfc' => null]);
+
+    Route::middleware('bfc.ability:credential:read')->get('/ability-guardless', fn (): array => ['ok' => true]);
+
+    $this->getJson('/ability-guardless')->assertStatus(401);
+});
