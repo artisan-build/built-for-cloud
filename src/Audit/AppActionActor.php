@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Audit;
 
+use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipal;
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
@@ -14,7 +15,7 @@ use Illuminate\Contracts\Auth\Authenticatable;
 use LogicException;
 
 /**
- * WHO performed an app action: one of the three principals
+ * WHO performed an app action: one of the four principals
  * {@see AppActorType} names, their identifier, and — for a delegated
  * actor only — the agency they acted for (D4).
  *
@@ -22,9 +23,9 @@ use LogicException;
  * not the truth of it.** `on_behalf_of` belongs to a delegated session
  * and to nothing else: a local user acts for the deployment they log in
  * to, and a credential acts for itself. Rather than validating that
- * after the fact, the two non-delegated named constructors do not TAKE
- * an `on_behalf_of` at all, so a local-user or api-token actor cannot be
- * constructed carrying one; {@see AppActionEvent} refuses the same
+ * after the fact, the three non-delegated named constructors do not TAKE
+ * an `on_behalf_of` at all, so a non-delegated actor cannot be constructed
+ * carrying one; {@see AppActionEvent} refuses the same
  * combination at the row, for writes that never came through here.
  *
  * WHAT NEITHER OF THOSE DECIDES is what the string SAYS.
@@ -50,8 +51,8 @@ use LogicException;
  * provenance is not a property this class has.
  *   Pinned by `tests/AppActionAuditTest.php` — "carries the agency a
  *   delegated handoff named", "records a delegated event with no agency
- *   as null rather than inventing one" and "cannot construct a local
- *   user or api token actor that carries an agency at all".
+ *   as null rather than inventing one" and "cannot construct a
+ *   non-delegated actor that carries an agency at all".
  *
  *   Pinned by `tests/ConsoleEnterAuditTest.php` — "records the agency
  *   the entering handoff named, and null when it named none", which is
@@ -114,6 +115,16 @@ final readonly class AppActionActor
     public static function apiToken(Credential $credential): self
     {
         return new self(AppActorType::ApiToken, self::identifierOf($credential));
+    }
+
+    /**
+     * A token from the legacy `api_tokens` store, named by that model's key.
+     *
+     * @throws LogicException when the token has no scalar identifier
+     */
+    public static function legacyApiToken(ApiToken $token): self
+    {
+        return new self(AppActorType::LegacyApiToken, self::identifier($token->getKey()));
     }
 
     /**
@@ -214,8 +225,14 @@ final readonly class AppActionActor
      */
     private static function identifierOf(Authenticatable $principal): string
     {
-        $identifier = $principal->getAuthIdentifier();
+        return self::identifier($principal->getAuthIdentifier());
+    }
 
+    /**
+     * A scalar, non-empty identifier as a string, or a refusal.
+     */
+    private static function identifier(mixed $identifier): string
+    {
         if (! is_int($identifier) && ! is_string($identifier)) {
             throw self::unattributable();
         }

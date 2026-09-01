@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\Audit\AppAction;
 use ArtisanBuild\BuiltForCloud\Audit\AppActionActor;
 use ArtisanBuild\BuiltForCloud\Audit\AppActionEvent;
@@ -556,8 +557,8 @@ it('keeps the two audit vocabularies disjoint, so neither stream can hand a read
     $appActionTypes = array_map(fn (AppActorType $type): string => $type->value, AppActorType::cases());
     $credentialTypes = array_map(fn (AuditActorType $type): string => $type->value, AuditActorType::cases());
 
-    // The three principals D17 names, and nothing else.
-    expect($appActionTypes)->toBe(['local_user', 'api_token', 'delegated_actor']);
+    // The four principals D17 names, and nothing else.
+    expect($appActionTypes)->toBe(['local_user', 'api_token', 'legacy_api_token', 'delegated_actor']);
 
     // Neither vocabulary contains a member of the other. A reader of
     // either stream can therefore enumerate what it may be handed
@@ -585,7 +586,7 @@ it('records a delegated event with no agency as null rather than inventing one',
     expect(AppActionEvent::query()->findOrFail($event->id)->on_behalf_of)->toBeNull();
 });
 
-it('cannot construct a local user or api token actor that carries an agency at all', function (): void {
+it('cannot construct a non-delegated actor that carries an agency at all', function (): void {
     $user = User::query()->create(['name' => 'Local', 'email' => 'local@example.test', 'password' => 'x']);
 
     $event = recordAppAction(AppActionActor::localUser($user));
@@ -596,11 +597,12 @@ it('cannot construct a local user or api token actor that carries an agency at a
         ->and($stored->actor_ref)->toBe((string) $user->getKey())
         ->and($stored->on_behalf_of)->toBeNull();
 
-    // …and it is structural, not merely unset: the two non-delegated
+    // …and it is structural, not merely unset: the three non-delegated
     // named constructors have no parameter to put an agency in, and the
     // constructor that does is private.
     expect((new ReflectionMethod(AppActionActor::class, 'localUser'))->getNumberOfParameters())->toBe(1)
         ->and((new ReflectionMethod(AppActionActor::class, 'apiToken'))->getNumberOfParameters())->toBe(1)
+        ->and((new ReflectionMethod(AppActionActor::class, 'legacyApiToken'))->getNumberOfParameters())->toBe(1)
         ->and((new ReflectionMethod(AppActionActor::class, '__construct'))->isPrivate())->toBeTrue();
 });
 
@@ -619,6 +621,26 @@ it('records an api_token actor as api_token with the credential id and no agency
     expect($stored->actor_type)->toBe(AppActorType::ApiToken)
         ->and($stored->actor_ref)->toBe((string) $credential->id)
         ->and($stored->on_behalf_of)->toBeNull();
+});
+
+it('records a legacy_api_token actor with the legacy token id and no agency', function (): void {
+    $token = ApiToken::factory()->create();
+
+    $event = recordAppAction(AppActionActor::legacyApiToken($token));
+
+    $stored = AppActionEvent::query()->findOrFail($event->id);
+
+    expect($stored->actor_type)->toBe(AppActorType::LegacyApiToken)
+        ->and($stored->actor_ref)->toBe((string) $token->getKey())
+        ->and($stored->on_behalf_of)->toBeNull();
+});
+
+it('refuses an empty or non-scalar legacy api token id', function (): void {
+    expect(fn (): AppActionActor => AppActionActor::legacyApiToken(new ApiToken(['id' => ''])))
+        ->toThrow(LogicException::class, 'no unattributed app action');
+
+    expect(fn (): AppActionActor => AppActionActor::legacyApiToken(new ApiToken(['id' => []])))
+        ->toThrow(LogicException::class, 'no unattributed app action');
 });
 
 // ─── AC6: the delegated actor is type-qualified ─────────────────────────────
