@@ -9,8 +9,8 @@ use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Credential;
 
 /**
- * The three principals D17 names for an APP ACTION: a local user, an api
- * token, and a delegated actor.
+ * The four principals D17 names for an APP ACTION: a local user, a unified
+ * credential, a legacy api token, and a delegated actor.
  *
  * **WHY THIS IS A NEW ENUM AND NOT A REUSE OF {@see AuditActorType}** —
  * the decision is recorded here because the code is where it has to hold.
@@ -55,6 +55,13 @@ enum AppActorType: string
      * token ({@see Credential}), identified by its opaque credential id.
      */
     case ApiToken = 'api_token';
+
+    /**
+     * A token from the legacy `api_tokens` store
+     * ({@see \ArtisanBuild\BuiltForCloud\ApiToken}), identified by its
+     * model key in that store's UUID id space.
+     */
+    case LegacyApiToken = 'legacy_api_token';
 
     /**
      * A delegated human admitted through the Console door, identified by

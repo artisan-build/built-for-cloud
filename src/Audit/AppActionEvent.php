@@ -18,7 +18,7 @@ use LogicException;
 /**
  * One row in the instance-side, append-only APP-ACTION audit stream
  * (Console PRD D17): who did what, in this deployment, attributed to one
- * of the three principals D17 names.
+ * of the four principals D17 names.
  *
  * **A SEPARATE STREAM, NOT AN EXTENSION.** The shipped
  * {@see CredentialAuditEvent} stream is credential-work only — its event

@@ -2915,9 +2915,9 @@ The event columns, all of them:
 | `action` | the backing value of a case from the app's own compile-time action enum, a bounded identifier |
 | `action_vocabulary` | the enum class that case came from, so two apps' identical slugs stay distinguishable |
 | `reason` | one member of the closed vocabulary below |
-| `actor_type` | `local_user`, `api_token` or `delegated_actor` |
-| `actor_ref` | the principal's identifier; for a delegated actor the TYPE-QUALIFIED `bfc-console:{id}` form |
-| `on_behalf_of` | the agency a delegated operator acts for (D4), or null; never present for the other two actor types |
+| `actor_type` | `local_user`, `api_token`, `legacy_api_token` or `delegated_actor` |
+| `actor_ref` | the principal's identifier; for `legacy_api_token`, the model key in the legacy `api_tokens` id space; for a delegated actor, the TYPE-QUALIFIED `bfc-console:{id}` form |
+| `on_behalf_of` | the agency a delegated operator acts for (D4), or null; never present for the other three actor types |
 | `occurred_at`, `created_at` | timestamps |
 
 **No column is designated for arbitrary app content.** The schema carries no `note` and nothing of
@@ -2958,13 +2958,15 @@ can store an agency beside a `local_user`. **Escape it at every sink.**
 
 ### The actor vocabulary
 
-The three principals D17 names, and it is a **separate** vocabulary from the credential stream's
+The four principals D17 names, and it is a **separate** vocabulary from the credential stream's
 `actor_type`. The two sets are disjoint on purpose: the credential stream has no delegated actor
 and never will, and an app action is never performed by a CLI operator or a credential holder. A
 shared enum would hand a reader of either stream members that stream cannot produce.
 
 - `local_user` — the host application's own authenticated human, named by the app's own primary key.
 - `api_token` — a credential acting on its own behalf, named by its opaque credential id.
+- `legacy_api_token` — a token from the legacy `api_tokens` store, named by its model key in that
+  store's UUID id space.
 - `delegated_actor` — a delegated human admitted through the Console door, named by the
   type-qualified `bfc-console:{id}` form and never the bare integer. `bfc_delegated_actors` is an
   ordinary auto-increment table in the same id space `users` occupies, so a bare `7` would read as
