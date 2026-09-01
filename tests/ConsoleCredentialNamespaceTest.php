@@ -99,3 +99,28 @@ it('keeps the reserved namespace out of any user provider, whatever the bfc guar
 
     expect(DelegatedActor::query()->count())->toBe(1);
 });
+
+it('refuses the reserved namespace BEFORE any user provider is asked, not merely unresolvable', function (): void {
+    // sqlite matches nothing for `bfc-console:1`, so a 401 alone proves
+    // nothing about driver coercion — MySQL would resolve key 0. The
+    // load-bearing claim is narrower and checkable on every driver: the
+    // namespace check fires BEFORE the provider, so no users-table query
+    // is ever issued for a reserved-namespace user_id.
+    $askedQueries = [];
+
+    DB::listen(function (Illuminate\Database\Events\QueryExecuted $query) use (&$askedQueries): void {
+        $askedQueries[] = $query->sql;
+    });
+
+    namespaceUser();
+    consoleActor();
+
+    $minted = $this->mintCredential(['user_id' => 'bfc-console:1']);
+
+    $this->getJson('/token-route', ['Authorization' => $minted->bearerHeader()])
+        ->assertStatus(401);
+
+    expect(collect($askedQueries)->contains(
+        fn (string $sql): bool => str_contains($sql, 'from "users"'),
+    ))->toBeFalse();
+});
