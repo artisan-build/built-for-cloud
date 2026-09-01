@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
+use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacSigner;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
@@ -20,6 +21,7 @@ use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Testing\TestResponse;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -316,6 +318,59 @@ it('refuses a duplicate activation — deliberately not idempotent — identical
             ->where('credential_id', $credential->id)
             ->where('event', LifecycleEventType::Activated->value)
             ->count())->toBe(1);
+});
+
+// ------------------------------------- the cutover retirement (rotation grace)
+
+it('retires the lineage predecessor into grace and refuses to hide a failed retirement, naming the still-live old row', function (): void {
+    // A live production signing key, mid-rotation to a pending successor.
+    $productionMint = app(MintCredential::class)(
+        new Subject(SubjectType::ExternalConsumer, 'grace-client'),
+        MintOptions::fromInput(['kind' => 'hmac']),
+    );
+    $this->postJson('/bfc/credentials/'.$productionMint->summary->id.'/activate', [
+        'delivery_fingerprint' => (string) $productionMint->deliveryFingerprint,
+    ], activationAdminHeaders())->assertOk();
+
+    $rotate = $this->postJson('/bfc/credentials/'.$productionMint->summary->id.'/rotate', [
+        'code_ttl_seconds' => 3600,
+    ], activationAdminHeaders())->assertCreated();
+
+    $pendingId = (string) $rotate->json('credential.id');
+    $claimCode = (string) $rotate->json('delivery.claim_code');
+
+    $delivered = $this->postJson('/bfc/onboarding/exchange', ['token' => $claimCode])->assertCreated();
+    $fingerprint = (string) $delivered->json('delivery_fingerprint');
+
+    // Force the phase-2 grace write to fail: every expires_at update on
+    // credentials aborts, so the predecessor cannot be grace-bounded.
+    DB::statement(<<<'SQL'
+        CREATE TRIGGER bfc_fail_activation_grace
+        BEFORE UPDATE OF expires_at ON credentials
+        BEGIN
+            SELECT RAISE(ABORT, 'forced grace failure');
+        END
+        SQL);
+
+    $incomplete = $this->postJson('/bfc/credentials/'.$pendingId.'/activate', [
+        'delivery_fingerprint' => $fingerprint,
+    ], activationAdminHeaders())->assertStatus(500);
+
+    expect((string) $incomplete->json('message'))
+        ->toContain('could not retire superseded credential')
+        ->toContain($productionMint->summary->id)
+        ->toContain($pendingId);
+
+    // The activation STOOD through the failed retirement: the successor
+    // is active and the old row is left still-verifying, unbounded.
+    $successor = Credential::query()->findOrFail($pendingId);
+    $predecessor = Credential::query()->findOrFail($productionMint->summary->id);
+
+    expect($successor->status)->toBe(CredentialStatus::Active)
+        ->and($predecessor->rotated_at)->not->toBeNull()
+        ->and($predecessor->expires_at)->toBeNull();
+
+    DB::statement('DROP TRIGGER bfc_fail_activation_grace');
 });
 
 // ----------------------------------------------------------- other refusals
