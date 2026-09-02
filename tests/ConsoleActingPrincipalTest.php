@@ -344,6 +344,28 @@ it('does not carry a resolved acting principal into the next request', function 
         ->and($second->identifier())->toBeNull();
 });
 
+it('does not return a principal resolved in one request on the next when the CACHED guard instance is kept', function (): void {
+    // The auth manager caches guard instances for the life of the worker,
+    // so a redemption that logged the inner session guard in would leak
+    // the principal into the next request through that cache alone —
+    // unless the guard resets itself when the request changes. Simulate
+    // the worker: hold ONE guard instance and swap the request under it.
+    consoleRedeem();
+
+    $guard = auth(ConsoleGuardConfiguration::GUARD);
+
+    expect($guard->check())->toBeTrue();
+
+    // The next request carries none of the session state a redemption
+    // wrote (the browser that lost it, or a worker that dropped it).
+    $request = app('request');
+    app()->instance('request', Request::create('/next-request'));
+    session()->forget(consoleGuardSessionKey());
+
+    expect($guard->check())->toBeFalse()
+        ->and($guard->user())->toBeNull();
+});
+
 // ─── AC16: claims are SESSION-bound, not row-bound ──────────────────────────
 
 it('does not let a later handoff change the role of an already-live session', function (): void {

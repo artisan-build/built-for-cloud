@@ -54,6 +54,22 @@ it('revokes exactly the presented credential and emits revoked with holder_reque
         ->and($event->actor_ref)->toBe($presentedRow->id);
 });
 
+it('kills exactly the presented row even when another live row was created before it', function (): void {
+    // The bystander exists FIRST: a selection that ignores the presented
+    // secret and grabs the first live row would kill this one instead.
+    $bystander = mintSelfRevokable('first-row');
+    $presented = mintSelfRevokable('second-row');
+
+    $this->artisan('bfc:token:revoke-self')
+        ->expectsQuestion('Present the credential to revoke', $presented)
+        ->assertSuccessful();
+
+    $registry = app(TokenRegistry::class);
+
+    expect($registry->resolve($presented))->toBeNull()
+        ->and($registry->resolve($bystander))->toBe('first-row');
+});
+
 it('refuses a secret passed as an argument without echoing it', function (): void {
     $plaintext = mintSelfRevokable('argv-refused');
 
