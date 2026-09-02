@@ -186,6 +186,26 @@ final class CredentialApiTest extends TestCase
         $this->assertSame($admin->id, $event->actor_ref);
     }
 
+    public function test_name_revoke_excludes_an_already_dead_same_name_row_from_the_id_set(): void
+    {
+        // A same-name row that is already dead is NOT part of the id set
+        // this verb revokes — the response reports what actually died NOW.
+        $dead = ApiToken::factory()->create([
+            'name' => 'ci',
+            'token_hash' => hash('sha256', 'dead-secret'),
+        ]);
+        $dead->forceFill(['revoked_at' => now(), 'expires_at' => now()])->save();
+
+        $live = ApiToken::factory()->create([
+            'name' => 'ci',
+            'token_hash' => hash('sha256', 'live-secret'),
+        ]);
+
+        $this->deleteJson('/api/credentials/ci', [], $this->credentialAdminHeaders())
+            ->assertOk()
+            ->assertExactJson(['revoked_ids' => [$live->id]]);
+    }
+
     public function test_it_lists_credential_api_tokens_without_exposing_secrets(): void
     {
         $plaintext = 'list-secret';
