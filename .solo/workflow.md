@@ -21,6 +21,14 @@ via Packagist (`^0.1`). This is a **library** (no app shell).
 - tests that need a users table set one up (loadLaravelMigrations / a test migration) + a test User
   model (Authenticatable, is_admin) + `config(['auth.providers.users.model' => ...])`.
 
+## Database
+- The ordinary suite stays on in-memory SQLite. Tests whose claim depends on real row locks opt into
+  the `pgsql` Pest group and `Tests\Support\PostgresLane`, which migrates a real Postgres database and
+  exposes a second connection for deterministic interleaving with `lock_timeout`, never sleeps.
+- Name each worktree's database with `PGSQL_TESTING_DATABASE` (this lane uses `bfc_testing`) so
+  concurrent `migrate:fresh` runs cannot destroy each other. CI reruns the whole group with
+  `--fail-on-skipped`, making an absent Postgres service a failure rather than a green skip.
+
 ## Dependency install (fresh worktree/branch)
 - command: `composer install --no-interaction`.
 - post-install: none required (library; no .env, no app DB).
