@@ -13,15 +13,15 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:18-alpine
         env:
-          POSTGRES_DB: built_for_cloud_test
+          POSTGRES_DB: bfc_testing
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d built_for_cloud_test"
+          --health-cmd "pg_isready -U postgres -d bfc_testing"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -66,10 +66,21 @@ jobs:
       - name: Run Tests
         run: composer test
         env:
-          BFC_POSTGRES_DATABASE: built_for_cloud_test
-          BFC_POSTGRES_HOST: 127.0.0.1
-          BFC_POSTGRES_PASSWORD: postgres
-          BFC_POSTGRES_USERNAME: postgres
+          PGSQL_TESTING_DATABASE: bfc_testing
+          PGSQL_TESTING_HOST: 127.0.0.1
+          PGSQL_TESTING_PASSWORD: postgres
+          PGSQL_TESTING_USERNAME: postgres
+
+      # Local runs skip the opt-in Postgres group when no server is configured.
+      # CI must instead fail if the service or its driver disappears, so skipped
+      # tests are an explicit failure rather than a permanently green lane.
+      - name: Prove the Postgres tests actually ran
+        run: ./vendor/bin/pest --group=pgsql --fail-on-skipped
+        env:
+          PGSQL_TESTING_DATABASE: bfc_testing
+          PGSQL_TESTING_HOST: 127.0.0.1
+          PGSQL_TESTING_PASSWORD: postgres
+          PGSQL_TESTING_USERNAME: postgres
 
   lowest:
     name: tests (lowest deps)
