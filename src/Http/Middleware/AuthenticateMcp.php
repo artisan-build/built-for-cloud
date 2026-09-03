@@ -51,11 +51,15 @@ use Throwable;
  * Pinned by `tests/AuthenticateMcpTest.php` — "never falls through
  * between registry and assertion authentication paths", "uniformly
  * refuses audience ttl purpose key and signature failures while
- * auditing each reason", "grants the admin actor attribute only to an
- * admin-scoped registry token", "takes the bearer out of the server
- * bag as well as the headers", "does not answer or audit a downstream
- * refusal as this door refusing" and "fails closed when an assertion
- * refusal cannot be audited".
+ * auditing each reason", "refuses a replay because its mint is spent
+ * and audits the bounded reason", "keeps the contained actor handoff
+ * but rolls back its burn and principal", "publishes the assertion
+ * actor and this handoff claims on the request", "writes no session
+ * key under an assertion", "grants the admin actor attribute only to
+ * an admin-scoped registry token", "takes the bearer out of the
+ * server bag as well as the headers", "does not answer or audit a
+ * downstream refusal as this door refusing" and "fails closed when an
+ * assertion refusal cannot be audited".
  */
 final class AuthenticateMcp
 {
