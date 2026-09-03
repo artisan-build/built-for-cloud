@@ -16,6 +16,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleEntryRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\DelegatedActorDeactivated;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
+use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Carbon\CarbonImmutable;
 use Closure;
@@ -80,7 +81,17 @@ final class AuthenticateMcp
         }
 
         $this->tokens->recordClientIdentityFromRequest($request, $token);
-        $request->attributes->set('bfc.actor_token_id', (string) $token->getKey());
+
+        // The attribute keeps its ONE meaning — an ADMIN token
+        // authenticated, EnsureAdminToken's convention: the package's
+        // readers convert it straight into AuditActor::adminToken(),
+        // which types the audit row AdminToken. A non-admin MCP token
+        // still authenticates this door, but must not arrive anywhere
+        // wearing an attribution its credential does not hold.
+        if ($token->hasScope(Scope::Admin)) {
+            $request->attributes->set('bfc.actor_token_id', (string) $token->getKey());
+        }
+
         $request->setUserResolver(static fn () => $token);
 
         return $next($request);

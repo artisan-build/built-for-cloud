@@ -16,6 +16,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\SelfServiceUnavailable;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
+use ArtisanBuild\BuiltForCloud\Scope;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
@@ -46,6 +47,7 @@ beforeEach(function (): void {
         return [
             'user_type' => is_object($user) ? $user::class : null,
             'user_id' => $userId,
+            'actor_token_id' => $request->attributes->get('bfc.actor_token_id'),
             'acting_id' => $acting->identifier(),
             'delegated' => $acting->delegated,
             'guard' => $acting->guard,
@@ -255,6 +257,37 @@ it('keeps local and browser-session consumers closed to a request assertion', fu
     $this->postJson('/mcp-personal-probe', [], ['Authorization' => 'Bearer '.mcpAssertion()])
         ->assertOk()
         ->assertJsonPath('refused', true);
+});
+
+it('grants the admin actor attribute only to an admin-scoped registry token', function (): void {
+    // A non-admin, MCP-scoped token authenticates this door — that is
+    // the point of a per-tool gate — but `bfc.actor_token_id` means
+    // "an ADMIN token authenticated" (EnsureAdminToken's convention;
+    // six package readers convert it straight into an admin audit
+    // actor), so a token without the scope must not carry it.
+    $limited = 'non-admin-'.bin2hex(random_bytes(16));
+    $limitedToken = ApiToken::query()->create([
+        'name' => 'mcp non-admin token',
+        'token_hash' => hash('sha256', $limited),
+        'abilities' => ['apps:call'],
+    ]);
+
+    $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$limited])
+        ->assertOk()
+        ->assertJsonPath('user_type', ApiToken::class)
+        ->assertJsonPath('user_id', $limitedToken->getKey())
+        ->assertJsonPath('actor_token_id', null);
+
+    $admin = 'admin-'.bin2hex(random_bytes(16));
+    $adminToken = ApiToken::query()->create([
+        'name' => 'mcp admin token',
+        'token_hash' => hash('sha256', $admin),
+        'abilities' => [Scope::Admin->value],
+    ]);
+
+    $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$admin])
+        ->assertOk()
+        ->assertJsonPath('actor_token_id', (string) $adminToken->getKey());
 });
 
 it('never falls through between registry and assertion authentication paths', function (): void {
