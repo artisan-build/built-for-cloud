@@ -169,6 +169,7 @@ final class AssertionVerifier
         $displayName = $this->boundedString($claims, 'display_name', self::MAX_DISPLAY_LENGTH);
         $onBehalfOf = $this->optionalBoundedString($claims, 'on_behalf_of', self::MAX_DISPLAY_LENGTH);
         $stateDigest = $this->optionalStateDigest($claims);
+        $purpose = $this->optionalPurpose($claims);
         $issuedAt = $this->timestamp($claims, 'iat');
         $expiresAt = $this->timestamp($claims, 'exp');
         $notBefore = array_key_exists('nbf', $claims) ? $this->timestamp($claims, 'nbf') : null;
@@ -234,7 +235,31 @@ final class AssertionVerifier
             keyId: $keyId,
             id: $id,
             stateDigest: $stateDigest,
+            purpose: $purpose,
         );
+    }
+
+    /**
+     * The purpose claim is optional for one compatibility window. If it is
+     * present, it must name one of the two doors exactly; malformed values do
+     * not degrade into the legacy absent shape.
+     *
+     * @param  array<string, mixed>  $claims
+     */
+    private function optionalPurpose(array $claims): ?AssertionPurpose
+    {
+        if (! array_key_exists('purpose', $claims)) {
+            return null;
+        }
+
+        $value = $claims['purpose'];
+        $purpose = is_string($value) ? AssertionPurpose::tryFrom($value) : null;
+
+        if (! $purpose instanceof AssertionPurpose) {
+            throw AssertionRefused::because(AssertionRefusalReason::InvalidClaims);
+        }
+
+        return $purpose;
     }
 
     /**

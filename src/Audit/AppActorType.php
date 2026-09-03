@@ -65,7 +65,7 @@ enum AppActorType: string
     case LegacyApiToken = 'legacy_api_token';
 
     /**
-     * A delegated human admitted through the Console door, identified by
+     * A delegated human admitted through a Console handoff, identified by
      * the TYPE-QUALIFIED `bfc-console:{id}` form and never the bare key
      * ({@see DelegatedActor::getAuthIdentifier()}). This is the only
      * actor type that may carry `on_behalf_of`.

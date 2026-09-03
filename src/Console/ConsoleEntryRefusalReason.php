@@ -16,8 +16,8 @@ use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleEntryRefused;
  * deliberately DISJOINT value sets: the verifier owns everything about
  * the token (signature, issuer, audience, clocks, claim shapes), and
  * this enum owns everything the endpoint decides after the token has
- * verified — the single-use burn, the signed handoff state, and the
- * return path. One audit note therefore carries exactly one value from
+ * verified — purpose, the single-use burn, the signed handoff state, and
+ * the return path. One audit note therefore carries exactly one value from
  * exactly one of the two vocabularies, and a reader never has to
  * disambiguate.
  *
@@ -60,6 +60,9 @@ enum ConsoleEntryRefusalReason: string
      * deployment's configured allowlist does not cover it.
      */
     case ReturnPathRefused = 'return_path_refused';
+
+    /** The assertion was verified, but was minted for the other door. */
+    case PurposeMismatch = 'purpose_mismatch';
 
     /**
      * The mint identifier (`jti`) is already spent. This is the

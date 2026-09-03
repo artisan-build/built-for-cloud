@@ -112,6 +112,7 @@ $expectedCitations = [
     'release-notes/console-reservations.md' => 4,
     'src/Console/AssertionBurn.php' => 6,
     'src/Console/AssertionVerifier.php' => 2,
+    'src/Console/RequestAssertion.php' => 1,
     'src/Console/ConsoleEntryState.php' => 8,
     'src/Console/ConsoleGuard.php' => 17,
     'src/Console/ConsoleReturnTo.php' => 2,
@@ -146,6 +147,7 @@ $exemptFromCitation = [
     'src/Console/ActingPrincipalResolver.php' => 'D14 precedence, whose guarantees are stated and cited on ConsoleGuard',
     'src/Console/Assertion.php' => 'the verified claim set; every property rule is the verifier\'s and is cited there',
     'src/Console/AssertionRefusalReason.php' => 'a bounded enum of audit reasons',
+    'src/Console/AssertionPurpose.php' => 'the two-value assertion-purpose vocabulary',
     'src/Console/ConsoleEntryRefusalReason.php' => 'a bounded enum of audit reasons',
     'src/Console/ConsoleGuardConfiguration.php' => 'guard/provider injection; its rules are driven by ConsoleGuardRegistrationTest and stated in the contract',
     'src/Console/ConsoleKey.php' => 'a keyring row; the custody claim lives on ConsoleKeyring and points elsewhere for its enforcement',
@@ -156,7 +158,7 @@ $exemptFromCitation = [
     'src/Console/ConsoleReentryReason.php' => 'a bounded enum the structured 401 carries',
     'src/Console/ConsoleRole.php' => 'the two-value contract vocabulary (D8)',
     'src/Console/ConsoleSessionClock.php' => 'D7\'s cap constant and its fail-closed read; cited from ConsoleGuard, which is where the cap is enforced',
-    'src/Console/DelegatedClaims.php' => 'a readonly value object carrying one session\'s claims',
+    'src/Console/DelegatedClaims.php' => 'a readonly value object carrying one handoff\'s request or session claims',
 ];
 
 /**

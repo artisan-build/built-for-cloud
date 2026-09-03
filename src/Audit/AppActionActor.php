@@ -20,7 +20,7 @@ use LogicException;
  * actor only — the agency they acted for (D4).
  *
  * **THE CONSTRUCTOR IS PRIVATE, and that is what holds the SHAPE of D4 —
- * not the truth of it.** `on_behalf_of` belongs to a delegated session
+ * not the truth of it.** `on_behalf_of` belongs to a delegated handoff
  * and to nothing else: a local user acts for the deployment they log in
  * to, and a credential acts for itself. Rather than validating that
  * after the fact, the three non-delegated named constructors do not TAKE
@@ -129,7 +129,7 @@ final readonly class AppActionActor
 
     /**
      * A delegated operator, named by the type-qualified identity, acting
-     * for the agency THIS session's handoff named — or for none.
+     * for the agency THIS request or session handoff named — or for none.
      *
      * **THE AGENCY IS CALLER-SUPPLIED, and an earlier revision of this
      * paragraph said it was issuer-supplied.** That was false for any
@@ -138,16 +138,15 @@ final readonly class AppActionActor
      * verbatim. Nothing here bounds it, and nothing here establishes
      * where it came from.
      *
-     * On the package's own two paths it IS an issuer claim, and both
-     * take it from the SESSION's copy rather than the actor row's
-     * `last_handoff_on_behalf_of` — that column is shared by every live
-     * session for the same subject, so a later handoff naming a
-     * different agency would retroactively re-attribute this action to
-     * it. `POST /bfc/console/enter` calls this factory directly with the
-     * claims of the session it has just opened;
-     * {@see fromActingPrincipal()} reads it off the request's one
-     * resolved {@see ActingPrincipal}, which took it from
-     * {@see DelegatedClaims}. Either way it began as an assertion claim
+     * On the package's own two paths it IS an issuer claim, and both take
+     * it from the current handoff's request/session copy rather than the
+     * actor row's `last_handoff_on_behalf_of` — that column is shared by
+     * every live session for the same subject, so a later request or session
+     * handoff naming a different agency would retroactively re-attribute this action to it.
+     * `POST /bfc/console/enter` calls this factory directly with the claims
+     * of the session it has just opened; {@see fromActingPrincipal()} reads
+     * it off the request's one resolved {@see ActingPrincipal}, which took
+     * it from {@see DelegatedClaims}. Either way it began as an assertion claim
      * {@see AssertionVerifier} bounded to 120 characters and rejected
      * for control characters.
      *
@@ -199,7 +198,7 @@ final readonly class AppActionActor
     {
         // The delegated branch reads `onBehalfOf` off the SAME resolution
         // it reads the principal off: ActingPrincipal builds both from
-        // this session's own DelegatedClaims in one step, so the two
+        // this handoff's own DelegatedClaims in one step, so the two
         // halves of the attribution cannot have come from different
         // handoffs.
         if ($principal->delegated && $principal->principal instanceof DelegatedActor) {

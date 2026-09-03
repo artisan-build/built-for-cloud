@@ -44,8 +44,9 @@ use Illuminate\Http\Request;
  *
  * PRECEDENCE — delegated wins, and there is no union. A REFUSAL wins
  * over everything, on every route: a request whose delegated session has
- * just been invalidated resolves nobody, and never falls back to a
- * co-resident local user.
+ * just been invalidated resolves nobody, and never falls back to a request
+ * assertion or co-resident local user. A verified request assertion then
+ * wins over a local principal; without one, guard resolution is unchanged.
  *
  * ONE VALUE, not two equal answers. {@see resolve()} memoizes and hands
  * back the identical object to every caller. The memo is keyed on the
@@ -65,10 +66,10 @@ use Illuminate\Http\Request;
  * whether a delegated session exists, a question the applicable guard
  * cannot change the answer to.
  *
- * CLAIMS COME FROM THE SESSION. The role and the attribution this
- * resolution carries are the ones THIS session's own handoff wrote
- * ({@see DelegatedClaims}), never the shadow row's `last_handoff_*`
- * copy, which a later handoff for the same subject overwrites.
+ * CLAIMS COME FROM THIS HANDOFF. A browser entry reads the session copy;
+ * an MCP request reads the assertion that middleware just verified. Neither
+ * reads the shadow row's shared `last_handoff_*` copy, which a later handoff
+ * for the same subject overwrites.
  */
 final class ActingPrincipalResolver
 {
@@ -77,6 +78,8 @@ final class ActingPrincipalResolver
     private ?Request $resolvedFor = null;
 
     private ?string $resolvedUnder = null;
+
+    private ?ActingPrincipal $resolvedRequestAssertion = null;
 
     public function __construct(private readonly Container $app) {}
 
@@ -88,17 +91,21 @@ final class ActingPrincipalResolver
     {
         $request = $this->request();
         $applicable = $this->applicableGuardName();
+        $requestAssertion = RequestAssertion::principal($request);
 
-        if ($this->resolvedFor !== $request || $this->resolvedUnder !== $applicable) {
+        if ($this->resolvedFor !== $request
+            || $this->resolvedUnder !== $applicable
+            || $this->resolvedRequestAssertion !== $requestAssertion) {
             $this->resolved = null;
             $this->resolvedFor = $request;
             $this->resolvedUnder = $applicable;
+            $this->resolvedRequestAssertion = $requestAssertion;
         }
 
-        return $this->resolved ??= $this->resolveNow();
+        return $this->resolved ??= $this->resolveNow($requestAssertion);
     }
 
-    private function resolveNow(): ActingPrincipal
+    private function resolveNow(?ActingPrincipal $requestAssertion): ActingPrincipal
     {
         $console = $this->consoleGuard();
 
@@ -112,6 +119,13 @@ final class ActingPrincipalResolver
 
         if ($refusal instanceof ConsoleReentryReason) {
             return ActingPrincipal::refused($refusal);
+        }
+
+        // A verified assertion is the delegated principal for this request,
+        // ahead of any local session and never unioned with it. The console
+        // refusal above remains terminal and therefore wins over this source.
+        if ($requestAssertion instanceof ActingPrincipal) {
+            return $requestAssertion;
         }
 
         if ($this->applicableGuardName() === ConsoleGuardConfiguration::GUARD) {

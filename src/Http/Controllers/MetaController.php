@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
+use ArtisanBuild\BuiltForCloud\Mcp\McpConfiguration;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use Illuminate\Http\JsonResponse;
 
@@ -15,7 +16,7 @@ final class MetaController
     {
         $ownership = Ownership::current();
 
-        return response()->json([
+        $payload = [
             'product' => config('built-for-cloud.product'),
             'bfc_version' => BuiltForCloud::VERSION,
             'api_version' => BuiltForCloud::API_VERSION,
@@ -114,7 +115,13 @@ final class MetaController
             // one fact.
             'capabilities' => self::capabilities(),
             'claimed' => $ownership !== null && $ownership->owner_token_id !== null,
-        ]);
+        ];
+
+        if (($mcp = McpConfiguration::endpoint()) !== null) {
+            $payload['endpoints'] = ['mcp' => $mcp];
+        }
+
+        return response()->json($payload);
     }
 
     /**
@@ -137,6 +144,14 @@ final class MetaController
         if (ConsoleGuardConfiguration::servesDelegatedEntry()) {
             $capabilities[] = 'console-enter';
             $capabilities[] = 'console-chrome-assets';
+        }
+
+        if (McpConfiguration::serves()) {
+            $capabilities[] = 'mcp-serve';
+        }
+
+        if (McpConfiguration::delegated()) {
+            $capabilities[] = 'mcp-delegated';
         }
 
         return $capabilities;

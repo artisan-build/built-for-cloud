@@ -49,6 +49,8 @@ Everything else is the ordinary Laravel baseline (`ctype`, `filter`, `hash`, `mb
 
 ## Versioning and compatibility
 
+**RELEASE WINDOW: this document describes `bfc_version` 0.7.0; `BuiltForCloud::VERSION` is 0.6.4 until the tag lands.**
+
 Two discriminators, reported by [`GET /bfc/meta`](#get-bfcmeta):
 
 - **`api_version`** (integer, currently **2**) — the contract's major version. It bumps whenever a
@@ -91,11 +93,11 @@ The rules a consumer may rely on:
 
 ### Changelog
 
-**api_version 2** (bfc **0.6.4**, this release). All changes since version 1, in one inventory.
+**api_version 2** (bfc **0.7.0**, this release). All changes since version 1, in one inventory.
 Additive unless marked otherwise.
 
-**Everything the Console adds in 0.6.4 is additive, so `api_version` stays 2. What carries the
-signal is `bfc_version` 0.6.4 plus the `capabilities` entries** — `console-keys`,
+**Everything the Console adds through 0.7.0 is additive, so `api_version` stays 2. What carries the
+signal is `bfc_version` 0.7.0 plus the `capabilities` entries** — `console-keys`,
 `console-key-retire`, `console-vitals`, `console-guard`, `console-enter`, `console-chrome-assets`
 and `app-action-audit-emit`.
 
@@ -113,6 +115,15 @@ because a reader applying rule 1 to their own change needs the real list:
   response keys included, so a consumer pinned to the pre-Console shape sees identical keys.
 - **Machinery that is not a route at all** — the `bfc-console` guard, the delegated-actor table and
   the app-action emission point serve no new wire shape and change none.
+
+- **Request-scoped delegated MCP authentication ships.** `AuthenticateMcp` accepts either a
+  `TokenRegistry` bearer or a purpose-bound Console assertion, burns assertions before dispatch,
+  and publishes their delegated actor for that request without writing a session. `GET /bfc/meta`
+  gains conditional `mcp-serve` / `mcp-delegated` capabilities and the additive `endpoints` object.
+  MCP tools gain the `metadata | content` classification attribute and a reusable delegated-tool
+  conformance assertion. The assertion verifier gains the optional `purpose` claim; the MCP door
+  requires `mcp` now, while Console entry temporarily treats absence as `console-entry`. That
+  legacy tolerance is scheduled for removal in the next minor.
 
 None of that removes a field, renames one, retypes one, or changes what an existing field means,
 which is what rule 1 makes the major bump about. Written down here so it is not re-litigated, along
@@ -521,6 +532,19 @@ revision may constrain `product` to a bounded shape, letting `GET /bfc/meta` hon
 `metadata`; until then it is `content`, because an unrestricted config string is
 operator-authored free text.
 
+MCP tools use the same two-value boundary through
+`#[ToolClassification(Classification::Metadata)]` or
+`#[ToolClassification(Classification::Content)]`. A tool extending `ClassifiedTool` advertises
+the value in `tools/list` as `_meta.classification`; an undeclared tool serializes conservatively
+as `content`, but is still non-conforming because the declaration itself is required. A product
+may advertise `mcp-delegated` only when every registered tool carries one of Laravel MCP's
+`#[IsReadOnly]`, `#[IsDestructive]`, or `#[IsIdempotent]` attributes and an explicit
+`ToolClassification`, and its suite runs
+`ContractAssertions::assertBuiltForCloudMcpDelegatedTools()` against the server. The assertion
+checks registered tools eligible under that test's application state and verifies wire
+propagation. It does not inspect unregistered or currently ineligible tools, response bodies,
+implementations, or whether an annotation truthfully describes behavior.
+
 ---
 
 ## Metadata
@@ -534,10 +558,11 @@ Public (`bfc-public` throttle). Identifies the instance.
 ```json
 {
   "product": "Sink",
-  "bfc_version": "0.6.4",
+  "bfc_version": "0.7.0",
   "api_version": 2,
-  "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials", "console-keys", "console-key-retire", "console-vitals", "app-action-audit-emit"],
-  "claimed": true
+  "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials", "console-keys", "console-key-retire", "console-vitals", "app-action-audit-emit", "mcp-serve", "mcp-delegated"],
+  "claimed": true,
+  "endpoints": {"mcp": "/mcp"}
 }
 ```
 
@@ -605,6 +630,18 @@ An app that defined its own `bfc-console` guard keeps it, and the package mounts
 front of somebody else's guard — so that deployment reports `console-guard` and not
 `console-enter`. The capability and the route ride one predicate, so they can never disagree.
 See [Console — what has landed](#console--what-has-landed-and-what-is-still-reserved).
+
+`mcp-serve` means this deployment declares a rooted MCP endpoint path in
+`built-for-cloud.mcp.path`; the same predicate adds `endpoints.mcp`, so the capability and the
+path it promises cannot disagree. `endpoints` is an additive open object: feature-detect its
+members, ignore unknown names, and never depend on key order. It is absent when no endpoint is
+declared.
+
+`mcp-delegated` is strictly stronger: the endpoint is declared and
+`built-for-cloud.mcp.delegated` is true, meaning `AuthenticateMcp` guards it and the product runs
+the tool conformance assertion described under Endpoint classification. A deployment may report
+`mcp-serve` alone when it accepts registry bearers but not delegated assertions. The package does
+not mount an MCP server; these are deployment declarations, not unconditional installation facts.
 
 ---
 
@@ -2008,7 +2045,7 @@ field.
 {
   "version": 1,
   "api_version": 2,
-  "bfc_version": "0.6.4",
+  "bfc_version": "0.7.0",
   "app_version": "1.4.2",
   "health": "ok",
   "deployed_at": "2026-08-29T09:14:00+00:00",
@@ -2160,6 +2197,69 @@ mutating request).
 
 ---
 
+## MCP authentication
+
+`AuthenticateMcp` is the plain Laravel middleware alias `bfc.mcp` for an application-owned,
+stateless MCP endpoint. The package does not mount that endpoint. A deployment declares the path
+it actually mounted with `built-for-cloud.mcp.path` and declares delegated support with
+`built-for-cloud.mcp.delegated`; those declarations drive the metadata promises above.
+
+The only carrier is `Authorization: Bearer <credential>`. Dispatch is exclusive by prefix:
+
+- A bearer beginning with `v4.public.` is handled only as a Console assertion. A signature,
+  keyring, issuer, audience, clock, TTL, purpose, replay, or containment failure never falls
+  through to `TokenRegistry`.
+- Every other bearer is handled only by `TokenRegistry::resolveModel()`. An unknown or expired
+  registry token never falls through to assertion verification.
+
+A deployment whose `built-for-cloud.token_prefix` is configured as `v4.public.` creates a carrier
+collision: generated registry tokens would select the assertion path. That is an invalid
+deployment configuration, not a fallback code path.
+
+On the assertion path, verification happens first and `purpose` must be exactly `mcp`. The
+middleware then commits `DelegatedActor::recordHandoff()` independently so a contained human's
+attempt and current claims survive refusal. In the middleware's own database transaction it
+inserts the single-use `jti` burn, locks and re-reads that actor, refuses an inactive actor, and
+publishes an `ActingPrincipal` on the current request object. Claims come directly from this
+verified assertion, never from the actor row's shared `last_handoff_*` fields. No login occurs and
+the middleware writes no session key. The resolver's existing order still applies: a Console-session
+refusal is terminal, then the request assertion outranks a local principal, and identities are
+never unioned. The request object is also the scope boundary, so a singleton resolver cannot carry
+that principal into the next request.
+
+Every authentication failure answers the same reason-free response, including replay and
+containment:
+
+```json
+HTTP/1.1 401 Unauthorized
+{"message":"Unauthenticated."}
+```
+
+Assertion-path refusals append `denied_action` to the credential lifecycle stream with one bounded
+reason and no presented bytes. The refusal is fail-closed: if that audit transaction cannot commit,
+the request answers `500`, not an unaudited `401`. This is the same availability trade as Console
+entry; a deployment whose database is unwritable could not commit the assertion burn either.
+Registry-token refusals are not audited here because an application-chosen public MCP route must
+not turn anonymous bearer noise into a database-write amplifier.
+
+The middleware removes `Authorization` from the framework request before validation. This prevents
+downstream package frames and rich exception reporters from serializing it, but does not erase
+copies made by an upstream proxy or middleware, web-server access logs that record headers, a raw
+request buffer already captured elsewhere, or vendor frames entered before removal. It does not
+authorize a tool either: applications still apply their own policy to the assertion role or token.
+
+A request-scoped delegated actor has no local personal identity. If an application composes
+`bfc.mcp` with `bfc.admin`, `bfc.auth`, or `PersonalCredentialSurface`, those local/session-oriented
+consumers refuse it through `delegatedSessionPresent()` rather than treating it as a local user.
+This is intentional and is a behavior change only on routes that compose those gates with
+`AuthenticateMcp`; requests carrying no request assertion retain their prior behavior.
+
+*Pinned by* `tests/AuthenticateMcpTest.php`, `tests/ConsoleActingPrincipalTest.php`,
+`tests/AuthFoundationTest.php`, `tests/ConsoleChromeTest.php`,
+`tests/ConsoleChromeUnmountedTest.php`, and `tests/PersonalCredentialsTest.php`.
+
+---
+
 ## Console entry
 
 The door. Everything above in the `/bfc/console/*` namespace is operator- or vendor-facing
@@ -2196,6 +2296,12 @@ state=<base64url of {"return_to": "/orders?tab=open"}>
 ```
 
 - `assertion` — the signed handoff. Required, ≤ 4096 bytes.
+- `purpose` — a signed assertion claim, either `console-entry` or `mcp`. In this release it is
+  optional at verification for issuer compatibility. This endpoint treats absence as
+  `console-entry` and refuses an explicit `mcp`; `AuthenticateMcp` requires an explicit `mcp` and
+  refuses both absence and `console-entry`. The MCP half is fully enforced now. Requiring an
+  explicit `console-entry` here is deferred and scheduled for removal of the absent-purpose
+  tolerance in the next minor.
 - `state` — the **signed handoff state**. Required, ≤ 4096 bytes, unpadded base64url of a JSON
   object. The only member this deployment reads is `return_to`; unknown members are ignored, so
   an issuer may grow the payload without a contract break. The assertion's `state` claim carries
@@ -2220,8 +2326,8 @@ session, not the row's").
 
 Every failure answers with that body and that status: an expired assertion, one minted for
 another deployment, a bad signature, an unknown key, a replayed mint, a tampered or absent
-state, a return path this deployment will not honour, and an actor this deployment has
-contained. **Nothing in the response distinguishes them.** The reason is recorded in the audit
+state, an explicit `purpose: mcp`, a return path this deployment will not honour, and an actor this
+deployment has contained. **Nothing in the response distinguishes them.** The reason is recorded in the audit
 stream as a `denied_action` event with the actor typed (`credential_holder`) and a bounded
 reason code in the note — never returned to the caller.
 

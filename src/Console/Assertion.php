@@ -81,6 +81,8 @@ final readonly class Assertion
          * decision governs.
          */
         public ?string $stateDigest = null,
+        /** The door this mint is for, or null for a legacy console-entry mint during the compatibility window. */
+        public ?AssertionPurpose $purpose = null,
     ) {}
 
     /**
@@ -106,6 +108,7 @@ final readonly class Assertion
         string $keyId,
         string $id,
         ?string $stateDigest = null,
+        ?AssertionPurpose $purpose = null,
     ): self {
         return new self(
             issuer: $issuer,
@@ -119,6 +122,7 @@ final readonly class Assertion
             keyId: $keyId,
             id: $id,
             stateDigest: $stateDigest,
+            purpose: $purpose,
         );
     }
 

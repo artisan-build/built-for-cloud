@@ -14,6 +14,7 @@ use Illuminate\Foundation\Testing\TestCase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Testing\TestResponse;
+use Laravel\Mcp\Server;
 use PHPUnit\Framework\Assert;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
@@ -22,6 +23,14 @@ use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
  */
 trait ContractAssertions
 {
+    /**
+     * @param  class-string<Server>  $serverClass
+     */
+    public function assertBuiltForCloudMcpDelegatedTools(string $serverClass): void
+    {
+        McpDelegatedTools::assertConforms($serverClass);
+    }
+
     public function assertBuiltForCloudContract(): void
     {
         $this->assertBuiltForCloudMetaContract();

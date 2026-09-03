@@ -11,7 +11,7 @@ use Throwable;
 /**
  * `POST /bfc/console/enter` refused an entry for something the endpoint
  * decided rather than something the verifier did (Console PRD D12/D13):
- * the burn, the signed handoff state, or the return path.
+ * purpose, the burn, the signed handoff state, or the return path.
  *
  * ONE exception class for every such refusal, carrying ONE uniform,
  * reason-free message — the same discipline {@see AssertionRefused}

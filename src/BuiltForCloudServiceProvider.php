@@ -53,6 +53,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\PersonalCredentials;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
@@ -255,6 +256,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             // than a generic one. It enforces no clock of its own —
             // ConsoleGuard does that on every route.
             $router->aliasMiddleware('bfc.console', EnsureConsoleSession::class);
+            $router->aliasMiddleware('bfc.mcp', AuthenticateMcp::class);
 
             // Livewire remains optional; its provider is what supplies this binding.
             if ($this->app->bound(LivewireManager::class)) {

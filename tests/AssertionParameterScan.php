@@ -96,7 +96,11 @@ final class AssertionParameterScan
      *
      * @var list<string>
      */
-    public const array ROOTS = ['Console', 'Http/Controllers/ConsoleEnter.php'];
+    public const array ROOTS = [
+        'Console',
+        'Http/Controllers/ConsoleEnter.php',
+        'Http/Middleware/AuthenticateMcp.php',
+    ];
 
     /** The package's PSR-4 prefix, for turning a path into a class. */
     private const string NAMESPACE_PREFIX = 'ArtisanBuild\\BuiltForCloud\\';

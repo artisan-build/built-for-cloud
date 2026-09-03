@@ -45,6 +45,9 @@ it('marks every frame in this package that holds console assertion bytes', funct
     expect(AssertionParameterScan::framesIn($classes))->toBe([
         'AssertionVerifier::keyIdOf($token)',
         'AssertionVerifier::verify($token)',
+        'AuthenticateMcp::authenticateAssertion($assertionToken)',
+        'AuthenticateMcp::authenticateAssertion($request)',
+        'AuthenticateMcp::handle($request)',
         // The three the name rule could never have seen. `__invoke` is
         // the one that mattered: it holds the submitted form, and the
         // fail-closed audit made it an exception path in the same round
@@ -62,6 +65,8 @@ it('marks every frame in this package that holds console assertion bytes', funct
         // now says so.
         'DelegatedActorProvider::retrieveByToken($token)',
         'DelegatedActorProvider::updateRememberToken($token)',
+        'RequestAssertion::principal($request)',
+        'RequestAssertion::publish($request)',
     ]);
 });
 

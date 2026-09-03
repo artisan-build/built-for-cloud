@@ -19,6 +19,7 @@
     },
     "require-dev": {
         "larastan/larastan": "^3.9",
+        "laravel/mcp": "^0.9.4",
         "laravel/pint": "^1.27",
         "livewire/livewire": "^4.4",
         "orchestra/testbench": "^11.0",
@@ -54,5 +55,8 @@
         }
     },
     "minimum-stability": "stable",
-    "prefer-stable": true
+    "prefer-stable": true,
+    "suggest": {
+        "laravel/mcp": "Required by applications using the MCP tool classification bridge and conformance helper."
+    }
 }

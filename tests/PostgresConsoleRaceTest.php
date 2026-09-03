@@ -5,8 +5,10 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\Actions\RetireConsoleKey;
 use ArtisanBuild\BuiltForCloud\Console\AssertionBurn;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
 use ArtisanBuild\BuiltForCloud\Tests\Support\PostgresLane;
 use Illuminate\Database\QueryException;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 uses(PostgresLane::class)->group('pgsql');
@@ -113,6 +115,67 @@ it('serializes two inserts for one assertion at the unique burn index', function
 
     expect(AssertionBurn::query()->count())->toBe(1);
 })->note('Mutation: remove unique() from the burn ledger mint_hash migration, widening the concurrent insert window. The probe then inserts a duplicate instead of receiving SQLSTATE 55P03. Debt row bfc-console-enter-burn-race.');
+
+it('serializes concurrent presentation through AuthenticateMcp own transaction', function (): void {
+    $secret = consoleKeypair();
+    consoleFileKey('pg-mcp-k1', $secret);
+
+    $token = consoleMint($secret, consoleClaims(['purpose' => 'mcp']), 'pg-mcp-k1');
+    $probe = $this->postgresLaneProbe();
+    $probe->statement("set lock_timeout = '".BFC_POSTGRES_LOCK_TIMEOUT."'");
+
+    $interleaved = false;
+    $probeFailure = null;
+
+    AssertionBurn::created(function () use ($token, $probe, &$interleaved, &$probeFailure): void {
+        if ($interleaved) {
+            return;
+        }
+
+        $interleaved = true;
+        config(['database.default' => 'pgsql_testing_probe']);
+
+        try {
+            app(AuthenticateMcp::class)->handle(
+                Request::create('/mcp', 'POST', server: ['HTTP_AUTHORIZATION' => 'Bearer '.$token]),
+                fn () => response()->json(['ok' => true]),
+            );
+        } catch (Throwable $failure) {
+            $probeFailure = $failure;
+        } finally {
+            config(['database.default' => 'pgsql_testing']);
+
+            if ($probe->transactionLevel() > 0) {
+                $probe->rollBack();
+            }
+        }
+    });
+
+    try {
+        $response = app(AuthenticateMcp::class)->handle(
+            Request::create('/mcp', 'POST', server: ['HTTP_AUTHORIZATION' => 'Bearer '.$token]),
+            fn () => response()->json(['ok' => true]),
+        );
+    } finally {
+        $probe->statement('set lock_timeout = default');
+    }
+
+    expect($response->getStatusCode())->toBe(200)
+        ->and($interleaved)->toBeTrue()
+        ->and(AssertionBurn::query()->count())->toBe(1);
+
+    expectPostgresLockRefusal(
+        $probeFailure,
+        'A concurrent MCP presentation passed the middleware transaction before the first burn committed.',
+    );
+
+    $replay = app(AuthenticateMcp::class)->handle(
+        Request::create('/mcp', 'POST', server: ['HTTP_AUTHORIZATION' => 'Bearer '.$token]),
+        fn () => response()->json(['ok' => true]),
+    );
+
+    expect($replay->getStatusCode())->toBe(AuthenticateMcp::REFUSAL_STATUS);
+})->note('The probe enters AuthenticateMcp with the same signed bytes while its first burn is uncommitted. PostgreSQL must refuse the interleaving at the unique index with SQLSTATE 55P03; after commit, the same bytes receive the ordinary replay 401.');
 
 it('locks the whole key ring before deciding whether retirement needs confirmation', function (): void {
     consoleFileKey('pg-retire-k1', consoleKeypair());

@@ -253,6 +253,24 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | MCP Endpoint
+    |--------------------------------------------------------------------------
+    |
+    | The package supplies authentication middleware, not an MCP server.
+    | Setting `path` declares the rooted path this deployment actually serves;
+    | it is the single predicate for both the mcp-serve capability and the
+    | endpoints.mcp value. Set `delegated` only when AuthenticateMcp guards that
+    | endpoint and the product runs the delegated-tool conformance assertion.
+    |
+    */
+
+    'mcp' => [
+        'path' => env('BUILT_FOR_CLOUD_MCP_PATH'),
+        'delegated' => env('BUILT_FOR_CLOUD_MCP_DELEGATED', false),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Console Vitals (the ops-vitals read, Console PRD D9/D15)
     |--------------------------------------------------------------------------
     |
