@@ -68,11 +68,14 @@ use Throwable;
  *
  * Every refusal leaves as {@see AssertionRefused} with one uniform,
  * reason-free message; the {@see AssertionRefusalReason} is for the
- * audit record PR4 writes, never for the presenter.
+ * audit record the refusing door writes — the enter endpoint or the
+ * MCP middleware — never for the presenter.
  *
  * Verification is PURE: it reads the keyring and the clock and writes
- * nothing. The single-use burn of `jti` (D12) belongs to the enter
- * endpoint that owns the transaction, not to the crypto choke point.
+ * nothing. The single-use burn of `jti` (D12) belongs to the door that
+ * owns the redeeming transaction — the enter endpoint for a browser
+ * entry, `AuthenticateMcp` for a stateless call — not to the crypto
+ * choke point.
  *
  * THE TOKEN IS A LIVE CREDENTIAL AND IS MARKED AS ONE. Every frame in
  * this class that holds the presented bytes carries

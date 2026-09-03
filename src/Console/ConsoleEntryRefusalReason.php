@@ -7,17 +7,29 @@ namespace ArtisanBuild\BuiltForCloud\Console;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleEntryRefused;
 
 /**
- * Why `POST /bfc/console/enter` refused an entry for a reason the
- * ASSERTION ITSELF was not refused for (Console PRD D12/D13) — a
- * bounded, machine-readable vocabulary for the AUDIT RECORD, never for
- * the caller.
+ * Why a console DOOR refused a presentation for a reason the ASSERTION
+ * ITSELF was not refused for (Console PRD D12/D13) — a bounded,
+ * machine-readable vocabulary for the AUDIT RECORD, never for the
+ * caller.
+ *
+ * TWO doors decide in this vocabulary: `POST /bfc/console/enter`
+ * (rendered as its uniform 403) and the MCP authentication middleware
+ * `AuthenticateMcp` (rendered as its uniform 401). The enum's
+ * Console-prefixed NAME predates the second door and is kept for
+ * stability; its CONTRACT is both consumers, and every case states
+ * where it can arise. The doors share the cases the shared machinery
+ * produces — a purpose mismatch, a spent mint, a contained actor —
+ * while `state_missing`, `return_path_refused` and the enter-only
+ * field shapes arise at the enter door alone, which cannot happen on
+ * a bearer whose bytes verified.
  *
  * It is the sibling of {@see AssertionRefusalReason} and the two are
  * deliberately DISJOINT value sets: the verifier owns everything about
  * the token (signature, issuer, audience, clocks, claim shapes), and
- * this enum owns everything the endpoint decides after the token has
- * verified — purpose, the single-use burn, the signed handoff state, and
- * the return path. One audit note therefore carries exactly one value from
+ * this enum owns everything a door decides after the token has
+ * verified — purpose, the single-use burn and containment at both
+ * doors; the signed handoff state and the return path at the enter
+ * door only. One audit note therefore carries exactly one value from
  * exactly one of the two vocabularies, and a reader never has to
  * disambiguate.
  *
@@ -26,8 +38,9 @@ use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleEntryRefused;
  * attacker-influenced string can ride into a log line.
  *
  * {@see ConsoleEntryRefused} collapses every case below — and every
- * {@see AssertionRefusalReason} — into ONE response, so a presenter
- * cannot tell a replay from a wrong audience from a bad signature.
+ * {@see AssertionRefusalReason} — into ONE response PER DOOR, so a
+ * presenter at either cannot tell a replay from a wrong audience from
+ * a bad signature.
  */
 enum ConsoleEntryRefusalReason: string
 {

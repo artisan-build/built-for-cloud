@@ -139,10 +139,15 @@ final class DelegatedActor extends Model implements Authenticatable
      *
      * INTERNAL. This is the storage half and it does NOT decide whether
      * the actor may act: it returns deactivated rows too, and it verifies
-     * nothing — writing a row here grants nothing, because no session can
-     * be created from it. {@see ConsoleGuard::redeem()} is the only
-     * operation that turns an actor into a principal, and it fails closed
-     * on a deactivated one under a row lock BEFORE anything is logged in.
+     * nothing — writing a row here grants nothing, because neither a
+     * session nor a request principal can be created from it. TWO
+     * operations turn an actor into a principal, and both fail closed
+     * on a deactivated one under a row lock BEFORE anything is
+     * published: {@see ConsoleGuard::redeem()} for a browser entry
+     * (session keys, via the enter door), and
+     * {@see RequestAssertion::publish()} for a stateless MCP call (a
+     * principal scoped to the one request object, via
+     * `AuthenticateMcp`).
      *
      * `deactivated_at` is deliberately never cleared. A fresh, valid
      * assertion means the ISSUER still vouches for the human; it says

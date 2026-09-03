@@ -28,11 +28,13 @@ use Carbon\CarbonImmutable;
  * the vendor learns nothing at all about the app's own users (there is
  * no "Scalpels user x = app user y" mapping anywhere in this design).
  *
- * `$id` is the token's `jti`: the unique mint identifier PR4 BURNS
- * atomically at the enter endpoint, which is what makes an assertion
- * single-use. Verification deliberately does not burn it — the verifier
- * is the crypto/claims choke point, and the burn is a storage decision
- * that belongs to the endpoint that owns the transaction.
+ * `$id` is the token's `jti`: the unique mint identifier the
+ * redeeming door BURNS atomically — the enter endpoint inside its
+ * session-minting transaction, `AuthenticateMcp` inside its own —
+ * which is what makes an assertion single-use. Verification
+ * deliberately does not burn it — the verifier is the crypto/claims
+ * choke point, and the burn is a storage decision that belongs to the
+ * door that owns the transaction.
  *
  * **The display claims are NOT sanitized HTML.** They are bounded in
  * length and free of control characters, and that is all — see
@@ -57,8 +59,8 @@ final readonly class Assertion
         public CarbonImmutable $expiresAt,
         /** The keyring key that verified the signature. */
         public string $keyId,
-        /** The `jti` the enter endpoint burns — one redemption per mint, ever. */
-        public string $id,
+    /** The `jti` the redeeming door burns — one redemption per mint, ever. */
+    public string $id,
         /**
          * The sha256 hex digest of the SIGNED HANDOFF STATE (D13), or
          * null when the mint carried none.
