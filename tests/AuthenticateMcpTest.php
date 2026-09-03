@@ -57,6 +57,8 @@ beforeEach(function (): void {
             'audit_ref' => $audit?->ref,
             'audit_agency' => $audit?->onBehalfOf,
             'authorization' => $request->header('Authorization'),
+            'server_authorization' => $request->server->get('HTTP_AUTHORIZATION'),
+            'redirect_server_authorization' => $request->server->get('REDIRECT_HTTP_AUTHORIZATION'),
         ];
     })->middleware('bfc.mcp');
 
@@ -141,6 +143,25 @@ it('publishes the assertion actor and this handoff claims for this request only'
         ->assertJsonPath('authorization', null);
 
     expect(AssertionBurn::query()->count())->toBe(1);
+});
+
+it('takes the bearer out of the server bag as well as the headers', function (): void {
+    // Rich exception reporters serialize `$request->server` alongside
+    // the trace, so clearing the header alone leaves the live
+    // credential in the object a reporter would capture. Apache's
+    // rewrite copy rides the same request here to prove the set the
+    // middleware clears is the set the carrier arrives in.
+    $assertion = mcpAssertion();
+
+    $this->call('POST', '/mcp-probe', [], [], [], [
+        'HTTP_AUTHORIZATION' => 'Bearer '.$assertion,
+        'REDIRECT_HTTP_AUTHORIZATION' => 'Bearer '.$assertion,
+        'CONTENT_TYPE' => 'application/json',
+        'HTTP_ACCEPT' => 'application/json',
+    ])->assertOk()
+        ->assertJsonPath('authorization', null)
+        ->assertJsonPath('server_authorization', null)
+        ->assertJsonPath('redirect_server_authorization', null);
 });
 
 it('refuses a replay because its mint is spent and audits the bounded reason', function (): void {

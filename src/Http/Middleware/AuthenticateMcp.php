@@ -42,6 +42,11 @@ use Throwable;
  * this request object. Assertion refusals are audited and fail closed if that
  * audit cannot be committed. Registry-token refusals are intentionally not
  * audited here, matching the package's public bearer gates.
+ *
+ * THE CREDENTIAL IS TAKEN OUT OF THE REQUEST BEFORE ANYTHING CAN THROW,
+ * and the claim is deliberately narrower than "no frame leaks it":
+ * see forgetCredential(), which states exactly what is cleared and the
+ * residue that survives.
  */
 final class AuthenticateMcp
 {
@@ -62,9 +67,7 @@ final class AuthenticateMcp
     {
         $bearer = $request->bearerToken();
 
-        // Remove the live credential before any validation or storage path
-        // can throw and a rich exception reporter can serialize the request.
-        $request->headers->remove('Authorization');
+        $this->forgetCredential($request);
 
         if ($bearer === null || $bearer === '') {
             return $this->refuseToken();
@@ -95,6 +98,32 @@ final class AuthenticateMcp
         $request->setUserResolver(static fn () => $token);
 
         return $next($request);
+    }
+
+    /**
+     * THE CLAIM IS NARROWER THAN "NO FRAME LEAKS THE CREDENTIAL",
+     * deliberately, and in the same voice the console entry door uses
+     * for the same problem. What IS cleared: the `Authorization` HEADER
+     * and the SERVER-BAG copies a rich exception reporter serializes
+     * alongside a trace — `HTTP_AUTHORIZATION` and Apache's rewrite copy
+     * `REDIRECT_HTTP_AUTHORIZATION`, which is the set Laravel's own
+     * bearer resolution reads. This runs before any verification or
+     * storage path can throw, so a downstream failure serializes a
+     * request object that no longer carries the bearer.
+     *
+     * What SURVIVES, named rather than chased: vendor frames this
+     * package cannot annotate were entered before this middleware ran
+     * and hold the bytes they were handed; a raw request body already
+     * buffered by something upstream; copies made by a proxy in front
+     * of the deployment; and web-server access logs that record
+     * headers. Those are equally true of every bearer token a Laravel
+     * application receives, and none of them is reachable from here.
+     */
+    private function forgetCredential(#[SensitiveParameter] Request $request): void
+    {
+        $request->headers->remove('Authorization');
+        $request->server->remove('HTTP_AUTHORIZATION');
+        $request->server->remove('REDIRECT_HTTP_AUTHORIZATION');
     }
 
     /**

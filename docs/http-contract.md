@@ -2242,11 +2242,13 @@ entry; a deployment whose database is unwritable could not commit the assertion 
 Registry-token refusals are not audited here because an application-chosen public MCP route must
 not turn anonymous bearer noise into a database-write amplifier.
 
-The middleware removes `Authorization` from the framework request before validation. This prevents
-downstream package frames and rich exception reporters from serializing it, but does not erase
-copies made by an upstream proxy or middleware, web-server access logs that record headers, a raw
-request buffer already captured elsewhere, or vendor frames entered before removal. It does not
-authorize a tool either: applications still apply their own policy to the assertion role or token.
+The middleware removes the credential from the framework request before validation: the
+`Authorization` header and the server-bag copies a rich exception reporter serializes alongside a
+trace (`HTTP_AUTHORIZATION` and Apache's rewrite copy `REDIRECT_HTTP_AUTHORIZATION`). This prevents
+downstream package frames and reporters from serializing it, but does not erase copies made by an
+upstream proxy or middleware, web-server access logs that record headers, a raw request buffer
+already captured elsewhere, or vendor frames entered before removal. It does not authorize a tool
+either: applications still apply their own policy to the assertion role or token.
 
 A request-scoped delegated actor has no local personal identity. If an application composes
 `bfc.mcp` with `bfc.admin`, `bfc.auth`, or `PersonalCredentialSurface`, those local/session-oriented
