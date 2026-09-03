@@ -175,7 +175,7 @@ it('serializes concurrent presentation through AuthenticateMcp own transaction',
     );
 
     expect($replay->getStatusCode())->toBe(AuthenticateMcp::REFUSAL_STATUS);
-})->note('The probe enters AuthenticateMcp with the same signed bytes while its first burn is uncommitted. PostgreSQL must refuse the interleaving at the unique index with SQLSTATE 55P03; after commit, the same bytes receive the ordinary replay 401.');
+})->note('Mutation: move AssertionBurn::burn() out of AuthenticateMcp\'s DB::transaction (or remove the burn ledger\'s mint_hash unique index), and the probe\'s same-bytes insert no longer contends — it completes instead of receiving SQLSTATE 55P03, and the post-commit replay stops answering the ordinary 401. Debt row bfc-mcp-concurrent-presentation-race.');
 
 it('locks the whole key ring before deciding whether retirement needs confirmation', function (): void {
     consoleFileKey('pg-retire-k1', consoleKeypair());

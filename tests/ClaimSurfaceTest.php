@@ -275,7 +275,10 @@ $restatedClaims = [
         'src/Console/ConsoleGuard.php',
         'src/Console/DelegatedActorProvider.php',
     ],
-    'that assertion stays presentable until its ttl runs out every presentation refused every one audited as actor deactivated spending it' => [
+    // The key shortened in rework 2: the contained-actor paragraph in
+    // AssertionBurn gained the 403/401 door-translation parenthetical,
+    // which breaks the normalized run at the same three sites.
+    'that assertion stays presentable until its ttl runs out every presentation refused every one audited as actor deactivated' => [
         'docs/http-contract.md',
         'release-notes/console-enter.md',
         'src/Console/AssertionBurn.php',
@@ -587,7 +590,7 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1272,
+        'blocks' => 1275,
         'absolute' => 418,
         'paired' => 113,
         'unpaired' => 305,
