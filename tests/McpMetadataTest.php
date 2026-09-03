@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
+use ArtisanBuild\BuiltForCloud\Mcp\McpConfiguration;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Route;
 
@@ -105,7 +106,9 @@ it('does not advertise delegated MCP beside a guarded route of another verb or d
     Route::get('/mcp', fn (): array => ['ok' => true])->middleware('bfc.mcp');
     Route::post('/mcp', fn (): array => ['ok' => true]);
 
-    expect($this->getJson('/bfc/meta')->json('capabilities'))->not->toContain('mcp-delegated');
+    // The coordinator reproduced the old check answering TRUE here.
+    expect(McpConfiguration::delegated())->toBeFalse()
+        ->and($this->getJson('/bfc/meta')->json('capabilities'))->not->toContain('mcp-delegated');
 
     // Same shape, across hosts: a guarded route domain-qualified to
     // another deployment shares the URI text but not this request's
