@@ -59,8 +59,8 @@ final readonly class Assertion
         public CarbonImmutable $expiresAt,
         /** The keyring key that verified the signature. */
         public string $keyId,
-    /** The `jti` the redeeming door burns — one redemption per mint, ever. */
-    public string $id,
+        /** The `jti` the redeeming door burns — one redemption per mint, ever. */
+        public string $id,
         /**
          * The sha256 hex digest of the SIGNED HANDOFF STATE (D13), or
          * null when the mint carried none.
