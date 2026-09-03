@@ -14,6 +14,9 @@ namespace ArtisanBuild\BuiltForCloud\Mcp;
  * Pinned by `tests/McpConformanceTest.php` — "accepts a server whose
  * tools declare and advertise the delegated contract".
  */
+/**
+ * @phpstan-ignore trait.unused (the supported seam for consuming products and the conformance fixtures, deliberately with no in-package user once ClassifiedTool was removed)
+ */
 trait AdvertisesToolClassification
 {
     /**

@@ -89,7 +89,7 @@ final class McpConfiguration
             return false;
         }
 
-        foreach ($router->getRoutes() as $route) {
+        foreach ($router->getRoutes()->get() as $route) {
             if ($route->uri() === $uri) {
                 $middleware = $route->gatherMiddleware();
 
