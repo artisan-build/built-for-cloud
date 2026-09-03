@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Mcp\AdvertisesToolClassification;
 use ArtisanBuild\BuiltForCloud\Mcp\Classification;
-use ArtisanBuild\BuiltForCloud\Mcp\ClassifiedTool;
 use ArtisanBuild\BuiltForCloud\Mcp\ToolClassification;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
 use Laravel\Mcp\Server;
@@ -16,7 +15,10 @@ uses(ContractAssertions::class);
 
 #[IsReadOnly]
 #[ToolClassification(Classification::Metadata)]
-final class ConformingMcpTool extends ClassifiedTool {}
+final class ConformingMcpTool extends Tool
+{
+    use AdvertisesToolClassification;
+}
 
 #[ToolClassification(Classification::Content)]
 final class MissingAnnotationMcpTool extends Tool
@@ -25,7 +27,10 @@ final class MissingAnnotationMcpTool extends Tool
 }
 
 #[IsReadOnly]
-final class MissingClassificationMcpTool extends ClassifiedTool {}
+final class MissingClassificationMcpTool extends Tool
+{
+    use AdvertisesToolClassification;
+}
 
 #[IsReadOnly]
 #[ToolClassification(Classification::Content)]

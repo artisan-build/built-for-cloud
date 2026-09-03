@@ -534,7 +534,8 @@ operator-authored free text.
 
 MCP tools use the same two-value boundary through
 `#[ToolClassification(Classification::Metadata)]` or
-`#[ToolClassification(Classification::Content)]`. A tool extending `ClassifiedTool` advertises
+`#[ToolClassification(Classification::Content)]`. A tool using the
+`AdvertisesToolClassification` trait on its `Laravel\Mcp\Server\Tool` advertises
 the value in `tools/list` as `_meta.classification`; an undeclared tool serializes conservatively
 as `content`, but is still non-conforming because the declaration itself is required. A product
 may advertise `mcp-delegated` only when every registered tool carries one of Laravel MCP's
