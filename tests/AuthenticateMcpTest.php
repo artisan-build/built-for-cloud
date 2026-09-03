@@ -26,6 +26,8 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Testing\TestResponse;
 use ParagonIE\Paseto\Keys\Version4\AsymmetricSecretKey;
+use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
+use Throwable;
 
 uses(RefreshDatabase::class);
 
@@ -388,6 +390,57 @@ it('keeps a refused console session terminal over a published request assertion'
         ->assertJsonPath('principal', null)
         ->assertJsonPath('delegated', false)
         ->assertJsonPath('delegated_session_present', true);
+});
+
+it('takes the bearer out of the request before a refusal is served or a fault throws', function (): void {
+    // The scrub's promise is ORDERING, not just occurrence: the
+    // credential leaves the request object BEFORE verification or
+    // storage can throw, because the failure scenario that created the
+    // rule was precisely a refusal or a database exception serialized
+    // by a rich reporter — the paths the success-path test cannot see.
+    // Driving the middleware directly means the SAME Request object
+    // can be inspected after each outcome, which a feature request
+    // cannot reach.
+    $next = static fn (Request $r): SymfonyResponse => response()->json(['ok' => true]);
+
+    // A CAUGHT refusal — an unknown key id — answers the uniform 401
+    // through the normal pipeline.
+    $unknownKey = mcpAssertion([], 'not-filed', consoleKeypair());
+    $refused = Request::create('/mcp', 'POST', server: [
+        'HTTP_AUTHORIZATION' => 'Bearer '.$unknownKey,
+        'REDIRECT_HTTP_AUTHORIZATION' => 'Bearer '.$unknownKey,
+        'HTTP_ACCEPT' => 'application/json',
+    ]);
+
+    $response = app(AuthenticateMcp::class)->handle($refused, $next);
+
+    expect($response->getStatusCode())->toBe(AuthenticateMcp::REFUSAL_STATUS)
+        ->and($refused->headers->get('Authorization'))->toBeNull()
+        ->and($refused->server->get('HTTP_AUTHORIZATION'))->toBeNull()
+        ->and($refused->server->get('REDIRECT_HTTP_AUTHORIZATION'))->toBeNull();
+
+    // An UNCAUGHT storage fault — the fail-closed audit write cannot
+    // commit — propagates out of handle(), and the Request it leaves
+    // behind is scrubbed all the same.
+    Schema::drop('credential_audit_events');
+
+    $unauditable = mcpAssertion(['aud' => 'https://another-deployment.test']);
+    $thrown = Request::create('/mcp', 'POST', server: [
+        'HTTP_AUTHORIZATION' => 'Bearer '.$unauditable,
+        'REDIRECT_HTTP_AUTHORIZATION' => 'Bearer '.$unauditable,
+        'HTTP_ACCEPT' => 'application/json',
+    ]);
+
+    try {
+        app(AuthenticateMcp::class)->handle($thrown, $next);
+        $this->fail('The refusal whose audit could not commit should have failed closed.');
+    } catch (Throwable) {
+        // Expected: the audit transaction could not commit.
+    }
+
+    expect($thrown->headers->get('Authorization'))->toBeNull()
+        ->and($thrown->server->get('HTTP_AUTHORIZATION'))->toBeNull()
+        ->and($thrown->server->get('REDIRECT_HTTP_AUTHORIZATION'))->toBeNull();
 });
 
 it('fails closed when an assertion refusal cannot be audited', function (): void {
