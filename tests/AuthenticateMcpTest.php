@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\Console\ConsoleEntryRefusalReason;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleSession;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\Exceptions\AssertionRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\SelfServiceUnavailable;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
@@ -79,6 +80,12 @@ beforeEach(function (): void {
         }
 
         return ['refused' => false];
+    })->middleware('bfc.mcp');
+
+    // A downstream MCP tool that verifies or relays an assertion of its
+    // own, exactly what hone and the scalpels relay do.
+    Route::post('/mcp-downstream-refusal', function (): never {
+        throw AssertionRefused::because(AssertionRefusalReason::Replayed);
     })->middleware('bfc.mcp');
 });
 
@@ -331,6 +338,22 @@ it('never falls through between registry and assertion authentication paths', fu
 
     expect($token->refresh()->request_count)->toBe(0)
         ->and(mcpRefusalReasons())->toBe([AssertionRefusalReason::UnknownKey->value]);
+});
+
+it('does not answer or audit a downstream refusal as this door refusing', function (): void {
+    // Authentication here SUCCEEDS — the burn happens, the principal is
+    // published — and the tool behind the door then refuses an assertion
+    // of its own. That refusal belongs to the tool: this middleware must
+    // not catch it, answer its uniform 401 as though this request never
+    // authenticated, or write a denied_action row claiming it did.
+    mcpRequest()->assertOk();
+
+    $this->postJson('/mcp-downstream-refusal', [], [
+        'Authorization' => 'Bearer '.mcpAssertion(['sub' => 'downstream-subject']),
+    ])->assertServerError();
+
+    expect(AssertionBurn::query()->count())->toBe(2)
+        ->and(mcpRefusalReasons())->toBe([]);
 });
 
 it('fails closed when an assertion refusal cannot be audited', function (): void {

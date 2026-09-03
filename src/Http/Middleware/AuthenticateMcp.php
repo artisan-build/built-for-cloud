@@ -161,8 +161,6 @@ final class AuthenticateMcp
             });
 
             $this->prune();
-
-            return $next($request);
         } catch (AssertionRefused $refused) {
             return $this->refuseAssertion($refused->reason->value, null);
         } catch (ConsoleEntryRefused $refused) {
@@ -170,6 +168,14 @@ final class AuthenticateMcp
         } catch (DelegatedActorDeactivated) {
             return $this->refuseAssertion(ConsoleEntryRefusalReason::ActorDeactivated->value, $mintId);
         }
+
+        // The downstream pipeline runs OUTSIDE the credential-refusal
+        // handler above: this try is about THIS door's authentication,
+        // and a tool behind it that verifies or relays an assertion of
+        // its own (exactly what hone and the scalpels relay do) must
+        // not have its refusal answered — or audited — as though this
+        // request had failed to authenticate here.
+        return $next($request);
     }
 
     private function refuseToken(): JsonResponse
