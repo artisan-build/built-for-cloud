@@ -93,6 +93,59 @@ it('does not count a guarded route at some other path', function (): void {
     expect($this->getJson('/bfc/meta')->json('capabilities'))->not->toContain('mcp-delegated');
 });
 
+it('does not advertise delegated MCP beside a guarded route of another verb or domain', function (): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.delegated' => true,
+    ]);
+
+    // The exact shape laravel/mcp registers itself: a GET (and DELETE)
+    // beside the POST transport. A guard on the decoy verb must not
+    // certify the transport that actually carries the MCP session.
+    Route::get('/mcp', fn (): array => ['ok' => true])->middleware('bfc.mcp');
+    Route::post('/mcp', fn (): array => ['ok' => true]);
+
+    expect($this->getJson('/bfc/meta')->json('capabilities'))->not->toContain('mcp-delegated');
+
+    // Same shape, across hosts: a guarded route domain-qualified to
+    // another deployment shares the URI text but not this request's
+    // host, so it must not stand in for the unguarded POST this host
+    // would actually dispatch.
+    Route::domain('other.example.com')->post('/mcp', fn (): array => ['ok' => true])->middleware('bfc.mcp');
+
+    expect($this->getJson('/bfc/meta')->json('capabilities'))->not->toContain('mcp-delegated');
+});
+
+it('withholds delegated MCP when the guard is declared and then excluded', function (): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.delegated' => true,
+    ]);
+
+    // The raw declaration carries the middleware; the EFFECTIVE
+    // pipeline does not. Only the router's own gatherer sees the
+    // difference, so only a check built on it withholds here.
+    Route::post('/mcp', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp')
+        ->withoutMiddleware(AuthenticateMcp::class);
+
+    expect($this->getJson('/bfc/meta')->json('capabilities'))->not->toContain('mcp-delegated');
+});
+
+it('earns delegated MCP for a guarded route at the root path', function (): void {
+    config([
+        'built-for-cloud.mcp.path' => '/',
+        'built-for-cloud.mcp.delegated' => true,
+    ]);
+
+    Route::post('/', fn (): array => ['ok' => true])->middleware('bfc.mcp');
+
+    $response = $this->getJson('/bfc/meta')->assertOk();
+
+    expect($response->json('capabilities'))->toContain('mcp-delegated')
+        ->and($response->json('endpoints'))->toBe(['mcp' => '/']);
+});
+
 it('does not advertise a malformed endpoint path', function (string $path): void {
     config([
         'built-for-cloud.mcp.path' => $path,

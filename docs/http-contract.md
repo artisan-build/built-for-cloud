@@ -98,8 +98,8 @@ Additive unless marked otherwise.
 
 **Everything the Console adds through 0.7.0 is additive, so `api_version` stays 2. What carries the
 signal is `bfc_version` 0.7.0 plus the `capabilities` entries** — `console-keys`,
-`console-key-retire`, `console-vitals`, `console-guard`, `console-enter`, `console-chrome-assets`
-and `app-action-audit-emit`.
+`console-key-retire`, `console-vitals`, `console-guard`, `console-enter`, `console-chrome-assets`,
+`app-action-audit-emit`, `mcp-serve` and `mcp-delegated`.
 
 **What "additive" covers here, stated as what actually shipped rather than as one paradigm case**,
 because a reader applying rule 1 to their own change needs the real list:
@@ -640,15 +640,20 @@ declared.
 
 `mcp-delegated` is strictly stronger, and its two promises ride different predicates because the
 package can observe one and only declare the other. The endpoint is declared,
-`built-for-cloud.mcp.delegated` is true, and the route at the declared path is ACTUALLY guarded by
-`AuthenticateMcp` — read from the router itself, so the capability and the middleware can never
-disagree, the same one-condition property `console-enter` holds by riding the resolved-guard
-condition. Whether the product runs the delegated-tool conformance assertion in its own suite is a
-product declaration the package cannot observe and does not pretend to check: in the voice of
-`console-chrome-assets`, whether the advertised tools are annotated and classified is the
-application's own decision, made by its own test suite, and no package capability can see that. A
-deployment may report `mcp-serve` alone when it accepts registry bearers but not delegated
-assertions. The package does not mount an MCP server.
+`built-for-cloud.mcp.delegated` is true, and the route Laravel would actually DISPATCH for the MCP
+POST at the declared path — matched by verb and domain the way the real transport is — carries
+`AuthenticateMcp` in its effective pipeline, with middleware groups expanded, aliases resolved and
+`withoutMiddleware` exclusions honoured. That establishes ONE direction: when the capability is
+advertised, the dispatched route is guarded — a guarded GET decoy, a route on another deployment's
+domain, or a guard declared and then excluded cannot earn it. What escapes the check: a
+domain-qualified MCP route whose host differs from the one the metadata request arrived on reads as
+unguarded, so the capability is UNDERSTATED there — withheld, never falsely granted — and a
+fallback route at the path is the 404 handler, not the transport. Whether the product runs the
+delegated-tool conformance assertion in its own suite is a product declaration the package cannot
+observe and does not pretend to check: in the voice of `console-chrome-assets`, whether the
+advertised tools are annotated and classified is the application's own decision, made by its own
+test suite, and no package capability can see that. A deployment may report `mcp-serve` alone when
+it accepts registry bearers but not delegated assertions. The package does not mount an MCP server.
 
 ---
 
@@ -2243,6 +2248,15 @@ HTTP/1.1 401 Unauthorized
 {"message":"Unauthenticated."}
 ```
 
+The BYTES are uniform; the TIMING is not padded. This door's failure paths do measurably different
+work — a registry-token miss resolves a hash and answers, with no audit row; an assertion with the
+wrong audience fails inside signature verification; a containment refusal persists the handoff,
+burns, takes a locked read, rolls the burn back and writes the audit row — so a prober who can
+measure latency can distinguish the paths, the same deliberately-unpadded residue the Console entry
+door carries and for the same reason: padding would cost real latency on every request to hide
+which leg refused, while the assertion's own audience binding and single-use burn are what make a
+stolen or forged token worthless regardless of which leg said no.
+
 Assertion-path refusals append `denied_action` to the credential lifecycle stream with one bounded
 reason and no presented bytes. The refusal is fail-closed: if that audit transaction cannot commit,
 the request answers `500`, not an unaudited `401`. This is the same availability trade as Console
@@ -2263,6 +2277,15 @@ A request-scoped delegated actor has no local personal identity. If an applicati
 consumers refuse it through `delegatedSessionPresent()` rather than treating it as a local user.
 This is intentional and is a behavior change only on routes that compose those gates with
 `AuthenticateMcp`; requests carrying no request assertion retain their prior behavior.
+
+Two further effects on the same composing routes. `EnsureConsoleSession` resolves through the same
+shared resolver, so on a route composed with `bfc.mcp` a published request assertion is a delegated
+source it can see — its re-entry answer reflects the delegated principal rather than an absent
+session. And because the middleware removes `Authorization` — the header and the server-bag copies —
+before the pipeline runs, any LATER bearer-reading middleware or bearer-keyed rate limiter on the
+same route sees no credential at all. Scrubbing the credential before anything can throw is the
+point; anything that still needs the bearer belongs in front of `bfc.mcp`, or keyed on something
+other than the credential.
 
 *Pinned by* `tests/AuthenticateMcpTest.php`, `tests/ConsoleActingPrincipalTest.php`,
 `tests/AuthFoundationTest.php`, `tests/ConsoleChromeTest.php`,
@@ -2306,18 +2329,21 @@ state=<base64url of {"return_to": "/orders?tab=open"}>
 ```
 
 - `assertion` — the signed handoff. Required, ≤ 4096 bytes.
-- `purpose` — a signed assertion claim, either `console-entry` or `mcp`. In this release it is
-  optional at verification for issuer compatibility. This endpoint treats absence as
-  `console-entry` and refuses an explicit `mcp`; `AuthenticateMcp` requires an explicit `mcp` and
-  refuses both absence and `console-entry`. The MCP half is fully enforced now. Requiring an
-  explicit `console-entry` here is deferred and scheduled for removal of the absent-purpose
-  tolerance in the next minor.
 - `state` — the **signed handoff state**. Required, ≤ 4096 bytes, unpadded base64url of a JSON
   object. The only member this deployment reads is `return_to`; unknown members are ignored, so
   an issuer may grow the payload without a contract break. The assertion's `state` claim carries
   the lower-case hex **sha256 of these exact bytes**, which is what makes the state signed: it
   is checked before a single byte is decoded, and a state that does not hash to the claim is
   refused.
+
+**The `purpose` claim** is a signed claim INSIDE the assertion, not a field on this form request —
+an issuer mints it into the token alongside `iss`/`sub`/`aud`/`jti` and the display claims; nothing
+about it is posted separately. Either `console-entry` or `mcp`. In this release it is
+optional at verification for issuer compatibility. This endpoint treats absence as
+`console-entry` and refuses an explicit `mcp`; `AuthenticateMcp` requires an explicit `mcp` and
+refuses both absence and `console-entry`. The MCP half is fully enforced now. Requiring an
+explicit `console-entry` here is deferred and scheduled for removal of the absent-purpose
+tolerance in the next minor.
 
 **303** — entry succeeded. `Location` is the **relative** `return_to`, emitted verbatim and
 never resolved against the request's `Host`, so a spoofed header cannot turn a validated in-app
@@ -2525,8 +2551,9 @@ only, and this is the sentence that says so rather than leaving a reader to infe
 **Storage.** One row per redeemed mint in `bfc_console_assertion_burns`, keyed on a digest of
 issuer + `jti`. It holds no secret — a `jti` is a mint identifier, worthless without the signed
 token that carried it — and it is the one table in this package that is **pruned**: a row is
-useful only until the assertion it names expires, and the endpoint drops expired rows after each
-successful entry. The margin points one way on purpose: a row dropped while its assertion could
+useful only until the assertion it names expires, and each successful redemption drops expired
+rows — after a browser entry and after a stateless MCP authentication alike, the two events that
+write one. The margin points one way on purpose: a row dropped while its assertion could
 still be presented would un-spend a mint.
 
 *Pinned by* `tests/ConsoleEnterTest.php` ("sits exactly on the prune boundary: one second inside keeps a burn row, one second past drops it").

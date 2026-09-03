@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Mcp;
 
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
+use Illuminate\Http\Request;
 use Illuminate\Routing\Router;
+use Throwable;
 
 /**
  * The deployment-declared MCP surface advertised by `/bfc/meta`.
@@ -14,11 +16,26 @@ use Illuminate\Routing\Router;
  * `endpoints.mcp` ride the declared path alone. `mcp-delegated` makes
  * a stronger promise — the advertised endpoint accepts a delegated
  * console assertion — and the half of that promise the package CAN
- * observe is verified rather than trusted: the router is asked whether
- * the route at the declared path is actually guarded by
- * {@see AuthenticateMcp}, so the capability and the middleware can
- * never disagree, which is precisely what `console-enter` holds by
- * riding the resolved-guard condition.
+ * observe is verified rather than trusted: the router is asked for the
+ * route that would actually HANDLE the MCP POST at the declared path
+ * on the metadata request's own host, and that route's EFFECTIVE
+ * middleware — gathered the way Laravel will run it, so middleware
+ * groups are expanded, aliases resolve to their classes, and
+ * `withoutMiddleware` exclusions are honoured. A guarded route of
+ * another verb, another domain, or another path beside an unguarded
+ * POST transport does not earn the capability, and neither does a
+ * guard that was declared and then excluded.
+ *
+ * What the check ESTABLISHES is one-directional, and only that
+ * direction is claimed: when the capability is advertised, the route
+ * Laravel would dispatch for that POST carries this middleware in its
+ * effective pipeline. What still escapes it: a deployment whose MCP
+ * route is domain-qualified on a host other than the one the metadata
+ * request arrived on reads as unguarded here (the capability is then
+ * UNDERSTATED — withheld, never falsely granted, which is the honest
+ * direction for this mechanism to fail in); a fallback route, which is
+ * the 404 handler rather than the transport; and the other half of the
+ * promise entirely.
  *
  * The other half — that the product runs the delegated-tool conformance
  * assertion in its own suite — the package CANNOT observe, and does not
@@ -29,18 +46,15 @@ use Illuminate\Routing\Router;
  * config and falsely-in-fact; the contract document says so plainly.
  *
  * Pinned by `tests/McpMetadataTest.php` — "advertises delegated MCP
- * only when the declared path is actually guarded" and "does not
- * advertise delegated MCP for a route the middleware does not guard".
+ * only when the declared path is actually guarded", "does not
+ * advertise delegated MCP for a route the middleware does not guard",
+ * "does not advertise delegated MCP beside a guarded route of another
+ * verb or domain", "withholds delegated MCP when the guard is declared
+ * and then excluded" and "earns delegated MCP for a guarded route at
+ * the root path".
  */
 final class McpConfiguration
 {
-    /**
-     * The middleware alias the package registers for
-     * {@see AuthenticateMcp} — the alias half of the guard check; a
-     * route may mount either the alias or the class itself.
-     */
-    private const string MIDDLEWARE_ALIAS = 'bfc.mcp';
-
     public static function endpoint(): ?string
     {
         $path = config('built-for-cloud.mcp.path');
@@ -67,39 +81,56 @@ final class McpConfiguration
     }
 
     /**
-     * Whether the route at the advertised path carries this package's
-     * MCP authentication. The check reads the ROUTER, not the
-     * declaration, so a route that is missing, unmounted, or guarded by
-     * something else does not earn the capability however the config is
-     * set.
+     * Whether the route Laravel would DISPATCH for the MCP POST at the
+     * advertised path carries this package's MCP authentication in its
+     * effective pipeline.
      *
-     * The residue, named: a deployment mounting the same middleware
-     * under an alias of its own reads as UNGUARDED here, because the
-     * gathered middleware carries neither this alias nor the class —
-     * the capability is then understated, never overstated, which is
-     * the honest direction for this mechanism to fail in.
+     * The route is selected by MATCHING, not by comparing URI text, so
+     * verb and domain decide it the way they decide the real request —
+     * a guarded GET decoy or another deployment's domain cannot stand
+     * in for an unguarded POST transport. The middleware is read
+     * through the router's own gatherer, so groups, aliases and
+     * exclusions resolve exactly as the pipeline will run them. The
+     * root path `/` needs no special case: it is handed to the matcher
+     * verbatim and matches the root route the framework registers.
+     *
+     * The residue, named: no route at all (including a method-not-
+     * allowed POST) reads as unguarded, and a domain-qualified MCP
+     * route on a host other than the metadata request's reads the same
+     * way — withheld, never granted.
      */
     private static function advertisedEndpointIsGuarded(): bool
     {
-        $uri = rtrim(ltrim((string) self::endpoint(), '/'), '/');
-
         $router = app('router');
 
         if (! $router instanceof Router) {
             return false;
         }
 
-        foreach ($router->getRoutes()->get() as $route) {
-            if ($route->uri() === $uri) {
-                $middleware = $route->gatherMiddleware();
-
-                if (in_array(AuthenticateMcp::class, $middleware, true)
-                    || in_array(self::MIDDLEWARE_ALIAS, $middleware, true)) {
-                    return true;
-                }
-            }
+        try {
+            $route = $router->getRoutes()->match(self::mcpPostProbe());
+        } catch (Throwable) {
+            return false;
         }
 
-        return false;
+        return in_array(AuthenticateMcp::class, $router->gatherRouteMiddleware($route), true);
+    }
+
+    /**
+     * The request the MCP transport itself would present: a POST at
+     * the advertised path, on the host this deployment is answering
+     * metadata on (so a domain-qualified route must qualify against
+     * the host that actually serves this request, not merely share the
+     * URI text).
+     */
+    private static function mcpPostProbe(): Request
+    {
+        $current = app('request');
+
+        $host = $current instanceof Request && $current->getHost() !== ''
+            ? $current->getHost()
+            : 'localhost';
+
+        return Request::create('http://'.$host.(string) self::endpoint(), 'POST');
     }
 }
