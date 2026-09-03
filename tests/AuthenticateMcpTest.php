@@ -66,6 +66,18 @@ beforeEach(function (): void {
     Route::middleware([StartSession::class, 'bfc.mcp'])
         ->post('/mcp-session-probe', fn (Request $request): array => $request->session()->all());
 
+    Route::middleware([StartSession::class, 'bfc.mcp'])
+        ->post('/mcp-precedence-probe', function (): array {
+            $acting = app(ActingPrincipalResolver::class)->resolve();
+
+            return [
+                'refused' => $acting->wasRefused(),
+                'principal' => $acting->identifier(),
+                'delegated' => $acting->delegated,
+                'delegated_session_present' => $acting->delegatedSessionPresent(),
+            ];
+        });
+
     Route::post('/mcp-admin-probe', fn (): array => ['admitted' => true])
         ->middleware(['bfc.mcp', 'bfc.admin']);
 
@@ -354,6 +366,28 @@ it('does not answer or audit a downstream refusal as this door refusing', functi
 
     expect(AssertionBurn::query()->count())->toBe(2)
         ->and(mcpRefusalReasons())->toBe([]);
+});
+
+it('keeps a refused console session terminal over a published request assertion', function (): void {
+    // The one fixture carrying BOTH a console session the guard refuses
+    // (a capped one — ConsoleSessionClock's 120-minute absolute cap)
+    // and a verified, published request assertion. The resolver's
+    // refusal branch sits ABOVE its request-assertion branch; moving
+    // the branches would let this assertion rescue the request, which
+    // is exactly the ordering this test exists to pin. A just-refused
+    // delegated session resolves NOBODY: never the assertion principal,
+    // never a union.
+    $actor = consoleActor();
+
+    $this->withSession(consoleSessionState($actor, CarbonImmutable::now()->subMinutes(121)->getTimestamp()))
+        ->postJson('/mcp-precedence-probe', [], [
+            'Authorization' => 'Bearer '.mcpAssertion(['sub' => 'assertion-rescue-attempt']),
+        ])
+        ->assertOk()
+        ->assertJsonPath('refused', true)
+        ->assertJsonPath('principal', null)
+        ->assertJsonPath('delegated', false)
+        ->assertJsonPath('delegated_session_present', true);
 });
 
 it('fails closed when an assertion refusal cannot be audited', function (): void {
