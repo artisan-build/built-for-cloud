@@ -259,8 +259,13 @@ return [
     | The package supplies authentication middleware, not an MCP server.
     | Setting `path` declares the rooted path this deployment actually serves;
     | it is the single predicate for both the mcp-serve capability and the
-    | endpoints.mcp value. Set `delegated` only when AuthenticateMcp guards that
+    | endpoints.mcp value. Set `delegated` when AuthenticateMcp guards that
     | endpoint and the product runs the delegated-tool conformance assertion.
+    | The capability is not earned by this flag alone: it is also verified
+    | against the router that the declared path is actually guarded by the
+    | middleware, so the promise and the door can never disagree. Whether the
+    | conformance assertion runs is a declaration only the product's own test
+    | suite can back — the package cannot observe it.
     |
     */
 

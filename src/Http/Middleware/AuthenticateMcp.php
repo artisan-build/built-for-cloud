@@ -116,8 +116,9 @@ final class AuthenticateMcp
      * and hold the bytes they were handed; a raw request body already
      * buffered by something upstream; copies made by a proxy in front
      * of the deployment; and web-server access logs that record
-     * headers. Those are equally true of every bearer token a Laravel
-     * application receives, and none of them is reachable from here.
+     * headers. None of that is reachable from here, and none of it is
+     * specific to this credential — it is the standing exposure of any
+     * bearer an application is sent.
      */
     private function forgetCredential(#[SensitiveParameter] Request $request): void
     {

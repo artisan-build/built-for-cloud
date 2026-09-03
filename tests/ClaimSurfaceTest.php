@@ -286,6 +286,15 @@ $restatedClaims = [
         'release-notes/unified-store-guard.md',
         'src/Auth/CredentialGuard.php',
     ],
+    // Added in the MCP rework round, deliberately: R2 narrowed
+    // AuthenticateMcp's secrecy claim in the exact voice the enter door
+    // established, so the phrase is now restated at three sites by
+    // decision, and this map is where the diff says so.
+    'the claim is narrower than no frame leaks the credential' => [
+        'docs/http-contract.md',
+        'src/Http/Controllers/ConsoleEnter.php',
+        'src/Http/Middleware/AuthenticateMcp.php',
+    ],
     'the lock is only as exclusive as the cache store is shared' => [
         'release-notes/hmac-kind.md',
         'src/Commands/HmacRewrapCommand.php',
@@ -579,8 +588,8 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
         'blocks' => 1272,
-        'absolute' => 417,
-        'paired' => 112,
+        'absolute' => 418,
+        'paired' => 113,
         'unpaired' => 305,
     ]);
 

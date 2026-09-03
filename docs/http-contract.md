@@ -637,11 +637,17 @@ path it promises cannot disagree. `endpoints` is an additive open object: featur
 members, ignore unknown names, and never depend on key order. It is absent when no endpoint is
 declared.
 
-`mcp-delegated` is strictly stronger: the endpoint is declared and
-`built-for-cloud.mcp.delegated` is true, meaning `AuthenticateMcp` guards it and the product runs
-the tool conformance assertion described under Endpoint classification. A deployment may report
-`mcp-serve` alone when it accepts registry bearers but not delegated assertions. The package does
-not mount an MCP server; these are deployment declarations, not unconditional installation facts.
+`mcp-delegated` is strictly stronger, and its two promises ride different predicates because the
+package can observe one and only declare the other. The endpoint is declared,
+`built-for-cloud.mcp.delegated` is true, and the route at the declared path is ACTUALLY guarded by
+`AuthenticateMcp` — read from the router itself, so the capability and the middleware can never
+disagree, the same one-condition property `console-enter` holds by riding the resolved-guard
+condition. Whether the product runs the delegated-tool conformance assertion in its own suite is a
+product declaration the package cannot observe and does not pretend to check: in the voice of
+`console-chrome-assets`, whether the advertised tools are annotated and classified is the
+application's own decision, made by its own test suite, and no package capability can see that. A
+deployment may report `mcp-serve` alone when it accepts registry bearers but not delegated
+assertions. The package does not mount an MCP server.
 
 ---
 
@@ -2202,7 +2208,8 @@ mutating request).
 `AuthenticateMcp` is the plain Laravel middleware alias `bfc.mcp` for an application-owned,
 stateless MCP endpoint. The package does not mount that endpoint. A deployment declares the path
 it actually mounted with `built-for-cloud.mcp.path` and declares delegated support with
-`built-for-cloud.mcp.delegated`; those declarations drive the metadata promises above.
+`built-for-cloud.mcp.delegated`; the `mcp-delegated` capability rides that declaration AND the
+router-verified fact that `AuthenticateMcp` guards the declared path.
 
 The only carrier is `Authorization: Bearer <credential>`. Dispatch is exclusive by prefix:
 
