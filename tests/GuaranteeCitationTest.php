@@ -90,6 +90,17 @@ $citedSurfaces = [
     // same diff, and the notes this PR did not write are not this PR's
     // to classify.
     'release-notes/console-reservations.md',
+    // The MCP request-scoped principal (PR5). Its one security-boundary
+    // file was exempt from this rule by the accident of not being
+    // listed, which the reviewer and the judge found independently —
+    // so the middleware, the whole `src/Mcp` directory and the
+    // conformance instrument are named here for the same reason
+    // ConsoleEnter.php is: the door is new, its guarantees are load-
+    // bearing, and a new file must be classified in the diff that adds
+    // it, not by living somewhere the walk does not go.
+    'src/Http/Middleware/AuthenticateMcp.php',
+    'src/Mcp',
+    'src/Testing/McpDelegatedTools.php',
 ];
 
 /**
@@ -112,6 +123,7 @@ $expectedCitations = [
     'release-notes/console-reservations.md' => 4,
     'src/Console/AssertionBurn.php' => 6,
     'src/Console/AssertionVerifier.php' => 2,
+    'src/Console/RequestAssertion.php' => 1,
     'src/Console/ConsoleEntryState.php' => 8,
     'src/Console/ConsoleGuard.php' => 17,
     'src/Console/ConsoleReturnTo.php' => 2,
@@ -126,6 +138,12 @@ $expectedCitations = [
     'resources/views/layout.blade.php' => 2,
     'resources/js/console-reentry.js' => 9,
     'src/Http/Controllers/ConsoleEnter.php' => 24,
+    // The MCP surfaces added by PR5's rework, each classified in the
+    // diff that added it to the walk.
+    'src/Http/Middleware/AuthenticateMcp.php' => 1,
+    'src/Mcp/McpConfiguration.php' => 1,
+    'src/Mcp/AdvertisesToolClassification.php' => 1,
+    'src/Testing/McpDelegatedTools.php' => 1,
 ];
 
 /**
@@ -146,6 +164,7 @@ $exemptFromCitation = [
     'src/Console/ActingPrincipalResolver.php' => 'D14 precedence, whose guarantees are stated and cited on ConsoleGuard',
     'src/Console/Assertion.php' => 'the verified claim set; every property rule is the verifier\'s and is cited there',
     'src/Console/AssertionRefusalReason.php' => 'a bounded enum of audit reasons',
+    'src/Console/AssertionPurpose.php' => 'the two-value assertion-purpose vocabulary',
     'src/Console/ConsoleEntryRefusalReason.php' => 'a bounded enum of audit reasons',
     'src/Console/ConsoleGuardConfiguration.php' => 'guard/provider injection; its rules are driven by ConsoleGuardRegistrationTest and stated in the contract',
     'src/Console/ConsoleKey.php' => 'a keyring row; the custody claim lives on ConsoleKeyring and points elsewhere for its enforcement',
@@ -156,7 +175,9 @@ $exemptFromCitation = [
     'src/Console/ConsoleReentryReason.php' => 'a bounded enum the structured 401 carries',
     'src/Console/ConsoleRole.php' => 'the two-value contract vocabulary (D8)',
     'src/Console/ConsoleSessionClock.php' => 'D7\'s cap constant and its fail-closed read; cited from ConsoleGuard, which is where the cap is enforced',
-    'src/Console/DelegatedClaims.php' => 'a readonly value object carrying one session\'s claims',
+    'src/Console/DelegatedClaims.php' => 'a readonly value object carrying one handoff\'s request or session claims',
+    'src/Mcp/Classification.php' => 'a bounded enum: the two-value D14 boundary vocabulary, like ConsoleRole\'s',
+    'src/Mcp/ToolClassification.php' => 'an attribute and its reflection reader; the declaration rules are the conformance instrument\'s and are cited there',
 ];
 
 /**
@@ -174,9 +195,14 @@ $exemptFromCitation = [
  * rule existed carry citations that name three test files at once — the
  * contract's session-writer paragraph is one — and rewriting other
  * people's citations is not this change's business. So the rule is
- * enforced where it is enforceable, over the files this release adds,
- * and everything older stays held to the orphan check alone. A file
- * added here is a file that can never drift; a file not here can.
+ * enforced where it is enforceable, and everything older stays held to
+ * the orphan check alone. A file added here is a file that can never
+ * drift; a file not here can. The current membership is everything the
+ * chrome release and the reservations note added, plus every MCP
+ * surface from PR5 and its reworks — the residue outside it is the
+ * pre-rule legacy (ConsoleGuard, AssertionBurn, the contract document,
+ * the older release notes), which a future PR may migrate one citation
+ * at a time but which this one does not touch.
  */
 $strictlyCited = [
     'src/Console/ConsoleChrome.php',
@@ -191,6 +217,19 @@ $strictlyCited = [
     // the day it arrives — which is the whole argument for the list:
     // a file added here is a file that can never drift.
     'release-notes/console-reservations.md',
+    // PR5's MCP surfaces, and for the same reason: written under the
+    // rule, not retrofitted. Rework round 2 found they had been given
+    // floors but NOT strict binding, so a title moved out of its cited
+    // test file would have kept the floor and the orphan check green —
+    // the exact wrong-file drift this list exists to prevent, accepted
+    // by the instrument on the one new security-boundary file in the
+    // release. RequestAssertion joins them: it predates neither rule
+    // but shipped in this PR's lineage and cites one file.
+    'src/Http/Middleware/AuthenticateMcp.php',
+    'src/Mcp/McpConfiguration.php',
+    'src/Mcp/AdvertisesToolClassification.php',
+    'src/Testing/McpDelegatedTools.php',
+    'src/Console/RequestAssertion.php',
 ];
 
 it('resolves every test title quoted by a guarantee citation', function () use ($citedSurfaces): void {
@@ -451,6 +490,69 @@ it('holds the console chrome to one test file per citation, and to the file it n
         expect(CitationScan::countCitationsIn((string) file_get_contents($root.'/'.$path)))
             ->toBeGreaterThan(0, $path.' is on the strict list but cites nothing.');
     }
+});
+
+it('names a wrong-file citation on the strict MCP surfaces, so the binding is not vacuous', function (): void {
+    // The positive control rework 2 demanded: the exact drift the strict
+    // list exists for — a title that still EXISTS, so the orphan check
+    // and the floor both stay green, but lives in a different test file
+    // from the one the citation names. Only the strict check can see
+    // it, and it NAMES it.
+    $root = sys_get_temp_dir().'/bfc-citation-strict-mcp-'.bin2hex(random_bytes(6));
+
+    mkdir($root.'/src', 0700, true);
+    mkdir($root.'/tests', 0700, true);
+
+    // The middleware citation's shape: one citation, one named file,
+    // several titles — one of which has since moved.
+    file_put_contents($root.'/tests/AuthenticateMcpTest.php', "<?php\n\nit('never falls through between registry and assertion authentication paths', function (): void {});\n");
+    file_put_contents($root.'/tests/McpMetadataTest.php', "<?php\n\nit('refuses a replay because its mint is spent and audits the bounded reason', function (): void {});\n");
+
+    file_put_contents($root.'/src/Middleware.php', <<<'PHP'
+        <?php
+
+        /**
+         * A claim.
+         *   Pinned by `tests/AuthenticateMcpTest.php` — "never falls
+         *   through between registry and assertion authentication
+         *   paths" and "refuses a replay because its mint is spent and
+         *   audits the bounded reason".
+         */
+        final class Middleware {}
+        PHP);
+
+    try {
+        // Both weaker checks pass: the title resolves SOMEWHERE, and
+        // the file carries its citation.
+        expect(CitationScan::orphansIn($root, ['src'], $root.'/tests'))->toBe([])
+            ->and(CitationScan::shortfallsIn($root, ['src'], ['src/Middleware.php' => 1]))->toBe([])
+            // The strict check alone names where the moved title really
+            // lives.
+            ->and(CitationScan::misattributedIn($root, ['src/Middleware.php'], $root.'/tests'))
+            ->toBe(['src/Middleware.php: "refuses a replay because its mint is spent and audits the bounded reason" is cited to tests/AuthenticateMcpTest.php but declared in tests/McpMetadataTest.php']);
+    } finally {
+        array_map(unlink(...), [
+            $root.'/src/Middleware.php',
+            $root.'/tests/AuthenticateMcpTest.php',
+            $root.'/tests/McpMetadataTest.php',
+        ]);
+        rmdir($root.'/src');
+        rmdir($root.'/tests');
+        rmdir($root);
+    }
+});
+
+it('keeps every MCP surface the release added on the strict list', function () use ($strictlyCited): void {
+    // The wiring itself, non-vacuously guarded: dropping one of these
+    // from `$strictlyCited` would re-open wrong-file drift silently —
+    // which is exactly how the gap was found, floors present, strict
+    // binding absent.
+    expect($strictlyCited)
+        ->toContain('src/Http/Middleware/AuthenticateMcp.php')
+        ->toContain('src/Mcp/McpConfiguration.php')
+        ->toContain('src/Mcp/AdvertisesToolClassification.php')
+        ->toContain('src/Testing/McpDelegatedTools.php')
+        ->toContain('src/Console/RequestAssertion.php');
 });
 
 it('names a citation that points at the wrong test file, and one that points at several', function (): void {

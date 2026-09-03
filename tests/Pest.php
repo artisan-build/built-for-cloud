@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\Console\Assertion;
+use ArtisanBuild\BuiltForCloud\Console\AssertionPurpose;
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleEntryState;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuard;
@@ -253,6 +254,7 @@ function consoleAssertionFor(
     string $displayName = 'Jane Operator',
     ConsoleRole $role = ConsoleRole::Admin,
     ?string $onBehalfOf = null,
+    ?AssertionPurpose $purpose = null,
 ): Assertion {
     $now = CarbonImmutable::now();
 
@@ -267,6 +269,7 @@ function consoleAssertionFor(
         expiresAt: $now->addSeconds(90),
         keyId: 'k1',
         id: 'mint_'.bin2hex(random_bytes(8)),
+        purpose: $purpose,
     );
 }
 

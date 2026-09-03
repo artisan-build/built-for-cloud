@@ -138,6 +138,16 @@ it('carries the handoff its own role and agency into the session, not the row\'s
     consoleFollow($entered)->assertOk()->assertJsonPath('attribution', 'Jane Operator (Acme Agency)');
 });
 
+it('accepts a legacy absent purpose as console entry and refuses an explicit MCP purpose', function (): void {
+    consoleEnter(consoleHandoff('/orders', ['purpose' => consoleAbsent()]))
+        ->assertStatus(303);
+
+    consoleEnter(consoleHandoff('/orders', ['purpose' => 'mcp']))
+        ->assertStatus(ConsoleEnter::REFUSAL_STATUS);
+
+    expect(consoleEntryRefusalReasons())->toBe([ConsoleEntryRefusalReason::PurposeMismatch->value]);
+});
+
 // ─── AC2: the single-use burn ───────────────────────────────────────────────
 
 it('refuses a genuine second presentation of the same assertion, because the mint id is spent', function (): void {

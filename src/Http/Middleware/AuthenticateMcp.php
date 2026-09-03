@@ -1,0 +1,222 @@
+<?php
+
+declare(strict_types=1);
+
+namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
+
+use ArtisanBuild\BuiltForCloud\AuditActor;
+use ArtisanBuild\BuiltForCloud\Console\AssertionBurn;
+use ArtisanBuild\BuiltForCloud\Console\AssertionPurpose;
+use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleEntryRefusalReason;
+use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
+use ArtisanBuild\BuiltForCloud\Console\RequestAssertion;
+use ArtisanBuild\BuiltForCloud\Exceptions\AssertionRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleEntryRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\DelegatedActorDeactivated;
+use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
+use ArtisanBuild\BuiltForCloud\LifecycleEventType;
+use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\TokenRegistry;
+use Carbon\CarbonImmutable;
+use Closure;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use SensitiveParameter;
+use Symfony\Component\HttpFoundation\Response;
+use Throwable;
+
+/**
+ * Authenticate one stateless MCP request with either a registry token or a
+ * delegated assertion.
+ *
+ * `Authorization: Bearer` is exclusive and prefix-discriminated. A bearer
+ * beginning `v4.public.` is verified only as an assertion; every other bearer
+ * is resolved only by TokenRegistry. Neither failure falls through to the
+ * other path.
+ *
+ * Assertion handling mirrors the console entry door: verify, require the MCP
+ * purpose, commit the handoff record independently, then burn and lock-check
+ * the actor in this middleware's transaction before publishing a principal on
+ * this request object. Assertion refusals are audited and fail closed if that
+ * audit cannot be committed. Registry-token refusals are intentionally not
+ * audited here, matching the package's public bearer gates.
+ *
+ * THE CREDENTIAL IS TAKEN OUT OF THE REQUEST BEFORE ANYTHING CAN THROW,
+ * and the claim is deliberately narrower than "no frame leaks it":
+ * see forgetCredential(), which states exactly what is cleared and the
+ * residue that survives.
+ *
+ * Pinned by `tests/AuthenticateMcpTest.php` — "never falls through
+ * between registry and assertion authentication paths", "uniformly
+ * refuses audience ttl purpose key and signature failures while
+ * auditing each reason", "refuses a replay because its mint is spent
+ * and audits the bounded reason", "keeps the contained actor handoff
+ * but rolls back its burn and principal", "publishes the assertion
+ * actor and this handoff claims on the request", "writes no session
+ * key under an assertion", "grants the admin actor attribute only to
+ * an admin-scoped registry token", "takes the bearer out of the
+ * server bag as well as the headers", "does not answer or audit a
+ * downstream refusal as this door refusing" and "fails closed when an
+ * assertion refusal cannot be audited".
+ */
+final class AuthenticateMcp
+{
+    public const int REFUSAL_STATUS = 401;
+
+    public const string AUDIT_NOTE = 'mcp authentication refused: ';
+
+    public function __construct(
+        private readonly TokenRegistry $tokens,
+        private readonly AssertionVerifier $verifier,
+        private readonly LifecycleEventRecorder $recorder,
+    ) {}
+
+    /**
+     * @param  Closure(Request): Response  $next
+     */
+    public function handle(#[SensitiveParameter] Request $request, Closure $next): Response
+    {
+        $bearer = $request->bearerToken();
+
+        $this->forgetCredential($request);
+
+        if ($bearer === null || $bearer === '') {
+            return $this->refuseToken();
+        }
+
+        if (str_starts_with($bearer, AssertionVerifier::HEADER)) {
+            return $this->authenticateAssertion($request, $next, $bearer);
+        }
+
+        $token = $this->tokens->resolveModel($bearer);
+
+        if ($token === null) {
+            return $this->refuseToken();
+        }
+
+        $this->tokens->recordClientIdentityFromRequest($request, $token);
+
+        // The attribute keeps its ONE meaning — an ADMIN token
+        // authenticated, EnsureAdminToken's convention: the package's
+        // readers convert it straight into AuditActor::adminToken(),
+        // which types the audit row AdminToken. A non-admin MCP token
+        // still authenticates this door, but must not arrive anywhere
+        // wearing an attribution its credential does not hold.
+        if ($token->hasScope(Scope::Admin)) {
+            $request->attributes->set('bfc.actor_token_id', (string) $token->getKey());
+        }
+
+        $request->setUserResolver(static fn () => $token);
+
+        return $next($request);
+    }
+
+    /**
+     * THE CLAIM IS NARROWER THAN "NO FRAME LEAKS THE CREDENTIAL",
+     * deliberately, and in the same voice the console entry door uses
+     * for the same problem. What IS cleared: the `Authorization` HEADER
+     * and the SERVER-BAG copies a rich exception reporter serializes
+     * alongside a trace — `HTTP_AUTHORIZATION` and Apache's rewrite copy
+     * `REDIRECT_HTTP_AUTHORIZATION`, which is the set Laravel's own
+     * bearer resolution reads. This runs before any verification or
+     * storage path can throw, so a downstream failure serializes a
+     * request object that no longer carries the bearer.
+     *
+     * What SURVIVES, named rather than chased: vendor frames this
+     * package cannot annotate were entered before this middleware ran
+     * and hold the bytes they were handed; a raw request body already
+     * buffered by something upstream; copies made by a proxy in front
+     * of the deployment; and web-server access logs that record
+     * headers. None of that is reachable from here, and none of it is
+     * specific to this credential — it is the standing exposure of any
+     * bearer an application is sent.
+     */
+    private function forgetCredential(#[SensitiveParameter] Request $request): void
+    {
+        $request->headers->remove('Authorization');
+        $request->server->remove('HTTP_AUTHORIZATION');
+        $request->server->remove('REDIRECT_HTTP_AUTHORIZATION');
+    }
+
+    /**
+     * @param  Closure(Request): Response  $next
+     */
+    private function authenticateAssertion(
+        #[SensitiveParameter] Request $request,
+        Closure $next,
+        #[SensitiveParameter] string $assertionToken,
+    ): Response {
+        $mintId = null;
+
+        try {
+            $assertion = $this->verifier->verify($assertionToken);
+            $mintId = $assertion->id;
+
+            if ($assertion->purpose !== AssertionPurpose::Mcp) {
+                throw ConsoleEntryRefused::because(ConsoleEntryRefusalReason::PurposeMismatch, $assertion->id);
+            }
+
+            // Its own commit: containment must not erase evidence that this
+            // actor attempted entry or the claims that attempt carried.
+            $actor = DelegatedActor::recordHandoff($assertion);
+
+            DB::transaction(function () use ($request, $assertion, $actor): void {
+                AssertionBurn::burn($assertion, CarbonImmutable::now());
+
+                $locked = DelegatedActor::lockedById($actor->getKey());
+
+                if (! $locked instanceof DelegatedActor || ! $locked->isActive()) {
+                    throw DelegatedActorDeactivated::cannotEnter();
+                }
+
+                RequestAssertion::publish($request, $locked, $assertion);
+            });
+
+            $this->prune();
+        } catch (AssertionRefused $refused) {
+            return $this->refuseAssertion($refused->reason->value, null);
+        } catch (ConsoleEntryRefused $refused) {
+            return $this->refuseAssertion($refused->reason->value, $refused->assertionId);
+        } catch (DelegatedActorDeactivated) {
+            return $this->refuseAssertion(ConsoleEntryRefusalReason::ActorDeactivated->value, $mintId);
+        }
+
+        // The downstream pipeline runs OUTSIDE the credential-refusal
+        // handler above: this try is about THIS door's authentication,
+        // and a tool behind it that verifies or relays an assertion of
+        // its own (exactly what hone and the scalpels relay do) must
+        // not have its refusal answered — or audited — as though this
+        // request had failed to authenticate here.
+        return $next($request);
+    }
+
+    private function refuseToken(): JsonResponse
+    {
+        return response()->json(['message' => 'Unauthenticated.'], self::REFUSAL_STATUS);
+    }
+
+    private function refuseAssertion(string $reason, ?string $mintId): JsonResponse
+    {
+        DB::transaction(function () use ($reason, $mintId): void {
+            $this->recorder->record(
+                event: LifecycleEventType::DeniedAction,
+                actor: AuditActor::assertionPresenter($mintId),
+                note: self::AUDIT_NOTE.$reason,
+                drainAfterCommit: false,
+            );
+        });
+
+        return $this->refuseToken();
+    }
+
+    private function prune(): void
+    {
+        try {
+            AssertionBurn::prune(CarbonImmutable::now());
+        } catch (Throwable) {
+            // Housekeeping cannot fail an authenticated request.
+        }
+    }
+}

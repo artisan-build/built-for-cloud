@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipal;
 use ArtisanBuild\BuiltForCloud\Console\Assertion;
 use ArtisanBuild\BuiltForCloud\Console\AssertionBurn;
+use ArtisanBuild\BuiltForCloud\Console\AssertionPurpose;
 use ArtisanBuild\BuiltForCloud\Console\AssertionRefusalReason;
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleEntryRefusalReason;
@@ -135,7 +136,7 @@ use Throwable;
  *   "leaves a contained actor's mint unspent, so every attempt audits as containment".
  *
  * **EVERY REFUSAL IS THE SAME ANSWER — BYTE FOR BYTE. THE TIMING IS
- * NOT.** Thirteen assertion reasons and eight entry reasons collapse
+ * NOT.** Thirteen assertion reasons and nine entry reasons collapse
  * into one status and one body, so a party feeding tokens at this door
  * cannot READ which one it hit. The reason goes to the AUDIT record,
  * with the actor typed, and to nothing else.
@@ -313,6 +314,13 @@ final class ConsoleEnter
 
             $assertion = $this->verifier->verify($token);
             $mintId = $assertion->id;
+
+            // Legacy assertions with no purpose remain console-entry mints
+            // during the compatibility window. An explicit MCP mint never
+            // crosses into the browser-session door.
+            if ($assertion->purpose === AssertionPurpose::Mcp) {
+                throw ConsoleEntryRefused::because(ConsoleEntryRefusalReason::PurposeMismatch, $assertion->id);
+            }
 
             $entry = ConsoleEntryState::bind($assertion, $state);
 

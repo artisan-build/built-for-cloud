@@ -13,8 +13,8 @@ use Illuminate\Contracts\Auth\Authenticatable;
 /**
  * ONE resolved answer to "who is acting on this request, and under which
  * guard" (Console PRD D14) — plus the two facts a gate needs that the
- * acting principal alone does not carry: whether a delegated session is
- * PRESENT on this request at all, and whether one was REFUSED.
+ * acting principal alone does not carry: whether a delegated source is
+ * PRESENT on this request at all, and whether a session was REFUSED.
  *
  * D14's rule is not "the delegated guard wins for authentication"; it is
  * that the delegated guard wins for the acting principal AND for every
@@ -27,24 +27,24 @@ use Illuminate\Contracts\Auth\Authenticatable;
  * second time, is the failure mode D14 exists to forbid — one request,
  * one resolution.
  *
- * WHICH GUARD "WINS" IS DECIDED BY THE ROUTE, not by this class. A
+ * WHICH SESSION GUARD "WINS" IS DECIDED BY THE ROUTE, not by this class. A
  * console route carries `auth:bfc-console` ({@see Authenticate}), which
  * makes the delegated guard the one the request resolves through; on
  * such a route {@see $delegated} is true and `$request->user()`,
  * `Auth::user()` and {@see $principal} are the same object because they
  * all end at the same guard. On a route guarded by the app's own session
- * guard, the acting principal is the app's own user — and a delegated
- * session that is nonetheless live on the request is reported by
+ * guard, the acting principal is the app's own user unless verified MCP
+ * middleware published a delegated actor directly on this request. A
+ * delegated session that is nonetheless live is reported by
  * {@see $delegatedActor}, never silently substituted.
  *
  * THE TWO DIRECTIONS ARE DELIBERATELY ASYMMETRIC, and the gates depend
  * on it:
  *
  *  - ADMISSION must be exact. {@see EnsureUserIsAdmin} admits a
- *    delegated operator only when {@see $delegated} is true — i.e. when
- *    that actor really is the principal everything behind the gate will
- *    act as. Admitting on one identity while the request acts as another
- *    is the confused deputy, and no convenience is worth it.
+ *    delegated operator only when {@see $delegated} is true and the console
+ *    guard answered. A request assertion is delegated too, but carries no
+ *    browser-session identity and is refused by that gate.
  *  - REFUSAL may be broad. {@see EnsureUserIsAuthenticated} refuses
  *    whenever {@see delegatedSessionPresent()} is true, whichever guard
  *    the route names. A surface that can only act as the authenticated
@@ -66,9 +66,9 @@ final readonly class ActingPrincipal
         /** The guard that answered, or null when nobody is acting. */
         public ?string $guard,
         /**
-         * Whether the delegated actor is THE ACTING PRINCIPAL — true only
-         * when the route's own guard is the console guard. Not merely
-         * "a delegated session exists"; that is
+         * Whether a delegated actor is THE ACTING PRINCIPAL — through the
+         * route's console guard or a verified request assertion. Not merely
+         * "a delegated source exists"; that is
          * {@see delegatedSessionPresent()}.
          */
         public bool $delegated,
@@ -76,7 +76,7 @@ final readonly class ActingPrincipal
         public ?Authenticatable $principal,
         /**
          * The DELEGATED attribution line ("Jane (Acme Agency)") as THIS
-         * session's own handoff carried it, or null for every
+         * handoff carried it, or null for every
          * non-delegated resolution — a local session renders no chrome
          * (D11) and must produce no delegated attribution.
          *
@@ -84,11 +84,11 @@ final readonly class ActingPrincipal
          */
         public ?string $attribution,
         /**
-         * The operator's display name ALONE, as this session's own
-         * handoff carried it — the same claim {@see $attribution}
+         * The operator's display name ALONE, as this handoff carried it —
+         * the same claim {@see $attribution}
          * composes, carried separately because the chrome (PR5) renders
          * the name and the agency into two different sinks and bounds
-         * each on its own. It comes from the SESSION's claims for the
+         * each on its own. It comes from request/session claims for the
          * reason {@see DelegatedClaims} gives: the actor row's
          * `last_handoff_display_name` is shared by every live session
          * for the same subject.
@@ -96,7 +96,7 @@ final readonly class ActingPrincipal
          * **Issuer-supplied free text. Escape at every sink.**
          */
         public ?string $displayName,
-        /** This session's delegated role (D8), or null when the acting principal is not delegated. */
+        /** This handoff's delegated role (D8), or null when the acting principal is not delegated. */
         public ?ConsoleRole $role,
         /** The agency the operator acts for (D4), or null. */
         public ?string $onBehalfOf,
@@ -108,9 +108,8 @@ final readonly class ActingPrincipal
          */
         public ?ConsoleReentryReason $refusal,
         /**
-         * The LIVE delegated session's actor, if this request carries
-         * one — whichever guard the route names, and so not necessarily
-         * the acting principal. It is what lets a local-only gate refuse
+         * The delegated actor this request carries through an assertion or
+         * live session, whichever guard the route names. It is what lets a local-only gate refuse
          * rather than act as the wrong human, and what lets
          * {@see EnsureConsoleSession} answer before `auth:bfc-console`
          * has made the console guard the request's own.
@@ -131,6 +130,22 @@ final readonly class ActingPrincipal
     {
         return new self(
             guard: ConsoleGuardConfiguration::GUARD,
+            delegated: true,
+            principal: $actor,
+            attribution: $claims->attribution(),
+            displayName: $claims->displayName,
+            role: $claims->role,
+            onBehalfOf: $claims->onBehalfOf,
+            refusal: null,
+            delegatedActor: $actor,
+        );
+    }
+
+    /** A delegated assertion acting for this request without a session guard. */
+    public static function delegatedRequest(DelegatedActor $actor, DelegatedClaims $claims): self
+    {
+        return new self(
+            guard: null,
             delegated: true,
             principal: $actor,
             attribution: $claims->attribution(),
@@ -226,10 +241,10 @@ final readonly class ActingPrincipal
     }
 
     /**
-     * Whether this request carries a delegated session AT ALL — live or
-     * just refused — whichever guard the route names. This is the broad
-     * question a local-only surface refuses on; {@see $delegated} is the
-     * narrow one an admin gate admits on.
+     * Whether this request carries a delegated source AT ALL — a request
+     * assertion, or a delegated session live or just refused. This retained
+     * method name is public API; it now answers the broad question a
+     * local-only surface refuses on.
      */
     public function delegatedSessionPresent(): bool
     {

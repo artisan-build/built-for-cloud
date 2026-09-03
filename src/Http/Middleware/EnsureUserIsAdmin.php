@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
 
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleRole;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use Closure;
@@ -37,6 +38,9 @@ use Symfony\Component\HttpFoundation\Response;
  *   if THIS SESSION's own handoff carried `admin` — the role is
  *   session-bound, so a later handoff for the same human cannot promote
  *   a live `member` session;
+ * - a request-scoped delegated assertion is refused even when it carries
+ *   `admin`: it has no browser-session identity, and this gate admits the
+ *   Console guard's principal specifically;
  * - a delegated session that is present but is NOT the acting principal
  *   (the route is guarded by the app's own guard) is a 403, and
  *   deliberately not a fall-through to the local user's `is_admin`:
@@ -51,8 +55,8 @@ use Symfony\Component\HttpFoundation\Response;
  *
  * OFFBOARDING is a LOCAL containment registry keyed on host-app user
  * ids, so it is checked for the local branch only; a delegated actor's
- * containment is its own `deactivated_at`, enforced at the guard and the
- * provider before this gate ever runs.
+ * containment is its own `deactivated_at`, enforced at the guard/provider
+ * or assertion middleware before this gate ever runs.
  */
 final class EnsureUserIsAdmin
 {
@@ -63,7 +67,7 @@ final class EnsureUserIsAdmin
     {
         $acting = app(ActingPrincipalResolver::class)->resolve();
 
-        if ($acting->delegated) {
+        if ($acting->delegated && $acting->guard === ConsoleGuardConfiguration::GUARD) {
             if ($acting->role !== ConsoleRole::Admin) {
                 abort(403);
             }

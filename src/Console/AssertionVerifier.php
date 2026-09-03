@@ -68,11 +68,14 @@ use Throwable;
  *
  * Every refusal leaves as {@see AssertionRefused} with one uniform,
  * reason-free message; the {@see AssertionRefusalReason} is for the
- * audit record PR4 writes, never for the presenter.
+ * audit record the refusing door writes — the enter endpoint or the
+ * MCP middleware — never for the presenter.
  *
  * Verification is PURE: it reads the keyring and the clock and writes
- * nothing. The single-use burn of `jti` (D12) belongs to the enter
- * endpoint that owns the transaction, not to the crypto choke point.
+ * nothing. The single-use burn of `jti` (D12) belongs to the door that
+ * owns the redeeming transaction — the enter endpoint for a browser
+ * entry, `AuthenticateMcp` for a stateless call — not to the crypto
+ * choke point.
  *
  * THE TOKEN IS A LIVE CREDENTIAL AND IS MARKED AS ONE. Every frame in
  * this class that holds the presented bytes carries
@@ -112,7 +115,20 @@ final class AssertionVerifier
     /** The bound on the identity claims — issuer, subject, audience. */
     public const int MAX_IDENTITY_LENGTH = 255;
 
-    /** The bound on the mint id the enter endpoint burns. */
+    /**
+     * The verifier's bound on the `jti` that Console entry or MCP
+     * authentication may pass to the shared burn ledger.
+     *
+     * Pinned by `tests/ConsoleAssertionTest.php` — "refuses claims that
+     * are absent, mistyped, or unparseable"; the consuming paths are
+     * pinned by `tests/ConsoleEnterTest.php` — "refuses a genuine second
+     * presentation of the same assertion, because the mint id is spent"
+     * and `tests/AuthenticateMcpTest.php` — "refuses a replay because its
+     * mint is spent and audits the bounded reason".
+     *
+     * RESIDUE — NOT ESTABLISHED HERE: this length bound does not establish
+     * that an issuer assigns a distinct `jti` to each mint.
+     */
     public const int MAX_ID_LENGTH = 64;
 
     /**
@@ -169,6 +185,7 @@ final class AssertionVerifier
         $displayName = $this->boundedString($claims, 'display_name', self::MAX_DISPLAY_LENGTH);
         $onBehalfOf = $this->optionalBoundedString($claims, 'on_behalf_of', self::MAX_DISPLAY_LENGTH);
         $stateDigest = $this->optionalStateDigest($claims);
+        $purpose = $this->optionalPurpose($claims);
         $issuedAt = $this->timestamp($claims, 'iat');
         $expiresAt = $this->timestamp($claims, 'exp');
         $notBefore = array_key_exists('nbf', $claims) ? $this->timestamp($claims, 'nbf') : null;
@@ -234,7 +251,31 @@ final class AssertionVerifier
             keyId: $keyId,
             id: $id,
             stateDigest: $stateDigest,
+            purpose: $purpose,
         );
+    }
+
+    /**
+     * The purpose claim is optional for one compatibility window. If it is
+     * present, it must name one of the two doors exactly; malformed values do
+     * not degrade into the legacy absent shape.
+     *
+     * @param  array<string, mixed>  $claims
+     */
+    private function optionalPurpose(array $claims): ?AssertionPurpose
+    {
+        if (! array_key_exists('purpose', $claims)) {
+            return null;
+        }
+
+        $value = $claims['purpose'];
+        $purpose = is_string($value) ? AssertionPurpose::tryFrom($value) : null;
+
+        if (! $purpose instanceof AssertionPurpose) {
+            throw AssertionRefused::because(AssertionRefusalReason::InvalidClaims);
+        }
+
+        return $purpose;
     }
 
     /**

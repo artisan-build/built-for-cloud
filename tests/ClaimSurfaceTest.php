@@ -275,7 +275,10 @@ $restatedClaims = [
         'src/Console/ConsoleGuard.php',
         'src/Console/DelegatedActorProvider.php',
     ],
-    'that assertion stays presentable until its ttl runs out every presentation refused every one audited as actor deactivated spending it' => [
+    // The key shortened in rework 2: the contained-actor paragraph in
+    // AssertionBurn gained the 403/401 door-translation parenthetical,
+    // which breaks the normalized run at the same three sites.
+    'that assertion stays presentable until its ttl runs out every presentation refused every one audited as actor deactivated' => [
         'docs/http-contract.md',
         'release-notes/console-enter.md',
         'src/Console/AssertionBurn.php',
@@ -285,6 +288,15 @@ $restatedClaims = [
         'release-notes/console-reservations.md',
         'release-notes/unified-store-guard.md',
         'src/Auth/CredentialGuard.php',
+    ],
+    // Added in the MCP rework round, deliberately: R2 narrowed
+    // AuthenticateMcp's secrecy claim in the exact voice the enter door
+    // established, so the phrase is now restated at three sites by
+    // decision, and this map is where the diff says so.
+    'the claim is narrower than no frame leaks the credential' => [
+        'docs/http-contract.md',
+        'src/Http/Controllers/ConsoleEnter.php',
+        'src/Http/Middleware/AuthenticateMcp.php',
     ],
     'the lock is only as exclusive as the cache store is shared' => [
         'release-notes/hmac-kind.md',
@@ -578,10 +590,10 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1242,
-        'absolute' => 407,
-        'paired' => 110,
-        'unpaired' => 297,
+        'blocks' => 1276,
+        'absolute' => 418,
+        'paired' => 113,
+        'unpaired' => 305,
     ]);
 
     // The surfaces the restatement map runs over are wider than the

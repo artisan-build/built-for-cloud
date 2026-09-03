@@ -253,6 +253,33 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | MCP Endpoint
+    |--------------------------------------------------------------------------
+    |
+    | The package supplies authentication middleware, not an MCP server.
+    | Setting `path` declares the rooted path this deployment actually serves;
+    | it is the single predicate for both the mcp-serve capability and the
+    | endpoints.mcp value. Set `delegated` when AuthenticateMcp guards that
+    | endpoint and the product runs the delegated-tool conformance assertion.
+    | The capability is not earned by this flag alone: the router must confirm
+    | that the route dispatched for the MCP POST at the declared path carries
+    | the middleware in its effective pipeline (groups resolved, exclusions
+    | honoured), which establishes that an advertised capability is truly
+    | guarded. The check is one-directional — a domain-qualified MCP route on
+    | another host reads as unguarded, so the capability is withheld there
+    | rather than falsely granted. Whether the conformance assertion runs is
+    | a declaration only the product's own test suite can back — the package
+    | cannot observe it.
+    |
+    */
+
+    'mcp' => [
+        'path' => env('BUILT_FOR_CLOUD_MCP_PATH'),
+        'delegated' => env('BUILT_FOR_CLOUD_MCP_DELEGATED', false),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Console Vitals (the ops-vitals read, Console PRD D9/D15)
     |--------------------------------------------------------------------------
     |

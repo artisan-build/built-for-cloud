@@ -7,18 +7,18 @@ namespace ArtisanBuild\BuiltForCloud\Console;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 
 /**
- * The claims ONE handoff carried, bound to ONE session (Console PRD D8:
- * role and display claims are per-mint and never cached beyond the
- * session).
+ * The claims ONE handoff carried, bound to ONE request or browser session
+ * (Console PRD D8: role and display claims are per-mint and never read from
+ * shared actor storage).
  *
  * This type exists because the alternative — reading them off the shadow
  * actor row — is a privilege escalation. That row is shared by every live
  * session for the same subject, so a later handoff arriving as `admin`
  * would retroactively promote a session that entered as `member`, and
  * attribute it to whatever agency the newer handoff named. The claims a
- * request acts under therefore live in that request's own session and
- * nowhere else; the row keeps only a `last_handoff_*` copy, named so that
- * reading it for authorization looks as wrong as it is.
+ * browser request acts under therefore live in that session; an MCP request
+ * builds them from its just-verified assertion. The row keeps only a
+ * `last_handoff_*` copy, named so reading it for authorization looks wrong.
  *
  * The set is atomic: {@see ConsoleSession::claims()} returns an instance
  * or null, never a partially populated one, because a session carrying a

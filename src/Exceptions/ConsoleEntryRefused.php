@@ -9,22 +9,28 @@ use RuntimeException;
 use Throwable;
 
 /**
- * `POST /bfc/console/enter` refused an entry for something the endpoint
- * decided rather than something the verifier did (Console PRD D12/D13):
- * the burn, the signed handoff state, or the return path.
+ * A console DOOR refused a presentation for something the door decided
+ * rather than something the verifier did (Console PRD D12/D13):
+ * purpose, the burn, containment, or — enter door only — the signed
+ * handoff state and the return path.
+ *
+ * Thrown by `POST /bfc/console/enter`, which renders its uniform 403,
+ * and by the MCP authentication middleware, which renders its uniform
+ * 401 and audits the same reason code. TWO doors, two response
+ * translations, one bounded vocabulary.
  *
  * ONE exception class for every such refusal, carrying ONE uniform,
  * reason-free message — the same discipline {@see AssertionRefused}
- * holds for the token itself, for the same reason. The endpoint renders
- * both into one identical response, so a party feeding assertions at
- * this door cannot tell "replayed" from "expired" from "wrong audience"
- * from "tampered state".
+ * holds for the token itself, for the same reason. Each door renders
+ * everything into its one identical response, so a party feeding
+ * assertions at either cannot tell "replayed" from "expired" from
+ * "wrong audience" from "tampered state".
  *
  * The machine-readable {@see ConsoleEntryRefusalReason} rides alongside
  * for the AUDIT RECORD, and `$assertionId` carries the mint identifier
  * when the token verified far enough to have one — which is exactly the
  * post-verification refusals, and never the ones the verifier decided.
- * The endpoint never guesses one.
+ * Neither door ever guesses one.
  */
 final class ConsoleEntryRefused extends RuntimeException
 {

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Console\Assertion;
+use ArtisanBuild\BuiltForCloud\Console\AssertionPurpose;
 use ArtisanBuild\BuiltForCloud\Console\AssertionRefusalReason;
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyring;
@@ -74,6 +75,19 @@ it('carries a direct operator with no agency as a null on_behalf_of', function (
         ->and($assertion->attribution())->toBe('Jane Operator')
         ->and($assertion->isAdmin())->toBeTrue();
 });
+
+it('carries an optional typed purpose and refuses every malformed present value', function (mixed $value): void {
+    $secret = consoleKeypair();
+    consoleFileKey('k1', $secret);
+
+    $legacy = consoleVerify(consoleMint($secret, consoleClaims(['purpose' => consoleAbsent()])));
+    $mcp = consoleVerify(consoleMint($secret, consoleClaims(['purpose' => 'mcp'])));
+
+    expect($legacy->purpose)->toBeNull()
+        ->and($mcp->purpose)->toBe(AssertionPurpose::Mcp)
+        ->and(consoleRefusal(consoleMint($secret, consoleClaims(['purpose' => $value])))->reason)
+        ->toBe(AssertionRefusalReason::InvalidClaims);
+})->with(['unknown', '', null, 1]);
 
 // ------------------------------------------------------------- the clock
 

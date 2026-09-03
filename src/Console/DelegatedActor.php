@@ -45,18 +45,24 @@ use Illuminate\Support\Facades\DB;
  * `last_handoff_role` and `last_handoff_on_behalf_of` are what their
  * names say — the MOST RECENT handoff's claims, shared by every live
  * session for this subject, kept for operator listings and audit
- * context. PRD D8 makes claims per-mint and never cached beyond the
- * session, and this row cannot honour that: a later handoff arriving as
- * `admin` would otherwise promote a session that entered as `member` on
- * its very next request. The claims a request ACTS UNDER are
- * session-bound — {@see ConsoleSession} and {@see DelegatedClaims} — and
- * this class deliberately offers no `attribution()` or `role()` accessor
- * that could be mistaken for the live one.
+ * context. Browser-entry claims are copied into {@see ConsoleSession};
+ * MCP assertion claims are copied into {@see RequestAssertion} on the
+ * current request. {@see DelegatedClaims} carries either copy to the
+ * acting-principal consumers. A later handoff does not replace the
+ * claims of an already-live browser session.
  *   Pinned by `tests/ConsoleActingPrincipalTest.php` — "holds two
  *   concurrent sessions for one subject at the roles they each entered
  *   with" and "does not let a concurrent admin session promote a member
  *   session past the admin gate", which drive two live sessions
  *   interleaved rather than one session re-read after a row write.
+ * MCP request scoping is pinned by `tests/AuthenticateMcpTest.php` —
+ * "publishes the assertion actor and this handoff claims on the request"
+ * and "authenticates a TokenRegistry bearer and does not leak the prior
+ * request assertion memo".
+ *
+ * RESIDUE — NOT ESTABLISHED HERE: these tests do not constrain claim
+ * storage or principal resolution implemented by a consuming application
+ * outside {@see ConsoleSession} and {@see RequestAssertion}.
  *
  * IDENTITY IS A DIGEST. {@see identityHash()} is the unique key: sha256
  * over a length-delimited encoding of issuer and subject, computed in PHP
@@ -139,10 +145,15 @@ final class DelegatedActor extends Model implements Authenticatable
      *
      * INTERNAL. This is the storage half and it does NOT decide whether
      * the actor may act: it returns deactivated rows too, and it verifies
-     * nothing — writing a row here grants nothing, because no session can
-     * be created from it. {@see ConsoleGuard::redeem()} is the only
-     * operation that turns an actor into a principal, and it fails closed
-     * on a deactivated one under a row lock BEFORE anything is logged in.
+     * nothing — writing a row here grants nothing, because neither a
+     * session nor a request principal can be created from it. TWO
+     * operations turn an actor into a principal, and both fail closed
+     * on a deactivated one under a row lock BEFORE anything is
+     * published: {@see ConsoleGuard::redeem()} for a browser entry
+     * (session keys, via the enter door), and
+     * {@see RequestAssertion::publish()} for a stateless MCP call (a
+     * principal scoped to the one request object, via
+     * `AuthenticateMcp`).
      *
      * `deactivated_at` is deliberately never cleared. A fresh, valid
      * assertion means the ISSUER still vouches for the human; it says

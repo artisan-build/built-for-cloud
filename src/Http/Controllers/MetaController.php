@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
+use ArtisanBuild\BuiltForCloud\Mcp\McpConfiguration;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use Illuminate\Http\JsonResponse;
 
@@ -15,7 +16,7 @@ final class MetaController
     {
         $ownership = Ownership::current();
 
-        return response()->json([
+        $payload = [
             'product' => config('built-for-cloud.product'),
             'bfc_version' => BuiltForCloud::VERSION,
             'api_version' => BuiltForCloud::API_VERSION,
@@ -112,9 +113,42 @@ final class MetaController
             // that is what `console-enter` says, and duplicating its
             // predicate here would give a control plane two names for
             // one fact.
+            //
+            // `mcp-serve` says this deployment DECLARES that it serves
+            // an MCP endpoint at the advertised path: the same
+            // `built-for-cloud.mcp.path` predicate that adds
+            // `endpoints.mcp`, so the capability and the path it names
+            // cannot disagree. The package ships no MCP server and
+            // mounts no route — the declaration is the deployment
+            // naming the path IT mounted, which is why this is a
+            // declaration-predicated capability rather than an
+            // unconditional one like `tokens`.
+            //
+            // `mcp-delegated` says this deployment's advertised MCP
+            // endpoint accepts a delegated console assertion. Strictly
+            // stronger than `mcp-serve`, and its two halves are held
+            // differently because only one is observable from inside
+            // the package: the router must confirm that the route it
+            // would dispatch for the MCP POST at the declared path —
+            // matched by verb and domain, middleware gathered the way
+            // the pipeline runs it — carries `AuthenticateMcp`, so an
+            // advertised capability is truly guarded (a guarded decoy
+            // verb, another deployment's domain, or an excluded guard
+            // cannot earn it; a differently-hosted domain-qualified
+            // route understates, never overstates). The other half —
+            // that the product's own suite runs the delegated-tool
+            // conformance assertion — is a declaration no package
+            // check can see, exactly as `console-chrome-assets` cannot
+            // see whether any page wears the chrome.
             'capabilities' => self::capabilities(),
             'claimed' => $ownership !== null && $ownership->owner_token_id !== null,
-        ]);
+        ];
+
+        if (($mcp = McpConfiguration::endpoint()) !== null) {
+            $payload['endpoints'] = ['mcp' => $mcp];
+        }
+
+        return response()->json($payload);
     }
 
     /**
@@ -137,6 +171,14 @@ final class MetaController
         if (ConsoleGuardConfiguration::servesDelegatedEntry()) {
             $capabilities[] = 'console-enter';
             $capabilities[] = 'console-chrome-assets';
+        }
+
+        if (McpConfiguration::serves()) {
+            $capabilities[] = 'mcp-serve';
+        }
+
+        if (McpConfiguration::delegated()) {
+            $capabilities[] = 'mcp-delegated';
         }
 
         return $capabilities;
