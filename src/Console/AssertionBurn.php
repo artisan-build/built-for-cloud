@@ -40,23 +40,26 @@ use Illuminate\Database\UniqueConstraintViolationException;
  *   atomic" and "length-delimits the burn key, so two different issuer
  *   and mint pairs cannot hash alike".
  *
- * THE RACE IS EXERCISED, ON ONE LANE ONLY. The ordinary suite runs on
- * sqlite, which serializes writers in-process: the citations above
- * drive the SEQUENTIAL replay and the shared-transaction property the
- * race rests on — not the interleaving itself. The `pgsql` group adds
- * the two-connection interleaving on a driver with real row locking,
- * at this table's unique index and through BOTH doors that burn — the
- * enter door's transaction and the MCP middleware's own — so a
- * rewrite of {@see burn()} as check-then-insert reds that lane rather
- * than passing silently. The concurrent claim is only as strong as
- * the lane that runs it: the group is skipped wherever PostgreSQL is
- * not configured, and a deployment that never runs it holds the
- * sequential guarantees only. A mutation-debt row keeps the sweep
- * obligation open.
+ * THE POSTGRES LANE EXERCISES TWO CONCURRENT SHAPES. In the first, one
+ * connection calls {@see burn()} inside an open transaction and a
+ * second connection attempts a raw insert for the same mint. The raw
+ * insert meets PostgreSQL's lock refusal while the first row is
+ * uncommitted, establishing contention at the unique `mint_hash` index.
  *   Pinned by `tests/PostgresConsoleRaceTest.php` — "serializes two
- *   inserts for one assertion at the unique burn index" and
- *   "serializes concurrent presentation through AuthenticateMcp own
- *   transaction".
+ *   inserts for one assertion at the unique burn index".
+ *
+ * In the second, two calls to `AuthenticateMcp` present the same token,
+ * interleaved after the first burn row is created and before its
+ * transaction commits. The probe meets PostgreSQL's lock refusal, and a
+ * presentation after the first transaction commits receives the replay
+ * response.
+ *   Pinned by `tests/PostgresConsoleRaceTest.php` — "serializes concurrent
+ *   presentation through AuthenticateMcp own transaction".
+ *
+ * RESIDUE — NOT ESTABLISHED HERE: these tests do not demonstrate that a
+ * check-then-insert rewrite of {@see burn()} is detected, and they do not
+ * exercise concurrent presentation through the complete Console-entry
+ * transaction.
  *
  * IDENTITY IS A DIGEST, for the reason {@see DelegatedActor} states at
  * length: `jti` is only meaningful inside the issuer that minted it, and

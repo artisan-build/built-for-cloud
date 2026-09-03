@@ -45,18 +45,24 @@ use Illuminate\Support\Facades\DB;
  * `last_handoff_role` and `last_handoff_on_behalf_of` are what their
  * names say — the MOST RECENT handoff's claims, shared by every live
  * session for this subject, kept for operator listings and audit
- * context. PRD D8 makes claims per-mint and never cached beyond the
- * session, and this row cannot honour that: a later handoff arriving as
- * `admin` would otherwise promote a session that entered as `member` on
- * its very next request. The claims a request ACTS UNDER are
- * session-bound — {@see ConsoleSession} and {@see DelegatedClaims} — and
- * this class deliberately offers no `attribution()` or `role()` accessor
- * that could be mistaken for the live one.
+ * context. Browser-entry claims are copied into {@see ConsoleSession};
+ * MCP assertion claims are copied into {@see RequestAssertion} on the
+ * current request. {@see DelegatedClaims} carries either copy to the
+ * acting-principal consumers. A later handoff does not replace the
+ * claims of an already-live browser session.
  *   Pinned by `tests/ConsoleActingPrincipalTest.php` — "holds two
  *   concurrent sessions for one subject at the roles they each entered
  *   with" and "does not let a concurrent admin session promote a member
  *   session past the admin gate", which drive two live sessions
  *   interleaved rather than one session re-read after a row write.
+ * MCP request scoping is pinned by `tests/AuthenticateMcpTest.php` —
+ * "publishes the assertion actor and this handoff claims on the request"
+ * and "authenticates a TokenRegistry bearer and does not leak the prior
+ * request assertion memo".
+ *
+ * RESIDUE — NOT ESTABLISHED HERE: these tests do not constrain claim
+ * storage or principal resolution implemented by a consuming application
+ * outside {@see ConsoleSession} and {@see RequestAssertion}.
  *
  * IDENTITY IS A DIGEST. {@see identityHash()} is the unique key: sha256
  * over a length-delimited encoding of issuer and subject, computed in PHP

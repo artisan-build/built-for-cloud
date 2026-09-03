@@ -115,7 +115,20 @@ final class AssertionVerifier
     /** The bound on the identity claims — issuer, subject, audience. */
     public const int MAX_IDENTITY_LENGTH = 255;
 
-    /** The bound on the mint id the enter endpoint burns. */
+    /**
+     * The verifier's bound on the `jti` that Console entry or MCP
+     * authentication may pass to the shared burn ledger.
+     *
+     * Pinned by `tests/ConsoleAssertionTest.php` — "refuses claims that
+     * are absent, mistyped, or unparseable"; the consuming paths are
+     * pinned by `tests/ConsoleEnterTest.php` — "refuses a genuine second
+     * presentation of the same assertion, because the mint id is spent"
+     * and `tests/AuthenticateMcpTest.php` — "refuses a replay because its
+     * mint is spent and audits the bounded reason".
+     *
+     * RESIDUE — NOT ESTABLISHED HERE: this length bound does not establish
+     * that an issuer assigns a distinct `jti` to each mint.
+     */
     public const int MAX_ID_LENGTH = 64;
 
     /**

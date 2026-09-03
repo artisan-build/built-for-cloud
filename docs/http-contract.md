@@ -2248,14 +2248,19 @@ HTTP/1.1 401 Unauthorized
 {"message":"Unauthenticated."}
 ```
 
-The BYTES are uniform; the TIMING is not padded. This door's failure paths do measurably different
-work — a registry-token miss resolves a hash and answers, with no audit row; an assertion with the
-wrong audience fails inside signature verification; a containment refusal persists the handoff,
-burns, takes a locked read, rolls the burn back and writes the audit row — so a prober who can
-measure latency can distinguish the paths, the same deliberately-unpadded residue the Console entry
-door carries and for the same reason: padding would cost real latency on every request to hide
-which leg refused, while the assertion's own audience binding and single-use burn are what make a
-stolen or forged token worthless regardless of which leg said no.
+**The exercised assertion-refusal BYTES are uniform.** Audience, TTL, purpose, key and signature
+failures return the same reason-free `401` JSON body. *Pinned by*
+`tests/AuthenticateMcpTest.php` ("uniformly refuses audience ttl purpose key and signature failures
+while auditing each reason"). A replay is asserted against the same one-field JSON object. *Pinned by*
+`tests/AuthenticateMcpTest.php` ("refuses a replay because its mint is spent and audits the bounded
+reason").
+
+**RESIDUE — NOT ESTABLISHED HERE:** response-time uniformity is not tested. A valid, unspent
+assertion for the configured deployment is accepted and publishes a request principal; *pinned by*
+`tests/AuthenticateMcpTest.php` ("publishes the assertion actor and this handoff claims on the
+request"). Audience mismatch is refused by the first citation, and presentation after the mint is
+spent is refused by the replay citation. Those controls do not establish that first use of a stolen,
+valid, unspent assertion at the deployment it names will be refused.
 
 Assertion-path refusals append `denied_action` to the credential lifecycle stream with one bounded
 reason and no presented bytes. The refusal is fail-closed: if that audit transaction cannot commit,
