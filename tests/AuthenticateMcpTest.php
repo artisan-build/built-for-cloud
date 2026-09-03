@@ -138,7 +138,7 @@ function mcpRefusalReasons(): array
     return $reasons;
 }
 
-it('publishes the assertion actor and this handoff claims for this request only', function (): void {
+it('publishes the assertion actor and this handoff claims on the request', function (): void {
     $response = mcpRequest([
         'sub' => 'mcp-operator',
         'display_name' => 'MCP Operator',
