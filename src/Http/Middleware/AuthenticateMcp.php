@@ -47,6 +47,15 @@ use Throwable;
  * and the claim is deliberately narrower than "no frame leaks it":
  * see forgetCredential(), which states exactly what is cleared and the
  * residue that survives.
+ *
+ * Pinned by `tests/AuthenticateMcpTest.php` — "never falls through
+ * between registry and assertion authentication paths", "uniformly
+ * refuses audience ttl purpose key and signature failures while
+ * auditing each reason", "grants the admin actor attribute only to an
+ * admin-scoped registry token", "takes the bearer out of the server
+ * bag as well as the headers", "does not answer or audit a downstream
+ * refusal as this door refusing" and "fails closed when an assertion
+ * refusal cannot be audited".
  */
 final class AuthenticateMcp
 {

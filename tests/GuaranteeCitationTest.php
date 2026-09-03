@@ -90,6 +90,17 @@ $citedSurfaces = [
     // same diff, and the notes this PR did not write are not this PR's
     // to classify.
     'release-notes/console-reservations.md',
+    // The MCP request-scoped principal (PR5). Its one security-boundary
+    // file was exempt from this rule by the accident of not being
+    // listed, which the reviewer and the judge found independently —
+    // so the middleware, the whole `src/Mcp` directory and the
+    // conformance instrument are named here for the same reason
+    // ConsoleEnter.php is: the door is new, its guarantees are load-
+    // bearing, and a new file must be classified in the diff that adds
+    // it, not by living somewhere the walk does not go.
+    'src/Http/Middleware/AuthenticateMcp.php',
+    'src/Mcp',
+    'src/Testing/McpDelegatedTools.php',
 ];
 
 /**
@@ -127,6 +138,12 @@ $expectedCitations = [
     'resources/views/layout.blade.php' => 2,
     'resources/js/console-reentry.js' => 9,
     'src/Http/Controllers/ConsoleEnter.php' => 24,
+    // The MCP surfaces added by PR5's rework, each classified in the
+    // diff that added it to the walk.
+    'src/Http/Middleware/AuthenticateMcp.php' => 1,
+    'src/Mcp/McpConfiguration.php' => 1,
+    'src/Mcp/AdvertisesToolClassification.php' => 1,
+    'src/Testing/McpDelegatedTools.php' => 1,
 ];
 
 /**
@@ -159,6 +176,8 @@ $exemptFromCitation = [
     'src/Console/ConsoleRole.php' => 'the two-value contract vocabulary (D8)',
     'src/Console/ConsoleSessionClock.php' => 'D7\'s cap constant and its fail-closed read; cited from ConsoleGuard, which is where the cap is enforced',
     'src/Console/DelegatedClaims.php' => 'a readonly value object carrying one handoff\'s request or session claims',
+    'src/Mcp/Classification.php' => 'a bounded enum: the two-value D14 boundary vocabulary, like ConsoleRole\'s',
+    'src/Mcp/ToolClassification.php' => 'an attribute and its reflection reader; the declaration rules are the conformance instrument\'s and are cited there',
 ];
 
 /**

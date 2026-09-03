@@ -27,6 +27,10 @@ use Illuminate\Routing\Router;
  * chrome is the application's own decision. A deployment that sets
  * `delegated` and never runs the assertion advertises truthfully-by-
  * config and falsely-in-fact; the contract document says so plainly.
+ *
+ * Pinned by `tests/McpMetadataTest.php` — "advertises delegated MCP
+ * only when the declared path is actually guarded" and "does not
+ * advertise delegated MCP for a route the middleware does not guard".
  */
 final class McpConfiguration
 {

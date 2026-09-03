@@ -24,6 +24,9 @@ use ReflectionClass;
  * ineligible by the current application state, response bodies, tool
  * implementations, or whether an annotation truthfully describes behaviour.
  * It proves declaration and wire propagation, not semantic honesty.
+ *
+ * Pinned by `tests/McpConformanceTest.php` — "names every offending
+ * tool and the contract leg it violates".
  */
 final class McpDelegatedTools
 {

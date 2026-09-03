@@ -10,6 +10,9 @@ namespace ArtisanBuild\BuiltForCloud\Mcp;
  * Use this trait on a `Laravel\Mcp\Server\Tool`. An undeclared tool emits the
  * conservative `content` default, but remains non-conforming until it carries
  * the attribute explicitly.
+ *
+ * Pinned by `tests/McpConformanceTest.php` — "accepts a server whose
+ * tools declare and advertise the delegated contract".
  */
 trait AdvertisesToolClassification
 {
