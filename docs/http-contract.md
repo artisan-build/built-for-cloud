@@ -49,8 +49,6 @@ Everything else is the ordinary Laravel baseline (`ctype`, `filter`, `hash`, `mb
 
 ## Versioning and compatibility
 
-**RELEASE WINDOW: this document describes `bfc_version` 0.7.0; `BuiltForCloud::VERSION` is 0.6.4 until the tag lands.**
-
 Two discriminators, reported by [`GET /bfc/meta`](#get-bfcmeta):
 
 - **`api_version`** (integer, currently **2**) — the contract's major version. It bumps whenever a
