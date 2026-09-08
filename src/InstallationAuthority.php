@@ -4,56 +4,21 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
-use InvalidArgumentException;
 
-/**
- * @property string $key
- * @property string $mode
- * @property int $generation
- */
-final class InstallationAuthority extends Model
+final class InstallationAuthority
 {
     public const string KEY = 'installation';
 
-    protected $table = 'bfc_authority';
-
-    protected $primaryKey = 'key';
-
-    public $incrementing = false;
-
-    protected $keyType = 'string';
-
-    /** @var list<string> */
-    protected $guarded = [];
-
-    protected static function booted(): void
-    {
-        self::saving(function (self $authority): void {
-            if ($authority->key !== self::KEY
-                || AuthorityMode::tryFrom($authority->mode) === null
-                || $authority->generation < 1) {
-                throw new InvalidArgumentException('The installation authority record is invalid.');
-            }
-
-            if ($authority->exists && $authority->isDirty('generation')) {
-                $original = (int) $authority->getOriginal('generation');
-
-                if ($authority->generation <= $original) {
-                    throw new InvalidArgumentException('Authority generation must increase monotonically.');
-                }
-            }
-        });
-    }
-
     public static function current(?string $connection = null): AuthorityState
     {
-        $authority = self::onConnection($connection)->whereKey(self::KEY)->first();
+        $authority = DB::connection($connection)
+            ->table('bfc_authority')
+            ->where('key', self::KEY)
+            ->first(['mode', 'generation']);
 
-        return $authority instanceof self
-            ? AuthorityState::fromRaw($authority->mode, $authority->generation)
+        return is_object($authority)
+            ? AuthorityState::fromRaw((string) $authority->mode, (int) $authority->generation)
             : AuthorityState::fromRaw('', 0);
     }
 
@@ -66,31 +31,20 @@ final class InstallationAuthority extends Model
             return null;
         }
 
-        $changed = self::onConnection($connection)
-            ->whereKey(self::KEY)
+        $database = DB::connection($connection);
+        $changed = $database
+            ->table('bfc_authority')
+            ->where('key', self::KEY)
             ->where('mode', $expected->mode?->value)
             ->where('generation', $expected->generation)
             ->update([
                 'mode' => $mode->value,
-                'generation' => DB::raw('generation + 1'),
+                'generation' => $database->raw('generation + 1'),
                 'updated_at' => now(),
             ]);
 
-        return $changed === 1 ? self::current($connection) : null;
-    }
-
-    /** @return Builder<self> */
-    private static function onConnection(?string $connection): Builder
-    {
-        $authority = new self;
-        $authority->setConnection($connection);
-
-        return $authority->newQuery();
-    }
-
-    /** @return array<string, string> */
-    protected function casts(): array
-    {
-        return ['generation' => 'integer'];
+        return $changed === 1
+            ? AuthorityState::fromRaw($mode->value, $expected->generation + 1)
+            : null;
     }
 }

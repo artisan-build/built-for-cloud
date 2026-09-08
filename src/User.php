@@ -44,12 +44,12 @@ class User extends Model implements AuthenticatableContract, MustVerifyEmail
     /** @var list<string> */
     protected $hidden = ['password', 'remember_token', 'owner_slot'];
 
-    protected static function booted(): void
-    {
-        static::saving(function (self $user): void {
-            $user->owner_slot = $user->role === UserRole::Owner->value ? 'owner' : null;
-        });
-    }
+    /** @var array<string, mixed> */
+    protected $attributes = [
+        'role' => 'member',
+        'status' => 'active',
+        'email_is_generated' => false,
+    ];
 
     public function roleValue(): ?UserRole
     {

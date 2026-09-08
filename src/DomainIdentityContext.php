@@ -25,6 +25,17 @@ final readonly class DomainIdentityContext implements IdentityContext
             : (is_string($authorityMode) ? AuthorityMode::tryFrom($authorityMode) : null);
     }
 
+    public static function forUser(User $user, AuthorityState $authority): self
+    {
+        return new self(
+            (string) $user->getKey(),
+            $user->role,
+            $authority->mode,
+            $authority->generation,
+            CredentialOwnership::Account,
+        );
+    }
+
     public function actorId(): string
     {
         return $this->stableActorId;
@@ -52,32 +63,35 @@ final readonly class DomainIdentityContext implements IdentityContext
 
     public function canUseProduct(): bool
     {
-        return $this->hasValidAuthority() && RolePolicy::canUseProduct($this->resolvedRole);
+        return $this->hasValidHumanAuthority() && RolePolicy::canUseProduct($this->resolvedRole);
     }
 
     public function canManageMembers(): bool
     {
-        return $this->hasValidAuthority() && RolePolicy::canManageMembers($this->resolvedRole);
+        return $this->hasValidHumanAuthority() && RolePolicy::canManageMembers($this->resolvedRole);
     }
 
     public function canManageAdmins(): bool
     {
-        return $this->hasValidAuthority() && RolePolicy::canManageAdmins($this->resolvedRole);
+        return $this->hasValidHumanAuthority() && RolePolicy::canManageAdmins($this->resolvedRole);
     }
 
     public function canInitiateModeTransition(): bool
     {
-        return $this->hasValidAuthority() && RolePolicy::canInitiateModeTransition($this->resolvedRole);
+        return $this->hasValidHumanAuthority() && RolePolicy::canInitiateModeTransition($this->resolvedRole);
     }
 
     public function isSameActorOrAdminOrOwner(string $attributedActorId): bool
     {
-        return $this->hasValidAuthority()
+        return $this->hasValidHumanAuthority()
             && RolePolicy::isSameActorOrAdminOrOwner($this->resolvedRole, $this->stableActorId, $attributedActorId);
     }
 
-    private function hasValidAuthority(): bool
+    private function hasValidHumanAuthority(): bool
     {
-        return $this->stableActorId !== '' && $this->resolvedAuthorityMode !== null && $this->generation >= 1;
+        return $this->ownership === CredentialOwnership::Account
+            && $this->stableActorId !== ''
+            && $this->resolvedAuthorityMode !== null
+            && $this->generation >= 1;
     }
 }

@@ -26,6 +26,9 @@ final class ThinHostAuthenticationTest extends Orchestra
     /** @param Application $app */
     protected function getEnvironmentSetUp($app): void
     {
+        $app['config']->set('auth.defaults.guard', 'web');
+        $app['config']->set('auth.guards', []);
+        $app['config']->set('auth.providers', []);
         $app['config']->set('built-for-cloud.surfaces.data_migrations', false);
         $app['config']->set('app.key', 'base64:'.base64_encode(str_repeat('thin-host-key-32', 2)));
     }
@@ -48,6 +51,8 @@ final class ThinHostAuthenticationTest extends Orchestra
         $retrieved = $guard->getProvider()->retrieveByCredentials(['email' => $user->email]);
 
         $this->assertTrue(Schema::hasTable('users'));
+        $this->assertSame('web', config('auth.defaults.guard'));
+        $this->assertSame(['driver' => 'session', 'provider' => 'users'], config('auth.guards.web'));
         $this->assertSame(User::class, config('auth.providers.users.model'));
         $this->assertInstanceOf(User::class, $retrieved);
         $this->assertTrue($guard->getProvider()->validateCredentials($retrieved, [

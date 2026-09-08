@@ -11,6 +11,7 @@ use Illuminate\Console\Command;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
@@ -187,7 +188,11 @@ it('falls back to local target selection when cloud environments cannot be liste
 
 it('fails create-admin clearly when the role column is missing', function (): void {
     Schema::table('users', function (Blueprint $table): void {
-        $table->dropColumn('role');
+        $table->dropUnique('users_owner_slot_unique');
+    });
+
+    Schema::table('users', function (Blueprint $table): void {
+        $table->dropColumn(['owner_slot', 'role']);
     });
 
     $exitCode = Artisan::call('create-admin', [
@@ -283,5 +288,18 @@ it('protects routes through auth and admin middleware aliases', function (): voi
     $this->get('/admin-only')->assertForbidden();
     $this->actingAs($regular)->get('/auth-only')->assertOk();
     $this->actingAs($regular)->get('/admin-only')->assertForbidden();
+
+    DB::table('users')->where('id', $regular->getKey())->update(['role' => 'super-admin']);
+    $regular->refresh();
+
+    $this->actingAs($regular)->get('/auth-only')->assertForbidden();
+
+    DB::table('users')->where('id', $regular->getKey())->update([
+        'role' => UserRole::Member->value,
+        'status' => 'inactive',
+    ]);
+    $regular->refresh();
+
+    $this->actingAs($regular)->get('/auth-only')->assertForbidden();
     $this->actingAs($admin)->get('/admin-only')->assertOk();
 });

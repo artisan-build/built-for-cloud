@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
+use PHPUnit\Framework\AssertionFailedError;
 
 uses(RefreshDatabase::class);
 uses(ContractAssertions::class);
@@ -30,4 +31,11 @@ it('provides helpers for minting contract auth tokens', function (): void {
 
     expect($adminToken->abilities)->toBe([Scope::Admin->value])
         ->and($consumeToken->abilities)->toBe([Scope::Consume->value]);
+});
+
+it('exercises the consumer thin-host conformance wrapper', function (): void {
+    $this->assertBuiltForCloudThinHostSources(__DIR__.'/Fixtures/ThinHost');
+
+    expect(fn () => $this->assertBuiltForCloudThinHostSources(__DIR__.'/Fixtures/RogueHost'))
+        ->toThrow(AssertionFailedError::class);
 });

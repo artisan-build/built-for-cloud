@@ -21,4 +21,13 @@ final class UnsupportedHumanAuthConfiguration extends RuntimeException
             .'. Conflicting provider: '.$model.'. Remove the host-owned human model/configuration.',
         );
     }
+
+    public static function forGuard(mixed $guard): self
+    {
+        return new self(
+            'Built for Cloud owns the supported human auth guard and requires '
+            .'auth.defaults.guard to select the web session guard backed by the users provider. '
+            .'Conflicting guard: '.get_debug_type($guard).'. Remove the host-owned human guard configuration.',
+        );
+    }
 }

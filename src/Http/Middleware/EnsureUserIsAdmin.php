@@ -54,7 +54,7 @@ use Symfony\Component\HttpFoundation\Response;
  *   still checked for offboarding containment;
  * - anything else is 403.
  *
- * OFFBOARDING is a LOCAL containment registry keyed on host-app user
+ * OFFBOARDING is a LOCAL containment registry keyed on canonical package user
  * ids, so it is checked for the local branch only; a delegated actor's
  * containment is its own `deactivated_at`, enforced at the guard/provider
  * or assertion middleware before this gate ever runs.

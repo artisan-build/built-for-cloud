@@ -228,18 +228,22 @@ cloud command:run <env> --cmd "php artisan bfc:ownership:mint-claim --execute --
 Built for Cloud owns the canonical `ArtisanBuild\BuiltForCloud\User` model and the fresh-install
 `users` migration. A supported host does not define `App\Models\User` or a users migration. The
 service provider registers the package model on Laravel's normal `web` session guard and `users`
-Eloquent provider; a conflicting configured human model fails during boot instead of being used.
+Eloquent provider, including when a headless host declares neither entry. A conflicting materialized
+human model, provider, selected guard, or `web` guard fails during boot instead of being used.
 
 The local database primary key is stable attribution. Domain packages receive its string form only
 through `Contracts\IdentityContext`, together with closed role decisions, authority mode/generation,
-credential ownership, and the same-actor-or-Admin/Owner helper. That interface carries no Eloquent,
-guard, hash, or token-display types.
+credential ownership, and the same-actor-or-Admin/Owner helper. `DomainIdentityContext::forUser()`
+derives the opaque actor ID only from the canonical database primary key. That interface carries no
+Eloquent, guard, hash, credential ID, or token-display types.
 
 The package migration stores unique email, nullable password, `owner`/`admin`/`member` role, human
 status, trusted Scalpels issuer/connection/subject provenance, original contact email, generated-email
-state, and timestamps reserved for later managed-membership freshness behavior. It also creates one
-`bfc_authority` row in `standalone` mode at generation 1. `InstallationAuthority::change()` advances
-that generation with a compare-and-set update, so stale writers cannot change authority.
+state, and timestamps reserved for later managed-membership freshness behavior. External provenance is
+either fully null or fully populated, and fully populated triples are unique at the database boundary.
+It also creates one structurally guarded `bfc_authority` row in `standalone` mode at generation 1.
+`InstallationAuthority::change()` is the non-Eloquent write API; it advances that generation with a
+compare-and-set update and returns the exact state it wrote, so stale writers cannot change authority.
 
 ### Role policy
 
@@ -251,9 +255,11 @@ that generation with a compare-and-set update, so stale writers cannot change au
 | Admin | yes | yes | no | no |
 | Member | yes | no | no | no |
 
-Unknown role or authority-mode strings deny every context decision. A unique internal owner slot
-prevents two package-model rows from holding the Owner role. No destructive/configuration policy or
-custom permission system is implied.
+Unknown role or authority-mode strings deny every context decision. `bfc.auth` also rejects inactive
+canonical users and persisted unknown roles. A database-generated unique owner slot prevents a second
+Owner through model, bulk, or raw writes. Installation-owned credentials receive no human-role product,
+membership, Admin, transition, or same-actor authority in this foundation. No destructive/configuration
+policy or custom permission system is implied.
 
 ### Create the first admin
 
@@ -336,7 +342,8 @@ conventional app-owned `User`, users migration, auth controller/UI, and token-co
 The source check is intentionally a path-pattern drift detector. It does not prove arbitrary PHP
 cannot implement auth indirectly, inspect generated runtime code, or establish fleet-wide
 completeness. The package suite includes both an artifact-free thin Testbench host and a rogue
-app-owned User positive control so a scanner that visits nothing cannot report success.
+positive control for every advertised source classifier, the configuration scanner, and the
+consumer-facing assertion wrapper so a scanner that visits nothing cannot report success.
 
 ### Foundation boundary
 

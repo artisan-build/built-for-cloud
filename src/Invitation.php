@@ -157,8 +157,8 @@ final class Invitation extends Model
                 $attributes['password'] = Hash::make($attributes['password']);
             }
 
-            // The legacy attribute-composition hook lets an app add
-            // non-authority profile attributes. No binding means the
+            // The legacy attribute-composition hook can rewrite the canonical
+            // model's accepted profile attributes. No binding means the
             // attributes pass through untouched, exactly today's behaviour.
             // Package-owned role and owner fields are stripped again after
             // the hook, so it cannot widen the closed role policy.

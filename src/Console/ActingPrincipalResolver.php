@@ -188,9 +188,9 @@ final class ActingPrincipalResolver
      * The applicable guard when it is the app's OWN, or null when it
      * structurally has none.
      *
-     * A headless app ships `auth.defaults.guard => null` and
-     * `auth.guards => []`, and asking the AuthManager for a guard that
-     * does not exist throws — so structural absence is read as "nobody
+     * Runtime configuration can remove or replace the package-installed
+     * web guard, and asking the AuthManager for a guard that does not
+     * exist throws — so structural absence is read as "nobody
      * is acting locally", the same stance {@see CredentialGuard} takes.
      * A CONFIGURED guard that throws during resolution is a different
      * state and is left to propagate.

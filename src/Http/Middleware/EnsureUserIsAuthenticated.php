@@ -7,6 +7,8 @@ namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
+use ArtisanBuild\BuiltForCloud\RolePolicy;
+use ArtisanBuild\BuiltForCloud\User;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -79,6 +81,16 @@ final class EnsureUserIsAuthenticated
 
         if ($user === null) {
             return $this->unauthenticated($request);
+        }
+
+        if (! $user instanceof User
+            || $user->status !== 'active'
+            || ! RolePolicy::canUseProduct($user->role)) {
+            if ($request->hasSession()) {
+                $request->session()->invalidate();
+            }
+
+            abort(403);
         }
 
         // Full account containment (PRD 1.15, SEC-V3-04): a session

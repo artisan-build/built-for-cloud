@@ -713,8 +713,8 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     }
 
     /**
-     * BfC's management routes are public/pre-auth, and a headless app may have
-     * no auth guard at all (`auth.defaults.guard` null, `auth.guards` empty).
+     * BfC's management routes are public/pre-auth, and runtime configuration
+     * can still remove every guard after the package installs its web guard.
      * Laravel's inline `throttle:N,1` builds its signature via
      * `$request->user()`, so on such an app the AuthManager throws and every
      * throttled route 500s. Keying these limiters on the IP is both correct for
@@ -729,7 +729,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // The personal surface's limiter (PRD 1.17). Keyed on the
         // SESSION principal, not a bearer digest: this surface has no
         // bearer. The user id is read defensively — the limiter runs
-        // before the session gate, and a headless app (no guard at all)
+        // before the session gate, and a runtime with no configured guard
         // must get a bounded 401, never a 500 out of the AuthManager.
         RateLimiter::for('bfc-personal', function (Request $request): array {
             return [
