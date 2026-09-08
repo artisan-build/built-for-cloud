@@ -16,7 +16,7 @@ use ArtisanBuild\BuiltForCloud\Invitation;
  * The hook is TRUSTED APPLICATION CODE: whoever binds it can shape the
  * created user however the user model allows, so binding one is a
  * privileged act. The package applies two guard-rails to its return —
- * `is_admin` is stripped before the user is created, and an ADDRESSED
+ * Package-owned role fields are stripped before the user is created, and an ADDRESSED
  * invitation's email still overrides — as protection against accidental
  * pass-through of registrant input, NOT as a privilege boundary against
  * the hook itself (a hook can reach the same model directly).

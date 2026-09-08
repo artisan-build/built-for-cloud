@@ -13,7 +13,8 @@ use ArtisanBuild\BuiltForCloud\Exceptions\InvalidInvitation;
 use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
-use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
+use ArtisanBuild\BuiltForCloud\User;
+use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -176,7 +177,7 @@ it('strips admin escalation from the hook output and keeps the addressed email a
     {
         public function composeInvitedUserAttributes(Invitation $invitation, array $attributes): array
         {
-            $attributes['is_admin'] = true;
+            $attributes['role'] = UserRole::Owner->value;
             $attributes['email'] = 'hijacked@user.test';
 
             return $attributes;
@@ -188,7 +189,7 @@ it('strips admin escalation from the hook output and keeps the addressed email a
     $user = Invitation::accept($invitation->token, ['name' => 'Composed', 'password' => 'pw']);
 
     expect($user->refresh()->email)->toBe('victim@user.test')
-        ->and($user->is_admin)->toBeFalse();
+        ->and($user->role)->toBe(UserRole::Member->value);
 });
 
 // PR8 locked AC 4 (accept side): open invitations work end-to-end.

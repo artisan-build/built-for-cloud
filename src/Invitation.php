@@ -15,7 +15,6 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 /**
@@ -152,24 +151,22 @@ final class Invitation extends Model
                 throw InvalidInvitation::alreadyAccepted();
             }
 
-            unset($attributes['is_admin']);
+            unset($attributes['role'], $attributes['owner_slot']);
 
             if (isset($attributes['password']) && is_string($attributes['password'])) {
                 $attributes['password'] = Hash::make($attributes['password']);
             }
 
-            // The attribute-composition hook (D4 cost 4): the app composes
-            // the user's attributes at creation — capstan projects `role`,
-            // crate projects key-management-only. No binding = the
+            // The legacy attribute-composition hook lets an app add
+            // non-authority profile attributes. No binding means the
             // attributes pass through untouched, exactly today's behaviour.
-            // The hook is trusted app code; the is_admin strip below is a
-            // guard-rail against accidental pass-through, not a privilege
-            // boundary against the hook itself.
+            // Package-owned role and owner fields are stripped again after
+            // the hook, so it cannot widen the closed role policy.
             if (app()->bound(ComposesInvitedUserAttributes::class)) {
                 $attributes = app(ComposesInvitedUserAttributes::class)
                     ->composeInvitedUserAttributes($invitation, $attributes);
 
-                unset($attributes['is_admin']);
+                unset($attributes['role'], $attributes['owner_slot']);
             }
 
             // Addressed invitations force their address onto the user; an
@@ -178,12 +175,7 @@ final class Invitation extends Model
                 $attributes['email'] = $invitation->email;
             }
 
-            $userClass = self::userModelClass();
-            $user = $userClass::query()->create($attributes);
-
-            if (Schema::hasColumn($user->getTable(), 'is_admin')) {
-                $user->forceFill(['is_admin' => false])->save();
-            }
+            $user = User::query()->create($attributes);
 
             $invitation->refresh();
             $invitation->forceFill(['used_by' => (string) $user->getKey()])->save();
@@ -239,18 +231,6 @@ final class Invitation extends Model
     protected static function newFactory(): InvitationFactory
     {
         return InvitationFactory::new();
-    }
-
-    /**
-     * @return class-string<Model>
-     */
-    private static function userModelClass(): string
-    {
-        $configured = config('auth.providers.users.model', 'App\\Models\\User');
-
-        return is_string($configured) && is_a($configured, Model::class, true)
-            ? $configured
-            : 'App\\Models\\User';
     }
 
     public static function hashToken(string $token): string

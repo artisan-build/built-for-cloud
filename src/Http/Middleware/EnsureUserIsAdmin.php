@@ -8,8 +8,9 @@ use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleRole;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
+use ArtisanBuild\BuiltForCloud\RolePolicy;
+use ArtisanBuild\BuiltForCloud\User;
 use Closure;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -20,7 +21,7 @@ use Symfony\Component\HttpFoundation\Response;
  * A delegated operator carrying `role=admin` is exactly what the Console
  * exists to deliver (PRD D8: the vendor's own roles collapse to
  * `admin`/`member` at mint time and the app maps those two onto its own
- * policies), so an admin gate that demanded an `is_admin` column would
+ * policies), so an admin gate that demanded a local role would
  * refuse the one principal the whole feature is for. This gate therefore
  * asks {@see ActingPrincipalResolver} who is acting and answers per
  * principal TYPE.
@@ -43,14 +44,14 @@ use Symfony\Component\HttpFoundation\Response;
  *   Console guard's principal specifically;
  * - a delegated session that is present but is NOT the acting principal
  *   (the route is guarded by the app's own guard) is a 403, and
- *   deliberately not a fall-through to the local user's `is_admin`:
+ *   deliberately not a fall-through to the local user's role:
  *   D14 says the delegated principal governs, so a local admin session
  *   must not lend its standing to a delegated operator the route never
  *   scoped itself to;
  * - a REFUSED delegated session is terminal here too — 403, never
  *   re-resolved against the local user;
- * - a LOCAL user passes on the app's own `is_admin` attribute, exactly
- *   as before, and is still checked for offboarding containment;
+ * - a LOCAL package user passes when its role can manage Members, and is
+ *   still checked for offboarding containment;
  * - anything else is 403.
  *
  * OFFBOARDING is a LOCAL containment registry keyed on host-app user
@@ -81,7 +82,7 @@ final class EnsureUserIsAdmin
 
         $user = $acting->principal;
 
-        if (! $user instanceof Model || ! (bool) $user->getAttribute('is_admin')) {
+        if (! $user instanceof User || ! RolePolicy::canManageMembers($user->role)) {
             abort(403);
         }
 

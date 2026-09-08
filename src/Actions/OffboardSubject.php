@@ -480,17 +480,8 @@ final class OffboardSubject
             $userIds = [...$userIds, ...array_map(strval(...), $invitedUserIds)];
         }
 
-        $model = config('auth.providers.users.model');
-        $instance = null;
-
-        if (is_string($model) && class_exists($model) && is_subclass_of($model, Model::class)) {
-            /** @var Model $candidate */
-            $candidate = new $model;
-
-            if (Schema::hasTable($candidate->getTable())) {
-                $instance = $candidate;
-            }
-        }
+        $candidate = new \ArtisanBuild\BuiltForCloud\User;
+        $instance = Schema::hasTable($candidate->getTable()) ? $candidate : null;
 
         if ($instance !== null && $subject->type === SubjectType::UserPrincipal) {
             /** @var Model|null $byEmail */

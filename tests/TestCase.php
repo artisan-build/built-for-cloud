@@ -29,8 +29,6 @@ abstract class TestCase extends Orchestra
      */
     protected function getEnvironmentSetUp($app): void
     {
-        $app['config']->set('auth.providers.users.model', Fixtures\User::class);
-
         $app['config']->set('database.connections.pgsql_testing', [
             'driver' => 'pgsql',
             'host' => $this->environment('PGSQL_TESTING_HOST', '127.0.0.1'),

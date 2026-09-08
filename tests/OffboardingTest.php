@@ -33,6 +33,7 @@ use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnifiedStoreDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
+use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
@@ -368,7 +369,7 @@ it('rejects an offboarded user on bfc.admin too, whatever session store kept the
         'email' => 'person@example.com',
         'password' => 'irrelevant',
     ]);
-    $user->forceFill(['is_admin' => true])->save();
+    $user->forceFill(['role' => UserRole::Admin->value])->save();
 
     // Positive control: the admin passes the gate before containment.
     $this->actingAs($user)->get('/offboard-admin-guarded')->assertOk();

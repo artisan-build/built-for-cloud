@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud;
 
 use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
+use ArtisanBuild\BuiltForCloud\Auth\HumanAuthConfiguration;
 use ArtisanBuild\BuiltForCloud\Commands\ConsoleReKeyCommand;
 use ArtisanBuild\BuiltForCloud\Commands\ConsoleRetireKeyCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CreateAdminCommand;
@@ -134,6 +135,8 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        HumanAuthConfiguration::apply($this->app->make(Repository::class));
+
         // Surface selection (PRD 1.14, fleet F2): each family below is
         // mounted only when its `built-for-cloud.surfaces.*` key says so
         // — whole families, never single routes (the claim surfaces are

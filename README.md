@@ -225,39 +225,46 @@ cloud command:run <env> --cmd "php artisan bfc:ownership:mint-claim --execute --
 
 ## Auth foundation
 
-Built for Cloud augments your Laravel app's existing user model. It does **not** create or own a
-`users` table. Instead, it reads the configured model from `config('auth.providers.users.model')`
-(falling back to `App\Models\User`) and adds reusable admin and invitation building blocks around it.
+Built for Cloud owns the canonical `ArtisanBuild\BuiltForCloud\User` model and the fresh-install
+`users` migration. A supported host does not define `App\Models\User` or a users migration. The
+service provider registers the package model on Laravel's normal `web` session guard and `users`
+Eloquent provider; a conflicting configured human model fails during boot instead of being used.
 
-### User admin flag
+The local database primary key is stable attribution. Domain packages receive its string form only
+through `Contracts\IdentityContext`, together with closed role decisions, authority mode/generation,
+credential ownership, and the same-actor-or-Admin/Owner helper. That interface carries no Eloquent,
+guard, hash, or token-display types.
 
-The package ships a guarded migration that runs late and adds `is_admin boolean default false` to an
-existing `users` table. It never creates or replaces your app's user table, so run your app's users
-table migration first and let the package migration run after that. If the users table does not exist
-yet, the package migration is a no-op.
+The package migration stores unique email, nullable password, `owner`/`admin`/`member` role, human
+status, trusted Scalpels issuer/connection/subject provenance, original contact email, generated-email
+state, and timestamps reserved for later managed-membership freshness behavior. It also creates one
+`bfc_authority` row in `standalone` mode at generation 1. `InstallationAuthority::change()` advances
+that generation with a compare-and-set update, so stale writers cannot change authority.
 
-Make sure your app's user model casts the column as a boolean. Keep `is_admin` out of `$fillable` as
-defense-in-depth so user-submitted form data cannot mass-assign privileges:
+### Role policy
 
-```php
-protected $fillable = ['name', 'email', 'password'];
+`RolePolicy` implements only the frozen coarse policy:
 
-protected function casts(): array
-{
-    return ['is_admin' => 'boolean'];
-}
-```
+| Role | Use product | Manage Members | Manage Admins | Initiate mode transition |
+| --- | --- | --- | --- | --- |
+| Owner | yes | yes | yes | yes |
+| Admin | yes | yes | no | no |
+| Member | yes | no | no | no |
+
+Unknown role or authority-mode strings deny every context decision. A unique internal owner slot
+prevents two package-model rows from holding the Owner role. No destructive/configuration policy or
+custom permission system is implied.
 
 ### Create the first admin
 
-Use the shared command to create an administrator in the configured user model:
+The legacy shared command creates the initial Owner in the package model:
 
 ```bash
 php artisan create-admin --email=admin@example.com --password=secret --name="Admin"
 ```
 
-If any admin already exists, the command refuses to create another one. Pass `--force` when you
-intentionally want multiple admins:
+Once an Owner exists, the command refuses by default. Pass `--force` to create an Admin; it never
+creates a second Owner:
 
 ```bash
 php artisan create-admin --email=ops@example.com --password=secret --name="Ops" --force
@@ -265,13 +272,15 @@ php artisan create-admin --email=ops@example.com --password=secret --name="Ops" 
 
 When an option is omitted, the command prompts for it using Laravel Prompts.
 
-The command requires the `is_admin` column to exist and fails with a migration reminder when it is
-missing. It sets the admin flag with `forceFill()`, so your app should not make `is_admin` fillable.
+The command requires the package `role` column. Its command name is retained as legacy residue until
+the standalone lifecycle slice replaces initial-owner and membership-management flows.
 
 ### Invitations
 
-The package provides an `ArtisanBuild\BuiltForCloud\Invitation` model and migration. Consuming apps
-build their own routes, controllers, notifications, and views around these library methods:
+The existing `ArtisanBuild\BuiltForCloud\Invitation` primitive remains available as legacy residue.
+It now creates the package model and always leaves the new account as Member, even if incoming or
+hook-composed attributes attempt to set a role. Package-owned invitation UI and lifecycle belong to a
+later slice.
 
 ```php
 use ArtisanBuild\BuiltForCloud\Invitation;
@@ -284,11 +293,9 @@ $user = Invitation::accept($invitation->token, [
 ]);
 ```
 
-`invite()` generates a unique token and defaults `expires_at` to seven days from now. `accept()` only
-accepts pending, unexpired invitations; it creates the configured user with the invitation email,
-hashes a provided `password`, marks `accepted_at`, and returns the new user. `accept()` never grants
-admin access: privileged incoming attributes such as `is_admin` are ignored and the created user is
-forced non-admin when the column exists. Invalid, expired, or already accepted tokens throw
+`invite()` generates a unique token with a required bounded TTL. `accept()` only
+accepts pending, unexpired invitations; it creates the package user with the invitation email,
+hashes a provided `password`, marks `accepted_at`, and returns the new user. Invalid, expired, or already accepted tokens throw
 `ArtisanBuild\BuiltForCloud\Exceptions\InvalidInvitation`.
 
 Useful scopes are available for app UI and housekeeping:
@@ -306,7 +313,7 @@ The service provider registers route middleware aliases:
 | Alias | Behaviour |
 | --- | --- |
 | `bfc.auth` | Requires an authenticated user. JSON requests receive `401`; browser requests redirect to a `login` route when one exists, otherwise `401`. |
-| `bfc.admin` | Requires an authenticated user whose `is_admin` attribute is truthy; otherwise `403`. |
+| `bfc.admin` | Requires a package Owner/Admin, while retaining the existing delegated-console branch; otherwise `403`. |
 
 Use them in the consuming app's routes:
 
@@ -316,9 +323,28 @@ Route::middleware('bfc.auth')->group(function () {
 });
 
 Route::middleware('bfc.admin')->group(function () {
-    // administrators only
+    // Owner and Admin only
 });
 ```
+
+### Thin-host conformance
+
+`ContractAssertions::assertBuiltForCloudContract()` verifies the package model configuration and
+identity/authority schema. `assertBuiltForCloudThinHostSources($hostRoot)` additionally reports
+conventional app-owned `User`, users migration, auth controller/UI, and token-command paths.
+
+The source check is intentionally a path-pattern drift detector. It does not prove arbitrary PHP
+cannot implement auth indirectly, inspect generated runtime code, or establish fleet-wide
+completeness. The package suite includes both an artifact-free thin Testbench host and a rogue
+app-owned User positive control so a scanner that visits nothing cannot report success.
+
+### Foundation boundary
+
+This foundation does not implement local login/recovery UI, managed Scalpels HTTP exchange, email
+collision allocation, five/thirty-minute freshness calls, transition orchestration, or unified
+credential replacement. Existing `api_tokens`, fallback-token, invitation, ownership, delegated
+Console actor/guard, and app-specific credential declaration surfaces remain legacy residue for later
+authorized slices; they are not evidence that those later unified-auth behaviors exist.
 
 ## Installer scaffold
 

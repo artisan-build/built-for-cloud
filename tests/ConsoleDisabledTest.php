@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
+use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Session\Middleware\StartSession;
@@ -83,7 +84,7 @@ final class ConsoleDisabledTest extends TestCase
         $this->getJson('/disabled-auth')->assertOk();
         $this->getJson('/disabled-admin')->assertStatus(403);
 
-        $user->forceFill(['is_admin' => true])->save();
+        $user->forceFill(['role' => UserRole::Admin->value])->save();
 
         $this->getJson('/disabled-admin')->assertOk();
     }

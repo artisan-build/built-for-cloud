@@ -3365,7 +3365,7 @@ documented in their own sections above.
     on a route the console guard actually governs, so the principal it authorizes is the
     principal everything behind it acts as. A delegated `member` does not pass; a delegated
     session on a route the console guard does NOT govern is refused rather than resolved to
-    the local user's `is_admin`; a local user still passes on that attribute as before.
+    the local user's role; a package Owner or Admin still passes the local branch.
   - `bfc.auth` and the personal-credentials surface (`/bfc/me/credentials`) REFUSE a delegated
     session with a `403`, whichever guard the route names, rather than falling through to the
     local session user. A delegated actor has no personal credentials in this app. On a
