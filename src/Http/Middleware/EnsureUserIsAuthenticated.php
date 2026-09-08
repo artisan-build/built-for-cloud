@@ -95,19 +95,11 @@ final class EnsureUserIsAuthenticated
             abort(403);
         }
 
-        $sessionVersion = $request->hasSession()
-            ? $request->session()->get(StandaloneAccess::SESSION_VERSION_KEY)
-            : null;
-
-        if ($sessionVersion === null || (int) $sessionVersion !== $user->auth_session_version) {
-            if (is_string($acting->guard)) {
-                Auth::guard($acting->guard)->logout();
-            }
-
-            if ($request->hasSession()) {
-                $request->session()->invalidate();
-                $request->session()->regenerateToken();
-            }
+        if (! StandaloneAccess::sessionVersionIsCurrent($request, $user)) {
+            StandaloneAccess::endCurrentSession(
+                $request,
+                is_string($acting->guard) ? Auth::guard($acting->guard) : null,
+            );
 
             return $this->unauthenticated($request);
         }

@@ -218,7 +218,7 @@ it('refuses a delegated admin on an admin gate the console guard does not govern
 });
 
 it('still admits a local admin on the admin gate when no delegated session is live', function (): void {
-    $this->actingAs(surfaceUser(admin: true));
+    $this->actingAsVersioned(surfaceUser(admin: true));
 
     $this->getJson('/admin-only')->assertOk();
 });

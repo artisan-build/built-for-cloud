@@ -3,9 +3,13 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Actions\AcceptHumanInvitation;
+use ArtisanBuild\BuiltForCloud\AuthorityMode;
+use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\Tests\Support\PostgresLane;
 use ArtisanBuild\BuiltForCloud\User;
+use ArtisanBuild\BuiltForCloud\UserRole;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -18,6 +22,17 @@ function expectStandalonePostgresLock(?Throwable $failure): void
 {
     expect($failure)->toBeInstanceOf(QueryException::class)
         ->and((string) $failure?->getCode())->toBe('55P03');
+}
+
+function seedStandalonePostgresAuthority(): void
+{
+    DB::table('bfc_authority')->insert([
+        'key' => InstallationAuthority::KEY,
+        'mode' => AuthorityMode::Standalone->value,
+        'generation' => 1,
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
 }
 
 it('burns invitations once and enforces pending invitation and user email uniqueness on Postgres', function (): void {
@@ -103,4 +118,163 @@ it('holds invitation and membership rows against concurrent burns and role chang
 
     expect(DB::table('sessions')->where('user_id', $user->getKey())->pluck('id')->all())
         ->toBe(['postgres-owned']);
+});
+
+it('holds production membership and invitation operations against independent Postgres writers', function (): void {
+    seedStandalonePostgresAuthority();
+    $main = $this->postgresLaneConnection();
+    $probe = $this->postgresLaneProbe();
+    $probe->statement("set lock_timeout = '750ms'");
+    $owner = User::query()->create([
+        'name' => 'Postgres Controller Owner',
+        'email' => 'postgres-controller-owner@example.test',
+        'password' => Hash::make('postgres controller password'),
+    ]);
+    $owner->forceFill(['role' => UserRole::Owner->value, 'email_verified_at' => now()])->save();
+    $member = User::query()->create([
+        'name' => 'Postgres Controller Member',
+        'email' => 'postgres-controller-member@example.test',
+        'password' => Hash::make('postgres controller password'),
+    ]);
+    $membershipLockObserved = false;
+    $membershipFailure = null;
+
+    $main->listen(function (QueryExecuted $query) use ($probe, $member, &$membershipLockObserved, &$membershipFailure): void {
+        if ($membershipLockObserved
+            || ! str_contains(strtolower($query->sql), 'from "users"')
+            || ! str_contains(strtolower($query->sql), 'for update')
+            || ! in_array($member->getKey(), $query->bindings, false)) {
+            return;
+        }
+
+        $membershipLockObserved = true;
+        $probe->beginTransaction();
+
+        try {
+            $probe->table('users')->where('id', $member->getKey())->update(['role' => UserRole::Admin->value]);
+        } catch (Throwable $exception) {
+            $membershipFailure = $exception;
+        } finally {
+            $probe->rollBack();
+        }
+    });
+
+    $this->actingAsVersioned($owner)
+        ->put('/bfc/members/'.$member->getKey().'/role', ['role' => UserRole::Admin->value])
+        ->assertRedirect();
+
+    expect($membershipLockObserved)->toBeTrue();
+    expectStandalonePostgresLock($membershipFailure);
+    expect($member->refresh()->role)->toBe(UserRole::Admin->value);
+
+    $token = bin2hex(random_bytes(32));
+    $tokenHash = hash('sha256', $token);
+    Invitation::query()->create([
+        'id' => (string) Str::uuid(),
+        'email' => 'postgres-controller-invite@example.test',
+        'token' => $tokenHash,
+        'invited_by' => (string) $owner->getKey(),
+        'role' => UserRole::Member->value,
+        'expires_at' => now()->addHour(),
+    ]);
+    $invitationLockObserved = false;
+    $invitationFailure = null;
+
+    $main->listen(function (QueryExecuted $query) use ($probe, $tokenHash, &$invitationLockObserved, &$invitationFailure): void {
+        if ($invitationLockObserved
+            || ! str_contains(strtolower($query->sql), 'from "invitations"')
+            || ! str_contains(strtolower($query->sql), 'for update')
+            || ! in_array($tokenHash, $query->bindings, true)) {
+            return;
+        }
+
+        $invitationLockObserved = true;
+        $probe->beginTransaction();
+
+        try {
+            $probe->table('invitations')->where('token', $tokenHash)->update(['accepted_at' => now()]);
+        } catch (Throwable $exception) {
+            $invitationFailure = $exception;
+        } finally {
+            $probe->rollBack();
+        }
+    });
+
+    $accepted = app(AcceptHumanInvitation::class)($token, 'Postgres Controller Invitee', 'postgres invitation password');
+
+    expect($invitationLockObserved)->toBeTrue();
+    expectStandalonePostgresLock($invitationFailure);
+    expect($accepted->email)->toBe('postgres-controller-invite@example.test');
+    $probe->statement('set lock_timeout = default');
+});
+
+it('runs password reset burn and owned session controllers on Postgres', function (): void {
+    seedStandalonePostgresAuthority();
+    config([
+        'session.driver' => 'database',
+        'session.connection' => 'pgsql_testing',
+        'session.table' => 'sessions',
+    ]);
+    $user = User::query()->create([
+        'name' => 'Postgres Lifecycle User',
+        'email' => 'postgres-lifecycle@example.test',
+        'password' => Hash::make('postgres original password'),
+    ]);
+    $user->forceFill(['email_verified_at' => now()])->save();
+    $token = bin2hex(random_bytes(32));
+    DB::table('password_reset_tokens')->insert([
+        'email' => $user->email,
+        'token' => hash('sha256', $token),
+        'created_at' => now(),
+    ]);
+    DB::table('sessions')->insert([
+        'id' => 'postgres-reset-session',
+        'user_id' => $user->getKey(),
+        'payload' => 'test',
+        'last_activity' => now()->timestamp,
+    ]);
+
+    $this->post('/bfc/reset-password', [
+        'token' => $token,
+        'email' => $user->email,
+        'password' => 'postgres replacement password',
+        'password_confirmation' => 'postgres replacement password',
+    ])->assertRedirect(route('bfc.login'));
+
+    expect(Hash::check('postgres replacement password', (string) $user->refresh()->password))->toBeTrue()
+        ->and(DB::table('password_reset_tokens')->where('email', $user->email)->exists())->toBeFalse()
+        ->and(DB::table('sessions')->where('id', 'postgres-reset-session')->exists())->toBeFalse();
+
+    DB::table('sessions')->insert([
+        [
+            'id' => 'postgres-owned-controller-session',
+            'user_id' => $user->getKey(),
+            'payload' => 'test',
+            'last_activity' => now()->timestamp,
+            'ip_address' => '192.0.2.10',
+            'user_agent' => 'postgres-owned-agent',
+        ],
+        [
+            'id' => 'postgres-foreign-controller-session',
+            'user_id' => $user->getKey() + 1,
+            'payload' => 'test',
+            'last_activity' => now()->timestamp,
+            'ip_address' => '192.0.2.20',
+            'user_agent' => 'postgres-foreign-agent',
+        ],
+    ]);
+
+    $this->actingAsVersioned($user)
+        ->get('/bfc/me/sessions')
+        ->assertOk()
+        ->assertSee('postgres-owned-agent')
+        ->assertDontSee('postgres-foreign-agent');
+    $this->delete('/bfc/me/sessions/postgres-foreign-controller-session', [
+        'password' => 'postgres replacement password',
+    ])->assertNotFound();
+    expect(DB::table('sessions')->where('id', 'postgres-foreign-controller-session')->exists())->toBeTrue();
+    $this->delete('/bfc/me/sessions/postgres-owned-controller-session', [
+        'password' => 'postgres replacement password',
+    ])->assertRedirect();
+    expect(DB::table('sessions')->where('id', 'postgres-owned-controller-session')->exists())->toBeFalse();
 });

@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use Illuminate\Contracts\Auth\Guard;
+use Illuminate\Contracts\Auth\StatefulGuard;
 use Illuminate\Database\ConnectionInterface;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
@@ -46,6 +49,27 @@ final class StandaloneAccess
             return Hash::check($password, (string) $user->password);
         } catch (RuntimeException) {
             return false;
+        }
+    }
+
+    public static function sessionVersionIsCurrent(Request $request, User $user): bool
+    {
+        $version = $request->hasSession()
+            ? $request->session()->get(self::SESSION_VERSION_KEY)
+            : null;
+
+        return $version !== null && (int) $version === $user->auth_session_version;
+    }
+
+    public static function endCurrentSession(Request $request, ?Guard $guard): void
+    {
+        if ($guard instanceof StatefulGuard) {
+            $guard->logout();
+        }
+
+        if ($request->hasSession()) {
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
         }
     }
 

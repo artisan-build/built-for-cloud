@@ -38,6 +38,12 @@ $case = new class('testProbe') extends TestCase
         } elseif ($collision === 'pair') {
             $router->get('/bfc/login', static fn (): string => 'host')
                 ->name('host.login');
+        } elseif ($collision === 'middleware') {
+            foreach ($router->getRoutes() as $route) {
+                if (in_array($route->getName(), ['bfc.login', 'bfc.login.store'], true)) {
+                    $route->withoutMiddleware('bfc.standalone');
+                }
+            }
         }
     }
 
@@ -49,7 +55,7 @@ $case = new class('testProbe') extends TestCase
     public function test_probe(): void {}
 };
 
-if (! in_array($collision, ['name', 'pair'], true)) {
+if (! in_array($collision, ['name', 'pair', 'middleware'], true)) {
     fwrite(STDERR, "Unknown collision probe.\n");
     exit(2);
 }

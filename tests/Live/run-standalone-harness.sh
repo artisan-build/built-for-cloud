@@ -65,12 +65,14 @@ request() {
     local status
     local redirect
 
-    if ! result="$(curl --silent --show-error --output "${output}" --write-out $'%{http_code}\n%{redirect_url}' "$@")"; then
+    if ! result="$(curl --silent --show-error --output "${output}" --write-out $'%{http_code}\n%{redirect_url}\n%header{x-bfc-harness-mail}' "$@")"; then
         fail "${label}: curl failed"
     fi
 
     status="${result%%$'\n'*}"
-    redirect="${result#*$'\n'}"
+    result="${result#*$'\n'}"
+    redirect="${result%%$'\n'*}"
+    LAST_HARNESS_MAIL="${result#*$'\n'}"
 
     if [[ "${status}" != "${expected}" ]]; then
         fail "${label} HTTP status: expected [${expected}], observed [${status}], redirect [${redirect:-none}]"
@@ -141,6 +143,9 @@ ADMIN_COOKIE="${RUN_DIR}/admin.cookies"
 MEMBER_COOKIE="${RUN_DIR}/member.cookies"
 INVITEE_COOKIE="${RUN_DIR}/invitee.cookies"
 OTHER_COOKIE="${RUN_DIR}/other.cookies"
+RESET_COOKIE="${RUN_DIR}/reset.cookies"
+OLD_PASSWORD_COOKIE="${RUN_DIR}/old-password.cookies"
+NEW_PASSWORD_COOKIE="${RUN_DIR}/new-password.cookies"
 
 request "owner login page" 200 "${RUN_DIR}/owner-login.html" --cookie "${COOKIE}" --cookie-jar "${COOKIE}" "${BASE}/bfc/login"
 assert_file_contains "${RUN_DIR}/owner-login.html" 'data-testid="login-form"' "owner login structure"
@@ -152,6 +157,8 @@ request "owner wrong password" 302 "${RUN_DIR}/owner-login-failed.html" --cookie
     "${BASE}/bfc/login"
 
 request "owner login retry page" 200 "${RUN_DIR}/owner-login-retry.html" --cookie "${COOKIE}" --cookie-jar "${COOKIE}" "${BASE}/bfc/login"
+assert_file_contains "${RUN_DIR}/owner-login-retry.html" 'data-testid="login-errors"' "wrong-password refusal error"
+request "owner protected refusal after wrong password" 302 "${RUN_DIR}/owner-wrong-password-domain.html" --cookie "${COOKIE}" "${BASE}/domain"
 CSRF="$(csrf_from_file "${RUN_DIR}/owner-login-retry.html")"
 assert_nonempty "${CSRF}" "owner retry CSRF token"
 request "owner successful login" "${EXPECT_LOGIN_STATUS}" "${RUN_DIR}/owner-login-success.html" --cookie "${COOKIE}" --cookie-jar "${COOKIE}" \
@@ -163,16 +170,30 @@ assert_file_contains "${RUN_DIR}/owner-members.html" 'data-testid="members-manag
 assert_file_contains "${RUN_DIR}/owner-members.html" 'member@example.test' "seeded Member listing"
 MANAGE_TOKEN="$(csrf_from_file "${RUN_DIR}/owner-members.html")"
 assert_nonempty "${MANAGE_TOKEN}" "Owner member-management CSRF token"
+request "Owner issues invitation through UI" 302 "${RUN_DIR}/invitation-issued.html" --cookie "${COOKIE}" --cookie-jar "${COOKIE}" \
+    --data-urlencode "_token=${MANAGE_TOKEN}" --data-urlencode "email=harness-invitee@example.test" --data-urlencode "role=admin" \
+    "${BASE}/bfc/members/invitations"
+INVITE_URL="${LAST_HARNESS_MAIL}"
+assert_nonempty "${INVITE_URL}" "array-mail invitation URL"
+request "Owner listing after invitation" 200 "${RUN_DIR}/owner-members-invited.html" --cookie "${COOKIE}" "${BASE}/bfc/members"
+assert_file_contains "${RUN_DIR}/owner-members-invited.html" 'data-testid="members-pending-invitations"' "pending invitation structure"
+assert_file_contains "${RUN_DIR}/owner-members-invited.html" 'harness-invitee@example.test' "pending test-created invitation"
 request "Owner promotes Member" 302 "${RUN_DIR}/promote.html" --cookie "${COOKIE}" --cookie-jar "${COOKIE}" \
     --data-urlencode "_token=${MANAGE_TOKEN}" --data-urlencode "_method=PUT" --data-urlencode "role=admin" \
     "${BASE}/bfc/members/${MEMBER_ID}/role"
 
 request "Owner member listing after promote" 200 "${RUN_DIR}/owner-members-promoted.html" --cookie "${COOKIE}" "${BASE}/bfc/members"
+request "promoted Member state" 200 "${RUN_DIR}/member-promoted.json" "${BASE}/_bfc-harness/users/${MEMBER_ID}"
+assert_file_contains "${RUN_DIR}/member-promoted.json" 'member@example.test' "promoted test-created member"
+assert_file_contains "${RUN_DIR}/member-promoted.json" '"role":"admin"' "promoted Member role"
 MANAGE_TOKEN="$(csrf_from_file "${RUN_DIR}/owner-members-promoted.html")"
 assert_nonempty "${MANAGE_TOKEN}" "Owner demotion CSRF token"
 request "Owner demotes Member" 302 "${RUN_DIR}/demote.html" --cookie "${COOKIE}" --cookie-jar "${COOKIE}" \
     --data-urlencode "_token=${MANAGE_TOKEN}" --data-urlencode "_method=PUT" --data-urlencode "role=member" \
     "${BASE}/bfc/members/${MEMBER_ID}/role"
+request "demoted Member state" 200 "${RUN_DIR}/member-demoted.json" "${BASE}/_bfc-harness/users/${MEMBER_ID}"
+assert_file_contains "${RUN_DIR}/member-demoted.json" 'member@example.test' "demoted test-created member"
+assert_file_contains "${RUN_DIR}/member-demoted.json" '"role":"member"' "demoted Member role"
 
 request "Admin login page" 200 "${RUN_DIR}/admin-login.html" --cookie "${ADMIN_COOKIE}" --cookie-jar "${ADMIN_COOKIE}" "${BASE}/bfc/login"
 ADMIN_TOKEN="$(csrf_from_file "${RUN_DIR}/admin-login.html")"
@@ -200,8 +221,6 @@ request "Member cannot invite" 403 "${RUN_DIR}/member-invite-denied.html" --cook
     --data-urlencode "_token=${MEMBER_TOKEN}" --data-urlencode "email=blocked@example.test" --data-urlencode "role=member" \
     "${BASE}/bfc/members/invitations"
 
-INVITE_URL="$("${HARNESS_ENV[@]}" php tests/Live/mail-link.php invitation harness-invitee@example.test)"
-assert_nonempty "${INVITE_URL}" "array-mail invitation URL"
 request "invitation page" 200 "${RUN_DIR}/invitation.html" --cookie "${INVITEE_COOKIE}" --cookie-jar "${INVITEE_COOKIE}" "${INVITE_URL}"
 assert_file_contains "${RUN_DIR}/invitation.html" 'data-testid="invitation-accept-form"' "invitation structure"
 assert_file_contains "${RUN_DIR}/invitation.html" 'harness-invitee@example.test' "test-created invitation address"
@@ -220,9 +239,14 @@ if [[ "${INVITEE_SESSION_STATE}" != sessions=1\ marked=1\ version_match=1\ auth_
 fi
 request "accepted invitee domain" 200 "${RUN_DIR}/invitee-domain.html" --cookie "${INVITEE_COOKIE}" "${BASE}/domain"
 
-RESET_URL="$("${HARNESS_ENV[@]}" php tests/Live/mail-link.php reset member@example.test)"
+request "password request page" 200 "${RUN_DIR}/password-request.html" --cookie "${RESET_COOKIE}" --cookie-jar "${RESET_COOKIE}" "${BASE}/bfc/forgot-password"
+RESET_REQUEST_CSRF="$(csrf_from_file "${RUN_DIR}/password-request.html")"
+assert_nonempty "${RESET_REQUEST_CSRF}" "password request CSRF token"
+request "password reset request through UI" 302 "${RUN_DIR}/password-requested.html" --cookie "${RESET_COOKIE}" --cookie-jar "${RESET_COOKIE}" \
+    --data-urlencode "_token=${RESET_REQUEST_CSRF}" --data-urlencode "email=member@example.test" "${BASE}/bfc/forgot-password"
+RESET_URL="${LAST_HARNESS_MAIL}"
 assert_nonempty "${RESET_URL}" "array-mail reset URL"
-request "password reset page" 200 "${RUN_DIR}/reset.html" --cookie "${INVITEE_COOKIE}" --cookie-jar "${INVITEE_COOKIE}" "${RESET_URL}"
+request "password reset page" 200 "${RUN_DIR}/reset.html" --cookie "${RESET_COOKIE}" --cookie-jar "${RESET_COOKIE}" "${RESET_URL}"
 assert_file_contains "${RUN_DIR}/reset.html" 'data-testid="password-reset-form"' "password reset structure"
 assert_file_contains "${RUN_DIR}/reset.html" 'member@example.test' "test-created reset address"
 RESET_TOKEN="${RESET_URL%%\?*}"
@@ -230,10 +254,29 @@ RESET_TOKEN="${RESET_TOKEN##*/}"
 RESET_CSRF="$(csrf_from_file "${RUN_DIR}/reset.html")"
 assert_nonempty "${RESET_TOKEN}" "password reset token"
 assert_nonempty "${RESET_CSRF}" "password reset CSRF token"
-request "password reset" 302 "${RUN_DIR}/reset-complete.html" --cookie "${INVITEE_COOKIE}" --cookie-jar "${INVITEE_COOKIE}" \
+request "password reset" 302 "${RUN_DIR}/reset-complete.html" --cookie "${RESET_COOKIE}" --cookie-jar "${RESET_COOKIE}" \
     --data-urlencode "_token=${RESET_CSRF}" --data-urlencode "token=${RESET_TOKEN}" --data-urlencode "email=member@example.test" \
     --data-urlencode "password=harness reset password" --data-urlencode "password_confirmation=harness reset password" \
     "${BASE}/bfc/reset-password"
+request "stale Member session after reset" 302 "${RUN_DIR}/member-domain-after-reset.html" --cookie "${MEMBER_COOKIE}" "${BASE}/domain"
+
+request "old-password login page" 200 "${RUN_DIR}/old-password-login.html" --cookie "${OLD_PASSWORD_COOKIE}" --cookie-jar "${OLD_PASSWORD_COOKIE}" "${BASE}/bfc/login"
+OLD_PASSWORD_TOKEN="$(csrf_from_file "${RUN_DIR}/old-password-login.html")"
+assert_nonempty "${OLD_PASSWORD_TOKEN}" "old-password login CSRF token"
+request "old password refusal" 302 "${RUN_DIR}/old-password-refused.html" --cookie "${OLD_PASSWORD_COOKIE}" --cookie-jar "${OLD_PASSWORD_COOKIE}" \
+    --data-urlencode "_token=${OLD_PASSWORD_TOKEN}" --data-urlencode "email=member@example.test" \
+    --data-urlencode "password=harness owner password" "${BASE}/bfc/login"
+request "old password error page" 200 "${RUN_DIR}/old-password-error.html" --cookie "${OLD_PASSWORD_COOKIE}" --cookie-jar "${OLD_PASSWORD_COOKIE}" "${BASE}/bfc/login"
+assert_file_contains "${RUN_DIR}/old-password-error.html" 'data-testid="login-errors"' "old password refusal error"
+request "old password protected refusal" 302 "${RUN_DIR}/old-password-domain.html" --cookie "${OLD_PASSWORD_COOKIE}" "${BASE}/domain"
+
+request "new-password login page" 200 "${RUN_DIR}/new-password-login.html" --cookie "${NEW_PASSWORD_COOKIE}" --cookie-jar "${NEW_PASSWORD_COOKIE}" "${BASE}/bfc/login"
+NEW_PASSWORD_TOKEN="$(csrf_from_file "${RUN_DIR}/new-password-login.html")"
+assert_nonempty "${NEW_PASSWORD_TOKEN}" "new-password login CSRF token"
+request "new password login" 302 "${RUN_DIR}/new-password-success.html" --cookie "${NEW_PASSWORD_COOKIE}" --cookie-jar "${NEW_PASSWORD_COOKIE}" \
+    --data-urlencode "_token=${NEW_PASSWORD_TOKEN}" --data-urlencode "email=member@example.test" \
+    --data-urlencode "password=harness reset password" "${BASE}/bfc/login"
+request "new password protected access" 200 "${RUN_DIR}/new-password-domain.html" --cookie "${NEW_PASSWORD_COOKIE}" "${BASE}/domain"
 
 for TARGET_COOKIE in "${INVITEE_COOKIE}" "${OTHER_COOKIE}"; do
     TARGET_NAME="$(basename "${TARGET_COOKIE}" .cookies)"
@@ -241,12 +284,16 @@ for TARGET_COOKIE in "${INVITEE_COOKIE}" "${OTHER_COOKIE}"; do
     TARGET_TOKEN="$(csrf_from_file "${RUN_DIR}/${TARGET_NAME}-login.html")"
     assert_nonempty "${TARGET_TOKEN}" "${TARGET_NAME} login CSRF token"
     request "${TARGET_NAME} login" 302 "${RUN_DIR}/${TARGET_NAME}-login-success.html" --cookie "${TARGET_COOKIE}" --cookie-jar "${TARGET_COOKIE}" \
+        --user-agent "bfc-harness-${TARGET_NAME}-${STAMP}" \
         --data-urlencode "_token=${TARGET_TOKEN}" --data-urlencode "email=harness-invitee@example.test" \
         --data-urlencode "password=harness invitee password" "${BASE}/bfc/login"
 done
 
-request "session listing" 200 "${RUN_DIR}/sessions.html" --cookie "${INVITEE_COOKIE}" "${BASE}/bfc/me/sessions"
+request "session listing" 200 "${RUN_DIR}/sessions.html" --cookie "${INVITEE_COOKIE}" --user-agent "bfc-harness-invitee-${STAMP}" "${BASE}/bfc/me/sessions"
 assert_file_contains "${RUN_DIR}/sessions.html" 'data-testid="sessions-management"' "session listing structure"
+assert_file_contains "${RUN_DIR}/sessions.html" 'data-testid="sessions-current"' "current session marker"
+assert_file_contains "${RUN_DIR}/sessions.html" "bfc-harness-invitee-${STAMP}" "test-created current session content"
+assert_file_contains "${RUN_DIR}/sessions.html" "bfc-harness-other-${STAMP}" "test-created other session content"
 SESSIONS_TOKEN="$(csrf_from_file "${RUN_DIR}/sessions.html")"
 assert_nonempty "${SESSIONS_TOKEN}" "session revocation CSRF token"
 request "revoke other sessions" 302 "${RUN_DIR}/sessions-revoked.html" --cookie "${INVITEE_COOKIE}" --cookie-jar "${INVITEE_COOKIE}" \
@@ -264,4 +311,4 @@ request "Owner domain after logout" 302 "${RUN_DIR}/owner-domain-logged-out.html
 "${HARNESS_ENV[@]}" php tests/Live/set-managed-authority.php
 request "managed-mode standalone refusal" 404 "${RUN_DIR}/managed-login.html" "${BASE}/bfc/login"
 
-printf 'standalone live harness passed\nstamp: %s\nchecks: login failure/success, Member denial, Owner/Admin boundaries, array-mail invitation/reset delivery, acceptance, session revocation, logout, managed refusal\n' "${STAMP}"
+printf 'standalone live harness passed\nstamp: %s\nchecks: wrong-password refusal/login success, Member denial, persisted Owner/Admin boundaries, HTTP array-mail invitation/reset delivery, acceptance, reset old/stale refusal and new-password success, current/other session content and revocation, logout, managed refusal\n' "${STAMP}"

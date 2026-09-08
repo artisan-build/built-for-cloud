@@ -454,11 +454,9 @@ final class MetadataEndpointShapes
     private static function headlineLabel(string $value, string $context, string $path): void
     {
         $declaration = app(CredentialDeclaration::class);
-        $vocabulary = $declaration instanceof DeclaresHeadlineStat
-            ? $declaration::HEADLINE_VOCABULARY
-            : null;
+        $vocabulary = self::headlineVocabulary($declaration);
 
-        if (! is_string($vocabulary) || ! enum_exists($vocabulary) || ! is_a($vocabulary, HeadlineLabel::class, true)) {
+        if (! self::isHeadlineVocabulary($vocabulary)) {
             Assert::fail(
                 $context.': '.$path.' carries a headline label while this app declares no headline vocabulary. '
                 .'The producer reports no headline at all in that case, so this payload could not have come from it.',
@@ -476,6 +474,21 @@ final class MetadataEndpointShapes
             $context.': '.$path.' is not a case of the vocabulary this app declares ('.$vocabulary.'). '
             .'Being identifier-shaped is not membership.',
         );
+    }
+
+    /** @phpstan-assert-if-true class-string<HeadlineLabel> $vocabulary */
+    private static function isHeadlineVocabulary(mixed $vocabulary): bool
+    {
+        return is_string($vocabulary)
+            && enum_exists($vocabulary)
+            && is_a($vocabulary, HeadlineLabel::class, true);
+    }
+
+    private static function headlineVocabulary(CredentialDeclaration $declaration): mixed
+    {
+        return $declaration instanceof DeclaresHeadlineStat
+            ? $declaration::HEADLINE_VOCABULARY
+            : null;
     }
 
     /**

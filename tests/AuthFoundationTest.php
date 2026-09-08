@@ -217,7 +217,7 @@ it('protects routes through auth and admin middleware aliases', function (): voi
     $regular->refresh();
 
     $this->actingAs($regular)->get('/auth-only')->assertForbidden();
-    $this->actingAs($admin)->get('/admin-only')->assertOk();
+    $this->actingAsVersioned($admin)->get('/admin-only')->assertOk();
 
     DB::table('users')->where('id', $admin->getKey())->update(['status' => 'inactive']);
     $admin->refresh();

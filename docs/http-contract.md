@@ -324,7 +324,7 @@ API listing shape.
 - **Operator routes** (the `/bfc/credentials` and `/bfc/subjects` verbs)
   additionally accept a unified-store `operator` credential, authorized **per verb family**
   (GATE-3.7 least privilege). The ability vocabulary: `credential:read` (the listing — an
-  audited sensitive read), `credential:mint` (mint + invitations), `credential:rotate`
+  audited sensitive read), `credential:mint` (credential minting), `credential:rotate`
   (rotate + the hmac activate cutover, same family), `credential:revoke`, `subject:offboard`,
   `audit:read` (vocabulary now; the first audit-read surface will enforce it), and
   `console:key:write` (write this deployment's console key ring — file a countersigning key with
@@ -424,7 +424,7 @@ API listing shape.
   delegated-admin trust root, which is exactly what a declared ceiling exists to make someone
   decide rather than inherit.
 - **Operator rate limits:** write and expensive operator verbs (mint, rotate, activate,
-  revoke, invite, offboard) are limited per operator credential + IP (`bfc-operator-write`,
+  revoke, offboard) are limited per operator credential + IP (`bfc-operator-write`,
   60/min, keyed on the sha256 of the presented bearer so failed-auth hammering shares the
   bound) under a global ceiling of 600/min, returning `429` beyond either.
 - **Operator observability:** every operator sensitive read, denied action, and token-auth

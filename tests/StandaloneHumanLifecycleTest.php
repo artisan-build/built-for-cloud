@@ -13,6 +13,7 @@ use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\Tests\TestCase;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Notifications\AnonymousNotifiable;
 use Illuminate\Support\Facades\Auth;
@@ -182,6 +183,63 @@ it('invalidates marked stale sessions after password reset on a non-enumerable s
 
     $this->get('/bfc/members')->assertRedirect(route('bfc.login'));
     $this->assertGuest();
+});
+
+it('invalidates missing and stale local session markers on admin-only routes after password reset', function (bool $marked): void {
+    Route::middleware(['web', 'bfc.admin'])->get('/reset-admin-only', static fn (): string => 'admin');
+    $user = standaloneUser('reset-admin-'.($marked ? 'stale' : 'missing').'@example.test', UserRole::Admin);
+    $token = bin2hex(random_bytes(32));
+    DB::table('password_reset_tokens')->insert([
+        'email' => $user->email,
+        'token' => hash('sha256', $token),
+        'created_at' => now(),
+    ]);
+
+    if ($marked) {
+        loginStandalone($this, $user);
+    } else {
+        Route::middleware('web')->get('/reset-admin-unmarked-login', function () use ($user): string {
+            Auth::guard('web')->login($user, false);
+            request()->session()->regenerate();
+
+            return 'unmarked-admin';
+        });
+        $this->get('/reset-admin-unmarked-login')->assertOk();
+    }
+
+    $this->post('/bfc/reset-password', [
+        'token' => $token,
+        'email' => $user->email,
+        'password' => 'replacement secure password',
+        'password_confirmation' => 'replacement secure password',
+    ])->assertRedirect(route('bfc.login'));
+
+    $this->withSession(['admin-session-residue' => 'present'])
+        ->get('/reset-admin-only')
+        ->assertForbidden()
+        ->assertSessionMissing('admin-session-residue');
+    $this->assertGuest();
+})->with([false, true]);
+
+it('fails closed without an exception for a package user behind a non-session guard', function (): void {
+    Schema::table('users', static function (Blueprint $table): void {
+        $table->string('api_token')->nullable();
+    });
+    $user = standaloneUser('token-guard@example.test');
+    $user->forceFill(['api_token' => 'test-created-api-token'])->save();
+    config([
+        'auth.guards.token-probe' => [
+            'driver' => 'token',
+            'provider' => 'users',
+            'input_key' => 'api_token',
+            'storage_key' => 'api_token',
+            'hash' => false,
+        ],
+    ]);
+    Route::middleware(['auth:token-probe', 'bfc.auth'])
+        ->get('/token-guarded', static fn (): string => 'protected');
+
+    $this->getJson('/token-guarded?api_token=test-created-api-token')->assertUnauthorized();
 });
 
 it('bounds login independently by normalized address and IP', function (): void {

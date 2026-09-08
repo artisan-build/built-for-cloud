@@ -31,7 +31,7 @@ trait ParsesCredentialVerbInput
      */
     private function requireLocal(): bool
     {
-        if ((bool) $this->option('local')) {
+        if ((bool) $this->input->getOption('local')) {
             return true;
         }
 

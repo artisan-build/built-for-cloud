@@ -409,7 +409,7 @@ it('rejects an offboarded user on bfc.admin too, whatever session store kept the
     $user->forceFill(['role' => UserRole::Admin->value])->save();
 
     // Positive control: the admin passes the gate before containment.
-    $this->actingAs($user)->get('/offboard-admin-guarded')->assertOk();
+    $this->actingAsVersioned($user)->get('/offboard-admin-guarded')->assertOk();
 
     offboardViaHttp(['subject_type' => 'user_principal', 'subject_ref' => 'person@example.com'])->assertOk();
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
 use RuntimeException;
@@ -32,7 +33,7 @@ final class StandaloneRouteOwnership
             ));
 
             if ($named !== [$ownedRoute]
-                || ! in_array('bfc.standalone', $ownedRoute->gatherMiddleware(), true)) {
+                || ! in_array(EnsureStandaloneAuthority::class, $router->gatherRouteMiddleware($ownedRoute), true)) {
                 throw new RuntimeException("The route name [{$name}] is reserved by built-for-cloud standalone authentication.");
             }
 
