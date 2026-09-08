@@ -167,6 +167,40 @@ it('holds production membership and invitation operations against independent Po
     expectStandalonePostgresLock($membershipFailure);
     expect($member->refresh()->role)->toBe(UserRole::Admin->value);
 
+    $deactivationTarget = User::query()->create([
+        'name' => 'Postgres Deactivation Target',
+        'email' => 'postgres-deactivation-target@example.test',
+        'password' => Hash::make('postgres controller password'),
+    ]);
+    $deactivationLockObserved = false;
+    $deactivationFailure = null;
+
+    $main->listen(function (QueryExecuted $query) use ($probe, $deactivationTarget, &$deactivationLockObserved, &$deactivationFailure): void {
+        if ($deactivationLockObserved
+            || ! str_contains(strtolower($query->sql), 'from "users"')
+            || ! str_contains(strtolower($query->sql), 'for update')
+            || ! in_array($deactivationTarget->getKey(), $query->bindings, false)) {
+            return;
+        }
+
+        $deactivationLockObserved = true;
+        $probe->beginTransaction();
+
+        try {
+            $probe->table('users')->where('id', $deactivationTarget->getKey())->update(['status' => 'inactive']);
+        } catch (Throwable $exception) {
+            $deactivationFailure = $exception;
+        } finally {
+            $probe->rollBack();
+        }
+    });
+
+    $this->delete('/bfc/members/'.$deactivationTarget->getKey())->assertRedirect();
+
+    expect($deactivationLockObserved)->toBeTrue();
+    expectStandalonePostgresLock($deactivationFailure);
+    expect($deactivationTarget->refresh()->status)->toBe('inactive');
+
     $token = bin2hex(random_bytes(32));
     $tokenHash = hash('sha256', $token);
     Invitation::query()->create([
