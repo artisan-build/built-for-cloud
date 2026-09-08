@@ -82,7 +82,19 @@ final class EnsureUserIsAdmin
 
         $user = $acting->principal;
 
-        if (! $user instanceof User || ! RolePolicy::canManageMembers($user->role)) {
+        if (! $user instanceof User) {
+            abort(403);
+        }
+
+        if ($user->status !== 'active') {
+            if ($request->hasSession()) {
+                $request->session()->invalidate();
+            }
+
+            abort(403);
+        }
+
+        if (! RolePolicy::canManageMembers($user->role)) {
             abort(403);
         }
 

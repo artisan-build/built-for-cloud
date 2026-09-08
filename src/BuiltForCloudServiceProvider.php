@@ -96,6 +96,9 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__.'/../config/built-for-cloud.php', 'built-for-cloud');
+        $this->app->booting(
+            static fn (Application $app) => HumanAuthConfiguration::apply($app->make(Repository::class)),
+        );
 
         $this->callAfterResolving(
             HttpKernelContract::class,
@@ -136,6 +139,10 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     public function boot(): void
     {
         HumanAuthConfiguration::apply($this->app->make(Repository::class));
+
+        if ($this->app->resolved('auth')) {
+            HumanAuthConfiguration::assertEffectiveProvider($this->app->make('auth'));
+        }
 
         // Surface selection (PRD 1.14, fleet F2): each family below is
         // mounted only when its `built-for-cloud.surfaces.*` key says so

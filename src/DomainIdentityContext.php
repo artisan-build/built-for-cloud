@@ -29,7 +29,7 @@ final readonly class DomainIdentityContext implements IdentityContext
     {
         return new self(
             (string) $user->getKey(),
-            $user->role,
+            $user->status === 'active' ? $user->role : null,
             $authority->mode,
             $authority->generation,
             CredentialOwnership::Account,

@@ -6,6 +6,9 @@ namespace ArtisanBuild\BuiltForCloud\Auth;
 
 use ArtisanBuild\BuiltForCloud\Exceptions\UnsupportedHumanAuthConfiguration;
 use ArtisanBuild\BuiltForCloud\User;
+use Illuminate\Auth\AuthManager;
+use Illuminate\Auth\EloquentUserProvider;
+use Illuminate\Auth\SessionGuard;
 use Illuminate\Contracts\Config\Repository;
 
 final class HumanAuthConfiguration
@@ -50,6 +53,22 @@ final class HumanAuthConfiguration
             || ($guard['driver'] ?? null) !== 'session'
             || ($guard['provider'] ?? null) !== 'users') {
             throw UnsupportedHumanAuthConfiguration::forGuard($guard);
+        }
+    }
+
+    public static function assertEffectiveProvider(AuthManager $auth): void
+    {
+        if (! $auth->hasResolvedGuards()) {
+            return;
+        }
+
+        $guard = $auth->guard('web');
+        $provider = $guard instanceof SessionGuard ? $guard->getProvider() : null;
+
+        if (! $provider instanceof EloquentUserProvider || $provider->getModel() !== User::class) {
+            throw UnsupportedHumanAuthConfiguration::forResolvedProvider(
+                $provider instanceof EloquentUserProvider ? $provider->getModel() : $provider,
+            );
         }
     }
 }

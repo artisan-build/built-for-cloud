@@ -12,10 +12,9 @@ use Illuminate\Routing\Route as RoutingRoute;
 use Illuminate\Support\Facades\Route;
 
 /**
- * A headless BfC app has no auth guard at all: its `config/auth.php` ships with
- * `defaults.guard => null` and `guards => []`. Laravel's ThrottleRequests builds
- * its request signature by calling `$request->user()`, which makes the
- * AuthManager throw — turning every throttled BfC public route into a 500.
+ * Public BfC routes must remain independent of human guard resolution. This
+ * test removes the configured guard after package boot to prove Laravel's
+ * ThrottleRequests does not turn a pre-auth request into a 500.
  *
  * These routes are public/pre-auth, so they must throttle by IP and never
  * resolve a user.

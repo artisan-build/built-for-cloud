@@ -51,8 +51,10 @@ return new class extends Migration
         DB::unprepared(<<<'SQL'
             CREATE TRIGGER bfc_authority_validate_insert
             BEFORE INSERT ON bfc_authority
-            WHEN NEW.key IS NOT 'installation'
+            WHEN EXISTS (SELECT 1 FROM bfc_authority WHERE key = 'installation')
+                OR NEW.key IS NOT 'installation'
                 OR NEW.mode NOT IN ('standalone', 'managed')
+                OR typeof(NEW.generation) IS NOT 'integer'
                 OR NEW.generation < 1
             BEGIN
                 SELECT RAISE(ABORT, 'Invalid installation authority');
@@ -64,6 +66,7 @@ return new class extends Migration
             BEFORE UPDATE ON bfc_authority
             WHEN NEW.key IS NOT 'installation'
                 OR NEW.mode NOT IN ('standalone', 'managed')
+                OR typeof(NEW.generation) IS NOT 'integer'
                 OR NEW.generation < OLD.generation
                 OR (NEW.mode IS NOT OLD.mode AND NEW.generation <= OLD.generation)
             BEGIN

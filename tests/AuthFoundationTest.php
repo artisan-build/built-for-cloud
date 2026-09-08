@@ -268,7 +268,7 @@ it('ignores role escalation attempts while accepting invitations', function (): 
 
 it('protects routes through auth and admin middleware aliases', function (): void {
     Route::middleware('bfc.auth')->get('/auth-only', fn (): string => 'auth ok');
-    Route::middleware('bfc.admin')->get('/admin-only', fn (): string => 'admin ok');
+    Route::middleware(['web', 'bfc.admin'])->get('/admin-only', fn (): string => 'admin ok');
 
     $regular = User::query()->create([
         'name' => 'Regular',
@@ -302,4 +302,13 @@ it('protects routes through auth and admin middleware aliases', function (): voi
 
     $this->actingAs($regular)->get('/auth-only')->assertForbidden();
     $this->actingAs($admin)->get('/admin-only')->assertOk();
+
+    DB::table('users')->where('id', $admin->getKey())->update(['status' => 'inactive']);
+    $admin->refresh();
+
+    $this->withSession(['inactive-session-proof' => 'present'])
+        ->actingAs($admin)
+        ->get('/admin-only')
+        ->assertForbidden()
+        ->assertSessionMissing('inactive-session-proof');
 });

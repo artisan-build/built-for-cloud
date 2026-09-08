@@ -71,12 +71,12 @@ it('enforces separate email and trusted external identity uniqueness in the data
     expect(fn () => User::query()->create(['name' => 'Email Two', 'email' => 'same@example.test']))
         ->toThrow(QueryException::class);
 
-    User::query()->create(['name' => 'External One', 'email' => 'external-one@example.test'])
-        ->forceFill([
-            'scalpels_issuer' => 'https://scalpels.example',
-            'scalpels_connection_id' => 'connection-1',
-            'scalpels_id' => 'subject-1',
-        ])->save();
+    $external = User::query()->create(['name' => 'External One', 'email' => 'external-one@example.test']);
+    $external->forceFill([
+        'scalpels_issuer' => 'https://scalpels.example',
+        'scalpels_connection_id' => 'connection-1',
+        'scalpels_id' => 'subject-1',
+    ])->save();
 
     expect(function (): void {
         User::query()->create(['name' => 'External Two', 'email' => 'external-two@example.test'])
@@ -113,6 +113,14 @@ it('enforces separate email and trusted external identity uniqueness in the data
             'updated_at' => now(),
         ]))->toThrow(QueryException::class);
     }
+
+    expect(fn (): int => DB::table('users')->where('id', $external->getKey())->update([
+        'scalpels_id' => null,
+    ]))->toThrow(QueryException::class);
+
+    expect($external->refresh()->scalpels_issuer)->toBe('https://scalpels.example')
+        ->and($external->scalpels_connection_id)->toBe('connection-1')
+        ->and($external->scalpels_id)->toBe('subject-1');
 });
 
 it('round trips source contact address and generated email as distinct facts', function (): void {
@@ -237,6 +245,29 @@ it('derives immutable opaque identity from the canonical user across recreated c
         ->and(ContextContractScan::violations(RogueIdentityContext::class))->not->toBe([]);
 });
 
+it('denies every context decision for an inactive canonical user', function (): void {
+    $user = User::query()->create([
+        'name' => 'Inactive Owner',
+        'email' => 'inactive-owner@example.test',
+    ]);
+    $user->forceFill([
+        'role' => UserRole::Owner->value,
+        'status' => 'inactive',
+    ])->save();
+
+    $context = DomainIdentityContext::forUser(
+        $user,
+        AuthorityState::fromRaw(AuthorityMode::Managed->value, 5),
+    );
+
+    expect($context->role())->toBeNull()
+        ->and($context->canUseProduct())->toBeFalse()
+        ->and($context->canManageMembers())->toBeFalse()
+        ->and($context->canManageAdmins())->toBeFalse()
+        ->and($context->canInitiateModeTransition())->toBeFalse()
+        ->and($context->isSameActorOrAdminOrOwner((string) $user->getKey()))->toBeFalse();
+});
+
 it('stores one authority record and advances generation with compare and set', function (): void {
     expect(DB::table('bfc_authority')->count())->toBe(1)
         ->and(is_subclass_of(InstallationAuthority::class, Model::class))->toBeFalse();
@@ -313,6 +344,45 @@ it('structurally rejects invalid authority rows and non-monotonic writes', funct
     expect(InstallationAuthority::current()->mode)->toBe(AuthorityMode::Managed)
         ->and(InstallationAuthority::current()->generation)->toBe(2)
         ->and(DB::table('bfc_authority')->count())->toBe(1);
+});
+
+it('rejects SQLite replacement and non-integer authority generations without changing the row', function (): void {
+    $state = InstallationAuthority::current();
+
+    foreach ([
+        AuthorityMode::Managed,
+        AuthorityMode::Standalone,
+        AuthorityMode::Managed,
+        AuthorityMode::Managed,
+    ] as $mode) {
+        $state = InstallationAuthority::change($state, $mode) ?? throw new RuntimeException('Authority advance failed.');
+    }
+
+    $assertManagedFive = static function (): void {
+        $row = DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->first();
+
+        expect($row?->mode)->toBe(AuthorityMode::Managed->value)
+            ->and($row?->generation)->toBe(5)
+            ->and(DB::scalar("SELECT typeof(generation) FROM bfc_authority WHERE key = 'installation'"))->toBe('integer');
+    };
+
+    $assertManagedFive();
+
+    expect(fn (): bool => DB::statement(<<<'SQL'
+        INSERT OR REPLACE INTO bfc_authority (key, mode, generation, created_at, updated_at)
+        VALUES ('installation', 'standalone', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        SQL))->toThrow(QueryException::class);
+    $assertManagedFive();
+
+    expect(fn (): int => DB::update(<<<'SQL'
+        UPDATE bfc_authority SET generation = 'banana' WHERE key = 'installation'
+        SQL))->toThrow(QueryException::class);
+    $assertManagedFive();
+
+    expect(fn (): int => DB::update(<<<'SQL'
+        UPDATE bfc_authority SET generation = 1.5 WHERE key = 'installation'
+        SQL))->toThrow(QueryException::class);
+    $assertManagedFive();
 });
 
 it('returns the authority state written before a later writer advances it', function (): void {

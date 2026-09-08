@@ -30,12 +30,12 @@ it('migrates and enforces canonical human uniqueness on Postgres', function (): 
         'membership_response_at',
     ]))->toBeTrue();
 
-    User::query()->create(['name' => 'Postgres One', 'email' => 'postgres@example.test'])
-        ->forceFill([
-            'scalpels_issuer' => 'https://scalpels.example',
-            'scalpels_connection_id' => 'connection-pg',
-            'scalpels_id' => 'subject-pg',
-        ])->save();
+    $external = User::query()->create(['name' => 'Postgres One', 'email' => 'postgres@example.test']);
+    $external->forceFill([
+        'scalpels_issuer' => 'https://scalpels.example',
+        'scalpels_connection_id' => 'connection-pg',
+        'scalpels_id' => 'subject-pg',
+    ])->save();
 
     expect(fn () => User::query()->create(['name' => 'Duplicate', 'email' => 'postgres@example.test']))
         ->toThrow(QueryException::class);
@@ -68,6 +68,14 @@ it('migrates and enforces canonical human uniqueness on Postgres', function (): 
             'email_is_generated' => false,
         ]))->toThrow(QueryException::class);
     }
+
+    expect(fn (): int => DB::table('users')->where('id', $external->getKey())->update([
+        'scalpels_id' => null,
+    ]))->toThrow(QueryException::class);
+
+    expect($external->refresh()->scalpels_issuer)->toBe('https://scalpels.example')
+        ->and($external->scalpels_connection_id)->toBe('connection-pg')
+        ->and($external->scalpels_id)->toBe('subject-pg');
 
     $first = User::query()->create(['name' => 'Owner One', 'email' => 'owner-one-pg@example.test']);
     $second = User::query()->create(['name' => 'Owner Two', 'email' => 'owner-two-pg@example.test']);

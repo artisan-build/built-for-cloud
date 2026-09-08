@@ -22,14 +22,15 @@ use Illuminate\Support\Str;
  * single-use, optionally addressed, with a REQUIRED bounded ttl and an
  * `at_exchange` burn — acceptance consumes it under a conditional update
  * gated on affected rows, never a read-then-write. What it buys is not a
- * secret but an account-creation ceremony: `accept()` creates the app's
- * user.
+ * secret but an account-creation ceremony: `accept()` creates the canonical
+ * package User.
  *
  * Two consumers shape the row (D4 + D1e): a teammate invite is ADDRESSED
  * (`email` non-null, forced onto the created user); an open code is
  * UNADDRESSED (`email` null, the registrant supplies their own). `role` is
- * stored and never interpreted — the {@see ComposesInvitedUserAttributes}
- * hook is where an app projects it onto the user it creates.
+ * stored and never interpreted. The {@see ComposesInvitedUserAttributes}
+ * hook may rewrite only attributes accepted by the canonical User; authority
+ * fields are enforced by the package.
  *
  * @property string $id
  * @property string|null $email
