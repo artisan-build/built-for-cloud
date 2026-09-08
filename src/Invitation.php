@@ -14,10 +14,9 @@ use Illuminate\Database\Eloquent\Model;
 /**
  * An invitation IS a claim code (PRD 1.13, D4, D1e): hashed at rest,
  * single-use, optionally addressed, with a REQUIRED bounded ttl and an
- * `at_exchange` burn — acceptance consumes it under a conditional update
- * gated on affected rows, never a read-then-write. What it buys is not a
- * secret but an account-creation ceremony: `accept()` creates the canonical
- * package User.
+ * `at_exchange` burn. The standalone acceptance action consumes it under a
+ * conditional update gated on affected rows, never a read-then-write, and
+ * creates the canonical package User.
  *
  * The standalone lifecycle creates addressed invitations only. Their role is
  * fixed by the issuing Owner/Admin and acceptance projects it directly onto
@@ -46,9 +45,7 @@ final class Invitation extends Model
     use HasUuids;
 
     /**
-     * The claim-code ttl bounds (PRD 1.1 + 1.3): REQUIRED on invite,
-     * 60 seconds to 7 days. The old 7-day default is deliberately GONE —
-     * a code's lifetime is always the issuer's explicit choice.
+     * The claim-code ttl bounds (PRD 1.1 + 1.3): 60 seconds to 7 days.
      */
     public const int TTL_MIN_SECONDS = 60;
 

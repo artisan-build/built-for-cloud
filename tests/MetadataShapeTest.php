@@ -591,7 +591,7 @@ it('holds the classification on the personal-surface row', function (): void {
     ]);
 
     $this->assertBuiltForCloudMetadataEndpoint(
-        $this->actingAs($user)->deleteJson('/bfc/me/credentials/'.$credential->id)->assertNoContent(),
+        $this->actingAsVersioned($user)->deleteJson('/bfc/me/credentials/'.$credential->id)->assertNoContent(),
         'DELETE /bfc/me/credentials/{id}',
     );
 });

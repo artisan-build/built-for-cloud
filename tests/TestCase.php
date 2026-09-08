@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\BuiltForCloudServiceProvider;
+use ArtisanBuild\BuiltForCloud\StandaloneAccess;
+use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Foundation\Application;
 use Orchestra\Testbench\TestCase as Orchestra;
 
@@ -22,6 +24,15 @@ abstract class TestCase extends Orchestra
     protected function defineDatabaseMigrations(): void
     {
         $this->loadMigrationsFrom(__DIR__.'/database/migrations');
+    }
+
+    public function actingAsVersioned(User $user, ?string $guard = null): static
+    {
+        $user->refresh();
+
+        return $this->actingAs($user, $guard)->withSession([
+            StandaloneAccess::SESSION_VERSION_KEY => $user->auth_session_version,
+        ]);
     }
 
     /**

@@ -87,7 +87,7 @@ it('refuses a delegated session on a local-only gate instead of acting as the lo
 });
 
 it('still admits the local user on that gate when no delegated session is live', function (): void {
-    $this->actingAs(surfaceUser());
+    $this->actingAsVersioned(surfaceUser());
 
     $this->getJson('/local-only')->assertOk();
 });
@@ -122,7 +122,7 @@ it('refuses /bfc/me/credentials after a console refusal, past the limiter that a
 
     // Baseline: with no console session the SAME request succeeds, so
     // the local user is genuinely resolvable on this path.
-    $this->actingAs($user);
+    $this->actingAsVersioned($user);
     $this->getJson('/bfc/me/credentials')->assertOk();
 
     // Now with a capped delegated session. The `bfc-personal` limiter

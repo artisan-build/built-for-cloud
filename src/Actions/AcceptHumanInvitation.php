@@ -73,6 +73,8 @@ final readonly class AcceptHumanInvitation
                 recipient: $invitation->email,
             );
 
+            $user->refresh();
+
             return $user;
         }, 3);
     }

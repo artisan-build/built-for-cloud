@@ -183,7 +183,7 @@ it('fails create-admin clearly when the role column is missing', function (): vo
 });
 
 it('protects routes through auth and admin middleware aliases', function (): void {
-    Route::middleware('bfc.auth')->get('/auth-only', fn (): string => 'auth ok');
+    Route::middleware(['web', 'bfc.auth'])->get('/auth-only', fn (): string => 'auth ok');
     Route::middleware(['web', 'bfc.admin'])->get('/admin-only', fn (): string => 'admin ok');
 
     $regular = User::query()->create([
@@ -202,7 +202,7 @@ it('protects routes through auth and admin middleware aliases', function (): voi
 
     $this->get('/auth-only')->assertRedirect(route('bfc.login'));
     $this->get('/admin-only')->assertForbidden();
-    $this->actingAs($regular)->get('/auth-only')->assertOk();
+    $this->actingAsVersioned($regular)->get('/auth-only')->assertOk();
     $this->actingAs($regular)->get('/admin-only')->assertForbidden();
 
     DB::table('users')->where('id', $regular->getKey())->update(['role' => 'super-admin']);

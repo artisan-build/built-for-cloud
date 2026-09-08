@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\User;
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -98,9 +99,15 @@ final class EnsureUserIsAuthenticated
             ? $request->session()->get(StandaloneAccess::SESSION_VERSION_KEY)
             : null;
 
-        if ($sessionVersion !== null && (int) $sessionVersion !== $user->auth_session_version) {
-            $request->session()->invalidate();
-            $request->session()->regenerateToken();
+        if ($sessionVersion === null || (int) $sessionVersion !== $user->auth_session_version) {
+            if (is_string($acting->guard)) {
+                Auth::guard($acting->guard)->logout();
+            }
+
+            if ($request->hasSession()) {
+                $request->session()->invalidate();
+                $request->session()->regenerateToken();
+            }
 
             return $this->unauthenticated($request);
         }

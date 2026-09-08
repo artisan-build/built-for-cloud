@@ -79,7 +79,7 @@ final class ConsoleDisabledTest extends TestCase
         $this->getJson('/disabled-auth')->assertStatus(401);
         $this->getJson('/disabled-admin')->assertStatus(403);
 
-        $this->actingAs($user);
+        $this->actingAsVersioned($user);
 
         $this->getJson('/disabled-auth')->assertOk();
         $this->getJson('/disabled-admin')->assertStatus(403);

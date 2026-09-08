@@ -392,56 +392,60 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // could mint or revoke their credentials.
         $personal = $this->browserSessionMiddleware($router);
 
-        $router->middleware([...$personal, 'bfc.standalone'])->group(function (Router $router): void {
-            $router->get('/bfc/login', [StandaloneAuthentication::class, 'create'])
+        $standaloneRoutes = [];
+        $router->middleware([...$personal, 'bfc.standalone'])->group(function (Router $router) use (&$standaloneRoutes): void {
+            $standaloneRoutes[] = $router->get('/bfc/login', [StandaloneAuthentication::class, 'create'])
                 ->name('bfc.login');
-            $router->post('/bfc/login', [StandaloneAuthentication::class, 'store'])
+            $standaloneRoutes[] = $router->post('/bfc/login', [StandaloneAuthentication::class, 'store'])
                 ->middleware('throttle:bfc-login')
                 ->name('bfc.login.store');
-            $router->post('/bfc/logout', [StandaloneAuthentication::class, 'destroy'])
+            $standaloneRoutes[] = $router->post('/bfc/logout', [StandaloneAuthentication::class, 'destroy'])
                 ->middleware('bfc.auth')
                 ->name('bfc.logout');
 
-            $router->get('/bfc/forgot-password', [StandalonePasswordRecovery::class, 'create'])
+            $standaloneRoutes[] = $router->get('/bfc/forgot-password', [StandalonePasswordRecovery::class, 'create'])
                 ->name('bfc.password.request');
-            $router->post('/bfc/forgot-password', [StandalonePasswordRecovery::class, 'store'])
+            $standaloneRoutes[] = $router->post('/bfc/forgot-password', [StandalonePasswordRecovery::class, 'store'])
                 ->middleware('throttle:bfc-password-reset')
                 ->name('bfc.password.email');
-            $router->get('/bfc/reset-password/{token}', [StandalonePasswordRecovery::class, 'edit'])
+            $standaloneRoutes[] = $router->get('/bfc/reset-password/{token}', [StandalonePasswordRecovery::class, 'edit'])
                 ->name('bfc.password.reset');
-            $router->post('/bfc/reset-password', [StandalonePasswordRecovery::class, 'update'])
+            $standaloneRoutes[] = $router->post('/bfc/reset-password', [StandalonePasswordRecovery::class, 'update'])
                 ->middleware('throttle:bfc-password-reset')
                 ->name('bfc.password.update');
 
-            $router->get('/bfc/invitations/{token}', [StandaloneInvitations::class, 'show'])
+            $standaloneRoutes[] = $router->get('/bfc/invitations/{token}', [StandaloneInvitations::class, 'show'])
                 ->name('bfc.invitations.accept');
-            $router->post('/bfc/invitations/accept', [StandaloneInvitations::class, 'store'])
+            $standaloneRoutes[] = $router->post('/bfc/invitations/accept', [StandaloneInvitations::class, 'store'])
                 ->middleware('throttle:bfc-invitation-accept')
                 ->name('bfc.invitations.accept.store');
 
-            $router->get('/bfc/members', [StandaloneMemberships::class, 'index'])
+            $standaloneRoutes[] = $router->get('/bfc/members', [StandaloneMemberships::class, 'index'])
                 ->middleware('bfc.auth')
                 ->name('bfc.members.index');
-            $router->post('/bfc/members/invitations', [StandaloneMemberships::class, 'invite'])
-                ->middleware('bfc.auth')
+            $standaloneRoutes[] = $router->post('/bfc/members/invitations', [StandaloneMemberships::class, 'invite'])
+                ->middleware(['throttle:bfc-invitation-issue', 'bfc.auth'])
                 ->name('bfc.members.invitations.store');
-            $router->put('/bfc/members/{user}/role', [StandaloneMemberships::class, 'role'])
+            $standaloneRoutes[] = $router->put('/bfc/members/{user}/role', [StandaloneMemberships::class, 'role'])
                 ->middleware('bfc.auth')
                 ->name('bfc.members.role.update');
-            $router->delete('/bfc/members/{user}', [StandaloneMemberships::class, 'deactivate'])
+            $standaloneRoutes[] = $router->delete('/bfc/members/{user}', [StandaloneMemberships::class, 'deactivate'])
                 ->middleware('bfc.auth')
                 ->name('bfc.members.destroy');
 
-            $router->get('/bfc/me/sessions', [StandaloneSessions::class, 'index'])
+            $standaloneRoutes[] = $router->get('/bfc/me/sessions', [StandaloneSessions::class, 'index'])
                 ->middleware('bfc.auth')
                 ->name('bfc.sessions.index');
-            $router->delete('/bfc/me/sessions/others', [StandaloneSessions::class, 'destroyOthers'])
-                ->middleware('bfc.auth')
+            $standaloneRoutes[] = $router->delete('/bfc/me/sessions/others', [StandaloneSessions::class, 'destroyOthers'])
+                ->middleware(['throttle:bfc-session-confirm', 'bfc.auth'])
                 ->name('bfc.sessions.destroy-others');
-            $router->delete('/bfc/me/sessions/{session}', [StandaloneSessions::class, 'destroy'])
-                ->middleware('bfc.auth')
+            $standaloneRoutes[] = $router->delete('/bfc/me/sessions/{session}', [StandaloneSessions::class, 'destroy'])
+                ->middleware(['throttle:bfc-session-confirm', 'bfc.auth'])
                 ->name('bfc.sessions.destroy');
         });
+        $this->app->booted(
+            static fn () => StandaloneRouteOwnership::assertOwned($router, $standaloneRoutes),
+        );
 
         $router->get('/bfc/me/credentials', [PersonalCredentials::class, 'index'])
             ->middleware(['throttle:bfc-personal', ...$personal, 'bfc.auth']);
@@ -774,13 +778,27 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
 
         RateLimiter::for('bfc-claim', fn (Request $request): Limit => Limit::perMinute(10)->by($request->ip() ?? 'unknown'));
 
-        RateLimiter::for('bfc-login', fn (Request $request): Limit => Limit::perMinute(5)->by(
-            'bfc-login|'.StandaloneAccess::normalizeEmail((string) $request->input('email', '')).'|'.($request->ip() ?? 'unknown'),
-        ));
+        RateLimiter::for('bfc-login', fn (Request $request): array => [
+            Limit::perMinute(5)->by('bfc-login-address|'.StandaloneAccess::normalizeEmail((string) $request->input('email', ''))),
+            Limit::perMinute(5)->by('bfc-login-ip|'.($request->ip() ?? 'unknown')),
+        ]);
 
-        RateLimiter::for('bfc-password-reset', fn (Request $request): Limit => Limit::perMinute(5)->by(
-            'bfc-password-reset|'.($request->ip() ?? 'unknown'),
-        ));
+        RateLimiter::for('bfc-password-reset', fn (Request $request): array => [
+            Limit::perMinute(5)->by('bfc-password-reset-address|'.StandaloneAccess::normalizeEmail((string) $request->input('email', ''))),
+            Limit::perMinute(5)->by('bfc-password-reset-ip|'.($request->ip() ?? 'unknown')),
+        ]);
+
+        RateLimiter::for('bfc-invitation-issue', fn (Request $request): array => [
+            Limit::perMinute(5)->by('bfc-invitation-issue-actor|'.($this->limiterPrincipal($request) ?? 'anonymous')),
+            Limit::perMinute(5)->by('bfc-invitation-issue-address|'.StandaloneAccess::normalizeEmail((string) $request->input('email', ''))),
+            Limit::perMinute(5)->by('bfc-invitation-issue-ip|'.($request->ip() ?? 'unknown')),
+        ]);
+
+        RateLimiter::for('bfc-session-confirm', fn (Request $request): array => [
+            Limit::perMinute(4)->by('bfc-session-confirm-user|'.($this->limiterPrincipal($request) ?? 'anonymous')),
+            Limit::perMinute(2)->by('bfc-session-confirm-session|'.($request->hasSession() ? $request->session()->getId() : 'none')),
+            Limit::perMinute(6)->by('bfc-session-confirm-ip|'.($request->ip() ?? 'unknown')),
+        ]);
 
         RateLimiter::for('bfc-invitation-accept', fn (Request $request): Limit => Limit::perMinute(10)->by(
             'bfc-invitation-accept|'.($request->ip() ?? 'unknown'),

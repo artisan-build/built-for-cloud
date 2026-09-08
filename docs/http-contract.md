@@ -321,7 +321,7 @@ API listing shape.
   [`POST /bfc/console/keys/{key_id}/retire`](#post-bfcconsolekeyskey_idretire) — where what the
   split would reveal is worth more to an attacker than the diagnostic is to an operator; each
   answers one uniform `403` to every pre-authorization failure alike.
-- **Operator routes** (the `/bfc/credentials`, `/bfc/invitations` and `/bfc/subjects` verbs)
+- **Operator routes** (the `/bfc/credentials` and `/bfc/subjects` verbs)
   additionally accept a unified-store `operator` credential, authorized **per verb family**
   (GATE-3.7 least privilege). The ability vocabulary: `credential:read` (the listing — an
   audited sensitive read), `credential:mint` (mint + invitations), `credential:rotate`
@@ -962,8 +962,9 @@ actions below enforce their fixed role boundary again inside the write transacti
 
 ### POST /bfc/members/invitations
 
-Owner or Admin may invite a Member; only Owner may invite an Admin. Owner invitations, open codes,
-operator-credential issuance, duplicate user addresses, and duplicate pending addresses refuse.
+Owner or Admin may invite a Member; only Owner may invite an Admin. Owner invitations, unaddressed
+codes, duplicate user addresses, and duplicate pending addresses refuse. This browser action is the
+supported invitation-issuance surface; there is no operator route or invitation command.
 
 ### PUT /bfc/members/{user}/role
 

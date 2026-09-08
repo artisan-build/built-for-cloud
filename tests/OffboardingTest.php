@@ -28,6 +28,7 @@ use ArtisanBuild\BuiltForCloud\OffboardOptions;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
@@ -281,13 +282,17 @@ it('rejects and invalidates a surviving session — the stated compensation for 
         'email' => 'person@example.com',
         'password' => 'irrelevant',
     ]);
+    $sessionVersion = $user->refresh()->auth_session_version;
 
     offboardViaHttp(['subject_type' => 'user_principal', 'subject_ref' => 'person@example.com'])->assertOk();
 
     expect(OffboardedSubject::userIsOffboarded((string) $user->getKey()))->toBeTrue();
 
     // The pre-existing session presents itself: rejected, and invalidated.
-    $this->actingAs($user)->withSession(['residue' => 'still-here']);
+    $this->actingAs($user)->withSession([
+        StandaloneAccess::SESSION_VERSION_KEY => $sessionVersion,
+        'residue' => 'still-here',
+    ]);
 
     $response = $this->get('/offboard-session-guarded');
     $response->assertForbidden();

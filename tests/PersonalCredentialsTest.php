@@ -109,7 +109,7 @@ it('lists only the authenticated users own credentials', function (): void {
     $second = personalCredentialFor($mine, ['name' => 'phone']);
     $foreign = personalCredentialFor($theirs, ['name' => 'their-laptop']);
 
-    $response = $this->actingAs($mine)->getJson('/bfc/me/credentials')->assertOk();
+    $response = $this->actingAsVersioned($mine)->getJson('/bfc/me/credentials')->assertOk();
 
     expect($response->json('credentials.*.id'))->toBe([$first->id, $second->id])
         ->and($response->json('credentials.*.subject_ref'))
@@ -127,7 +127,7 @@ it('binds a mint to the session-derived subject and never to a crafted one', fun
     $mine = personalUser('mine@example.test');
     $victim = personalUser('victim@example.test');
 
-    $this->actingAs($mine)->postJson('/bfc/me/credentials', [
+    $this->actingAsVersioned($mine)->postJson('/bfc/me/credentials', [
         'name' => 'ci',
         // Every lever an attacker has for "make this someone else's":
         'subject_type' => SubjectType::Operator->value,
@@ -152,7 +152,7 @@ it('ignores a crafted subject even when the surface is called directly, not over
     $mine = personalUser('mine@example.test');
     $victim = personalUser('victim@example.test');
 
-    $this->actingAs($mine);
+    $this->actingAsVersioned($mine);
 
     $request = Request::create('/bfc/me/credentials', 'POST');
     $request->setUserResolver(fn (): User => $mine);
@@ -175,7 +175,7 @@ it('ignores a crafted subject even when the surface is called directly, not over
 it('reveals the minted plaintext exactly once and leaks it into no other channel', function (): void {
     $mine = personalUser('mine@example.test');
 
-    $this->actingAs($mine);
+    $this->actingAsVersioned($mine);
 
     $response = $this->assertNoSecretLeakageOfMinted(
         fn () => $this->postJson('/bfc/me/credentials', ['name' => 'ci'])->assertCreated(),
@@ -211,12 +211,12 @@ it('revokes a row the caller owns', function (): void {
     $mine = personalUser('mine@example.test');
     $credential = personalCredentialFor($mine);
 
-    $this->actingAs($mine)->deleteJson('/bfc/me/credentials/'.$credential->id)->assertNoContent();
+    $this->actingAsVersioned($mine)->deleteJson('/bfc/me/credentials/'.$credential->id)->assertNoContent();
 
     expect($credential->refresh()->revoked_at)->not->toBeNull();
 
     // Idempotent, exactly like the operator verb.
-    $this->actingAs($mine)->deleteJson('/bfc/me/credentials/'.$credential->id)->assertNoContent();
+    $this->actingAsVersioned($mine)->deleteJson('/bfc/me/credentials/'.$credential->id)->assertNoContent();
 
     expect(CredentialAuditEvent::query()
         ->where('credential_id', $credential->id)
@@ -230,7 +230,7 @@ it('denies every cross-user path by any crafted input', function (): void {
 
     $victimCredential = personalCredentialFor($victim, ['name' => 'victims-key']);
 
-    $this->actingAs($attacker);
+    $this->actingAsVersioned($attacker);
 
     // 1 — cannot LIST the victim's rows, with or without a crafted subject.
     $listing = $this->getJson('/bfc/me/credentials?subject_ref='.urlencode(personalSubjectRef($victim)))
@@ -278,7 +278,7 @@ it('distinguishes declared-unsupported from null-but-supported and renders less 
     // set one, not because the store cannot express it.
     personalCredentialFor($mine, ['name' => 'laptop', 'abilities' => ['consume']]);
 
-    $full = $this->actingAs($mine)->getJson('/bfc/me/credentials')->assertOk();
+    $full = $this->actingAsVersioned($mine)->getJson('/bfc/me/credentials')->assertOk();
 
     expect($full->json('fields.supported'))->toBe(['name', 'abilities', 'last_used_at', 'expires_at'])
         ->and($full->json('fields.unsupported'))->toBe([])
@@ -291,7 +291,7 @@ it('distinguishes declared-unsupported from null-but-supported and renders less 
     // unknowable rather than absent.
     SelfServiceDeclaration::$unsupported = ['abilities', 'expires_at'];
 
-    $thin = $this->actingAs($mine)->getJson('/bfc/me/credentials')->assertOk();
+    $thin = $this->actingAsVersioned($mine)->getJson('/bfc/me/credentials')->assertOk();
 
     expect($thin->json('fields.supported'))->toBe(['name', 'last_used_at'])
         ->and($thin->json('fields.unsupported'))->toBe(['abilities', 'expires_at'])
@@ -309,7 +309,7 @@ it('distinguishes declared-unsupported from null-but-supported and renders less 
     // the self-service policy, so there is nothing for a caller to set.
     SelfServiceDeclaration::$unsupported = ['name'];
 
-    $this->actingAs($mine)->postJson('/bfc/me/credentials', [
+    $this->actingAsVersioned($mine)->postJson('/bfc/me/credentials', [
         'name' => 'ci',
     ])->assertForbidden();
 
@@ -359,7 +359,7 @@ it('has nothing to act on when the declaration resolves no subject', function ()
     $mine = personalUser('mine@example.test');
     $credential = personalCredentialFor($mine);
 
-    $this->actingAs($mine);
+    $this->actingAsVersioned($mine);
 
     $this->getJson('/bfc/me/credentials')
         ->assertForbidden()
@@ -398,7 +398,7 @@ it('drops a row from the personal listing when the declarations verb matrix deni
         }
     });
 
-    $this->actingAs($mine)->getJson('/bfc/me/credentials')
+    $this->actingAsVersioned($mine)->getJson('/bfc/me/credentials')
         ->assertOk()
         ->assertJsonPath('credentials', []);
 });
@@ -417,7 +417,7 @@ it('stops authenticating a revoked personal credential and kills it when the bou
     // request, which would otherwise repoint the default guard for the
     // rest of THIS test process (one process, many requests — production
     // gets a fresh container per request and never sees it).
-    $this->actingAs($mine, 'web');
+    $this->actingAsVersioned($mine, 'web');
 
     $secret = (string) $this->postJson('/bfc/me/credentials', ['name' => 'ci'])
         ->assertCreated()
@@ -434,7 +434,7 @@ it('stops authenticating a revoked personal credential and kills it when the bou
     $this->withHeader('Authorization', 'Bearer '.$survivor)->getJson('/personal-probe')->assertOk();
 
     // Self-revoke through the personal surface kills the first one.
-    $this->actingAs($mine, 'web')
+    $this->actingAsVersioned($mine, 'web')
         ->deleteJson('/bfc/me/credentials/'.$credential->id)
         ->assertNoContent();
 
@@ -452,7 +452,7 @@ it('stops authenticating a revoked personal credential and kills it when the bou
 
     $this->withHeader('Authorization', 'Bearer '.$survivor)->getJson('/personal-probe')->assertUnauthorized();
 
-    $this->actingAs($mine, 'web')->getJson('/bfc/me/credentials')->assertForbidden();
+    $this->actingAsVersioned($mine, 'web')->getJson('/bfc/me/credentials')->assertForbidden();
 });
 
 // ------------------------- REWORK FIX 2: the self-service mint fails CLOSED
@@ -464,7 +464,7 @@ it('mints no abilities at all when the app declares no self-service policy, so a
 
     // The escalation attempt: a logged-in, otherwise powerless human asks
     // for the destructive MCP ability and the operator admin ability.
-    $secret = (string) $this->actingAs($mine, 'web')
+    $secret = (string) $this->actingAsVersioned($mine, 'web')
         ->postJson('/bfc/me/credentials', [
             'name' => 'ci',
             'abilities' => [OperatorAbility::McpAdmin->value, OperatorAbility::ADMIN],
@@ -499,7 +499,7 @@ it('grants exactly the self-service policy abilities and never the clients', fun
 
     $mine = personalUser('mine@example.test');
 
-    $secret = (string) $this->actingAs($mine, 'web')
+    $secret = (string) $this->actingAsVersioned($mine, 'web')
         ->postJson('/bfc/me/credentials', [
             'name' => 'ci',
             // The client asks for more. It changes nothing.
@@ -522,7 +522,7 @@ it('grants exactly the self-service policy abilities and never the clients', fun
 it('drops client abilities even when the surface is called directly, not over HTTP', function (): void {
     $mine = personalUser('mine@example.test');
 
-    $this->actingAs($mine, 'web');
+    $this->actingAsVersioned($mine, 'web');
 
     $request = Request::create('/bfc/me/credentials', 'POST');
     $request->setUserResolver(fn (): User => $mine);
@@ -541,7 +541,7 @@ it('drops client abilities even when the surface is called directly, not over HT
 it('refuses a self-service credential kind the app has not opted in', function (): void {
     $mine = personalUser('mine@example.test');
 
-    $this->actingAs($mine, 'web');
+    $this->actingAsVersioned($mine, 'web');
 
     // `hmac` delivers signing key material and `asymmetric` an enrollment
     // code; neither is reachable by naming it. No policy means bearer only.
@@ -566,7 +566,7 @@ it('offers a kind once the self-service policy opts it in', function (): void {
 
     $mine = personalUser('mine@example.test');
 
-    $this->actingAs($mine, 'web')
+    $this->actingAsVersioned($mine, 'web')
         ->postJson('/bfc/me/credentials', ['name' => 'signing', 'kind' => CredentialKind::Hmac->value])
         ->assertCreated()
         ->assertJsonPath('delivery.shape', 'signing_key');
@@ -577,7 +577,7 @@ it('offers a kind once the self-service policy opts it in', function (): void {
 it('leaves the durable expiry caller-chosen and never defaults one on the self-service mint', function (): void {
     $mine = personalUser('mine@example.test');
 
-    $this->actingAs($mine, 'web');
+    $this->actingAsVersioned($mine, 'web');
 
     // Abilities fail closed; LIFETIME does not — a durable's expiry stays
     // the caller's choice with no default (PRD 1.3 / D1b: TTL defaults on
@@ -603,7 +603,7 @@ it('rejects a mutating personal request that carries no valid CSRF token', funct
     $mine = personalUser('mine@example.test');
     $credential = personalCredentialFor($mine);
 
-    $this->actingAs($mine, 'web');
+    $this->actingAsVersioned($mine, 'web');
 
     // PreventRequestForgery short-circuits while the app reports itself as
     // running unit tests, which is exactly why every other test here can

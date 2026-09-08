@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
-use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -49,18 +48,17 @@ final class StandaloneDatabaseSessionsTest extends TestCase
             ]);
         }
 
-        $this->actingAs($user)->withSession([
-            StandaloneAccess::SESSION_VERSION_KEY => $user->auth_session_version,
-        ])->get('/bfc/me/sessions')
+        $this->login($user, 'session owner password');
+        $this->get('/bfc/me/sessions')
             ->assertOk()
             ->assertSee('198.51.100.10')
             ->assertDontSee('198.51.100.20')
             ->assertSeeHtml('data-testid="sessions-list"');
 
-        $this->actingAs($user)->delete('/bfc/me/sessions/foreign-session', [
+        $this->delete('/bfc/me/sessions/foreign-session', [
             'password' => 'session owner password',
         ])->assertNotFound();
-        $this->actingAs($user)->delete('/bfc/me/sessions/owned-other', [
+        $this->delete('/bfc/me/sessions/owned-other', [
             'password' => 'session owner password',
         ])->assertRedirect();
 
@@ -81,9 +79,7 @@ final class StandaloneDatabaseSessionsTest extends TestCase
             'password' => Hash::make('foreign password'),
         ]);
 
-        $this->actingAs($user)->withSession([
-            StandaloneAccess::SESSION_VERSION_KEY => $user->auth_session_version,
-        ]);
+        $this->login($user, 'all others password');
         foreach ([['another-owned', $user->getKey()], ['another-foreign', $other->getKey()]] as [$id, $userId]) {
             DB::table('sessions')->insert([
                 'id' => $id,
@@ -98,5 +94,13 @@ final class StandaloneDatabaseSessionsTest extends TestCase
         expect(DB::table('sessions')->where('id', 'another-owned')->exists())->toBeFalse()
             ->and(DB::table('sessions')->where('id', 'another-foreign')->exists())->toBeTrue()
             ->and($this->isAuthenticated())->toBeTrue();
+    }
+
+    private function login(User $user, string $password): void
+    {
+        $this->post('/bfc/login', [
+            'email' => $user->email,
+            'password' => $password,
+        ])->assertRedirect('/');
     }
 }

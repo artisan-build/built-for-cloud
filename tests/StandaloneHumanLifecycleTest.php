@@ -10,6 +10,7 @@ use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\Notifications\HumanInvitationNotification;
 use ArtisanBuild\BuiltForCloud\Notifications\StandalonePasswordResetNotification;
 use ArtisanBuild\BuiltForCloud\StandaloneAccess;
+use ArtisanBuild\BuiltForCloud\Tests\TestCase;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -20,6 +21,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
+use Symfony\Component\HttpFoundation\Cookie;
 
 uses(RefreshDatabase::class);
 
@@ -52,6 +54,16 @@ function notificationToken(object $notification): string
     return rawurldecode(basename(is_string($path) ? $path : ''));
 }
 
+function loginStandalone(TestCase $test, User $user, string $password = 'correct horse battery staple'): void
+{
+    $test->withServerVariables([
+        'REMOTE_ADDR' => '198.51.200.'.(((int) $user->getKey() % 250) + 1),
+    ])->post('/bfc/login', [
+        'email' => $user->email,
+        'password' => $password,
+    ])->assertRedirect('/');
+}
+
 it('mounts every named standalone route and renders package structural hooks', function (): void {
     $expected = [
         'bfc.login', 'bfc.login.store', 'bfc.logout',
@@ -75,11 +87,12 @@ it('mounts every named standalone route and renders package structural hooks', f
         ->assertOk()->assertSeeHtml('data-testid="invitation-accept-form"');
 
     $owner = standaloneUser('route-owner@example.test', UserRole::Owner);
-    $this->actingAs($owner)->get('/bfc/members')
+    loginStandalone($this, $owner);
+    $this->get('/bfc/members')
         ->assertOk()
         ->assertSeeHtml('data-testid="members-management"')
         ->assertSee($owner->email);
-    $this->actingAs($owner)->get('/bfc/me/sessions')
+    $this->get('/bfc/me/sessions')
         ->assertOk()->assertSeeHtml('data-testid="sessions-management"');
 });
 
@@ -91,14 +104,15 @@ it('authenticates only eligible canonical users with generic refusals and a loca
     standaloneUser('inactive@example.test', UserRole::Member, status: 'inactive');
     standaloneUser('unknown-role@example.test', 'super-admin');
 
-    foreach (['missing@example.test', 'null@example.test', 'malformed-hash@example.test', 'inactive@example.test', 'unknown-role@example.test'] as $email) {
-        $this->from('/bfc/login')->post('/bfc/login', [
-            'email' => $email,
-            'password' => 'wrong or unusable',
-        ])->assertRedirect('/bfc/login')->assertSessionHasErrors(['email']);
+    foreach (['missing@example.test', 'null@example.test', 'malformed-hash@example.test', 'inactive@example.test', 'unknown-role@example.test'] as $index => $email) {
+        $this->withServerVariables(['REMOTE_ADDR' => '198.51.201.'.($index + 1)])
+            ->from('/bfc/login')->post('/bfc/login', [
+                'email' => $email,
+                'password' => 'wrong or unusable',
+            ])->assertRedirect('/bfc/login')->assertSessionHasErrors(['email']);
     }
 
-    $this->post('/bfc/login', [
+    $this->withServerVariables(['REMOTE_ADDR' => '198.51.201.99'])->post('/bfc/login', [
         'email' => $eligible->email,
         'password' => 'correct horse battery staple',
         'intended' => 'https://outside.example/path',
@@ -112,9 +126,248 @@ it('authenticates only eligible canonical users with generic refusals and a loca
 it('uses POST logout to end the current session', function (): void {
     $user = standaloneUser('logout@example.test');
 
-    $this->actingAs($user)->post('/bfc/logout')->assertRedirect(route('bfc.login'));
+    loginStandalone($this, $user);
+    $this->post('/bfc/logout')->assertRedirect(route('bfc.login'));
     $this->assertGuest();
     $this->get('/bfc/members')->assertRedirect(route('bfc.login'));
+});
+
+it('invalidates previously unmarked sessions after password reset on a non-enumerable store', function (): void {
+    $user = standaloneUser('unmarked-reset@example.test');
+    $token = bin2hex(random_bytes(32));
+    DB::table('password_reset_tokens')->insert([
+        'email' => $user->email,
+        'token' => hash('sha256', $token),
+        'created_at' => now(),
+    ]);
+
+    Route::middleware('web')->get('/unmarked-reset-session', function () use ($user): string {
+        Auth::guard('web')->login($user, false);
+        request()->session()->regenerate();
+
+        return 'unmarked-session';
+    });
+    $this->get('/unmarked-reset-session')->assertOk()->assertSee('unmarked-session');
+    expect(Auth::check())->toBeTrue()
+        ->and(session()->has(StandaloneAccess::SESSION_VERSION_KEY))->toBeFalse()
+        ->and(config('session.driver'))->toBe('array');
+
+    $this->post('/bfc/reset-password', [
+        'token' => $token,
+        'email' => $user->email,
+        'password' => 'replacement secure password',
+        'password_confirmation' => 'replacement secure password',
+    ])->assertRedirect(route('bfc.login'));
+
+    $this->get('/bfc/members')->assertRedirect(route('bfc.login'));
+    $this->assertGuest();
+});
+
+it('invalidates marked stale sessions after password reset on a non-enumerable store', function (): void {
+    $user = standaloneUser('marked-reset@example.test');
+    $token = bin2hex(random_bytes(32));
+    DB::table('password_reset_tokens')->insert([
+        'email' => $user->email,
+        'token' => hash('sha256', $token),
+        'created_at' => now(),
+    ]);
+
+    loginStandalone($this, $user);
+    $this->post('/bfc/reset-password', [
+        'token' => $token,
+        'email' => $user->email,
+        'password' => 'replacement secure password',
+        'password_confirmation' => 'replacement secure password',
+    ])->assertRedirect(route('bfc.login'));
+
+    $this->get('/bfc/members')->assertRedirect(route('bfc.login'));
+    $this->assertGuest();
+});
+
+it('bounds login independently by normalized address and IP', function (): void {
+    $user = standaloneUser('throttled-login@example.test');
+
+    foreach (range(1, 5) as $attempt) {
+        $this->withServerVariables(['REMOTE_ADDR' => '198.51.100.'.$attempt])
+            ->post('/bfc/login', [
+                'email' => $attempt % 2 === 0 ? ' THROTTLED-LOGIN@EXAMPLE.TEST ' : $user->email,
+                'password' => 'wrong password',
+            ])->assertRedirect();
+    }
+
+    $this->withServerVariables(['REMOTE_ADDR' => '198.51.100.99'])
+        ->post('/bfc/login', ['email' => $user->email, 'password' => 'correct horse battery staple'])
+        ->assertTooManyRequests();
+    $this->assertGuest();
+
+    foreach (range(1, 5) as $attempt) {
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.10'])
+            ->post('/bfc/login', [
+                'email' => 'spray-'.$attempt.'@example.test',
+                'password' => 'wrong password',
+            ])->assertRedirect();
+    }
+
+    $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.10'])
+        ->post('/bfc/login', ['email' => 'spray-last@example.test', 'password' => 'wrong password'])
+        ->assertTooManyRequests();
+});
+
+it('bounds reset independently by normalized address and IP without enumerating accounts', function (): void {
+    Notification::fake();
+    $user = standaloneUser('throttled-reset@example.test');
+
+    foreach (range(1, 5) as $attempt) {
+        $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.'.$attempt])
+            ->post('/bfc/forgot-password', [
+                'email' => $attempt % 2 === 0 ? ' THROTTLED-RESET@EXAMPLE.TEST ' : $user->email,
+            ])->assertRedirect()->assertSessionHas('status', 'recovery-requested');
+    }
+
+    $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.99'])
+        ->post('/bfc/forgot-password', ['email' => $user->email])
+        ->assertTooManyRequests();
+
+    foreach (range(1, 5) as $attempt) {
+        $this->withServerVariables(['REMOTE_ADDR' => '198.18.0.1'])
+            ->post('/bfc/forgot-password', ['email' => 'reset-spray-'.$attempt.'@example.test'])
+            ->assertRedirect()->assertSessionHas('status', 'recovery-requested');
+    }
+
+    $this->withServerVariables(['REMOTE_ADDR' => '198.18.0.1'])
+        ->post('/bfc/forgot-password', ['email' => 'reset-spray-last@example.test'])
+        ->assertTooManyRequests();
+
+    $comparisonUser = standaloneUser('enumeration-reset@example.test');
+    $known = $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.40'])
+        ->post('/bfc/forgot-password', ['email' => $comparisonUser->email]);
+    $missing = $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.41'])
+        ->post('/bfc/forgot-password', ['email' => 'missing@example.test']);
+    expect($known->getStatusCode())->toBe($missing->getStatusCode());
+    $known->assertSessionHas('status', 'recovery-requested');
+    $missing->assertSessionHas('status', 'recovery-requested');
+});
+
+it('bounds invitation mail independently by actor address and IP', function (): void {
+    Notification::fake();
+    $owner = standaloneUser('throttled-invite-owner@example.test', UserRole::Owner);
+    loginStandalone($this, $owner);
+
+    foreach (range(1, 5) as $attempt) {
+        $this->withServerVariables(['REMOTE_ADDR' => '198.51.101.'.$attempt])
+            ->post('/bfc/members/invitations', [
+                'email' => 'actor-invite-'.$attempt.'@example.test',
+                'role' => 'member',
+            ])->assertRedirect();
+    }
+    $this->withServerVariables(['REMOTE_ADDR' => '198.51.101.99'])
+        ->post('/bfc/members/invitations', ['email' => 'actor-invite-last@example.test', 'role' => 'member'])
+        ->assertTooManyRequests();
+
+    $admins = collect(range(1, 11))->map(fn (int $attempt): User => standaloneUser(
+        'throttled-invite-admin-'.$attempt.'@example.test',
+        UserRole::Admin,
+    ));
+
+    foreach ($admins->take(5) as $index => $admin) {
+        loginStandalone($this, $admin);
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.114.'.($index + 1)])
+            ->post('/bfc/members/invitations', ['email' => 'same-address@example.test', 'role' => 'member']);
+    }
+    $addressActor = $admins->get(5);
+    loginStandalone($this, $addressActor);
+    $this->withServerVariables(['REMOTE_ADDR' => '203.0.114.99'])
+        ->post('/bfc/members/invitations', ['email' => ' SAME-ADDRESS@EXAMPLE.TEST ', 'role' => 'member'])
+        ->assertTooManyRequests();
+
+    foreach ($admins->slice(6, 5) as $index => $admin) {
+        loginStandalone($this, $admin);
+        $this->withServerVariables(['REMOTE_ADDR' => '192.0.3.10'])
+            ->post('/bfc/members/invitations', [
+                'email' => 'ip-invite-'.$index.'@example.test',
+                'role' => 'member',
+            ])->assertRedirect();
+    }
+    $lastAdmin = standaloneUser('throttled-invite-admin-last@example.test', UserRole::Admin);
+    loginStandalone($this, $lastAdmin);
+    $this->withServerVariables(['REMOTE_ADDR' => '192.0.3.10'])
+        ->post('/bfc/members/invitations', ['email' => 'ip-invite-last@example.test', 'role' => 'member'])
+        ->assertTooManyRequests();
+});
+
+it('bounds password-confirmed session revocations by user session and IP', function (): void {
+    $users = collect(range(1, 9))->map(fn (int $attempt): User => standaloneUser(
+        'session-throttle-'.$attempt.'@example.test',
+    ));
+    Route::middleware('web')->get('/session-throttle-login/{user}', static function (string $user): string {
+        $account = User::query()->findOrFail($user);
+        Auth::guard('web')->login($account, false);
+        request()->session()->regenerate();
+        request()->session()->put(StandaloneAccess::SESSION_VERSION_KEY, $account->auth_session_version);
+
+        return $account->email;
+    });
+    $useSessionCookie = function ($response): Cookie {
+        $cookie = collect($response->headers->getCookies())->first(
+            static fn (Cookie $candidate): bool => $candidate->getName() === config('session.cookie'),
+        );
+        expect($cookie)->toBeInstanceOf(Cookie::class);
+        $this->withUnencryptedCookie($cookie->getName(), $cookie->getValue());
+
+        return $cookie;
+    };
+
+    $sessionUser = $users->first();
+    $loginResponse = $this->get('/session-throttle-login/'.$sessionUser->getKey());
+    $loginResponse->assertOk()->assertSee($sessionUser->email);
+    $sessionCookie = $useSessionCookie($loginResponse);
+    foreach (range(1, 2) as $attempt) {
+        $this->withUnencryptedCookie($sessionCookie->getName(), $sessionCookie->getValue())
+            ->withServerVariables(['REMOTE_ADDR' => '198.51.102.1'])
+            ->delete('/bfc/me/sessions/not-owned', ['password' => 'wrong password'])
+            ->assertRedirect();
+    }
+    $this->withUnencryptedCookie($sessionCookie->getName(), $sessionCookie->getValue())
+        ->withServerVariables(['REMOTE_ADDR' => '198.51.102.1'])
+        ->delete('/bfc/me/sessions/others', ['password' => 'wrong password'])
+        ->assertTooManyRequests();
+
+    $userBucket = $users->get(1);
+    foreach (range(1, 4) as $attempt) {
+        $loginResponse = $this->get('/session-throttle-login/'.$userBucket->getKey());
+        $loginResponse->assertOk();
+        $useSessionCookie($loginResponse);
+        $this->withServerVariables(['REMOTE_ADDR' => '198.51.103.'.$attempt])
+            ->delete('/bfc/me/sessions/not-owned', ['password' => 'wrong password'])
+            ->assertRedirect();
+    }
+    $loginResponse = $this->get('/session-throttle-login/'.$userBucket->getKey());
+    $loginResponse->assertOk();
+    $useSessionCookie($loginResponse);
+    $this->withServerVariables(['REMOTE_ADDR' => '198.51.103.99'])
+        ->delete('/bfc/me/sessions/not-owned', ['password' => 'wrong password'])
+        ->assertTooManyRequests();
+
+    foreach ($users->slice(2, 6) as $ipUser) {
+        $loginResponse = $this->get('/session-throttle-login/'.$ipUser->getKey());
+        $loginResponse->assertOk();
+        $useSessionCookie($loginResponse);
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.115.10'])
+            ->delete('/bfc/me/sessions/not-owned', ['password' => 'wrong password'])
+            ->assertRedirect();
+    }
+    $lastIpUser = $users->last();
+    $loginResponse = $this->get('/session-throttle-login/'.$lastIpUser->getKey());
+    $loginResponse->assertOk();
+    $useSessionCookie($loginResponse);
+    $this->withServerVariables(['REMOTE_ADDR' => '203.0.115.10'])
+        ->delete('/bfc/me/sessions/not-owned', ['password' => 'wrong password'])
+        ->assertTooManyRequests();
+
+    foreach (['bfc.sessions.destroy', 'bfc.sessions.destroy-others'] as $name) {
+        expect(Route::getRoutes()->getByName($name)?->gatherMiddleware())
+            ->toContain('throttle:bfc-session-confirm');
+    }
 });
 
 it('keeps password requests non-enumerating and resets only eligible local accounts', function (): void {
@@ -208,21 +461,24 @@ it('enforces addressed invitation roles and accepts once with server-owned ident
     $admin = standaloneUser('invite-admin@example.test', UserRole::Admin);
     $member = standaloneUser('invite-member@example.test');
 
-    $this->actingAs($admin)->post('/bfc/members/invitations', [
+    loginStandalone($this, $admin);
+    $this->post('/bfc/members/invitations', [
         'email' => 'new-admin@example.test',
         'role' => 'admin',
     ])->assertForbidden();
-    $this->actingAs($member)->post('/bfc/members/invitations', [
+    loginStandalone($this, $member);
+    $this->post('/bfc/members/invitations', [
         'email' => 'new-member@example.test',
         'role' => 'member',
     ])->assertForbidden();
 
-    $this->actingAs($owner)->post('/bfc/members/invitations', [
+    loginStandalone($this, $owner);
+    $this->post('/bfc/members/invitations', [
         'email' => '  New-Admin@Example.Test ',
         'role' => 'admin',
     ])->assertRedirect();
 
-    $this->actingAs($owner)->post('/bfc/members/invitations', [
+    $this->post('/bfc/members/invitations', [
         'email' => 'new-admin@example.test',
         'role' => 'admin',
     ])->assertStatus(422);
@@ -244,7 +500,7 @@ it('enforces addressed invitation roles and accepts once with server-owned ident
     );
     expect($stored->token)->toBe(hash('sha256', $token));
 
-    Auth::logout();
+    $this->post('/bfc/logout')->assertRedirect(route('bfc.login'));
     $this->post('/bfc/invitations/accept', [
         'token' => $token,
         'name' => 'Invited Administrator',
@@ -263,8 +519,9 @@ it('enforces addressed invitation roles and accepts once with server-owned ident
         ->and($created->scalpels_id)->toBeNull()
         ->and($stored->refresh()->used_by)->toBe((string) $created->getKey());
     $this->assertAuthenticatedAs($created);
+    $this->get('/bfc/members')->assertOk()->assertSee($created->email);
 
-    Auth::logout();
+    $this->post('/bfc/logout')->assertRedirect(route('bfc.login'));
     $this->post('/bfc/invitations/accept', [
         'token' => $token,
         'name' => 'Replay',
@@ -280,13 +537,15 @@ it('applies membership boundaries and contains account-bound state on deactivati
     $member = standaloneUser('manage-member@example.test');
     $otherAdmin = standaloneUser('manage-other-admin@example.test', UserRole::Admin);
 
-    $this->actingAs($admin)->put('/bfc/members/'.$member->getKey().'/role', ['role' => 'admin'])
+    loginStandalone($this, $admin);
+    $this->put('/bfc/members/'.$member->getKey().'/role', ['role' => 'admin'])
         ->assertForbidden();
-    $this->actingAs($admin)->delete('/bfc/members/'.$otherAdmin->getKey())->assertForbidden();
-    $this->actingAs($owner)->put('/bfc/members/'.$member->getKey().'/role', ['role' => 'admin'])
+    $this->delete('/bfc/members/'.$otherAdmin->getKey())->assertForbidden();
+    loginStandalone($this, $owner);
+    $this->put('/bfc/members/'.$member->getKey().'/role', ['role' => 'admin'])
         ->assertRedirect();
     expect($member->refresh()->role)->toBe(UserRole::Admin->value);
-    $this->actingAs($owner)->put('/bfc/members/'.$member->getKey().'/role', ['role' => 'member'])
+    $this->put('/bfc/members/'.$member->getKey().'/role', ['role' => 'member'])
         ->assertRedirect();
 
     CredentialFactory::new()->forUser((string) $member->getKey())->create();
@@ -303,7 +562,8 @@ it('applies membership boundaries and contains account-bound state on deactivati
         'last_activity' => now()->timestamp,
     ]);
 
-    $this->actingAs($admin)->delete('/bfc/members/'.$member->getKey())->assertRedirect();
+    loginStandalone($this, $admin);
+    $this->delete('/bfc/members/'.$member->getKey())->assertRedirect();
     expect($member->refresh()->status)->toBe('inactive')
         ->and($member->deactivated_at)->not->toBeNull()
         ->and(Credential::query()->where('user_id', $member->getKey())->whereNull('revoked_at')->exists())->toBeFalse()
@@ -312,7 +572,8 @@ it('applies membership boundaries and contains account-bound state on deactivati
         ->and(DB::table('sessions')->where('user_id', $member->getKey())->exists())->toBeFalse()
         ->and(User::query()->whereKey($member->getKey())->exists())->toBeTrue();
 
-    $this->actingAs($owner)->delete('/bfc/members/'.$owner->getKey())->assertForbidden();
+    loginStandalone($this, $owner);
+    $this->delete('/bfc/members/'.$owner->getKey())->assertForbidden();
 });
 
 it('refuses every local route in managed mode before writes or mail', function (): void {
