@@ -7,7 +7,6 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 use ArtisanBuild\BuiltForCloud\BuiltForCloudServiceProvider;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Foundation\Application;
-use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;

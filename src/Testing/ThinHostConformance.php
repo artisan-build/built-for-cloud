@@ -49,7 +49,7 @@ final class ThinHostConformance
     }
 
     /** @param array<string, mixed> $auth
-     *  @return list<string>
+     * @return list<string>
      */
     public static function configurationArtifacts(array $auth): array
     {

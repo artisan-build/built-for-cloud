@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Exceptions;
 
+use ArtisanBuild\BuiltForCloud\User;
 use RuntimeException;
 
 final class UnsupportedHumanAuthConfiguration extends RuntimeException
@@ -16,7 +17,7 @@ final class UnsupportedHumanAuthConfiguration extends RuntimeException
 
         return new self(
             'Built for Cloud owns the supported human auth provider and requires '
-            .'auth.providers.users to use '.\ArtisanBuild\BuiltForCloud\User::class
+            .'auth.providers.users to use '.User::class
             .'. Conflicting provider: '.$model.'. Remove the host-owned human model/configuration.',
         );
     }

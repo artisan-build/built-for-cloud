@@ -15,7 +15,7 @@ use ReflectionUnionType;
 final class ContextContractScan
 {
     /** @param class-string $contract
-     *  @return list<string>
+     * @return list<string>
      */
     public static function violations(string $contract): array
     {

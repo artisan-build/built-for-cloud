@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
@@ -30,7 +31,7 @@ final class InstallationAuthority extends Model
 
     protected static function booted(): void
     {
-        static::saving(function (self $authority): void {
+        self::saving(function (self $authority): void {
             if ($authority->key !== self::KEY
                 || AuthorityMode::tryFrom($authority->mode) === null
                 || $authority->generation < 1) {
@@ -60,8 +61,7 @@ final class InstallationAuthority extends Model
         AuthorityState $expected,
         AuthorityMode $mode,
         ?string $connection = null,
-    ): ?AuthorityState
-    {
+    ): ?AuthorityState {
         if (! $expected->isValid()) {
             return null;
         }
@@ -79,8 +79,8 @@ final class InstallationAuthority extends Model
         return $changed === 1 ? self::current($connection) : null;
     }
 
-    /** @return \Illuminate\Database\Eloquent\Builder<self> */
-    private static function onConnection(?string $connection): \Illuminate\Database\Eloquent\Builder
+    /** @return Builder<self> */
+    private static function onConnection(?string $connection): Builder
     {
         $authority = new self;
         $authority->setConnection($connection);

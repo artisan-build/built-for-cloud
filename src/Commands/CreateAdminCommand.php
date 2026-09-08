@@ -236,5 +236,4 @@ final class CreateAdminCommand extends Command
     {
         return escapeshellarg($value);
     }
-
 }

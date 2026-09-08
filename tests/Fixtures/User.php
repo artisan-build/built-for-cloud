@@ -6,6 +6,4 @@ namespace ArtisanBuild\BuiltForCloud\Tests\Fixtures;
 
 use ArtisanBuild\BuiltForCloud\User as CanonicalUser;
 
-final class User extends CanonicalUser
-{
-}
+final class User extends CanonicalUser {}
