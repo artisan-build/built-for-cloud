@@ -5,11 +5,13 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\CloudCommandRunner;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidInvitation;
 use ArtisanBuild\BuiltForCloud\Invitation;
-use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
+use ArtisanBuild\BuiltForCloud\User;
+use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Console\Command;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
@@ -48,61 +50,7 @@ it('skips an existing invitations table without throwing', function (): void {
         ->and(Schema::hasColumn('invitations', 'email'))->toBeFalse();
 });
 
-it('augments an existing users table with an idempotent is_admin column', function (): void {
-    expect(Schema::hasColumn('users', 'is_admin'))->toBeTrue();
-
-    $user = User::query()->create([
-        'name' => 'Fresh User',
-        'email' => 'fresh@example.com',
-        'password' => Hash::make('secret'),
-    ]);
-
-    expect($user->refresh()->is_admin)->toBeFalse();
-
-    $migration = require __DIR__.'/../database/migrations/2026_06_22_000011_add_is_admin_to_users_table.php';
-    $migration->up();
-
-    expect(Schema::hasColumn('users', 'is_admin'))->toBeTrue();
-});
-
-it('skips the is_admin column when auth foundation admin column is disabled', function (): void {
-    config(['built-for-cloud.auth_foundation.user_admin_column' => false]);
-    Schema::table('users', function (Blueprint $table): void {
-        $table->dropColumn('is_admin');
-    });
-
-    $migration = require __DIR__.'/../database/migrations/2026_06_22_000011_add_is_admin_to_users_table.php';
-    $migration->up();
-
-    expect(Schema::hasColumn('users', 'is_admin'))->toBeFalse();
-});
-
-it('skips an existing is_admin column without throwing', function (): void {
-    expect(Schema::hasColumn('users', 'is_admin'))->toBeTrue();
-
-    $migration = require __DIR__.'/../database/migrations/2026_06_22_000011_add_is_admin_to_users_table.php';
-    $migration->up();
-
-    expect(Schema::hasColumn('users', 'is_admin'))->toBeTrue();
-});
-
-it('does not drop auth foundation objects while their flags are disabled', function (): void {
-    config([
-        'built-for-cloud.auth_foundation.invitations' => false,
-        'built-for-cloud.auth_foundation.user_admin_column' => false,
-    ]);
-
-    $invitationsMigration = require __DIR__.'/../database/migrations/2026_06_22_000010_create_invitations_table.php';
-    $adminColumnMigration = require __DIR__.'/../database/migrations/2026_06_22_000011_add_is_admin_to_users_table.php';
-
-    $invitationsMigration->down();
-    $adminColumnMigration->down();
-
-    expect(Schema::hasTable('invitations'))->toBeTrue()
-        ->and(Schema::hasColumn('users', 'is_admin'))->toBeTrue();
-});
-
-it('creates the first admin and refuses another unless forced', function (): void {
+it('creates the first Owner and refuses another Admin unless forced', function (): void {
     $firstExitCode = Artisan::call('create-admin', [
         '--execute' => true,
         '--email' => 'a@b.c',
@@ -113,7 +61,7 @@ it('creates the first admin and refuses another unless forced', function (): voi
     $admin = User::query()->where('email', 'a@b.c')->firstOrFail();
 
     expect($firstExitCode)->toBe(Command::SUCCESS)
-        ->and($admin->is_admin)->toBeTrue()
+        ->and($admin->role)->toBe(UserRole::Owner->value)
         ->and(Hash::check('secret-pass', $admin->password))->toBeTrue();
 
     $secondExitCode = Artisan::call('create-admin', [
@@ -124,7 +72,7 @@ it('creates the first admin and refuses another unless forced', function (): voi
     ]);
 
     expect($secondExitCode)->toBe(Command::FAILURE)
-        ->and(User::query()->where('is_admin', true)->count())->toBe(1);
+        ->and(User::query()->count())->toBe(1);
 
     $forcedExitCode = Artisan::call('create-admin', [
         '--execute' => true,
@@ -135,7 +83,8 @@ it('creates the first admin and refuses another unless forced', function (): voi
     ]);
 
     expect($forcedExitCode)->toBe(Command::SUCCESS)
-        ->and(User::query()->where('is_admin', true)->count())->toBe(2);
+        ->and(User::query()->where('role', UserRole::Owner->value)->count())->toBe(1)
+        ->and(User::query()->where('role', UserRole::Admin->value)->count())->toBe(1);
 });
 
 it('stores the provided admin password hash verbatim in execute mode', function (): void {
@@ -165,7 +114,7 @@ it('creates an admin locally in driver mode', function (): void {
     $admin = User::query()->where('email', 'local@b.c')->firstOrFail();
 
     expect($exitCode)->toBe(Command::SUCCESS)
-        ->and($admin->is_admin)->toBeTrue()
+        ->and($admin->role)->toBe(UserRole::Owner->value)
         ->and(Hash::check('secret-pass', $admin->password))->toBeTrue();
 });
 
@@ -234,12 +183,16 @@ it('falls back to local target selection when cloud environments cannot be liste
 
     expect($exitCode)->toBe(Command::SUCCESS)
         ->and(Artisan::output())->toContain('only local creation is available')
-        ->and(User::query()->where('email', 'fallback@b.c')->where('is_admin', true)->exists())->toBeTrue();
+        ->and(User::query()->where('email', 'fallback@b.c')->where('role', UserRole::Owner->value)->exists())->toBeTrue();
 });
 
-it('fails create-admin clearly when the is_admin column is missing', function (): void {
+it('fails create-admin clearly when the role column is missing', function (): void {
     Schema::table('users', function (Blueprint $table): void {
-        $table->dropColumn('is_admin');
+        $table->dropUnique('users_owner_slot_unique');
+    });
+
+    Schema::table('users', function (Blueprint $table): void {
+        $table->dropColumn(['owner_slot', 'role']);
     });
 
     $exitCode = Artisan::call('create-admin', [
@@ -250,7 +203,7 @@ it('fails create-admin clearly when the is_admin column is missing', function ()
     ]);
 
     expect($exitCode)->toBe(Command::FAILURE)
-        ->and(Artisan::output())->toContain('The is_admin column is missing — run your migrations first.')
+        ->and(Artisan::output())->toContain('The role column is missing - run your migrations first.')
         ->and(User::query()->where('email', 'missing@b.c')->exists())->toBeFalse();
 });
 
@@ -299,23 +252,23 @@ it('creates and accepts invitations exactly once', function (): void {
         ->and(User::query()->whereIn('email', ['expired@user.test', 'unknown@user.test'])->exists())->toBeFalse();
 });
 
-it('ignores admin escalation attempts while accepting invitations', function (): void {
+it('ignores role escalation attempts while accepting invitations', function (): void {
     $invitation = Invitation::invite('mallory@user.test', 604800);
 
     $user = Invitation::accept($invitation->token, [
         'name' => 'Mallory',
         'password' => 'pw',
-        'is_admin' => true,
+        'role' => UserRole::Owner->value,
     ]);
 
     expect($user)->toBeInstanceOf(User::class)
-        ->and($user->refresh()->is_admin)->toBeFalse()
+        ->and($user->refresh()->role)->toBe(UserRole::Member->value)
         ->and($user->email)->toBe('mallory@user.test');
 });
 
 it('protects routes through auth and admin middleware aliases', function (): void {
     Route::middleware('bfc.auth')->get('/auth-only', fn (): string => 'auth ok');
-    Route::middleware('bfc.admin')->get('/admin-only', fn (): string => 'admin ok');
+    Route::middleware(['web', 'bfc.admin'])->get('/admin-only', fn (): string => 'admin ok');
 
     $regular = User::query()->create([
         'name' => 'Regular',
@@ -329,11 +282,33 @@ it('protects routes through auth and admin middleware aliases', function (): voi
         'password' => Hash::make('secret'),
     ]);
 
-    $admin->forceFill(['is_admin' => true])->save();
+    $admin->forceFill(['role' => UserRole::Admin->value])->save();
 
     $this->get('/auth-only')->assertUnauthorized();
     $this->get('/admin-only')->assertForbidden();
     $this->actingAs($regular)->get('/auth-only')->assertOk();
     $this->actingAs($regular)->get('/admin-only')->assertForbidden();
+
+    DB::table('users')->where('id', $regular->getKey())->update(['role' => 'super-admin']);
+    $regular->refresh();
+
+    $this->actingAs($regular)->get('/auth-only')->assertForbidden();
+
+    DB::table('users')->where('id', $regular->getKey())->update([
+        'role' => UserRole::Member->value,
+        'status' => 'inactive',
+    ]);
+    $regular->refresh();
+
+    $this->actingAs($regular)->get('/auth-only')->assertForbidden();
     $this->actingAs($admin)->get('/admin-only')->assertOk();
+
+    DB::table('users')->where('id', $admin->getKey())->update(['status' => 'inactive']);
+    $admin->refresh();
+
+    $this->withSession(['inactive-session-proof' => 'present'])
+        ->actingAs($admin)
+        ->get('/admin-only')
+        ->assertForbidden()
+        ->assertSessionMissing('inactive-session-proof');
 });

@@ -106,11 +106,7 @@ final class SurfaceSelectionTest extends TestCase
     #[WithConfig('built-for-cloud.surfaces.migrations', false, false)]
     public function test_migrations_off_stops_loading_the_package_schema(): void
     {
-        // Only the test-fixture users table exists; no package migration
-        // was loaded into the migrator, so no package table was created.
-        $this->assertTrue(Schema::hasTable('users'));
-
-        foreach (['credentials', 'api_tokens', 'onboarding_tokens', 'ownership', 'ownership_claims', 'invitations', 'credential_audit_events'] as $table) {
+        foreach (['users', 'bfc_authority', 'credentials', 'api_tokens', 'onboarding_tokens', 'ownership', 'ownership_claims', 'invitations', 'credential_audit_events'] as $table) {
             $this->assertFalse(Schema::hasTable($table), "Expected the {$table} table to be absent with the migrations surface off.");
         }
 

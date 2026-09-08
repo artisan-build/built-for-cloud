@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud;
 
 use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
+use ArtisanBuild\BuiltForCloud\Auth\HumanAuthConfiguration;
 use ArtisanBuild\BuiltForCloud\Commands\ConsoleReKeyCommand;
 use ArtisanBuild\BuiltForCloud\Commands\ConsoleRetireKeyCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CreateAdminCommand;
@@ -95,6 +96,9 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__.'/../config/built-for-cloud.php', 'built-for-cloud');
+        $this->app->booting(
+            static fn (Application $app) => HumanAuthConfiguration::apply($app->make(Repository::class)),
+        );
 
         $this->callAfterResolving(
             HttpKernelContract::class,
@@ -134,6 +138,12 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        HumanAuthConfiguration::apply($this->app->make(Repository::class));
+
+        if ($this->app->resolved('auth')) {
+            HumanAuthConfiguration::assertEffectiveProvider($this->app->make('auth'));
+        }
+
         // Surface selection (PRD 1.14, fleet F2): each family below is
         // mounted only when its `built-for-cloud.surfaces.*` key says so
         // — whole families, never single routes (the claim surfaces are
@@ -710,8 +720,8 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     }
 
     /**
-     * BfC's management routes are public/pre-auth, and a headless app may have
-     * no auth guard at all (`auth.defaults.guard` null, `auth.guards` empty).
+     * BfC's management routes are public/pre-auth, and runtime configuration
+     * can still remove every guard after the package installs its web guard.
      * Laravel's inline `throttle:N,1` builds its signature via
      * `$request->user()`, so on such an app the AuthManager throws and every
      * throttled route 500s. Keying these limiters on the IP is both correct for
@@ -726,7 +736,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // The personal surface's limiter (PRD 1.17). Keyed on the
         // SESSION principal, not a bearer digest: this surface has no
         // bearer. The user id is read defensively — the limiter runs
-        // before the session gate, and a headless app (no guard at all)
+        // before the session gate, and a runtime with no configured guard
         // must get a bounded 401, never a 500 out of the AuthManager.
         RateLimiter::for('bfc-personal', function (Request $request): array {
             return [

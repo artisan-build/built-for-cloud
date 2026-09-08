@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedClaims;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
 use ArtisanBuild\BuiltForCloud\Tests\NoGlobalAuthMutationScan;
+use ArtisanBuild\BuiltForCloud\UserRole;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
@@ -103,7 +104,7 @@ function actingUser(bool $admin = false): User
     ]);
 
     if ($admin) {
-        $user->forceFill(['is_admin' => true])->save();
+        $user->forceFill(['role' => UserRole::Admin->value])->save();
     }
 
     return $user;

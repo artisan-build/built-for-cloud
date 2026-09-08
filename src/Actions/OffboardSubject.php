@@ -25,6 +25,7 @@ use ArtisanBuild\BuiltForCloud\OffboardResult;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
+use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -480,17 +481,8 @@ final class OffboardSubject
             $userIds = [...$userIds, ...array_map(strval(...), $invitedUserIds)];
         }
 
-        $model = config('auth.providers.users.model');
-        $instance = null;
-
-        if (is_string($model) && class_exists($model) && is_subclass_of($model, Model::class)) {
-            /** @var Model $candidate */
-            $candidate = new $model;
-
-            if (Schema::hasTable($candidate->getTable())) {
-                $instance = $candidate;
-            }
-        }
+        $candidate = new User;
+        $instance = Schema::hasTable($candidate->getTable()) ? $candidate : null;
 
         if ($instance !== null && $subject->type === SubjectType::UserPrincipal) {
             /** @var Model|null $byEmail */

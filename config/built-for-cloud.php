@@ -519,14 +519,13 @@ return [
     | Auth Foundation
     |--------------------------------------------------------------------------
     |
-    | Enabled by default for backward compatibility. Disable these when the
-    | consuming application owns its own invitations or admin-user concept.
+    | Invitations are a legacy package surface until the standalone lifecycle
+    | slice replaces them. Human users and roles are always package-owned.
     |
     */
 
     'auth_foundation' => [
         'invitations' => env('BUILT_FOR_CLOUD_INVITATIONS', true),
-        'user_admin_column' => env('BUILT_FOR_CLOUD_USER_ADMIN_COLUMN', true),
     ],
 
     /*

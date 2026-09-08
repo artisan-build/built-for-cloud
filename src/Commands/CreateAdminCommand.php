@@ -5,8 +5,9 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Commands;
 
 use ArtisanBuild\BuiltForCloud\CloudCommandRunner;
+use ArtisanBuild\BuiltForCloud\User;
+use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Console\Command;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
 
@@ -18,7 +19,7 @@ final class CreateAdminCommand extends Command
 {
     protected $signature = 'create-admin {--execute} {--email=} {--password=} {--password-hash=} {--name=} {--environment=} {--local} {--force}';
 
-    protected $description = 'Create an administrator user for the configured auth model';
+    protected $description = 'Create the initial Owner or an additional Admin';
 
     public function handle(CloudCommandRunner $runner): int
     {
@@ -87,29 +88,29 @@ final class CreateAdminCommand extends Command
 
     private function createAdmin(string $email, string $name, string $passwordHash, bool $force): int
     {
-        $userClass = $this->userModelClass();
-        $userModel = new $userClass;
-        $userTable = $userModel->getTable();
+        $userTable = (new User)->getTable();
 
-        if (! Schema::hasColumn($userTable, 'is_admin')) {
-            $this->error('The is_admin column is missing — run your migrations first.');
+        if (! Schema::hasColumn($userTable, 'role')) {
+            $this->error('The role column is missing - run your migrations first.');
 
             return self::FAILURE;
         }
 
-        if (! $force && $userClass::query()->where('is_admin', true)->exists()) {
-            $this->error('An admin user already exists. Pass --force to create another.');
+        $ownerExists = User::query()->where('role', UserRole::Owner->value)->exists();
+
+        if (! $force && $ownerExists) {
+            $this->error('An Owner already exists. Pass --force to create an Admin.');
 
             return self::FAILURE;
         }
 
-        $user = $userClass::query()->create([
+        $user = new User;
+        $user->forceFill([
             'name' => $name,
             'email' => $email,
             'password' => $passwordHash,
-        ]);
-
-        $user->forceFill(['is_admin' => true])->save();
+            'role' => $ownerExists ? UserRole::Admin->value : UserRole::Owner->value,
+        ])->save();
 
         $this->line("Admin user {$email} created.");
 
@@ -234,17 +235,5 @@ final class CreateAdminCommand extends Command
     private function quote(string $value): string
     {
         return escapeshellarg($value);
-    }
-
-    /**
-     * @return class-string<Model>
-     */
-    private function userModelClass(): string
-    {
-        $configured = config('auth.providers.users.model', 'App\\Models\\User');
-
-        return is_string($configured) && is_a($configured, Model::class, true)
-            ? $configured
-            : 'App\\Models\\User';
     }
 }

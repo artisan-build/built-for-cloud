@@ -261,7 +261,7 @@ final class CredentialGuard implements Guard
      * structural case rather than a policy choice. Since the Console
      * shipped, an app may point `credentials.session_guard` (or
      * `auth.defaults.guard`) at `bfc-console`, and the principal that guard
-     * resolves is not a host-app user: its identifier is type-qualified so
+     * resolves is not a canonical package user: its identifier is type-qualified so
      * that it can never equal a credential's `user_id`, which means every
      * comparison against one would mismatch and every token route would
      * 401 for anyone simultaneously inside a console session. "Not a
@@ -287,7 +287,7 @@ final class CredentialGuard implements Guard
     }
 
     /**
-     * The host-app user a credential is bound to, or null.
+     * The canonical package user a credential is bound to, or null.
      *
      * THE RESERVED NAMESPACE NEVER REACHES A USER PROVIDER. A stored
      * `user_id` of `bfc-console:1` is refused here, before any provider

@@ -15,7 +15,6 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 /**
@@ -23,14 +22,15 @@ use Illuminate\Support\Str;
  * single-use, optionally addressed, with a REQUIRED bounded ttl and an
  * `at_exchange` burn — acceptance consumes it under a conditional update
  * gated on affected rows, never a read-then-write. What it buys is not a
- * secret but an account-creation ceremony: `accept()` creates the app's
- * user.
+ * secret but an account-creation ceremony: `accept()` creates the canonical
+ * package User.
  *
  * Two consumers shape the row (D4 + D1e): a teammate invite is ADDRESSED
  * (`email` non-null, forced onto the created user); an open code is
  * UNADDRESSED (`email` null, the registrant supplies their own). `role` is
- * stored and never interpreted — the {@see ComposesInvitedUserAttributes}
- * hook is where an app projects it onto the user it creates.
+ * stored and never interpreted. The {@see ComposesInvitedUserAttributes}
+ * hook may rewrite only attributes accepted by the canonical User; authority
+ * fields are enforced by the package.
  *
  * @property string $id
  * @property string|null $email
@@ -152,24 +152,22 @@ final class Invitation extends Model
                 throw InvalidInvitation::alreadyAccepted();
             }
 
-            unset($attributes['is_admin']);
+            unset($attributes['role'], $attributes['owner_slot']);
 
             if (isset($attributes['password']) && is_string($attributes['password'])) {
                 $attributes['password'] = Hash::make($attributes['password']);
             }
 
-            // The attribute-composition hook (D4 cost 4): the app composes
-            // the user's attributes at creation — capstan projects `role`,
-            // crate projects key-management-only. No binding = the
+            // The legacy attribute-composition hook can rewrite the canonical
+            // model's accepted profile attributes. No binding means the
             // attributes pass through untouched, exactly today's behaviour.
-            // The hook is trusted app code; the is_admin strip below is a
-            // guard-rail against accidental pass-through, not a privilege
-            // boundary against the hook itself.
+            // Package-owned role and owner fields are stripped again after
+            // the hook, so it cannot widen the closed role policy.
             if (app()->bound(ComposesInvitedUserAttributes::class)) {
                 $attributes = app(ComposesInvitedUserAttributes::class)
                     ->composeInvitedUserAttributes($invitation, $attributes);
 
-                unset($attributes['is_admin']);
+                unset($attributes['role'], $attributes['owner_slot']);
             }
 
             // Addressed invitations force their address onto the user; an
@@ -178,12 +176,7 @@ final class Invitation extends Model
                 $attributes['email'] = $invitation->email;
             }
 
-            $userClass = self::userModelClass();
-            $user = $userClass::query()->create($attributes);
-
-            if (Schema::hasColumn($user->getTable(), 'is_admin')) {
-                $user->forceFill(['is_admin' => false])->save();
-            }
+            $user = User::query()->create($attributes);
 
             $invitation->refresh();
             $invitation->forceFill(['used_by' => (string) $user->getKey()])->save();
@@ -239,18 +232,6 @@ final class Invitation extends Model
     protected static function newFactory(): InvitationFactory
     {
         return InvitationFactory::new();
-    }
-
-    /**
-     * @return class-string<Model>
-     */
-    private static function userModelClass(): string
-    {
-        $configured = config('auth.providers.users.model', 'App\\Models\\User');
-
-        return is_string($configured) && is_a($configured, Model::class, true)
-            ? $configured
-            : 'App\\Models\\User';
     }
 
     public static function hashToken(string $token): string

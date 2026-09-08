@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\SelfServiceUnavailable;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SelfServiceDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
+use ArtisanBuild\BuiltForCloud\UserRole;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Session\Middleware\StartSession;
@@ -68,7 +69,7 @@ function surfaceUser(bool $admin = false): User
     ]);
 
     if ($admin) {
-        $user->forceFill(['is_admin' => true])->save();
+        $user->forceFill(['role' => UserRole::Admin->value])->save();
     }
 
     return $user;

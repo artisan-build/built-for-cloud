@@ -10,6 +10,7 @@ use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Foundation\Testing\TestCase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schema;
@@ -37,6 +38,7 @@ trait ContractAssertions
         $this->assertBuiltForCloudOwnershipAuthContract();
         $this->assertBuiltForCloudOnboardingAuthContract();
         $this->assertBuiltForCloudModelContract();
+        $this->assertBuiltForCloudHumanIdentityContract();
     }
 
     public function assertBuiltForCloudMetaContract(): void
@@ -126,6 +128,43 @@ trait ContractAssertions
         }
 
         Assert::assertSame(['consume', 'admin', 'onboard'], Scope::values());
+    }
+
+    public function assertBuiltForCloudHumanIdentityContract(): void
+    {
+        Assert::assertSame(User::class, config('auth.providers.users.model'));
+
+        foreach ([
+            'id',
+            'email',
+            'password',
+            'role',
+            'status',
+            'scalpels_issuer',
+            'scalpels_connection_id',
+            'scalpels_id',
+            'original_contact_email',
+            'email_is_generated',
+            'membership_confirmed_at',
+            'membership_checked_at',
+            'membership_response_at',
+        ] as $column) {
+            Assert::assertTrue(
+                Schema::hasColumn('users', $column),
+                sprintf('The package-owned users table is missing the expected %s column.', $column),
+            );
+        }
+
+        Assert::assertTrue(Schema::hasTable('bfc_authority'));
+    }
+
+    public function assertBuiltForCloudThinHostSources(string $hostRoot): void
+    {
+        Assert::assertSame(
+            [],
+            ThinHostConformance::sourceArtifacts($hostRoot),
+            'Conventional app-owned human auth artifacts were detected. This path scan is a drift detector, not a completeness proof.',
+        );
     }
 
     /**

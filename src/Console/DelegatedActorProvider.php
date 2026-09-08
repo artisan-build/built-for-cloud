@@ -133,7 +133,7 @@ final class DelegatedActorProvider implements UserProvider
      * Whether a stored `user_id` sits inside the RESERVED delegated
      * namespace, canonical or not. Deliberately broader than
      * {@see keyFrom()}: `bfc-console:1junk` names no actor, but it is
-     * still a value that must never reach a host-app user provider,
+     * still a value that must never reach the canonical package user provider,
      * where a driver's own coercion decides what it means.
      */
     public static function isReservedIdentifier(mixed $identifier): bool
