@@ -4,11 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
-use ArtisanBuild\BuiltForCloud\Exceptions\UnsupportedSessionDriver;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureSupportedSessionDriver;
-use Illuminate\Contracts\Http\Kernel as HttpKernelContract;
 use Illuminate\Foundation\Application;
-use Illuminate\Foundation\Http\Kernel as HttpKernel;
 use Illuminate\Support\Facades\Route;
 
 final class SessionDriverGuardTest extends TestCase
@@ -20,7 +16,7 @@ final class SessionDriverGuardTest extends TestCase
         'test_the_app_boots_and_serves_requests_with_array_sessions' => 'array',
         'test_the_app_boots_and_serves_requests_with_file_sessions' => 'file',
         'test_the_app_boots_and_runs_artisan_with_the_database_session_driver' => 'database',
-        'test_a_request_refuses_the_database_session_driver' => 'database',
+        'test_a_request_uses_the_database_session_driver' => 'database',
     ];
 
     /**
@@ -34,14 +30,6 @@ final class SessionDriverGuardTest extends TestCase
             'session.driver',
             self::SESSION_DRIVERS[$this->name()] ?? 'array',
         );
-    }
-
-    public function test_the_guard_is_first_in_the_resolved_global_middleware_stack(): void
-    {
-        $kernel = $this->app->make(HttpKernelContract::class);
-
-        $this->assertInstanceOf(HttpKernel::class, $kernel);
-        $this->assertSame(EnsureSupportedSessionDriver::class, $kernel->getGlobalMiddleware()[0]);
     }
 
     public function test_the_app_boots_and_serves_requests_with_cookie_sessions(): void
@@ -75,12 +63,9 @@ final class SessionDriverGuardTest extends TestCase
         $this->artisan('list')->assertSuccessful();
     }
 
-    public function test_a_request_refuses_the_database_session_driver(): void
+    public function test_a_request_uses_the_database_session_driver(): void
     {
-        $this->expectException(UnsupportedSessionDriver::class);
-        $this->expectExceptionMessage(UnsupportedSessionDriver::DATABASE_MESSAGE);
-
-        $this->withoutExceptionHandling()->getJson('/session-driver-probe');
+        $this->assertRequestSucceeds();
     }
 
     private function assertRequestSucceeds(): void

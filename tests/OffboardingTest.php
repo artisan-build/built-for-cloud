@@ -53,7 +53,10 @@ uses(RefreshDatabase::class, WithCredentials::class);
  * request thereafter.
  */
 beforeEach(function (): void {
-    config(['auth.guards.bfc' => ['driver' => 'bfc', 'provider' => 'users']]);
+    config([
+        'auth.guards.bfc' => ['driver' => 'bfc', 'provider' => 'users'],
+        'session.driver' => 'array',
+    ]);
 
     Route::middleware('auth:bfc')->get('/offboard-guarded', fn (): array => ['ok' => true]);
     Route::middleware(['web', 'bfc.auth'])->get('/offboard-session-guarded', fn (): array => ['ok' => true]);
@@ -73,6 +76,38 @@ function offboardHeaders(): array
 function offboardViaHttp(array $body): TestResponse
 {
     return test()->postJson('/bfc/subjects/offboard', $body, offboardHeaders());
+}
+
+function seedOffboardIntegrationInvite(
+    string $namespace,
+    string $eventId,
+    int $version,
+    string $subject,
+    ?string $email = null,
+): Invitation {
+    $invitation = Invitation::query()->create([
+        'id' => (string) Str::uuid(),
+        'email' => $email,
+        'token' => hash('sha256', 'offboard-integration-'.$eventId),
+        'expires_at' => now()->addHour(),
+    ]);
+
+    IntegrationEntitlement::query()->create([
+        'integration_namespace' => $namespace,
+        'external_subject' => $subject,
+        'entitlement_version' => $version,
+    ]);
+    IntegrationEvent::query()->create([
+        'integration_namespace' => $namespace,
+        'event_id' => $eventId,
+        'external_subject' => $subject,
+        'event_kind' => 'invite',
+        'entitlement_version' => $version,
+        'applied' => true,
+        'invitation_id' => $invitation->getKey(),
+    ]);
+
+    return $invitation;
 }
 
 it('contains the whole account in one action: every credential state, codes, invitations, reset tokens, sessions', function (): void {
@@ -300,16 +335,13 @@ it('rides the shared version gate: a replayed or older offboard event is transac
     // Advance the shared entitlement to version 7 through the INVITE verb
     // — one monotonic version per (namespace, subject) orders invites and
     // offboards together (the gate table PR8 built is shared).
-    $admin = ['Authorization' => 'Bearer '.auditAdminToken('offboard-gate-admin')];
-
-    $this->postJson('/bfc/invitations', [
-        'email' => 'sponsor@example.com',
-        'ttl_seconds' => 3600,
-        'integration_namespace' => 'github-sponsors',
-        'event_id' => 'evt-invite-7',
-        'entitlement_version' => 7,
-        'external_subject' => 'sponsor-login',
-    ], $admin)->assertStatus(202);
+    seedOffboardIntegrationInvite(
+        'github-sponsors',
+        'evt-invite-7',
+        7,
+        'sponsor-login',
+        'sponsor@example.com',
+    );
 
     $credential = $this->mintCredential([
         'subject_type' => SubjectType::ExternalConsumer,
@@ -563,17 +595,14 @@ it('consumes a pending code linked to an already-revoked durable (Fix 7)', funct
 });
 
 it('contains the accounts accepted integration invitations created (Fix 1)', function (): void {
-    $admin = ['Authorization' => 'Bearer '.auditAdminToken('fix1-admin')];
-
     // The integration invited a human (version 1, addressed)…
-    $this->postJson('/bfc/invitations', [
-        'email' => 'sponsor-user@example.com',
-        'ttl_seconds' => 3600,
-        'integration_namespace' => 'github-sponsors',
-        'event_id' => 'evt-invite-1',
-        'entitlement_version' => 1,
-        'external_subject' => 'sponsor-x',
-    ], $admin)->assertStatus(202);
+    seedOffboardIntegrationInvite(
+        'github-sponsors',
+        'evt-invite-1',
+        1,
+        'sponsor-x',
+        'sponsor-user@example.com',
+    );
 
     // …and the invitee accepted: the ceremony created their account and
     // stamped the invitation's used_by (the state accept() leaves).
@@ -827,15 +856,7 @@ it('surfaces the traversal ceiling and resumes from the registered frontier on r
 it('binds the version gate to the offboard target: a decoy external subject cannot offboard a victim (Fix 4)', function (): void {
     // The victim's REAL gate stands at version 7 (advanced by an invite —
     // the shared monotonic history).
-    $admin = ['Authorization' => 'Bearer '.auditAdminToken('gate-bind-admin')];
-
-    $this->postJson('/bfc/invitations', [
-        'ttl_seconds' => 3600,
-        'integration_namespace' => 'ns',
-        'event_id' => 'evt-invite-7',
-        'entitlement_version' => 7,
-        'external_subject' => 'victim',
-    ], $admin)->assertStatus(202);
+    seedOffboardIntegrationInvite('ns', 'evt-invite-7', 7, 'victim');
 
     $victim = $this->mintCredential([
         'subject_type' => SubjectType::ExternalConsumer,
@@ -910,16 +931,8 @@ it('binds the version gate to the offboard target: a decoy external subject cann
 });
 
 it('refuses a decoy NAMESPACE for a subject gate-bound elsewhere (r3 Fix 2)', function (): void {
-    $admin = ['Authorization' => 'Bearer '.auditAdminToken('ns-bind-admin')];
-
     // The victim's gate stands at version 7 under its REAL namespace.
-    $this->postJson('/bfc/invitations', [
-        'ttl_seconds' => 3600,
-        'integration_namespace' => 'ns',
-        'event_id' => 'evt-invite-7',
-        'entitlement_version' => 7,
-        'external_subject' => 'victim',
-    ], $admin)->assertStatus(202);
+    seedOffboardIntegrationInvite('ns', 'evt-invite-7', 7, 'victim');
 
     $victim = $this->mintCredential([
         'subject_type' => SubjectType::ExternalConsumer,

@@ -127,6 +127,14 @@ final class MetadataEndpointShapes
     {
         return [
             'GET /bfc/console/vitals' => self::vitals(),
+            'POST /bfc/logout' => ['type' => 'empty'],
+            'POST /bfc/forgot-password' => ['type' => 'empty'],
+            'POST /bfc/reset-password' => ['type' => 'empty'],
+            'POST /bfc/members/invitations' => ['type' => 'empty'],
+            'PUT /bfc/members/{user}/role' => ['type' => 'empty'],
+            'DELETE /bfc/members/{user}' => ['type' => 'empty'],
+            'DELETE /bfc/me/sessions/others' => ['type' => 'empty'],
+            'DELETE /bfc/me/sessions/{session}' => ['type' => 'empty'],
             // `ok` is `true` and can be nothing else: the verb has one
             // success path and {@see ManageOwnership::cancelTransfer}
             // returns that literal. `bool` was a domain wider than the

@@ -3,8 +3,6 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\CloudCommandRunner;
-use ArtisanBuild\BuiltForCloud\Exceptions\InvalidInvitation;
-use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Console\Command;
@@ -18,36 +16,13 @@ use Illuminate\Support\Facades\Schema;
 
 uses(RefreshDatabase::class);
 
-it('creates the invitations table when auth foundation invitations are enabled', function (): void {
+it('creates the package invitations table', function (): void {
     Schema::dropIfExists('invitations');
 
     $migration = require __DIR__.'/../database/migrations/2026_06_22_000010_create_invitations_table.php';
     $migration->up();
 
     expect(Schema::hasTable('invitations'))->toBeTrue();
-});
-
-it('skips the invitations table when auth foundation invitations are disabled', function (): void {
-    config(['built-for-cloud.auth_foundation.invitations' => false]);
-    Schema::dropIfExists('invitations');
-
-    $migration = require __DIR__.'/../database/migrations/2026_06_22_000010_create_invitations_table.php';
-    $migration->up();
-
-    expect(Schema::hasTable('invitations'))->toBeFalse();
-});
-
-it('skips an existing invitations table without throwing', function (): void {
-    Schema::dropIfExists('invitations');
-    Schema::create('invitations', function (Blueprint $table): void {
-        $table->id();
-    });
-
-    $migration = require __DIR__.'/../database/migrations/2026_06_22_000010_create_invitations_table.php';
-    $migration->up();
-
-    expect(Schema::hasTable('invitations'))->toBeTrue()
-        ->and(Schema::hasColumn('invitations', 'email'))->toBeFalse();
 });
 
 it('creates the first Owner and refuses another Admin unless forced', function (): void {
@@ -207,65 +182,6 @@ it('fails create-admin clearly when the role column is missing', function (): vo
         ->and(User::query()->where('email', 'missing@b.c')->exists())->toBeFalse();
 });
 
-it('creates and accepts invitations exactly once', function (): void {
-    // PR8's documented break (release-notes/invitations-convergence.md):
-    // the ttl is REQUIRED — the old 7-day default is gone.
-    $invitation = Invitation::invite('new@user.test', 604800);
-    $plainTextToken = $invitation->token;
-    $tokenHash = hash('sha256', $plainTextToken);
-
-    expect($plainTextToken)->not->toBe('')
-        ->and($invitation->expires_at?->isFuture())->toBeTrue()
-        ->and(Invitation::query()->pending()->whereKey($invitation->getKey())->exists())->toBeTrue()
-        ->and(Invitation::query()->whereKey($invitation->getKey())->value('token'))->toBe($tokenHash)
-        ->and(Invitation::query()->whereKey($invitation->getKey())->value('token'))->not->toBe($plainTextToken);
-
-    $secondInvitation = Invitation::invite('another@user.test', 604800);
-
-    expect($secondInvitation->token)->not->toBe($plainTextToken);
-
-    $user = Invitation::accept($plainTextToken, [
-        'name' => 'New',
-        'password' => 'pw',
-    ]);
-
-    $invitation->refresh();
-
-    expect($user)->toBeInstanceOf(User::class)
-        ->and($user->email)->toBe('new@user.test')
-        ->and($invitation->accepted_at)->not->toBeNull()
-        ->and(User::query()->where('email', 'new@user.test')->exists())->toBeTrue();
-
-    expect(fn () => Invitation::accept($plainTextToken, ['name' => 'Again', 'password' => 'pw']))
-        ->toThrow(InvalidInvitation::class);
-
-    $expired = Invitation::factory()->create([
-        'email' => 'expired@user.test',
-        'expires_at' => now()->subMinute(),
-    ]);
-
-    expect(fn () => Invitation::accept($expired->token, ['name' => 'Expired', 'password' => 'pw']))
-        ->toThrow(InvalidInvitation::class);
-
-    expect(fn () => Invitation::accept('unknown-token', ['name' => 'Unknown', 'password' => 'pw']))
-        ->toThrow(InvalidInvitation::class)
-        ->and(User::query()->whereIn('email', ['expired@user.test', 'unknown@user.test'])->exists())->toBeFalse();
-});
-
-it('ignores role escalation attempts while accepting invitations', function (): void {
-    $invitation = Invitation::invite('mallory@user.test', 604800);
-
-    $user = Invitation::accept($invitation->token, [
-        'name' => 'Mallory',
-        'password' => 'pw',
-        'role' => UserRole::Owner->value,
-    ]);
-
-    expect($user)->toBeInstanceOf(User::class)
-        ->and($user->refresh()->role)->toBe(UserRole::Member->value)
-        ->and($user->email)->toBe('mallory@user.test');
-});
-
 it('protects routes through auth and admin middleware aliases', function (): void {
     Route::middleware('bfc.auth')->get('/auth-only', fn (): string => 'auth ok');
     Route::middleware(['web', 'bfc.admin'])->get('/admin-only', fn (): string => 'admin ok');
@@ -284,7 +200,7 @@ it('protects routes through auth and admin middleware aliases', function (): voi
 
     $admin->forceFill(['role' => UserRole::Admin->value])->save();
 
-    $this->get('/auth-only')->assertUnauthorized();
+    $this->get('/auth-only')->assertRedirect(route('bfc.login'));
     $this->get('/admin-only')->assertForbidden();
     $this->actingAs($regular)->get('/auth-only')->assertOk();
     $this->actingAs($regular)->get('/admin-only')->assertForbidden();

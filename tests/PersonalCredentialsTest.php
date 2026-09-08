@@ -639,7 +639,7 @@ it('rejects a mutating personal request that carries no valid CSRF token', funct
 
 it('mounts the personal routes on the routes surface family, at fixed paths, behind the session gate', function (): void {
     $personal = collect(Route::getRoutes()->getRoutes())
-        ->filter(fn (RoutingRoute $route): bool => str_starts_with($route->uri(), 'bfc/me/'))
+        ->filter(fn (RoutingRoute $route): bool => str_starts_with($route->uri(), 'bfc/me/credentials'))
         ->values();
 
     expect($personal->map(fn (RoutingRoute $route): string => $route->methods()[0].' /'.$route->uri())->all())

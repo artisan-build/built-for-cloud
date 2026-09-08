@@ -50,7 +50,6 @@ function operatorMutations(string $targetId): array
         'rotate' => ['postJson', '/bfc/credentials/'.$targetId.'/rotate', []],
         'revoke' => ['deleteJson', '/bfc/credentials/'.$targetId, []],
         'activate' => ['postJson', '/bfc/credentials/'.$targetId.'/activate', ['delivery_fingerprint' => 'fp']],
-        'invite' => ['postJson', '/bfc/invitations', ['email' => 'a@b.c', 'ttl_seconds' => 3600]],
         'offboard' => ['postJson', '/bfc/subjects/offboard', ['subject_type' => 'external_consumer', 'subject_ref' => 'acme']],
     ];
 }
@@ -129,7 +128,7 @@ it('scopes each verb family to its own ability', function (): void {
     $revoker = operatorCredential([OperatorAbility::CredentialRevoke->value]);
     $rotator = operatorCredential([OperatorAbility::CredentialRotate->value]);
 
-    // Mint may mint (and invite — same family) but not read, rotate, or revoke.
+    // Mint may mint but not read, rotate, or revoke.
     $minted = $this->postJson('/bfc/credentials', [
         'subject_type' => 'external_consumer',
         'subject_ref' => 'acme',
@@ -137,8 +136,6 @@ it('scopes each verb family to its own ability', function (): void {
 
     $mintedId = (string) $minted->json('credential.id');
 
-    $this->postJson('/bfc/invitations', ['email' => 'a@b.c', 'ttl_seconds' => 3600], ['Authorization' => $minter->bearerHeader()])
-        ->assertCreated();
     $this->getJson('/bfc/credentials', ['Authorization' => $minter->bearerHeader()])->assertForbidden();
     $this->deleteJson('/bfc/credentials/'.$mintedId, [], ['Authorization' => $minter->bearerHeader()])->assertForbidden();
     $this->postJson('/bfc/credentials/'.$mintedId.'/rotate', [], ['Authorization' => $minter->bearerHeader()])->assertForbidden();

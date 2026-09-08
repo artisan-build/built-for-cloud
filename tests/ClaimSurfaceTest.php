@@ -254,11 +254,6 @@ $restatedClaims = [
         'release-notes/hmac-kind.md',
         'src/Hmac/HmacVerifier.php',
     ],
-    'straight out of the sealed carrier and accepts no secret input of any kind' => [
-        'src/Commands/CredentialMintCommand.php',
-        'src/Commands/CredentialRotateCommand.php',
-        'src/Commands/InvitationIssueCommand.php',
-    ],
     'surface cannot honestly make when it does not know whose credentials' => [
         'docs/http-contract.md',
         'release-notes/personal-credentials.md',
@@ -590,9 +585,9 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1275,
-        'absolute' => 418,
-        'paired' => 113,
+        'blocks' => 1321,
+        'absolute' => 417,
+        'paired' => 112,
         'unpaired' => 305,
     ]);
 

@@ -34,6 +34,7 @@ return new class extends Migration
             $table->timestamp('membership_checked_at')->nullable();
             $table->timestamp('membership_response_at')->nullable();
             $table->timestamp('deactivated_at')->nullable();
+            $table->unsignedBigInteger('auth_session_version')->default(1);
             $table->rememberToken();
             $table->timestamps();
 

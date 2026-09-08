@@ -31,6 +31,7 @@ use Illuminate\Notifications\Notifiable;
  * @property CarbonInterface|null $membership_checked_at
  * @property CarbonInterface|null $membership_response_at
  * @property CarbonInterface|null $deactivated_at
+ * @property int $auth_session_version
  */
 class User extends Model implements AuthenticatableContract, MustVerifyEmail
 {
@@ -67,6 +68,7 @@ class User extends Model implements AuthenticatableContract, MustVerifyEmail
             'membership_checked_at' => 'datetime',
             'membership_response_at' => 'datetime',
             'deactivated_at' => 'datetime',
+            'auth_session_version' => 'integer',
         ];
     }
 }

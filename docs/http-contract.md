@@ -182,15 +182,8 @@ with the three things that WOULD have moved the major and none of which happened
   below — `console-keys`.
 - `POST /bfc/onboarding/issue` requires `ttl_seconds` (bounds below) and accepts nullable
   `email`; the claim surfaces speak the claim-contract error enum documented here.
-- New route `POST /bfc/invitations` — the machine-callable invite verb (PRD 1.13, SEC-V3-05):
-  invitations ARE claim codes (hashed at rest, required bounded `ttl_seconds`, single-use
-  `at_exchange` burn on accept), optionally addressed, optionally carrying an ordered
-  integration event (namespace + stable event id + monotonic entitlement version + external
-  subject). The human path answers `201` with the single reveal, shape-identical whatever the
-  prior state; the integration path answers one uniform `202` acknowledgement carrying no
-  invitation data, with delivery to an addressed invitee by mail. An addressed human invite
-  supersedes prior pending invitations of the same email; an applying integration event
-  supersedes only its own namespace+subject history.
+- The standalone human lifecycle replaces operator/open-code invitation transport with addressed
+  Owner/Admin issuance, package mail, and package-owned acceptance under the local authority gate.
 
 - **The `hmac` kind ships (PRD 1.21 / D9, SEC-V3-01/07/08).** All additive. `POST
   /bfc/credentials` now mints `kind: "hmac"` — a per-subject symmetric signing key, born
@@ -467,7 +460,22 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/claim` | `content` | single reveal of the durable secret (`token`), plus the free-text suggested name |
 | `POST /bfc/onboarding/exchange` | `content` | single reveal of the durable secret, plus the free-text credential name |
 | `POST /bfc/onboarding/verify` | `content` | carries the free-text credential name |
-| `POST /bfc/invitations` | `content` | single reveal of the invitation code, plus a free-text email address |
+| `GET /bfc/login` | `content` | package-owned HTML login form |
+| `POST /bfc/login` | `content` | redirect plus a newly established session cookie |
+| `POST /bfc/logout` | `metadata` | redirect after session invalidation |
+| `GET /bfc/forgot-password` | `content` | package-owned HTML recovery form |
+| `POST /bfc/forgot-password` | `metadata` | redirect with a fixed non-enumerating status |
+| `GET /bfc/reset-password/{token}` | `content` | package-owned HTML reset form containing the one-time request token |
+| `POST /bfc/reset-password` | `metadata` | redirect after a successful reset |
+| `GET /bfc/invitations/{token}` | `content` | package-owned HTML acceptance form containing the one-time invitation token |
+| `POST /bfc/invitations/accept` | `content` | redirect plus a newly established session cookie |
+| `GET /bfc/members` | `content` | package-owned HTML containing user and invitation data |
+| `POST /bfc/members/invitations` | `metadata` | redirect after package notification dispatch |
+| `PUT /bfc/members/{user}/role` | `metadata` | redirect after role update |
+| `DELETE /bfc/members/{user}` | `metadata` | redirect after account containment |
+| `GET /bfc/me/sessions` | `content` | package-owned HTML containing caller-owned session metadata |
+| `DELETE /bfc/me/sessions/others` | `metadata` | redirect after caller-owned session deletion |
+| `DELETE /bfc/me/sessions/{session}` | `metadata` | redirect after one caller-owned session deletion |
 | `GET /api/credentials` | `content` | rows carry free-text names, subject refs and client identities |
 | `GET /api/credentials/client-observations` | `content` | client-claimed free-text identities |
 | `POST /api/credentials` | `content` | single reveal of the minted plaintext, plus the free-text name |
@@ -894,106 +902,94 @@ included, which is what makes both slots additive rather than a version bump.
 
 ---
 
-## Invitations — the invite verb
+## Standalone human lifecycle
 
-Invitations are claim codes for HUMANS (PRD 1.13, D4 + D1e): hashed at rest, single-use with an
-`at_exchange` burn, optionally addressed, and what one buys is not a secret but an
-account-creation ceremony inside the consuming app (`Invitation::accept()` creates the app's
-user; acceptance is an app surface, not an HTTP route here). The verb is machine-callable by
-design (D1e): an operator's integration triggers the INVITATION — it never mints a key, because
-minting would hand the integration a plaintext credential to deliver.
+Every route in this section runs through the package's `bfc.standalone` authority predicate and
+the ordinary Laravel web session stack. Managed authority returns `404` before local credentials,
+membership writes, session writes, or mail delivery. All mutating routes are CSRF protected.
 
-### POST /bfc/invitations
+### GET /bfc/login
 
-*Admin token or operator credential* — the same gate as the `/bfc/credentials` verb routes; the
-same two-transport rule (`bfc:invitation:issue --local` runs the identical action).
+Renders the package login screen through `bfc::layout`. An optional `intended` value is retained
+only when it is a validated same-origin relative path.
 
-**Request:**
+### POST /bfc/login
 
-```json
-{
-  "email": "person@example.com",
-  "ttl_seconds": 86400,
-  "invited_by": "42",
-  "role": "member",
-  "integration_namespace": "github-sponsors",
-  "event_id": "evt_0001",
-  "entitlement_version": 7,
-  "external_subject": "sponsor-login"
-}
-```
+Authenticates an active canonical Owner, Admin, or Member with a non-null password through the
+normal `web` guard, regenerates the session identifier, and updates `last_authenticated_at`.
+Failures are generic and rate-limited; remember-me is unsupported.
 
-`ttl_seconds` is **required**, bounded 60–604800 (7 days) — the invitation is a claim code and
-never defaults its lifetime. `email` is optional: omitted issues an OPEN code whose registrant
-supplies their own address at accept; provided, the address is forced onto the created user and
-the recipient is notified through the app's lifecycle-notification policy (an unaddressed
-invitation notifies nobody). `invited_by` is a nullable free-text inviter reference (max 64
-characters); `role` is stored and never interpreted — the app's accept hook projects it. The
-other free-text fields are bounded to 255 characters; oversize input is a `422` on both
-transports.
+### POST /bfc/logout
 
-**Supersession, scoped precisely:** issuing an addressed HUMAN invitation consumes every prior
-pending (unaccepted, unexpired) invitation of the same email — an issuer replaces a code by
-issuing again, and the old link then refuses as `code_already_claimed`. An APPLYING integration
-event consumes ONLY its own (namespace, external subject) pending history — never another
-namespace's invitation, and never a human invitation that happens to share the recipient
-address. Open, non-integration codes supersede nothing (there is no subject to match).
+Requires the local session, invalidates it whole, regenerates CSRF, and redirects to
+`bfc.login`.
 
-The four integration-event fields are **all-or-none** (SEC-V3-05): a plain human-issued invite
-carries none; a machine-issued event carries every one. `entitlement_version` is a whole number
-bounded to **[1, 9007199254740992]** (2^53 — exactly representable by every JSON producer);
-values outside the range are rejected, never truncated or saturated. The version gate stores
-the latest accepted version per (`integration_namespace`, `external_subject`) and
-**transactionally ignores any event whose version is not newer**; a replayed `event_id` answers
-idempotently — same response, no second invitation, no state change — and a replay after the
-invitation was accepted does not resurrect it. Concurrent deliveries racing a gate-row create
-are re-decided against the winner — up to **3 whole transactional attempts** per request
-(one request can lose the entitlement race and then the event-id race); past the bound the
-verb answers a clean `500 {"message": ...}` with **no partial state** — nothing was applied,
-and retrying is safe.
+### GET /bfc/forgot-password
 
-**The two response shapes, keyed on the REQUEST (never on state):**
+Renders the non-enumerating package recovery request screen.
 
-- **Human path (no integration event): `201` — always issues, always reveals**,
-  shape-identical for a fresh subject, a re-invite, and a subject who already accepted:
+### POST /bfc/forgot-password
 
-```json
-{
-  "invitation_id": "9d3f..." ,
-  "invitation_code": "…the single reveal…",
-  "email": "person@example.com"
-}
-```
+Always returns the same public result. Eligible verified standalone users receive a synchronous
+package notification through the configured mail driver; generated or unusable addresses do not.
+Only a SHA-256 token digest is stored, one latest record per email.
 
-  `invitation_code` is the **single reveal** — the code exists nowhere else and is never
-  retrievable again; the human issuer delivers it as an accept link.
+### GET /bfc/reset-password/{token}
 
-- **Integration path: `202 {"accepted": true}` — always**, whatever the gate decided
-  (applied, ignored-older, or replayed): the event is acknowledged and the body carries **no
-  invitation data**, so even an authorized caller cannot probe gate state from the response.
-  Delivery is the instance's job (D1e — the integration triggers; the instance delivers): an
-  ADDRESSED applying event mails the invitee the invitation code after the transaction
-  commits, and that mail is the code's one documented egress on this path. An event with no
-  `email` is acknowledged and its invitation has no delivery channel — deliver via the
-  admin/human surfaces by issuing an addressed invitation, which supersedes it. Response
-  TIMING is best-effort uniform only: an applying event does more work than an ignored one,
-  and the difference is not masked.
+Renders the package reset form. The token is accepted only by the following POST.
 
-- **403** — `{"message": "..."}`: the declaration's verb matrix denies `issue` for the invited
-  subject. Identical refusal on the CLI transport.
-- **422** — `{"message": "..."}`: shared input validation — missing/out-of-bounds
-  `ttl_seconds`, a malformed email, an out-of-bounds or non-integer `entitlement_version`, an
-  over-length field, or a PARTIAL integration-event group. Identical refusals on the CLI
-  transport.
+### POST /bfc/reset-password
 
-**Authority note:** the version gate trusts any caller this route's gate admits — any admin
-token or `credential:mint`/`credential:admin` operator credential can advance any
-integration namespace. The 1.10 ability vocabulary is per **verb family**, deliberately not
-per namespace; give each integration its own credential for AUDIT attribution, not
-authority isolation.
+Consumes an unexpired latest token once, stores a framework password hash, advances the account's
+session version, and removes all enumerable database sessions and reset records. Role, status,
+and provenance are not request fields and are not changed.
 
-Emits an `issued` audit event (ids only, never the code) in the issue's own transaction; the
-app's accept surface emits `exchanged` the same way.
+### GET /bfc/invitations/{token}
+
+Renders the addressed invitation ceremony through the package layout.
+
+### POST /bfc/invitations/accept
+
+Atomically burns an addressed pending token and creates one active canonical user with the
+invitation's server-fixed Member or Admin role and verified addressed email. It starts a normal
+web session with a regenerated identifier. Request role, email, status, provenance, and off-site
+redirect values have no authority.
+
+### GET /bfc/members
+
+Lists canonical users and pending addressed invitations. All roles may authenticate; management
+actions below enforce their fixed role boundary again inside the write transaction.
+
+### POST /bfc/members/invitations
+
+Owner or Admin may invite a Member; only Owner may invite an Admin. Owner invitations, open codes,
+operator-credential issuance, duplicate user addresses, and duplicate pending addresses refuse.
+
+### PUT /bfc/members/{user}/role
+
+Owner alone promotes Member to Admin or demotes Admin to Member. Owner targets and unknown or
+inactive target roles refuse after the target is locked.
+
+### DELETE /bfc/members/{user}
+
+Owner or Admin deactivates a Member; Owner alone deactivates an Admin. The stable user row remains,
+while reset records, sessions, pending invitations, and user-bound credentials are invalidated.
+Installation credentials are not selected by this operation.
+
+### GET /bfc/me/sessions
+
+For the database session driver, lists only rows whose `user_id` is the authenticated account and
+marks the current session structurally. Other drivers render an explicit unavailable state rather
+than claiming enumeration.
+
+### DELETE /bfc/me/sessions/others
+
+After current-password confirmation, deletes only the caller's other database sessions.
+
+### DELETE /bfc/me/sessions/{session}
+
+After current-password confirmation, deletes one non-current session only when it belongs to the
+caller. Foreign, current, and absent identifiers do not produce revocation success.
 
 ---
 

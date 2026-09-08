@@ -1,0 +1,19 @@
+providers:
+  - ArtisanBuild\BuiltForCloud\Tests\Support\StandaloneHarnessServiceProvider
+  - ArtisanBuild\BuiltForCloud\BuiltForCloudServiceProvider
+
+env:
+  APP_KEY: "base64:YmZjLXN0YW5kYWxvbmUtaGFybmVzcy1rZXktMzJi"
+  APP_URL: "http://127.0.0.1:8187"
+  DB_CONNECTION: sqlite
+  DB_DATABASE: "/tmp/bfc-standalone-harness.sqlite"
+  SESSION_DRIVER: database
+  CACHE_STORE: array
+  MAIL_MAILER: array
+  BUILT_FOR_CLOUD_SURFACE_DATA_MIGRATIONS: false
+
+workbench:
+  start: /bfc/login
+  install: false
+  discovers:
+    web: true

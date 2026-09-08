@@ -4,18 +4,12 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
-use ArtisanBuild\BuiltForCloud\Contracts\ComposesInvitedUserAttributes;
 use ArtisanBuild\BuiltForCloud\Database\Factories\InvitationFactory;
-use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
-use ArtisanBuild\BuiltForCloud\Exceptions\InvalidInvitation;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str;
 
 /**
  * An invitation IS a claim code (PRD 1.13, D4, D1e): hashed at rest,
@@ -25,12 +19,10 @@ use Illuminate\Support\Str;
  * secret but an account-creation ceremony: `accept()` creates the canonical
  * package User.
  *
- * Two consumers shape the row (D4 + D1e): a teammate invite is ADDRESSED
- * (`email` non-null, forced onto the created user); an open code is
- * UNADDRESSED (`email` null, the registrant supplies their own). `role` is
- * stored and never interpreted. The {@see ComposesInvitedUserAttributes}
- * hook may rewrite only attributes accepted by the canonical User; authority
- * fields are enforced by the package.
+ * The standalone lifecycle creates addressed invitations only. Their role is
+ * fixed by the issuing Owner/Admin and acceptance projects it directly onto
+ * the canonical package User; no host composition hook or open-code path is
+ * part of the supported surface.
  *
  * @property string $id
  * @property string|null $email
@@ -39,6 +31,7 @@ use Illuminate\Support\Str;
  * @property string|null $used_by
  * @property string|null $role
  * @property CarbonInterface|null $accepted_at
+ * @property CarbonInterface|null $cancelled_at
  * @property CarbonInterface|null $expires_at
  * @property CarbonInterface|null $created_at
  * @property CarbonInterface|null $updated_at
@@ -61,8 +54,6 @@ final class Invitation extends Model
 
     public const int TTL_MAX_SECONDS = 604800;
 
-    private ?string $plainTextToken = null;
-
     public $incrementing = false;
 
     protected $keyType = 'string';
@@ -78,6 +69,7 @@ final class Invitation extends Model
         'used_by',
         'role',
         'accepted_at',
+        'cancelled_at',
         'expires_at',
     ];
 
@@ -88,108 +80,9 @@ final class Invitation extends Model
     {
         return [
             'accepted_at' => 'datetime',
+            'cancelled_at' => 'datetime',
             'expires_at' => 'datetime',
         ];
-    }
-
-    public static function invite(?string $email, int $ttlSeconds, ?string $invitedBy = null, ?string $role = null): self
-    {
-        if ($ttlSeconds < self::TTL_MIN_SECONDS || $ttlSeconds > self::TTL_MAX_SECONDS) {
-            throw InvalidCredentialInput::invitationTtlOutOfBounds();
-        }
-
-        do {
-            $plainTextToken = Str::random(40);
-            $tokenHash = self::hashToken($plainTextToken);
-        } while (self::query()->where('token', $tokenHash)->exists());
-
-        $invitation = self::query()->create([
-            'email' => $email,
-            'token' => $tokenHash,
-            'invited_by' => $invitedBy,
-            'role' => $role,
-            'expires_at' => now()->addSeconds($ttlSeconds),
-        ]);
-
-        $invitation->plainTextToken = $plainTextToken;
-
-        return $invitation;
-    }
-
-    /**
-     * Exchange the invitation for a created user. Refusals speak the claim
-     * contract's error enum ({@see InvalidInvitation}); the burn is
-     * `at_exchange`: a conditional update gated on affected rows inside the
-     * locked transaction, so of two concurrent accepts exactly one wins.
-     *
-     * @param  array<string, mixed>  $attributes
-     */
-    public static function accept(string $token, array $attributes): Model
-    {
-        return DB::transaction(function () use ($token, $attributes): Model {
-            $invitation = self::query()->where('token', self::hashToken($token))->lockForUpdate()->first();
-
-            if (! $invitation instanceof self) {
-                throw InvalidInvitation::notFound();
-            }
-
-            if ($invitation->accepted_at !== null) {
-                throw InvalidInvitation::alreadyAccepted();
-            }
-
-            if ($invitation->expires_at !== null && $invitation->expires_at->lessThanOrEqualTo(now())) {
-                throw InvalidInvitation::expired();
-            }
-
-            // The at_exchange burn: zero affected rows means a concurrent
-            // accept won between the read and this write.
-            $consumed = self::query()
-                ->whereKey($invitation->getKey())
-                ->whereNull('accepted_at')
-                ->update(['accepted_at' => now()]);
-
-            if ($consumed === 0) {
-                throw InvalidInvitation::alreadyAccepted();
-            }
-
-            unset($attributes['role'], $attributes['owner_slot']);
-
-            if (isset($attributes['password']) && is_string($attributes['password'])) {
-                $attributes['password'] = Hash::make($attributes['password']);
-            }
-
-            // The legacy attribute-composition hook can rewrite the canonical
-            // model's accepted profile attributes. No binding means the
-            // attributes pass through untouched, exactly today's behaviour.
-            // Package-owned role and owner fields are stripped again after
-            // the hook, so it cannot widen the closed role policy.
-            if (app()->bound(ComposesInvitedUserAttributes::class)) {
-                $attributes = app(ComposesInvitedUserAttributes::class)
-                    ->composeInvitedUserAttributes($invitation, $attributes);
-
-                unset($attributes['role'], $attributes['owner_slot']);
-            }
-
-            // Addressed invitations force their address onto the user; an
-            // open code lets the registrant supply their own.
-            if ($invitation->email !== null) {
-                $attributes['email'] = $invitation->email;
-            }
-
-            $user = User::query()->create($attributes);
-
-            $invitation->refresh();
-            $invitation->forceFill(['used_by' => (string) $user->getKey()])->save();
-
-            app(LifecycleEventRecorder::class)->record(
-                event: LifecycleEventType::Exchanged,
-                codeId: $invitation->id,
-                actor: AuditActor::credentialHolder($invitation->id),
-                recipient: $invitation->email,
-            );
-
-            return $user;
-        });
     }
 
     /**
@@ -199,6 +92,7 @@ final class Invitation extends Model
     public function scopePending(Builder $query): Builder
     {
         return $query->whereNull('accepted_at')
+            ->whereNull('cancelled_at')
             ->where(function (Builder $query): void {
                 $query->whereNull('expires_at')
                     ->orWhere('expires_at', '>', now());
@@ -222,11 +116,6 @@ final class Invitation extends Model
     {
         return $query->where('expires_at', '<', now())
             ->whereNull('accepted_at');
-    }
-
-    public function getTokenAttribute(string $value): string
-    {
-        return $this->plainTextToken ?? $value;
     }
 
     protected static function newFactory(): InvitationFactory

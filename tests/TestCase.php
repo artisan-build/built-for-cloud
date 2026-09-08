@@ -31,6 +31,9 @@ abstract class TestCase extends Orchestra
     {
         $app['config']->set('auth.providers', []);
         $app['config']->set('auth.guards', []);
+        $app['config']->set('cache.default', 'array');
+        $app['config']->set('session.driver', 'array');
+        $app['config']->set('app.debug', false);
 
         $app['config']->set('database.connections.pgsql_testing', [
             'driver' => 'pgsql',
