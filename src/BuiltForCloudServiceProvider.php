@@ -92,6 +92,7 @@ use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 use Livewire\LivewireManager;
+use LogicException;
 use Throwable;
 
 final class BuiltForCloudServiceProvider extends ServiceProvider
@@ -394,10 +395,9 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $personal = $this->browserSessionMiddleware($router);
 
         $standaloneRoutes = [];
-        // This package middleware is deliberately outside StartSession. It removes the
-        // bearer URL after StartSession has handled every response, including an
-        // EnsureStandaloneAuthority refusal that returns before the controller.
-        $bearerPageMiddleware = [PreventBearerUrlPersistence::class, ...$personal, 'bfc.standalone'];
+        // These routes replace only StartSession's current-URL hook, so the bearer is
+        // removed before Laravel's one ordinary session save, including on refusal.
+        $bearerPageMiddleware = [...$this->bearerPageSessionMiddleware($router), 'bfc.standalone'];
         $standaloneRoutes[] = $router->get('/bfc/reset-password/{token}', [StandalonePasswordRecovery::class, 'edit'])
             ->middleware($bearerPageMiddleware)
             ->name('bfc.password.reset');
@@ -700,6 +700,24 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             ShareErrorsFromSession::class,
             PreventRequestForgery::class,
         ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function bearerPageSessionMiddleware(Router $router): array
+    {
+        $middleware = $router->resolveMiddleware($this->browserSessionMiddleware($router));
+        $sessionIndex = array_search(StartSession::class, $middleware, true);
+
+        if ($sessionIndex === false) {
+            throw new LogicException('Built for Cloud bearer pages require Laravel StartSession middleware.');
+        }
+
+        $middleware[$sessionIndex] = PreventBearerUrlPersistence::class;
+
+        /** @var list<string> $middleware */
+        return array_values($middleware);
     }
 
     /**

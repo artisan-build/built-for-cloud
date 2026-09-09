@@ -9,17 +9,35 @@ use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
+use Closure;
+use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
+use Illuminate\Cookie\Middleware\EncryptCookies;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Application;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
+use Illuminate\Routing\Router;
+use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Testing\TestResponse;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Symfony\Component\HttpFoundation\Response;
 
 final class StandaloneDatabaseSessionsTest extends TestCase
 {
-    use RefreshDatabase;
+    /** @var list<array{encoded_matches: int, decoded_matches: int, decoded: bool, transaction_level: int}> */
+    private array $observedSessionWrites = [];
+
+    private bool $readingObservedSessionWrite = false;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->artisan('migrate:fresh', ['--force' => true])->run();
+    }
 
     /** @param Application $app */
     protected function getEnvironmentSetUp($app): void
@@ -119,22 +137,31 @@ final class StandaloneDatabaseSessionsTest extends TestCase
             'password' => 'short',
             'password_confirmation' => 'mismatch',
         ]);
+        $this->observeCompletedSessionWrites($bearers);
+
+        $response = $this->get($retryUrl);
+        $response->assertOk();
+        $this->assertBearersAbsentFromPersistedSessions($bearers, $this->carryCurrentDatabaseSession($response));
+        $this->assertObservedSessionWritesAreClean(1);
 
         $response = $this->post($postUrl, $input);
 
         expect(DB::table('password_reset_tokens')->where('email', $user->email)->value('token'))
             ->toBe(hash('sha256', $token));
         $this->assertBearersAbsentFromPersistedSessions($bearers, $this->carryCurrentDatabaseSession($response));
+        $this->assertObservedSessionWritesAreClean(2);
         $response->assertRedirect($retryUrl)->assertSessionHasErrors(['password']);
         $response = $this->get($retryUrl);
         $response->assertOk()->assertSeeHtml('data-testid="password-reset-errors"');
         $this->assertBearersAbsentFromPersistedSessions($bearers, $this->carryCurrentDatabaseSession($response));
+        $this->assertObservedSessionWritesAreClean(3);
 
         $input['password'] = 'corrected reset password';
         $input['password_confirmation'] = 'corrected reset password';
         $response = $this->post($postUrl, $input);
         $response->assertRedirect(route('bfc.login'));
         $this->assertBearersAbsentFromPersistedSessions($bearers, $this->carryCurrentDatabaseSession($response));
+        $this->assertObservedSessionWritesAreClean(4);
 
         expect(Hash::check('corrected reset password', (string) $user->refresh()->password))->toBeTrue()
             ->and(DB::table('password_reset_tokens')->where('email', $user->email)->exists())->toBeFalse();
@@ -144,6 +171,12 @@ final class StandaloneDatabaseSessionsTest extends TestCase
         $response = $this->post($postUrl, $input);
         $response->assertRedirect($retryUrl)->assertSessionHasErrors(['email']);
         $this->assertBearersAbsentFromPersistedSessions($bearers, $this->carryCurrentDatabaseSession($response));
+        $this->assertObservedSessionWritesAreClean(5);
+
+        $response = $this->get($retryUrl);
+        $response->assertOk()->assertSeeHtml('data-testid="password-reset-errors"');
+        $this->assertBearersAbsentFromPersistedSessions($bearers, $this->carryCurrentDatabaseSession($response));
+        $this->assertObservedSessionWritesAreClean(6);
     }
 
     #[DataProvider('bearerPlacements')]
@@ -167,21 +200,30 @@ final class StandaloneDatabaseSessionsTest extends TestCase
             'password_confirmation' => 'mismatch',
             'intended' => '/domain',
         ]);
+        $this->observeCompletedSessionWrites($bearers);
+
+        $response = $this->get($retryUrl);
+        $response->assertOk();
+        $this->assertBearersAbsentFromPersistedSessions($bearers, $this->carryCurrentDatabaseSession($response));
+        $this->assertObservedSessionWritesAreClean(1);
 
         $response = $this->post($postUrl, $input);
 
         expect($invitation->refresh()->accepted_at)->toBeNull();
         $this->assertBearersAbsentFromPersistedSessions($bearers, $this->carryCurrentDatabaseSession($response));
+        $this->assertObservedSessionWritesAreClean(2);
         $response->assertRedirect($retryUrl)->assertSessionHasErrors(['password']);
         $response = $this->get($retryUrl);
         $response->assertOk()->assertSeeHtml('data-testid="invitation-accept-errors"');
         $this->assertBearersAbsentFromPersistedSessions($bearers, $this->carryCurrentDatabaseSession($response));
+        $this->assertObservedSessionWritesAreClean(3);
 
         $input['password'] = 'corrected invite password';
         $input['password_confirmation'] = 'corrected invite password';
         $response = $this->post($postUrl, $input);
         $response->assertRedirect('/domain');
         $this->assertBearersAbsentFromPersistedSessions($bearers, $this->carryCurrentDatabaseSession($response));
+        $this->assertObservedSessionWritesAreClean(4);
 
         expect($invitation->refresh()->accepted_at)->not->toBeNull()
             ->and(User::query()->where('email', $invitation->email)->count())->toBe(1);
@@ -192,6 +234,12 @@ final class StandaloneDatabaseSessionsTest extends TestCase
         $response = $this->post($postUrl, $input);
         $response->assertRedirect($retryUrl)->assertSessionHasErrors(['token']);
         $this->assertBearersAbsentFromPersistedSessions($bearers, $this->carryCurrentDatabaseSession($response));
+        $this->assertObservedSessionWritesAreClean(5);
+
+        $response = $this->get($retryUrl);
+        $response->assertOk()->assertSeeHtml('data-testid="invitation-accept-errors"');
+        $this->assertBearersAbsentFromPersistedSessions($bearers, $this->carryCurrentDatabaseSession($response));
+        $this->assertObservedSessionWritesAreClean(6);
     }
 
     public function test_malformed_bearers_use_safe_local_fallbacks_without_persistence(): void
@@ -235,6 +283,7 @@ final class StandaloneDatabaseSessionsTest extends TestCase
             'expires_at' => now()->addHour(),
         ]);
         InstallationAuthority::change(InstallationAuthority::current(), AuthorityMode::Managed);
+        $this->observeCompletedSessionWrites([$resetToken, $invitationToken]);
 
         $response = $this->get(route('bfc.password.reset', [
             'token' => $resetToken,
@@ -242,6 +291,7 @@ final class StandaloneDatabaseSessionsTest extends TestCase
         ], false));
         $response->assertNotFound();
         $this->assertBearersAbsentFromPersistedSessions([$resetToken], $this->carryCurrentDatabaseSession($response));
+        $this->assertObservedSessionWritesAreClean(1);
 
         $response = $this->get(route('bfc.invitations.accept', [
             'token' => $invitationToken,
@@ -252,12 +302,96 @@ final class StandaloneDatabaseSessionsTest extends TestCase
             [$resetToken, $invitationToken],
             $this->carryCurrentDatabaseSession($response),
         );
+        $this->assertObservedSessionWritesAreClean(2);
 
         expect((string) $user->refresh()->password)->toBe($password)
             ->and(DB::table('password_reset_tokens')->where('email', $user->email)->value('token'))->toBe($resetHash)
             ->and($invitation->refresh()->accepted_at)->toBeNull()
             ->and($this->isAuthenticated())->toBeFalse();
         Notification::assertNothingSent();
+    }
+
+    public function test_write_observer_detects_the_rejected_compensating_save_order(): void
+    {
+        $token = 'unsafe-order-'.bin2hex(random_bytes(32));
+        $this->observeCompletedSessionWrites([$token]);
+
+        /** @var Router $router */
+        $router = app('router');
+        $router->aliasMiddleware('bfc.test.unsafe-session-order', static function (Request $request, Closure $next): Response {
+            try {
+                return $next($request);
+            } finally {
+                $request->session()->forget(['_previous.url', '_previous.route']);
+                $request->session()->save();
+            }
+        });
+        $router->get('/_bfc-test/unsafe-session-order/{token}', static fn (): Response => response('unsafe-order-control'))
+            ->middleware([
+                EncryptCookies::class,
+                AddQueuedCookiesToResponse::class,
+                'bfc.test.unsafe-session-order',
+                StartSession::class,
+            ]);
+
+        $response = $this->get('/_bfc-test/unsafe-session-order/'.$token);
+        $response->assertOk()->assertSee('unsafe-order-control');
+
+        expect(array_column($this->observedSessionWrites, 'decoded'))->toBe([true, true])
+            ->and(array_column($this->observedSessionWrites, 'encoded_matches'))->toBe([0, 0])
+            ->and(array_column($this->observedSessionWrites, 'decoded_matches'))->toBe([1, 0])
+            ->and(array_column($this->observedSessionWrites, 'transaction_level'))->toBe([0, 0]);
+        $this->assertBearersAbsentFromPersistedSessions([$token], $this->carryCurrentDatabaseSession($response));
+    }
+
+    #[DataProvider('bearerPageRoutes')]
+    public function test_bearer_pages_preserve_the_host_flash_lifecycle(string $routeName): void
+    {
+        $token = 'flash-lifecycle-'.bin2hex(random_bytes(32));
+        config()->set('session.block', true);
+        config()->set('session.block_store', 'array');
+        $this->observeCompletedSessionWrites([$token]);
+
+        $route = Route::getRoutes()->getByName($routeName);
+        $this->assertNotNull($route);
+        /** @var Router $router */
+        $router = app('router');
+        $router->aliasMiddleware('bfc.test.host-flash', static function (Request $request, Closure $next): Response {
+            $request->session()->flash('bfc_test_host_flash', 'next-request-only');
+            $request->session()->put('bfc_test_host_persistent', 'persistent-value');
+
+            return $next($request);
+        });
+        $route->middleware('bfc.test.host-flash');
+        $route->computedMiddleware = null;
+
+        $router->get('/_bfc-test/session-lifetime', static fn (Request $request) => response()->json([
+            'flash' => $request->session()->get('bfc_test_host_flash'),
+            'persistent' => $request->session()->get('bfc_test_host_persistent'),
+        ]))->middleware([
+            EncryptCookies::class,
+            AddQueuedCookiesToResponse::class,
+            StartSession::class,
+        ]);
+
+        $response = $this->get(route($routeName, ['token' => $token, 'email' => 'flash@example.test'], false));
+        $response->assertOk();
+        $this->assertBearersAbsentFromPersistedSessions([$token], $this->carryCurrentDatabaseSession($response));
+        $this->assertObservedSessionWritesAreClean(1);
+
+        $response = $this->get('/_bfc-test/session-lifetime');
+        $response->assertOk()
+            ->assertJsonPath('flash', 'next-request-only')
+            ->assertJsonPath('persistent', 'persistent-value');
+        $this->carryCurrentDatabaseSession($response);
+        $this->assertObservedSessionWritesAreClean(2);
+
+        $response = $this->get('/_bfc-test/session-lifetime');
+        $response->assertOk()
+            ->assertJsonPath('flash', null)
+            ->assertJsonPath('persistent', 'persistent-value');
+        $this->carryCurrentDatabaseSession($response);
+        $this->assertObservedSessionWritesAreClean(3);
     }
 
     private function login(User $user, string $password): void
@@ -294,6 +428,17 @@ final class StandaloneDatabaseSessionsTest extends TestCase
             'body only' => ['body'],
             'query only' => ['query'],
             'conflicting body and query' => ['conflicting'],
+        ];
+    }
+
+    /**
+     * @return array<string, array{string}>
+     */
+    public static function bearerPageRoutes(): array
+    {
+        return [
+            'password reset' => ['bfc.password.reset'],
+            'invitation acceptance' => ['bfc.invitations.accept'],
         ];
     }
 
@@ -357,6 +502,59 @@ final class StandaloneDatabaseSessionsTest extends TestCase
                 $this->assertFalse(str_contains($encoded, $bearer), 'Bearer found in an encoded session payload.');
                 $this->assertFalse(str_contains($decoded, $bearer), 'Bearer found in a decoded session payload.');
             }
+        }
+    }
+
+    /** @param list<string> $bearers */
+    private function observeCompletedSessionWrites(array $bearers): void
+    {
+        $this->observedSessionWrites = [];
+
+        DB::listen(function (QueryExecuted $query) use ($bearers): void {
+            if ($this->readingObservedSessionWrite
+                || preg_match('/^(insert into|update) ["`]?sessions["`]?/i', ltrim($query->sql)) !== 1) {
+                return;
+            }
+
+            $this->readingObservedSessionWrite = true;
+
+            try {
+                $encodedMatches = 0;
+                $decodedMatches = 0;
+                $decodedAll = true;
+
+                foreach ($query->connection->table('sessions')->pluck('payload') as $payload) {
+                    $encoded = (string) $payload;
+                    $decoded = base64_decode($encoded, true);
+                    $decodedAll = $decodedAll && is_string($decoded);
+
+                    foreach ($bearers as $bearer) {
+                        $encodedMatches += (int) str_contains($encoded, $bearer);
+                        $decodedMatches += (int) (is_string($decoded) && str_contains($decoded, $bearer));
+                    }
+                }
+
+                $this->observedSessionWrites[] = [
+                    'encoded_matches' => $encodedMatches,
+                    'decoded_matches' => $decodedMatches,
+                    'decoded' => $decodedAll,
+                    'transaction_level' => $query->connection->transactionLevel(),
+                ];
+            } finally {
+                $this->readingObservedSessionWrite = false;
+            }
+        });
+    }
+
+    private function assertObservedSessionWritesAreClean(int $expectedWrites): void
+    {
+        $this->assertCount($expectedWrites, $this->observedSessionWrites, 'Unexpected database-session write count.');
+
+        foreach ($this->observedSessionWrites as $write) {
+            $this->assertTrue($write['decoded'], 'A completed session write did not contain a decodable payload.');
+            $this->assertSame(0, $write['encoded_matches'], 'Bearer found in an encoded completed session write.');
+            $this->assertSame(0, $write['decoded_matches'], 'Bearer found in a decoded completed session write.');
+            $this->assertSame(0, $write['transaction_level'], 'A session write had not completed outside a transaction.');
         }
     }
 }

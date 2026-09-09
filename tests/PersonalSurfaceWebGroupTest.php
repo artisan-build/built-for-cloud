@@ -103,11 +103,9 @@ final class PersonalSurfaceWebGroupTest extends TestCase
         $sessioned = collect(Route::getRoutes()->getRoutes())
             ->filter(fn (RoutingRoute $route): bool => str_starts_with($route->getActionName(), 'ArtisanBuild\\BuiltForCloud\\'))
             ->reject(fn (RoutingRoute $route): bool => str_starts_with($route->uri(), 'bfc/me/'))
-            ->filter(fn (RoutingRoute $route): bool => in_array(
-                StartSession::class,
-                $this->app['router']->gatherRouteMiddleware($route),
-                true,
-            ))
+            ->filter(fn (RoutingRoute $route): bool => collect($this->app['router']->gatherRouteMiddleware($route))
+                ->contains(static fn (mixed $middleware): bool => is_string($middleware)
+                    && is_a($middleware, StartSession::class, true)))
             ->map(fn (RoutingRoute $route): string => $route->methods()[0].' /'.$route->uri())
             ->values()
             ->all();

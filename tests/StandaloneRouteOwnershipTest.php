@@ -37,7 +37,7 @@ it('keeps the standalone authority gate effective on every owned route', functio
     }
 });
 
-it('wraps only bearer pages with persistence protection outside the session and authority middleware', function (): void {
+it('replaces only bearer page sessions with first-write persistence protection', function (): void {
     /** @var Router $router */
     $router = app('router');
     $bearerPages = ['bfc.password.reset', 'bfc.invitations.accept'];
@@ -55,9 +55,15 @@ it('wraps only bearer pages with persistence protection outside the session and 
             continue;
         }
 
+        $sessionMiddleware = array_values(array_filter(
+            $middleware,
+            static fn (mixed $name): bool => is_string($name) && is_a($name, StartSession::class, true),
+        ));
+
         expect($middleware)->toContain(PreventBearerUrlPersistence::class)
+            ->not->toContain(StartSession::class)
+            ->and($sessionMiddleware)->toBe([PreventBearerUrlPersistence::class])
             ->and(array_search(PreventBearerUrlPersistence::class, $middleware, true))
-            ->toBeLessThan(array_search(StartSession::class, $middleware, true))
             ->toBeLessThan(array_search(EnsureStandaloneAuthority::class, $middleware, true));
     }
 });

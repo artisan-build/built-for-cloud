@@ -4,22 +4,22 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
 
-use Closure;
+use Illuminate\Contracts\Cache\Factory as CacheFactory;
+use Illuminate\Contracts\Session\Session;
 use Illuminate\Http\Request;
-use Symfony\Component\HttpFoundation\Response;
+use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Session\SessionManager;
 
-final class PreventBearerUrlPersistence
+final class PreventBearerUrlPersistence extends StartSession
 {
-    /** @param Closure(Request): Response $next */
-    public function handle(Request $request, Closure $next): Response
+    public function __construct(SessionManager $manager, CacheFactory $cache)
     {
-        try {
-            return $next($request);
-        } finally {
-            if ($request->hasSession()) {
-                $request->session()->forget(['_previous.url', '_previous.route']);
-                $request->session()->save();
-            }
-        }
+        parent::__construct($manager, static fn (): CacheFactory => $cache);
+    }
+
+    /** @param Session $session */
+    protected function storeCurrentUrl(Request $request, $session): void
+    {
+        $session->forget(['_previous.url', '_previous.route']);
     }
 }
