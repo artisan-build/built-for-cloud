@@ -3,7 +3,9 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\PreventBearerUrlPersistence;
 use Illuminate\Routing\Router;
+use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Route;
 use Symfony\Component\Process\Process;
 
@@ -32,5 +34,30 @@ it('keeps the standalone authority gate effective on every owned route', functio
 
             expect($router->gatherRouteMiddleware($route))->toContain(EnsureStandaloneAuthority::class);
         }
+    }
+});
+
+it('wraps only bearer pages with persistence protection outside the session and authority middleware', function (): void {
+    /** @var Router $router */
+    $router = app('router');
+    $bearerPages = ['bfc.password.reset', 'bfc.invitations.accept'];
+
+    foreach (Route::getRoutes() as $route) {
+        if (! is_string($route->getName()) || ! str_starts_with($route->getName(), 'bfc.')) {
+            continue;
+        }
+
+        $middleware = $router->gatherRouteMiddleware($route);
+
+        if (! in_array($route->getName(), $bearerPages, true)) {
+            expect($middleware)->not->toContain(PreventBearerUrlPersistence::class);
+
+            continue;
+        }
+
+        expect($middleware)->toContain(PreventBearerUrlPersistence::class)
+            ->and(array_search(PreventBearerUrlPersistence::class, $middleware, true))
+            ->toBeLessThan(array_search(StartSession::class, $middleware, true))
+            ->toBeLessThan(array_search(EnsureStandaloneAuthority::class, $middleware, true));
     }
 });

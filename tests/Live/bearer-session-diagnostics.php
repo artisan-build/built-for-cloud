@@ -46,17 +46,30 @@ try {
     // The status output below reports an unusable cookie without exposing it.
 }
 
-$encoded = is_string($sessionId) ? DB::table('sessions')->where('id', $sessionId)->value('payload') : null;
-$decoded = is_string($encoded) ? base64_decode($encoded, true) : false;
-$payload = is_string($decoded) ? @unserialize($decoded, ['allowed_classes' => false]) : null;
-$sessionFound = is_string($encoded);
-$payloadDecoded = is_array($payload);
-$bearerAbsent = is_string($decoded)
-    && ! str_contains($encoded, $bearer)
-    && ! str_contains($decoded, $bearer);
-$oldInputTokenAbsent = is_array($payload) && ! Arr::has($payload, '_old_input.token');
-$previousUrl = is_array($payload) ? Arr::get($payload, '_previous.url') : null;
-$previousUrlBearerAbsent = ! is_string($previousUrl) || ! str_contains($previousUrl, $bearer);
+$rows = DB::table('sessions')->get(['id', 'payload']);
+$sessionFound = is_string($sessionId) && $rows->contains(static fn (object $row): bool => $row->id === $sessionId);
+$payloadDecoded = $rows->isNotEmpty();
+$bearerAbsent = $rows->isNotEmpty();
+$oldInputTokenAbsent = $rows->isNotEmpty();
+$previousUrlBearerAbsent = $rows->isNotEmpty();
+
+foreach ($rows as $row) {
+    $encoded = (string) $row->payload;
+    $decoded = base64_decode($encoded, true);
+    $payload = is_string($decoded) ? @unserialize($decoded, ['allowed_classes' => false]) : null;
+    $payloadDecoded = $payloadDecoded && is_array($payload);
+    $bearerAbsent = $bearerAbsent
+        && is_string($decoded)
+        && ! str_contains($encoded, $bearer)
+        && ! str_contains($decoded, $bearer);
+    $oldInputTokenAbsent = $oldInputTokenAbsent
+        && is_array($payload)
+        && ! Arr::has($payload, '_old_input.token');
+    $previousUrl = is_array($payload) ? Arr::get($payload, '_previous.url') : null;
+    $previousUrlBearerAbsent = $previousUrlBearerAbsent
+        && (! is_string($previousUrl) || ! str_contains($previousUrl, $bearer));
+}
+
 $passed = $sessionFound && $payloadDecoded && $bearerAbsent && $oldInputTokenAbsent && $previousUrlBearerAbsent;
 
 fwrite(STDOUT, sprintf(

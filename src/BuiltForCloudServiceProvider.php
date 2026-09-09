@@ -66,6 +66,7 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\PreventBearerUrlPersistence;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\VerifyHmacSignature;
 use ArtisanBuild\BuiltForCloud\Listeners\EvictConsolePrincipal;
@@ -393,6 +394,17 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $personal = $this->browserSessionMiddleware($router);
 
         $standaloneRoutes = [];
+        // This package middleware is deliberately outside StartSession. It removes the
+        // bearer URL after StartSession has handled every response, including an
+        // EnsureStandaloneAuthority refusal that returns before the controller.
+        $bearerPageMiddleware = [PreventBearerUrlPersistence::class, ...$personal, 'bfc.standalone'];
+        $standaloneRoutes[] = $router->get('/bfc/reset-password/{token}', [StandalonePasswordRecovery::class, 'edit'])
+            ->middleware($bearerPageMiddleware)
+            ->name('bfc.password.reset');
+        $standaloneRoutes[] = $router->get('/bfc/invitations/{token}', [StandaloneInvitations::class, 'show'])
+            ->middleware($bearerPageMiddleware)
+            ->name('bfc.invitations.accept');
+
         $router->middleware([...$personal, 'bfc.standalone'])->group(function (Router $router) use (&$standaloneRoutes): void {
             $standaloneRoutes[] = $router->get('/bfc/login', [StandaloneAuthentication::class, 'create'])
                 ->name('bfc.login');
@@ -408,14 +420,10 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $standaloneRoutes[] = $router->post('/bfc/forgot-password', [StandalonePasswordRecovery::class, 'store'])
                 ->middleware('throttle:bfc-password-reset')
                 ->name('bfc.password.email');
-            $standaloneRoutes[] = $router->get('/bfc/reset-password/{token}', [StandalonePasswordRecovery::class, 'edit'])
-                ->name('bfc.password.reset');
             $standaloneRoutes[] = $router->post('/bfc/reset-password', [StandalonePasswordRecovery::class, 'update'])
                 ->middleware('throttle:bfc-password-reset')
                 ->name('bfc.password.update');
 
-            $standaloneRoutes[] = $router->get('/bfc/invitations/{token}', [StandaloneInvitations::class, 'show'])
-                ->name('bfc.invitations.accept');
             $standaloneRoutes[] = $router->post('/bfc/invitations/accept', [StandaloneInvitations::class, 'store'])
                 ->middleware('throttle:bfc-invitation-accept')
                 ->name('bfc.invitations.accept.store');

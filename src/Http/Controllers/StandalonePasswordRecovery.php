@@ -32,8 +32,6 @@ final class StandalonePasswordRecovery
 
     public function edit(Request $request, string $token): View
     {
-        $this->preventBearerUrlPersistence($request);
-
         return view()->file(__DIR__.'/../../../resources/views/auth/reset-password.blade.php', [
             'token' => $token,
             'email' => StandaloneAccess::normalizeEmail((string) $request->query('email', '')),
@@ -49,7 +47,7 @@ final class StandalonePasswordRecovery
                 'password' => ['required', 'string', 'min:12', 'max:255', 'confirmed'],
             ]);
         } catch (ValidationException $exception) {
-            $this->rethrowWithoutBearer($request, $exception);
+            return $this->validationFailure($request, $exception);
         }
         $email = StandaloneAccess::normalizeEmail($input['email']);
         $lifetime = max(5, min(1440, (int) config('built-for-cloud.standalone.password_reset_minutes', 60)));
@@ -75,7 +73,7 @@ final class StandalonePasswordRecovery
                 DB::table('password_reset_tokens')->where('email', $user->email)->delete();
             }, 3);
         } catch (RuntimeException) {
-            $this->rethrowWithoutBearer(
+            return $this->validationFailure(
                 $request,
                 ValidationException::withMessages(['email' => 'This reset request is not available.']),
             );
@@ -84,19 +82,42 @@ final class StandalonePasswordRecovery
         return redirect()->route('bfc.login');
     }
 
-    private function preventBearerUrlPersistence(Request $request): void
+    private function validationFailure(Request $request, ValidationException $exception): RedirectResponse
     {
-        // StartSession must not copy a bearer-bearing GET URL into persisted previous-request state.
+        $redirectTo = $this->retryUrl($request);
+        $safeInput = $request->only(['email']);
+
+        $request->query->remove('token');
+        $request->request->remove('token');
+
+        if ($request->isJson()) {
+            $request->json()->remove('token');
+        }
+
         $request->session()->forget(['_previous.url', '_previous.route']);
-        $request->headers->set('X-Requested-With', 'XMLHttpRequest');
+
+        if ($request->expectsJson()) {
+            throw $exception;
+        }
+
+        return redirect($redirectTo)
+            ->withInput($safeInput)
+            ->withErrors($exception->errors());
     }
 
-    private function rethrowWithoutBearer(Request $request, ValidationException $exception): never
+    private function retryUrl(Request $request): string
     {
-        $exception->redirectTo(url()->previous());
-        $request->offsetUnset('token');
-        $request->session()->forget(['_previous.url', '_previous.route']);
+        $token = $request->input('token');
+        $email = $request->input('email');
 
-        throw $exception;
+        if (! is_string($token) || $token === '' || mb_strlen($token) > 255
+            || ! is_string($email) || $email === '' || mb_strlen($email) > 255) {
+            return route('bfc.password.request', absolute: false);
+        }
+
+        return route('bfc.password.reset', [
+            'token' => $token,
+            'email' => StandaloneAccess::normalizeEmail($email),
+        ], false);
     }
 }

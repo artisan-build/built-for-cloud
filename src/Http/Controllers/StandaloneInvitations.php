@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\Actions\AcceptHumanInvitation;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleReturnTo;
+use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use Illuminate\Contracts\View\View;
 use Illuminate\Database\QueryException;
@@ -19,8 +20,6 @@ final class StandaloneInvitations
 {
     public function show(Request $request, string $token): View
     {
-        $this->preventBearerUrlPersistence($request);
-
         return view()->file(__DIR__.'/../../../resources/views/auth/accept-invitation.blade.php', [
             'token' => $token,
             'email' => StandaloneAccess::normalizeEmail((string) $request->query('email', '')),
@@ -38,13 +37,13 @@ final class StandaloneInvitations
                 'intended' => ['nullable', 'string', 'max:2048'],
             ]);
         } catch (ValidationException $exception) {
-            $this->rethrowWithoutBearer($request, $exception);
+            return $this->validationFailure($request, $exception);
         }
 
         try {
             $user = $accept($input['token'], $input['name'], $input['password']);
         } catch (RuntimeException|QueryException) {
-            $this->rethrowWithoutBearer(
+            return $this->validationFailure(
                 $request,
                 ValidationException::withMessages(['token' => 'This invitation is not available.']),
             );
@@ -58,19 +57,50 @@ final class StandaloneInvitations
         return redirect()->to(ConsoleReturnTo::firstRelative([$input['intended'] ?? null]));
     }
 
-    private function preventBearerUrlPersistence(Request $request): void
+    private function validationFailure(Request $request, ValidationException $exception): RedirectResponse
     {
-        // StartSession must not copy a bearer-bearing GET URL into persisted previous-request state.
+        $redirectTo = $this->retryUrl($request);
+        $safeInput = $request->only(['name', 'intended']);
+
+        $request->query->remove('token');
+        $request->request->remove('token');
+
+        if ($request->isJson()) {
+            $request->json()->remove('token');
+        }
+
         $request->session()->forget(['_previous.url', '_previous.route']);
-        $request->headers->set('X-Requested-With', 'XMLHttpRequest');
+
+        if ($request->expectsJson()) {
+            throw $exception;
+        }
+
+        return redirect($redirectTo)
+            ->withInput($safeInput)
+            ->withErrors($exception->errors());
     }
 
-    private function rethrowWithoutBearer(Request $request, ValidationException $exception): never
+    private function retryUrl(Request $request): string
     {
-        $exception->redirectTo(url()->previous());
-        $request->offsetUnset('token');
-        $request->session()->forget(['_previous.url', '_previous.route']);
+        $token = $request->input('token');
 
-        throw $exception;
+        if (! is_string($token) || $token === '' || mb_strlen($token) > 255) {
+            return route('bfc.login', absolute: false);
+        }
+
+        $invitation = Invitation::query()->where('token', Invitation::hashToken($token))->first();
+        $parameters = ['token' => $token];
+
+        if ($invitation instanceof Invitation && is_string($invitation->email)) {
+            $parameters['email'] = $invitation->email;
+        }
+
+        $intended = ConsoleReturnTo::relative($request->input('intended'));
+
+        if ($intended !== null) {
+            $parameters['intended'] = $intended;
+        }
+
+        return route('bfc.invitations.accept', $parameters, false);
     }
 }
