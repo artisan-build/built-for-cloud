@@ -272,7 +272,6 @@ $case = new class('testProbe') extends TestCase
                 }
 
                 BfcExclusionProbeState::$preCacheCounts[$name] = count($route->gatherMiddleware());
-                $route->flushController();
             }
 
             BfcExclusionHostProvider::mutateRoutes($router, 'direct');

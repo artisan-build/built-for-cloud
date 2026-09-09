@@ -424,11 +424,12 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             'throttle:bfc-bearer-handoff',
             EnsureStandaloneAuthority::class,
         ];
-        $standaloneRoutes[] = $router->get('/bfc/reset-password/{token}', [StandalonePasswordRecovery::class, 'handoff'])
+        $bearerRoutes = [];
+        $bearerRoutes[] = $standaloneRoutes[] = $router->get('/bfc/reset-password/{token}', [StandalonePasswordRecovery::class, 'handoff'])
             ->middleware($bearerPageMiddleware)
             ->withoutMiddleware([StartSession::class])
             ->name('bfc.password.reset');
-        $standaloneRoutes[] = $router->get('/bfc/invitations/{token}', [StandaloneInvitations::class, 'handoff'])
+        $bearerRoutes[] = $standaloneRoutes[] = $router->get('/bfc/invitations/{token}', [StandaloneInvitations::class, 'handoff'])
             ->middleware($bearerPageMiddleware)
             ->withoutMiddleware([StartSession::class])
             ->name('bfc.invitations.accept');
@@ -474,8 +475,13 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $this->app->booted(function () use ($router, $standaloneRoutes): void {
             StandaloneRouteOwnership::assertOwned($router, $standaloneRoutes);
         });
-        Event::listen(RouteMatched::class, static function (RouteMatched $event) use ($router, $standaloneRoutes): void {
+        Event::listen(RouteMatched::class, static function (RouteMatched $event) use ($bearerRoutes, $router, $standaloneRoutes): void {
             StandaloneRouteOwnership::assertMatched($router, $event->route, $standaloneRoutes);
+
+            if (in_array($event->route, $bearerRoutes, true)) {
+                // Include normal host middleware attached after an earlier route gather.
+                $event->route->flushController();
+            }
         });
 
         $router->get('/bfc/me/credentials', [PersonalCredentials::class, 'index'])
