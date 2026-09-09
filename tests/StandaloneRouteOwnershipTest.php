@@ -20,6 +20,14 @@ it('fails thin-host boot on reserved standalone collisions and middleware exclus
         ->and($process->getOutput())->toContain('reserved by built-for-cloud standalone authentication');
 })->with(['name', 'pair', 'middleware']);
 
+it('refuses reserved standalone collisions registered by a later booted callback', function (string $collision): void {
+    $process = new Process([PHP_BINARY, __DIR__.'/Fixtures/standalone-route-collision.php', $collision]);
+    $process->run();
+
+    expect($process->getExitCode())->toBe(0, $process->getOutput().$process->getErrorOutput())
+        ->and($process->getOutput())->toContain('refused before the host handler');
+})->with(['late-name', 'late-pair']);
+
 it('keeps the standalone authority gate effective on every owned route', function (): void {
     /** @var Router $router */
     $router = app('router');

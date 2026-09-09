@@ -906,9 +906,11 @@ included, which is what makes both slots additive rather than a version bump.
 
 ## Standalone human lifecycle
 
-Every route in this section runs through the package's `bfc.standalone` authority predicate and
-the ordinary Laravel web session stack. Managed authority returns `404` before local credentials,
-membership writes, session writes, or mail delivery. All mutating routes are CSRF protected.
+Every route in this section runs through the package's standalone-authority predicate. The two
+bearer handoff GETs use the stateless stacks documented below; clean pages and all other standalone
+routes use the ordinary Laravel web session stack. Managed authority returns `404` before local
+credentials, membership writes, session writes, or mail delivery. All mutating routes are CSRF
+protected.
 
 ### GET /bfc/login
 

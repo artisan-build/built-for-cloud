@@ -20,6 +20,10 @@ it('excludes base and custom session starters across late route mutations', func
     'late RouteMatched custom route attachment' => 'matched-custom',
     'late base middleware group attachment' => 'group-base',
     'late custom middleware group attachment' => 'group-custom',
-    'cached base route stack' => 'cached-base',
-    'cached custom route stack' => 'cached-custom',
+    'late base middleware alias attachment' => 'alias-base',
+    'late custom middleware alias attachment' => 'alias-custom',
+    'late base nested middleware group attachment' => 'nested-base',
+    'late custom nested middleware group attachment' => 'nested-custom',
+    'post-cache base route attachment through public APIs' => 'post-cache-base',
+    'post-cache custom route attachment through public APIs' => 'post-cache-custom',
 ]);

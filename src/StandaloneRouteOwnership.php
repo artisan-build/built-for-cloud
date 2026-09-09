@@ -33,7 +33,8 @@ final class StandaloneRouteOwnership
             ));
 
             if ($named !== [$ownedRoute]
-                || ! in_array(EnsureStandaloneAuthority::class, $router->gatherRouteMiddleware($ownedRoute), true)) {
+                || ! in_array(EnsureStandaloneAuthority::class, $ownedRoute->middleware(), true)
+                || in_array(EnsureStandaloneAuthority::class, $ownedRoute->excludedMiddleware(), true)) {
                 throw new RuntimeException("The route name [{$name}] is reserved by built-for-cloud standalone authentication.");
             }
 
@@ -45,5 +46,28 @@ final class StandaloneRouteOwnership
                 }
             }
         }
+    }
+
+    /**
+     * @param  list<Route>  $ownedRoutes
+     */
+    public static function assertMatched(Router $router, Route $matchedRoute, array $ownedRoutes): void
+    {
+        foreach ($ownedRoutes as $ownedRoute) {
+            if ($matchedRoute === $ownedRoute
+                || $matchedRoute->getName() === $ownedRoute->getName()
+                || self::sharesMethodAndUri($matchedRoute, $ownedRoute)) {
+                self::assertOwned($router, $ownedRoutes);
+
+                return;
+            }
+        }
+    }
+
+    private static function sharesMethodAndUri(Route $route, Route $ownedRoute): bool
+    {
+        return $route->getDomain() === $ownedRoute->getDomain()
+            && $route->uri() === $ownedRoute->uri()
+            && array_intersect($route->methods(), $ownedRoute->methods()) !== [];
     }
 }

@@ -456,7 +456,7 @@ final class StandaloneDatabaseSessionsTest extends TestCase
             return $next($request);
         });
         $route->middleware('bfc.test.host-flash');
-        $route->computedMiddleware = null;
+        $route->flushController();
 
         $router->get('/_bfc-test/session-lifetime', static fn (Request $request) => response()->json([
             'flash' => $request->session()->get('bfc_test_host_flash'),

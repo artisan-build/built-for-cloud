@@ -11,6 +11,7 @@ use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\OffboardOptions;
@@ -657,7 +658,7 @@ it('mounts the personal routes on the routes surface family, at fixed paths, beh
         // group or the package's own fallback stack.
         $resolved = app('router')->gatherRouteMiddleware($route);
 
-        expect($declared)->toContain('bfc.auth')
+        expect($declared)->toContain(EnsureUserIsAuthenticated::class)
             ->and($declared)->toContain('throttle:bfc-personal')
             // No operator gate, ever: this surface is the session's.
             ->and(collect($declared)->filter(fn (mixed $one): bool => is_string($one) && str_starts_with($one, 'bfc.credential.admin'))->all())

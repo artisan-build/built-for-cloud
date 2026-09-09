@@ -36,6 +36,9 @@ final class BfcExclusionProbeState
     public static int $hostRequests = 0;
 
     public static int $hostSessionRequests = 0;
+
+    /** @var array<string, int> */
+    public static array $preCacheCounts = [];
 }
 
 final class BfcExclusionProbeStartSession extends StartSession
@@ -101,13 +104,13 @@ final class BfcExclusionHostProvider extends ServiceProvider
         $scenario = self::scenario();
 
         if (str_starts_with($scenario, 'booted-')) {
-            $this->app->booted(fn () => self::mutateRoutes($router, false));
+            $this->app->booted(fn () => self::mutateRoutes($router, 'direct'));
         }
 
         if (str_starts_with($scenario, 'matched-')) {
             $this->app['events']->listen(RouteMatched::class, static function (RouteMatched $event): void {
                 if (in_array($event->route->getName(), self::bearerRouteNames(), true)) {
-                    self::mutateRoute($event->route, self::starterClass(), false);
+                    self::mutateRoute($event->route, self::starterClass(), 'direct');
                 }
             });
         }
@@ -132,13 +135,19 @@ final class BfcExclusionHostProvider extends ServiceProvider
         return ['bfc.password.reset', 'bfc.invitations.accept'];
     }
 
-    public static function mutateRoutes(Router $router, bool $asGroup): void
+    public static function mutateRoutes(Router $router, string $shape): void
     {
         $starter = self::starterClass();
         $group = self::groupName();
 
-        if ($asGroup) {
+        if ($shape === 'group') {
             $router->middlewareGroup($group, [BfcExclusionHostMiddleware::class, $starter]);
+        } elseif ($shape === 'alias') {
+            $router->aliasMiddleware($group, $starter);
+        } elseif ($shape === 'nested') {
+            $inner = $group.'.inner';
+            $router->middlewareGroup($inner, [$starter]);
+            $router->middlewareGroup($group, [BfcExclusionHostMiddleware::class, $inner]);
         }
 
         foreach (self::bearerRouteNames() as $name) {
@@ -148,7 +157,7 @@ final class BfcExclusionHostProvider extends ServiceProvider
                 throw new RuntimeException('The bearer handoff route was unavailable to the late host provider.');
             }
 
-            self::mutateRoute($route, $starter, $asGroup ? $group : false);
+            self::mutateRoute($route, $starter, $shape);
         }
     }
 
@@ -158,12 +167,13 @@ final class BfcExclusionHostProvider extends ServiceProvider
     }
 
     /** @param class-string<StartSession> $starter */
-    private static function mutateRoute(Route $route, string $starter, string|false $group): void
+    private static function mutateRoute(Route $route, string $starter, string $shape): void
     {
-        $route->middleware($group === false
-            ? [BfcExclusionHostMiddleware::class, $starter]
-            : $group);
-        $route->computedMiddleware = null;
+        $route->middleware(match ($shape) {
+            'group', 'nested' => self::groupName(),
+            'alias' => [BfcExclusionHostMiddleware::class, self::groupName()],
+            default => [BfcExclusionHostMiddleware::class, $starter],
+        });
     }
 }
 
@@ -171,7 +181,7 @@ final class BfcExclusionLateProvider extends ServiceProvider
 {
     public function boot(Router $router): void
     {
-        BfcExclusionHostProvider::mutateRoutes($router, false);
+        BfcExclusionHostProvider::mutateRoutes($router, 'direct');
     }
 }
 
@@ -187,8 +197,12 @@ $scenarios = [
     'matched-custom',
     'group-base',
     'group-custom',
-    'cached-base',
-    'cached-custom',
+    'alias-base',
+    'alias-custom',
+    'nested-base',
+    'nested-custom',
+    'post-cache-base',
+    'post-cache-custom',
 ];
 
 if (! in_array($scenario, $scenarios, true)) {
@@ -234,19 +248,34 @@ $case = new class('testProbe') extends TestCase
         $scenario = BfcExclusionHostProvider::scenario();
 
         if (str_starts_with($scenario, 'post-kernel-')) {
-            BfcExclusionHostProvider::mutateRoutes($router, false);
+            BfcExclusionHostProvider::mutateRoutes($router, 'direct');
         }
 
         if (str_starts_with($scenario, 'group-')) {
-            BfcExclusionHostProvider::mutateRoutes($router, true);
+            BfcExclusionHostProvider::mutateRoutes($router, 'group');
         }
 
-        if (str_starts_with($scenario, 'cached-')) {
-            BfcExclusionHostProvider::mutateRoutes($router, false);
+        if (str_starts_with($scenario, 'alias-')) {
+            BfcExclusionHostProvider::mutateRoutes($router, 'alias');
+        }
 
+        if (str_starts_with($scenario, 'nested-')) {
+            BfcExclusionHostProvider::mutateRoutes($router, 'nested');
+        }
+
+        if (str_starts_with($scenario, 'post-cache-')) {
             foreach (BfcExclusionHostProvider::bearerRouteNames() as $name) {
-                $router->getRoutes()->getByName($name)?->gatherMiddleware();
+                $route = $router->getRoutes()->getByName($name);
+
+                if (! $route instanceof Route) {
+                    throw new RuntimeException('The bearer handoff route was unavailable before the post-cache mutation.');
+                }
+
+                BfcExclusionProbeState::$preCacheCounts[$name] = count($route->gatherMiddleware());
+                $route->flushController();
             }
+
+            BfcExclusionHostProvider::mutateRoutes($router, 'direct');
         }
 
         $this->artisan('migrate:fresh', ['--force' => true])->run();
@@ -314,16 +343,23 @@ $case = new class('testProbe') extends TestCase
         $excludedMiddleware = [];
         $attachments = [];
         $groups = $router->getMiddlewareGroups();
+        $aliases = $router->getMiddleware();
 
         foreach (BfcExclusionHostProvider::bearerRouteNames() as $name) {
             $route = $router->getRoutes()->getByName($name);
             $effectiveMiddleware[$name] = $router->gatherRouteMiddleware($route);
-            $rawMiddleware[$name] = $route->gatherMiddleware();
+            $rawMiddleware[$name] = $route->middleware();
             $excludedMiddleware[$name] = $route->excludedMiddleware();
-            $attachments[$name] = str_starts_with($scenario, 'group-')
-                ? in_array(BfcExclusionHostProvider::groupName(), $rawMiddleware[$name], true)
-                    && in_array(BfcExclusionHostProvider::starterClass(), $groups[BfcExclusionHostProvider::groupName()] ?? [], true)
-                : in_array(BfcExclusionHostProvider::starterClass(), $rawMiddleware[$name], true);
+            $attachments[$name] = match (true) {
+                str_starts_with($scenario, 'group-') => in_array(BfcExclusionHostProvider::groupName(), $rawMiddleware[$name], true)
+                    && in_array(BfcExclusionHostProvider::starterClass(), $groups[BfcExclusionHostProvider::groupName()] ?? [], true),
+                str_starts_with($scenario, 'alias-') => in_array(BfcExclusionHostProvider::groupName(), $rawMiddleware[$name], true)
+                    && ($aliases[BfcExclusionHostProvider::groupName()] ?? null) === BfcExclusionHostProvider::starterClass(),
+                str_starts_with($scenario, 'nested-') => in_array(BfcExclusionHostProvider::groupName(), $rawMiddleware[$name], true)
+                    && in_array(BfcExclusionHostProvider::groupName().'.inner', $groups[BfcExclusionHostProvider::groupName()] ?? [], true)
+                    && in_array(BfcExclusionHostProvider::starterClass(), $groups[BfcExclusionHostProvider::groupName().'.inner'] ?? [], true),
+                default => in_array(BfcExclusionHostProvider::starterClass(), $rawMiddleware[$name], true),
+            };
         }
 
         $base = $this->app->make(StartSession::class);
@@ -344,6 +380,7 @@ $case = new class('testProbe') extends TestCase
             'custom_terminates' => BfcExclusionProbeState::$customTerminates,
             'host_requests' => BfcExclusionProbeState::$hostRequests,
             'host_session_requests' => BfcExclusionProbeState::$hostSessionRequests,
+            'pre_cache_counts' => BfcExclusionProbeState::$preCacheCounts,
             'base_identity' => $baseConsumer->starter === $base,
             'custom_identity' => $customConsumer->starter === $custom,
             'custom_api' => $custom->probeApi(),
@@ -368,7 +405,10 @@ $valid = $result['session_writes'] === 0
     && $result['base_identity']
     && $result['custom_identity']
     && $result['custom_api'] === 'custom-api'
-    && $result['custom_builds'] === 1;
+    && $result['custom_builds'] === 1
+    && (! str_starts_with($scenario, 'post-cache-')
+        || count($result['pre_cache_counts']) === 2
+        && min($result['pre_cache_counts']) > 0);
 
 foreach ($result['responses'] as $response) {
     $valid = $valid

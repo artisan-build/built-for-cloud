@@ -5,6 +5,7 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\Database\Factories\CredentialFactory;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\Notifications\HumanInvitationNotification;
@@ -93,7 +94,7 @@ it('mounts every named standalone route and renders package structural hooks', f
     foreach ($expected as $name) {
         expect(Route::has($name))->toBeTrue($name);
         expect(Route::getRoutes()->getByName($name)?->gatherMiddleware())
-            ->toContain('bfc.standalone');
+            ->toContain(EnsureStandaloneAuthority::class);
     }
 
     $this->get('/bfc/login')->assertOk()->assertSeeHtml('data-testid="login-form"');
