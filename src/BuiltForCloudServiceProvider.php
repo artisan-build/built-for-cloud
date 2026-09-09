@@ -83,6 +83,7 @@ use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Auth;
@@ -394,16 +395,16 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // could mint or revoke their credentials.
         $personal = $this->browserSessionMiddleware($router);
 
-        $standaloneRoutes = [];
-        // These routes replace only StartSession's current-URL hook, so the bearer is
-        // removed before Laravel's one ordinary session save, including on refusal.
-        $bearerPageMiddleware = [...$this->bearerPageSessionMiddleware($router), 'bfc.standalone'];
-        $standaloneRoutes[] = $router->get('/bfc/reset-password/{token}', [StandalonePasswordRecovery::class, 'edit'])
-            ->middleware($bearerPageMiddleware)
-            ->name('bfc.password.reset');
-        $standaloneRoutes[] = $router->get('/bfc/invitations/{token}', [StandaloneInvitations::class, 'show'])
-            ->middleware($bearerPageMiddleware)
-            ->name('bfc.invitations.accept');
+        $bearerPageMiddleware = [...$personal, 'bfc.standalone'];
+        $bearerPageRoutes = [
+            $router->get('/bfc/reset-password/{token}', [StandalonePasswordRecovery::class, 'edit'])
+                ->middleware($bearerPageMiddleware)
+                ->name('bfc.password.reset'),
+            $router->get('/bfc/invitations/{token}', [StandaloneInvitations::class, 'show'])
+                ->middleware($bearerPageMiddleware)
+                ->name('bfc.invitations.accept'),
+        ];
+        $standaloneRoutes = $bearerPageRoutes;
 
         $router->middleware([...$personal, 'bfc.standalone'])->group(function (Router $router) use (&$standaloneRoutes): void {
             $standaloneRoutes[] = $router->get('/bfc/login', [StandaloneAuthentication::class, 'create'])
@@ -451,9 +452,10 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 ->middleware(['throttle:bfc-session-confirm', 'bfc.auth'])
                 ->name('bfc.sessions.destroy');
         });
-        $this->app->booted(
-            static fn () => StandaloneRouteOwnership::assertOwned($router, $standaloneRoutes),
-        );
+        $this->app->booted(function () use ($router, $standaloneRoutes, $bearerPageRoutes): void {
+            $this->decorateBearerPageSessionMiddleware($router, $bearerPageRoutes);
+            StandaloneRouteOwnership::assertOwned($router, $standaloneRoutes);
+        });
 
         $router->get('/bfc/me/credentials', [PersonalCredentials::class, 'index'])
             ->middleware(['throttle:bfc-personal', ...$personal, 'bfc.auth']);
@@ -702,22 +704,50 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         ];
     }
 
-    /**
-     * @return list<string>
-     */
-    private function bearerPageSessionMiddleware(Router $router): array
+    /** @param list<Route> $routes */
+    private function decorateBearerPageSessionMiddleware(Router $router, array $routes): void
     {
-        $middleware = $router->resolveMiddleware($this->browserSessionMiddleware($router));
-        $sessionIndex = array_search(StartSession::class, $middleware, true);
+        $sessionClasses = [];
 
-        if ($sessionIndex === false) {
-            throw new LogicException('Built for Cloud bearer pages require Laravel StartSession middleware.');
+        foreach ($routes as $route) {
+            $routeSessionClasses = array_values(array_filter(array_map(
+                static fn (mixed $middleware): mixed => is_string($middleware)
+                    ? explode(':', $middleware, 2)[0]
+                    : $middleware,
+                $router->gatherRouteMiddleware($route),
+            ), static fn (mixed $middleware): bool => is_string($middleware)
+                && is_a($middleware, StartSession::class, true)));
+
+            if (count($routeSessionClasses) !== 1) {
+                $name = $route->getName() ?? $route->uri();
+                $classes = $routeSessionClasses === [] ? 'none' : implode(', ', $routeSessionClasses);
+
+                throw new LogicException(
+                    "Built for Cloud bearer route [{$name}] requires exactly one effective StartSession middleware after host configuration; found "
+                    .count($routeSessionClasses)." [{$classes}].",
+                );
+            }
+
+            $sessionClasses[] = $routeSessionClasses[0];
         }
 
-        $middleware[$sessionIndex] = PreventBearerUrlPersistence::class;
+        foreach (array_unique($sessionClasses) as $sessionClass) {
+            $this->app->extend($sessionClass, static function (mixed $middleware) use ($sessionClass): PreventBearerUrlPersistence {
+                if ($middleware instanceof PreventBearerUrlPersistence) {
+                    return $middleware;
+                }
 
-        /** @var list<string> $middleware */
-        return array_values($middleware);
+                if (! $middleware instanceof StartSession) {
+                    $resolved = is_object($middleware) ? $middleware::class : get_debug_type($middleware);
+
+                    throw new LogicException(
+                        "Built for Cloud expected [{$sessionClass}] to resolve to StartSession middleware; resolved [{$resolved}].",
+                    );
+                }
+
+                return new PreventBearerUrlPersistence($middleware);
+            });
+        }
     }
 
     /**
