@@ -12,16 +12,24 @@ it('keeps later host web middleware on ordinary and bearer pages', function (): 
         ->and($process->getOutput())->toContain('late-host-web-ok');
 });
 
-it('supports one base or container-resolved custom session starter', function (string $shape): void {
-    $process = new Process([PHP_BINARY, __DIR__.'/Fixtures/bearer-page-session-stack.php', $shape]);
+it('supports one typed base or container-resolved custom starter at request dispatch', function (string $scenario): void {
+    $process = new Process([PHP_BINARY, __DIR__.'/Fixtures/bearer-page-session-stack.php', $scenario]);
     $process->run();
 
     expect($process->getExitCode())->toBe(0, $process->getOutput().$process->getErrorOutput())
-        ->and($process->getOutput())->toContain($shape.'-session-ok');
-})->with(['base', 'custom']);
+        ->and($process->getOutput())->toContain($scenario.'-session-ok');
+})->with([
+    'provider boot base' => 'base',
+    'provider boot custom' => 'custom',
+    'later application booted base' => 'booted-base',
+    'later application booted custom' => 'booted-custom',
+    'post-kernel custom replacement' => 'runtime-custom',
+    'post-kernel custom replacement after route cache invalidation' => 'runtime-cache-custom',
+    'post-kernel custom replacement after priority mutation' => 'runtime-priority-custom',
+]);
 
-it('fails closed on invalid final session starter counts', function (string $shape, int $count): void {
-    $process = new Process([PHP_BINARY, __DIR__.'/Fixtures/bearer-page-session-stack.php', $shape]);
+it('fails closed on invalid request-dispatch session starter counts', function (string $scenario, int $count): void {
+    $process = new Process([PHP_BINARY, __DIR__.'/Fixtures/bearer-page-session-stack.php', $scenario]);
     $process->run();
 
     expect($process->getExitCode())->toBe(0, $process->getOutput().$process->getErrorOutput())
@@ -29,6 +37,9 @@ it('fails closed on invalid final session starter counts', function (string $sha
         ->toContain('bfc.password.reset')
         ->toContain("found {$count}");
 })->with([
-    'zero session starters' => ['zero', 0],
-    'duplicate session starters' => ['duplicate', 2],
+    'later application booted zero starters' => ['booted-zero', 0],
+    'later application booted duplicate starters' => ['booted-duplicate', 2],
+    'post-kernel zero starters' => ['runtime-zero', 0],
+    'post-kernel duplicate starters' => ['runtime-duplicate', 2],
+    'globally disabled route middleware' => ['disabled', 0],
 ]);

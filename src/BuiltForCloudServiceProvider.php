@@ -67,6 +67,7 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\PreventBearerUrlPersistence;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\RestoreBearerRequestClassification;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\VerifyHmacSignature;
 use ArtisanBuild\BuiltForCloud\Listeners\EvictConsolePrincipal;
@@ -83,6 +84,7 @@ use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Events\RouteMatched;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
 use Illuminate\Session\Middleware\StartSession;
@@ -395,7 +397,12 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // could mint or revoke their credentials.
         $personal = $this->browserSessionMiddleware($router);
 
-        $bearerPageMiddleware = [...$personal, 'bfc.standalone'];
+        $bearerPageMiddleware = [
+            ...$personal,
+            RestoreBearerRequestClassification::class,
+            PreventBearerUrlPersistence::class,
+            'bfc.standalone',
+        ];
         $bearerPageRoutes = [
             $router->get('/bfc/reset-password/{token}', [StandalonePasswordRecovery::class, 'edit'])
                 ->middleware($bearerPageMiddleware)
@@ -452,8 +459,8 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 ->middleware(['throttle:bfc-session-confirm', 'bfc.auth'])
                 ->name('bfc.sessions.destroy');
         });
-        $this->app->booted(function () use ($router, $standaloneRoutes, $bearerPageRoutes): void {
-            $this->decorateBearerPageSessionMiddleware($router, $bearerPageRoutes);
+        $router->matched(fn (RouteMatched $event) => $this->assertBearerPageSessionMiddleware($router, $event));
+        $this->app->booted(function () use ($router, $standaloneRoutes): void {
             StandaloneRouteOwnership::assertOwned($router, $standaloneRoutes);
         });
 
@@ -704,49 +711,89 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         ];
     }
 
-    /** @param list<Route> $routes */
-    private function decorateBearerPageSessionMiddleware(Router $router, array $routes): void
+    private function assertBearerPageSessionMiddleware(Router $router, RouteMatched $event): void
     {
-        $sessionClasses = [];
+        $route = $event->route;
 
-        foreach ($routes as $route) {
-            $routeSessionClasses = array_values(array_filter(array_map(
-                static fn (mixed $middleware): mixed => is_string($middleware)
-                    ? explode(':', $middleware, 2)[0]
-                    : $middleware,
-                $router->gatherRouteMiddleware($route),
-            ), static fn (mixed $middleware): bool => is_string($middleware)
-                && is_a($middleware, StartSession::class, true)));
-
-            if (count($routeSessionClasses) !== 1) {
-                $name = $route->getName() ?? $route->uri();
-                $classes = $routeSessionClasses === [] ? 'none' : implode(', ', $routeSessionClasses);
-
-                throw new LogicException(
-                    "Built for Cloud bearer route [{$name}] requires exactly one effective StartSession middleware after host configuration; found "
-                    .count($routeSessionClasses)." [{$classes}].",
-                );
-            }
-
-            $sessionClasses[] = $routeSessionClasses[0];
+        if (! in_array($route->getName(), ['bfc.password.reset', 'bfc.invitations.accept'], true)) {
+            return;
         }
 
-        foreach (array_unique($sessionClasses) as $sessionClass) {
-            $this->app->extend($sessionClass, static function (mixed $middleware) use ($sessionClass): PreventBearerUrlPersistence {
-                if ($middleware instanceof PreventBearerUrlPersistence) {
-                    return $middleware;
-                }
+        if ($this->app->bound('middleware.disable') && $this->app->make('middleware.disable') === true) {
+            $middleware = [];
+        } else {
+            $router->middlewarePriority = array_values(array_filter(
+                $router->middlewarePriority,
+                static fn (string $middleware): bool => ! in_array($middleware, [
+                    RestoreBearerRequestClassification::class,
+                    PreventBearerUrlPersistence::class,
+                ], true),
+            ));
+            $middleware = $router->gatherRouteMiddleware($route);
+        }
+        $classes = array_map(
+            static fn (mixed $middleware): ?string => is_string($middleware)
+                ? explode(':', $middleware, 2)[0]
+                : null,
+            $middleware,
+        );
+        $sessionIndexes = array_keys(array_filter(
+            $classes,
+            static fn (?string $middleware): bool => $middleware !== null
+                && is_a($middleware, StartSession::class, true),
+        ));
 
-                if (! $middleware instanceof StartSession) {
-                    $resolved = is_object($middleware) ? $middleware::class : get_debug_type($middleware);
+        if (count($sessionIndexes) !== 1) {
+            $sessionClasses = array_values(array_intersect_key($classes, array_flip($sessionIndexes)));
+            $found = $sessionClasses === [] ? 'none' : implode(', ', $sessionClasses);
 
-                    throw new LogicException(
-                        "Built for Cloud expected [{$sessionClass}] to resolve to StartSession middleware; resolved [{$resolved}].",
-                    );
-                }
+            throw new LogicException(
+                "Built for Cloud bearer route [{$route->getName()}] requires exactly one effective StartSession middleware at request dispatch; found "
+                .count($sessionClasses)." [{$found}].",
+            );
+        }
 
-                return new PreventBearerUrlPersistence($middleware);
-            });
+        $sessionIndex = $sessionIndexes[0];
+        $sessionClass = $classes[$sessionIndex];
+        $priorityNames = [$sessionClass, ...array_values(class_parents($sessionClass) ?: [])];
+        $priorityIndex = null;
+
+        foreach ($priorityNames as $priorityName) {
+            $index = array_search($priorityName, $router->middlewarePriority, true);
+
+            if ($index !== false) {
+                $priorityIndex = $index;
+
+                break;
+            }
+        }
+
+        if ($priorityIndex === null) {
+            throw new LogicException(
+                "Built for Cloud bearer route [{$route->getName()}] requires its effective StartSession middleware in Laravel's middleware priority list at request dispatch.",
+            );
+        }
+
+        array_splice($router->middlewarePriority, $priorityIndex, 0, [RestoreBearerRequestClassification::class]);
+        array_splice($router->middlewarePriority, $priorityIndex + 2, 0, [PreventBearerUrlPersistence::class]);
+
+        $middleware = $router->gatherRouteMiddleware($route);
+        $classes = array_map(
+            static fn (mixed $middleware): ?string => is_string($middleware)
+                ? explode(':', $middleware, 2)[0]
+                : null,
+            $middleware,
+        );
+        $sessionIndex = array_search($sessionClass, $classes, true);
+        $restoreIndexes = array_keys($classes, RestoreBearerRequestClassification::class, true);
+        $preventIndexes = array_keys($classes, PreventBearerUrlPersistence::class, true);
+
+        if (! is_int($sessionIndex)
+            || $restoreIndexes !== [$sessionIndex - 1]
+            || $preventIndexes !== [$sessionIndex + 1]) {
+            throw new LogicException(
+                "Built for Cloud bearer route [{$route->getName()}] requires its request-classification middleware immediately around the effective StartSession middleware at request dispatch.",
+            );
         }
     }
 
