@@ -465,9 +465,11 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/logout` | `metadata` | redirect after session invalidation |
 | `GET /bfc/forgot-password` | `content` | package-owned HTML recovery form |
 | `POST /bfc/forgot-password` | `metadata` | redirect with a fixed non-enumerating status |
-| `GET /bfc/reset-password/{token}` | `content` | package-owned HTML reset form containing the one-time request token |
+| `GET /bfc/reset-password/{token}` | `content` | stateless encrypted-cookie handoff carrying the one-time request token |
+| `GET /bfc/reset-password` | `content` | package-owned HTML reset form containing the handed-off request token |
 | `POST /bfc/reset-password` | `metadata` | redirect after a successful reset |
-| `GET /bfc/invitations/{token}` | `content` | package-owned HTML acceptance form containing the one-time invitation token |
+| `GET /bfc/invitations/{token}` | `content` | stateless encrypted-cookie handoff carrying the one-time invitation token |
+| `GET /bfc/invitations/accept` | `content` | package-owned HTML acceptance form containing the handed-off invitation token |
 | `POST /bfc/invitations/accept` | `content` | redirect plus a newly established session cookie |
 | `GET /bfc/members` | `content` | package-owned HTML containing user and invitation data |
 | `POST /bfc/members/invitations` | `metadata` | redirect after package notification dispatch |
@@ -936,7 +938,17 @@ Only a SHA-256 token digest is stored, one latest record per email.
 
 ### GET /bfc/reset-password/{token}
 
-Renders the package reset form. The token is accepted only by the following POST.
+Validates the path token and eligible reset state without starting a session, sets a short-lived,
+path-scoped encrypted handoff cookie, and redirects with `Referrer-Policy: no-referrer` to the clean
+reset URL. The route excludes `StartSession` and its subclasses at dispatch time. Hosts must not put
+session middleware in the global HTTP kernel, which executes outside route-level exclusions and is
+not a supported package configuration.
+
+### GET /bfc/reset-password
+
+Validates the reset handoff cookie on Laravel's ordinary browser/session stack and renders the
+package reset form. The raw token appears only in the required hidden form field and is accepted
+only by the following POST.
 
 ### POST /bfc/reset-password
 
@@ -946,7 +958,16 @@ and provenance are not request fields and are not changed.
 
 ### GET /bfc/invitations/{token}
 
-Renders the addressed invitation ceremony through the package layout.
+Validates the path token and addressed pending invitation without starting a session, sets a
+short-lived, path-scoped encrypted handoff cookie, and redirects with
+`Referrer-Policy: no-referrer` to the clean acceptance URL. It carries the same dispatch-time
+`StartSession` exclusion and unsupported global-kernel boundary as the reset handoff.
+
+### GET /bfc/invitations/accept
+
+Validates the invitation handoff cookie on Laravel's ordinary browser/session stack and renders the
+addressed invitation ceremony through the package layout. The raw token appears only in the
+required hidden form field.
 
 ### POST /bfc/invitations/accept
 

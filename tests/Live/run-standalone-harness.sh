@@ -68,6 +68,28 @@ assert_bearer_absent_from_session() {
         "${label}"
 }
 
+session_row_count() {
+    local state
+
+    state="$(printf '%s' 'bfc-session-count-sentinel' | "${HARNESS_ENV[@]}" php tests/Live/bearer-session-table-diagnostics.php)"
+    state="${state#rows=}"
+    printf '%s' "${state%% *}"
+}
+
+assert_bearer_absent_from_all_sessions() {
+    local bearer="$1"
+    local label="$2"
+    local state
+
+    if ! state="$(printf '%s' "${bearer}" | "${HARNESS_ENV[@]}" php tests/Live/bearer-session-table-diagnostics.php)"; then
+        fail "${label}: observed [${state}]"
+    fi
+
+    if [[ "${state}" != rows=*" payload_decoded=yes bearer_absent=yes old_input_token_absent=yes previous_url_bearer_absent=yes" ]]; then
+        fail "${label}: observed [${state}]"
+    fi
+}
+
 csrf_from_file() {
     perl -0777 -ne 'print $1 if /name="_token" value="([^"]+)"/' "$1"
 }
@@ -159,9 +181,12 @@ COOKIE="${RUN_DIR}/owner.cookies"
 ADMIN_COOKIE="${RUN_DIR}/admin.cookies"
 MEMBER_COOKIE="${RUN_DIR}/member.cookies"
 INVITEE_COOKIE="${RUN_DIR}/invitee.cookies"
+INVITEE_REPLAY_COOKIE="${RUN_DIR}/invitee-replay.cookies"
 OTHER_COOKIE="${RUN_DIR}/other.cookies"
 RESET_COOKIE="${RUN_DIR}/reset.cookies"
-MANAGED_COOKIE="${RUN_DIR}/managed.cookies"
+RESET_REPLAY_COOKIE="${RUN_DIR}/reset-replay.cookies"
+MANAGED_INVITEE_COOKIE="${RUN_DIR}/managed-invitee.cookies"
+MANAGED_RESET_COOKIE="${RUN_DIR}/managed-reset.cookies"
 OLD_PASSWORD_COOKIE="${RUN_DIR}/old-password.cookies"
 NEW_PASSWORD_COOKIE="${RUN_DIR}/new-password.cookies"
 
@@ -239,47 +264,53 @@ request "Member cannot invite" 403 "${RUN_DIR}/member-invite-denied.html" --cook
     --data-urlencode "_token=${MEMBER_TOKEN}" --data-urlencode "email=blocked@example.test" --data-urlencode "role=member" \
     "${BASE}/bfc/members/invitations"
 
-request "invitation page" 200 "${RUN_DIR}/invitation.html" --cookie "${INVITEE_COOKIE}" --cookie-jar "${INVITEE_COOKIE}" "${INVITE_URL}"
-assert_file_contains "${RUN_DIR}/invitation.html" 'data-testid="invitation-accept-form"' "invitation structure"
-assert_file_contains "${RUN_DIR}/invitation.html" 'harness-invitee@example.test' "test-created invitation address"
 INVITE_TOKEN="${INVITE_URL%%\?*}"
 INVITE_TOKEN="${INVITE_TOKEN##*/}"
-INVITE_CSRF="$(csrf_from_file "${RUN_DIR}/invitation.html")"
 assert_nonempty "${INVITE_TOKEN}" "invitation token"
+INVITE_ROWS_BEFORE="$(session_row_count)"
+request "invitation bearer handoff" 302 "${RUN_DIR}/invitation-handoff.html" --cookie "${INVITEE_COOKIE}" --cookie-jar "${INVITEE_COOKIE}" "${INVITE_URL}"
+assert_equal "${BASE}/bfc/invitations/accept" "${LAST_HARNESS_REDIRECT}" "invitation clean handoff redirect"
+assert_equal "${INVITE_ROWS_BEFORE}" "$(session_row_count)" "invitation bearer handoff session writes"
+assert_bearer_absent_from_all_sessions "${INVITE_TOKEN}" "invitation bearer handoff session secrecy"
+cp "${INVITEE_COOKIE}" "${INVITEE_REPLAY_COOKIE}"
+cp "${INVITEE_COOKIE}" "${MANAGED_INVITEE_COOKIE}"
+request "invitation clean page" 200 "${RUN_DIR}/invitation.html" --cookie "${INVITEE_COOKIE}" --cookie-jar "${INVITEE_COOKIE}" "${BASE}/bfc/invitations/accept"
+assert_file_contains "${RUN_DIR}/invitation.html" 'data-testid="invitation-accept-form"' "invitation structure"
+assert_file_contains "${RUN_DIR}/invitation.html" 'harness-invitee@example.test' "test-created invitation address"
+INVITE_CSRF="$(csrf_from_file "${RUN_DIR}/invitation.html")"
 assert_nonempty "${INVITE_CSRF}" "invitation CSRF token"
+request "invitation replay preparation page" 200 "${RUN_DIR}/invitation-replay-preparation.html" --cookie "${INVITEE_REPLAY_COOKIE}" --cookie-jar "${INVITEE_REPLAY_COOKIE}" "${BASE}/bfc/invitations/accept"
+INVITE_REPLAY_CSRF="$(csrf_from_file "${RUN_DIR}/invitation-replay-preparation.html")"
+assert_nonempty "${INVITE_REPLAY_CSRF}" "invitation replay CSRF token"
 request "invitation correctable validation error" 302 "${RUN_DIR}/invitation-invalid.html" --cookie "${INVITEE_COOKIE}" --cookie-jar "${INVITEE_COOKIE}" \
-    --data-urlencode "_token=${INVITE_CSRF}" \
+    --header 'Referer:' --data-urlencode "_token=${INVITE_CSRF}" --data-urlencode "token=${INVITE_TOKEN}" \
     --data-urlencode "name=Harness Invitee" --data-urlencode "password=short" --data-urlencode "password_confirmation=mismatch" \
-    "${BASE}/bfc/invitations/accept?token=${INVITE_TOKEN}"
-assert_equal "${INVITE_URL}" "${LAST_HARNESS_REDIRECT}" "invitation canonical no-Referer retry"
+    "${BASE}/bfc/invitations/accept"
+assert_equal "${BASE}/bfc/invitations/accept" "${LAST_HARNESS_REDIRECT}" "invitation canonical no-Referer retry"
 assert_bearer_absent_from_session "${INVITE_TOKEN}" "${INVITEE_COOKIE}" "invitation validation session secrecy"
-request "invitation retry page" 200 "${RUN_DIR}/invitation-retry.html" --cookie "${INVITEE_COOKIE}" --cookie-jar "${INVITEE_COOKIE}" "${INVITE_URL}"
+request "invitation retry page" 200 "${RUN_DIR}/invitation-retry.html" --cookie "${INVITEE_COOKIE}" --cookie-jar "${INVITEE_COOKIE}" "${BASE}/bfc/invitations/accept"
 assert_file_contains "${RUN_DIR}/invitation-retry.html" 'data-testid="invitation-accept-errors"' "invitation correctable validation error"
 assert_bearer_absent_from_session "${INVITE_TOKEN}" "${INVITEE_COOKIE}" "invitation retry page session secrecy"
 INVITE_CSRF="$(csrf_from_file "${RUN_DIR}/invitation-retry.html")"
 assert_nonempty "${INVITE_CSRF}" "invitation retry CSRF token"
 request "invitation acceptance" 302 "${RUN_DIR}/invitation-accepted.html" --cookie "${INVITEE_COOKIE}" --cookie-jar "${INVITEE_COOKIE}" \
-    --data-urlencode "_token=${INVITE_CSRF}" --data-urlencode "name=Harness Invitee" \
+    --header 'Referer:' --data-urlencode "_token=${INVITE_CSRF}" --data-urlencode "token=${INVITE_TOKEN}" --data-urlencode "name=Harness Invitee" \
     --data-urlencode "password=harness invitee password" --data-urlencode "password_confirmation=harness invitee password" \
-    "${BASE}/bfc/invitations/accept?token=${INVITE_TOKEN}"
+    "${BASE}/bfc/invitations/accept"
 assert_bearer_absent_from_session "${INVITE_TOKEN}" "${INVITEE_COOKIE}" "invitation success session secrecy"
 INVITEE_SESSION_STATE="$("${HARNESS_ENV[@]}" php tests/Live/session-diagnostics.php harness-invitee@example.test "${INVITEE_COOKIE}")"
 if [[ "${INVITEE_SESSION_STATE}" != sessions=1\ marked=1\ version_match=1\ auth_match=1\ cookie_match=yes* ]]; then
     fail "accepted invitee session persistence: expected one marked session, observed [${INVITEE_SESSION_STATE}]"
 fi
 request "accepted invitee domain" 200 "${RUN_DIR}/invitee-domain.html" --cookie "${INVITEE_COOKIE}" "${BASE}/domain"
-request "invitation replay form" 200 "${RUN_DIR}/invitation-replay-form.html" --cookie "${INVITEE_COOKIE}" --cookie-jar "${INVITEE_COOKIE}" "${INVITE_URL}"
-INVITE_CSRF="$(csrf_from_file "${RUN_DIR}/invitation-replay-form.html")"
-assert_nonempty "${INVITE_CSRF}" "invitation replay CSRF token"
-request "invitation replay refusal" 302 "${RUN_DIR}/invitation-replay.html" --cookie "${INVITEE_COOKIE}" --cookie-jar "${INVITEE_COOKIE}" \
-    --data-urlencode "_token=${INVITE_CSRF}" --data-urlencode "name=Replay" \
+request "invitation replay refusal" 302 "${RUN_DIR}/invitation-replay.html" --cookie "${INVITEE_REPLAY_COOKIE}" --cookie-jar "${INVITEE_REPLAY_COOKIE}" \
+    --header 'Referer:' --data-urlencode "_token=${INVITE_REPLAY_CSRF}" --data-urlencode "token=${INVITE_TOKEN}" --data-urlencode "name=Replay" \
     --data-urlencode "password=another invite password" --data-urlencode "password_confirmation=another invite password" \
-    "${BASE}/bfc/invitations/accept?token=${INVITE_TOKEN}"
-assert_equal "${INVITE_URL}" "${LAST_HARNESS_REDIRECT}" "invitation canonical replay retry"
-assert_bearer_absent_from_session "${INVITE_TOKEN}" "${INVITEE_COOKIE}" "invitation replay session secrecy"
-request "invitation replay error page" 200 "${RUN_DIR}/invitation-replay-error.html" --cookie "${INVITEE_COOKIE}" --cookie-jar "${INVITEE_COOKIE}" "${INVITE_URL}"
-assert_file_contains "${RUN_DIR}/invitation-replay-error.html" 'data-testid="invitation-accept-errors"' "invitation replay error"
-assert_bearer_absent_from_session "${INVITE_TOKEN}" "${INVITEE_COOKIE}" "invitation replay page session secrecy"
+    "${BASE}/bfc/invitations/accept"
+assert_equal "${BASE}/bfc/invitations/accept" "${LAST_HARNESS_REDIRECT}" "invitation canonical replay retry"
+assert_bearer_absent_from_session "${INVITE_TOKEN}" "${INVITEE_REPLAY_COOKIE}" "invitation replay session secrecy"
+request "invitation replay clean refusal" 404 "${RUN_DIR}/invitation-replay-error.html" --cookie "${INVITEE_REPLAY_COOKIE}" --cookie-jar "${INVITEE_REPLAY_COOKIE}" "${BASE}/bfc/invitations/accept"
+assert_bearer_absent_from_all_sessions "${INVITE_TOKEN}" "invitation replay page session secrecy"
 
 request "password request page" 200 "${RUN_DIR}/password-request.html" --cookie "${RESET_COOKIE}" --cookie-jar "${RESET_COOKIE}" "${BASE}/bfc/forgot-password"
 RESET_REQUEST_CSRF="$(csrf_from_file "${RUN_DIR}/password-request.html")"
@@ -288,42 +319,48 @@ request "password reset request through UI" 302 "${RUN_DIR}/password-requested.h
     --data-urlencode "_token=${RESET_REQUEST_CSRF}" --data-urlencode "email=member@example.test" "${BASE}/bfc/forgot-password"
 RESET_URL="${LAST_HARNESS_MAIL}"
 assert_nonempty "${RESET_URL}" "array-mail reset URL"
-request "password reset page" 200 "${RUN_DIR}/reset.html" --cookie "${RESET_COOKIE}" --cookie-jar "${RESET_COOKIE}" "${RESET_URL}"
-assert_file_contains "${RUN_DIR}/reset.html" 'data-testid="password-reset-form"' "password reset structure"
-assert_file_contains "${RUN_DIR}/reset.html" 'member@example.test' "test-created reset address"
 RESET_TOKEN="${RESET_URL%%\?*}"
 RESET_TOKEN="${RESET_TOKEN##*/}"
-RESET_CSRF="$(csrf_from_file "${RUN_DIR}/reset.html")"
 assert_nonempty "${RESET_TOKEN}" "password reset token"
+RESET_ROWS_BEFORE="$(session_row_count)"
+request "password reset bearer handoff" 302 "${RUN_DIR}/reset-handoff.html" --cookie "${RESET_COOKIE}" --cookie-jar "${RESET_COOKIE}" "${RESET_URL}"
+assert_equal "${BASE}/bfc/reset-password" "${LAST_HARNESS_REDIRECT}" "password reset clean handoff redirect"
+assert_equal "${RESET_ROWS_BEFORE}" "$(session_row_count)" "password reset bearer handoff session writes"
+assert_bearer_absent_from_all_sessions "${RESET_TOKEN}" "password reset bearer handoff session secrecy"
+cp "${RESET_COOKIE}" "${RESET_REPLAY_COOKIE}"
+cp "${RESET_COOKIE}" "${MANAGED_RESET_COOKIE}"
+request "password reset clean page" 200 "${RUN_DIR}/reset.html" --cookie "${RESET_COOKIE}" --cookie-jar "${RESET_COOKIE}" "${BASE}/bfc/reset-password"
+assert_file_contains "${RUN_DIR}/reset.html" 'data-testid="password-reset-form"' "password reset structure"
+assert_file_contains "${RUN_DIR}/reset.html" 'member@example.test' "test-created reset address"
+RESET_CSRF="$(csrf_from_file "${RUN_DIR}/reset.html")"
 assert_nonempty "${RESET_CSRF}" "password reset CSRF token"
+request "password reset replay preparation page" 200 "${RUN_DIR}/reset-replay-preparation.html" --cookie "${RESET_REPLAY_COOKIE}" --cookie-jar "${RESET_REPLAY_COOKIE}" "${BASE}/bfc/reset-password"
+RESET_REPLAY_CSRF="$(csrf_from_file "${RUN_DIR}/reset-replay-preparation.html")"
+assert_nonempty "${RESET_REPLAY_CSRF}" "password reset replay CSRF token"
 request "password reset correctable validation error" 302 "${RUN_DIR}/reset-invalid.html" --cookie "${RESET_COOKIE}" --cookie-jar "${RESET_COOKIE}" \
-    --data-urlencode "_token=${RESET_CSRF}" \
+    --header 'Referer:' --data-urlencode "_token=${RESET_CSRF}" --data-urlencode "token=${RESET_TOKEN}" \
     --data-urlencode "email=member@example.test" --data-urlencode "password=short" --data-urlencode "password_confirmation=mismatch" \
-    "${BASE}/bfc/reset-password?token=${RESET_TOKEN}"
-assert_equal "${RESET_URL}" "${LAST_HARNESS_REDIRECT}" "password reset canonical no-Referer retry"
+    "${BASE}/bfc/reset-password"
+assert_equal "${BASE}/bfc/reset-password" "${LAST_HARNESS_REDIRECT}" "password reset canonical no-Referer retry"
 assert_bearer_absent_from_session "${RESET_TOKEN}" "${RESET_COOKIE}" "password reset validation session secrecy"
-request "password reset retry page" 200 "${RUN_DIR}/reset-retry.html" --cookie "${RESET_COOKIE}" --cookie-jar "${RESET_COOKIE}" "${RESET_URL}"
+request "password reset retry page" 200 "${RUN_DIR}/reset-retry.html" --cookie "${RESET_COOKIE}" --cookie-jar "${RESET_COOKIE}" "${BASE}/bfc/reset-password"
 assert_file_contains "${RUN_DIR}/reset-retry.html" 'data-testid="password-reset-errors"' "password reset correctable validation error"
 assert_bearer_absent_from_session "${RESET_TOKEN}" "${RESET_COOKIE}" "password reset retry page session secrecy"
 RESET_CSRF="$(csrf_from_file "${RUN_DIR}/reset-retry.html")"
 assert_nonempty "${RESET_CSRF}" "password reset retry CSRF token"
 request "password reset" 302 "${RUN_DIR}/reset-complete.html" --cookie "${RESET_COOKIE}" --cookie-jar "${RESET_COOKIE}" \
-    --data-urlencode "_token=${RESET_CSRF}" --data-urlencode "email=member@example.test" \
+    --header 'Referer:' --data-urlencode "_token=${RESET_CSRF}" --data-urlencode "token=${RESET_TOKEN}" --data-urlencode "email=member@example.test" \
     --data-urlencode "password=harness reset password" --data-urlencode "password_confirmation=harness reset password" \
-    "${BASE}/bfc/reset-password?token=${RESET_TOKEN}"
+    "${BASE}/bfc/reset-password"
 assert_bearer_absent_from_session "${RESET_TOKEN}" "${RESET_COOKIE}" "password reset success session secrecy"
-request "password reset replay form" 200 "${RUN_DIR}/reset-replay-form.html" --cookie "${RESET_COOKIE}" --cookie-jar "${RESET_COOKIE}" "${RESET_URL}"
-RESET_CSRF="$(csrf_from_file "${RUN_DIR}/reset-replay-form.html")"
-assert_nonempty "${RESET_CSRF}" "password reset replay CSRF token"
-request "password reset replay refusal" 302 "${RUN_DIR}/reset-replay.html" --cookie "${RESET_COOKIE}" --cookie-jar "${RESET_COOKIE}" \
-    --data-urlencode "_token=${RESET_CSRF}" --data-urlencode "email=member@example.test" \
+request "password reset replay refusal" 302 "${RUN_DIR}/reset-replay.html" --cookie "${RESET_REPLAY_COOKIE}" --cookie-jar "${RESET_REPLAY_COOKIE}" \
+    --header 'Referer:' --data-urlencode "_token=${RESET_REPLAY_CSRF}" --data-urlencode "token=${RESET_TOKEN}" --data-urlencode "email=member@example.test" \
     --data-urlencode "password=another reset password" --data-urlencode "password_confirmation=another reset password" \
-    "${BASE}/bfc/reset-password?token=${RESET_TOKEN}"
-assert_equal "${RESET_URL}" "${LAST_HARNESS_REDIRECT}" "password reset canonical replay retry"
-assert_bearer_absent_from_session "${RESET_TOKEN}" "${RESET_COOKIE}" "password reset replay session secrecy"
-request "password reset replay error page" 200 "${RUN_DIR}/reset-replay-error.html" --cookie "${RESET_COOKIE}" --cookie-jar "${RESET_COOKIE}" "${RESET_URL}"
-assert_file_contains "${RUN_DIR}/reset-replay-error.html" 'data-testid="password-reset-errors"' "password reset replay error"
-assert_bearer_absent_from_session "${RESET_TOKEN}" "${RESET_COOKIE}" "password reset replay page session secrecy"
+    "${BASE}/bfc/reset-password"
+assert_equal "${BASE}/bfc/reset-password" "${LAST_HARNESS_REDIRECT}" "password reset canonical replay retry"
+assert_bearer_absent_from_session "${RESET_TOKEN}" "${RESET_REPLAY_COOKIE}" "password reset replay session secrecy"
+request "password reset replay clean refusal" 404 "${RUN_DIR}/reset-replay-error.html" --cookie "${RESET_REPLAY_COOKIE}" --cookie-jar "${RESET_REPLAY_COOKIE}" "${BASE}/bfc/reset-password"
+assert_bearer_absent_from_all_sessions "${RESET_TOKEN}" "password reset replay page session secrecy"
 request "stale Member session after reset" 302 "${RUN_DIR}/member-domain-after-reset.html" --cookie "${MEMBER_COOKIE}" "${BASE}/domain"
 
 request "old-password login page" 200 "${RUN_DIR}/old-password-login.html" --cookie "${OLD_PASSWORD_COOKIE}" --cookie-jar "${OLD_PASSWORD_COOKIE}" "${BASE}/bfc/login"
@@ -376,9 +413,13 @@ request "Owner domain after logout" 302 "${RUN_DIR}/owner-domain-logged-out.html
 
 "${HARNESS_ENV[@]}" php tests/Live/set-managed-authority.php
 request "managed-mode standalone refusal" 404 "${RUN_DIR}/managed-login.html" "${BASE}/bfc/login"
-request "managed-mode invitation bearer refusal" 404 "${RUN_DIR}/managed-invitation.html" --cookie "${MANAGED_COOKIE}" --cookie-jar "${MANAGED_COOKIE}" "${INVITE_URL}"
-assert_bearer_absent_from_session "${INVITE_TOKEN}" "${MANAGED_COOKIE}" "managed invitation refusal session secrecy"
-request "managed-mode reset bearer refusal" 404 "${RUN_DIR}/managed-reset.html" --cookie "${MANAGED_COOKIE}" --cookie-jar "${MANAGED_COOKIE}" "${RESET_URL}"
-assert_bearer_absent_from_session "${RESET_TOKEN}" "${MANAGED_COOKIE}" "managed reset refusal session secrecy"
+MANAGED_ROWS_BEFORE="$(session_row_count)"
+request "managed-mode invitation handoff refusal" 404 "${RUN_DIR}/managed-invitation-clean.html" --cookie "${MANAGED_INVITEE_COOKIE}" --cookie-jar "${MANAGED_INVITEE_COOKIE}" "${BASE}/bfc/invitations/accept"
+request "managed-mode invitation bearer refusal" 404 "${RUN_DIR}/managed-invitation.html" --cookie "${MANAGED_INVITEE_COOKIE}" --cookie-jar "${MANAGED_INVITEE_COOKIE}" "${INVITE_URL}"
+assert_bearer_absent_from_all_sessions "${INVITE_TOKEN}" "managed invitation refusal session secrecy"
+request "managed-mode reset handoff refusal" 404 "${RUN_DIR}/managed-reset-clean.html" --cookie "${MANAGED_RESET_COOKIE}" --cookie-jar "${MANAGED_RESET_COOKIE}" "${BASE}/bfc/reset-password"
+request "managed-mode reset bearer refusal" 404 "${RUN_DIR}/managed-reset.html" --cookie "${MANAGED_RESET_COOKIE}" --cookie-jar "${MANAGED_RESET_COOKIE}" "${RESET_URL}"
+assert_bearer_absent_from_all_sessions "${RESET_TOKEN}" "managed reset refusal session secrecy"
+assert_equal "${MANAGED_ROWS_BEFORE}" "$(session_row_count)" "managed handoff and bearer refusal session writes"
 
-printf 'standalone live harness passed\nstamp: %s\nchecks: wrong-password refusal/login success, Member denial, persisted Owner/Admin boundaries, HTTP array-mail invitation/reset delivery, query/body validation-error session secrecy, no-Referer retry, acceptance/replay, reset old/stale refusal and new-password success, current/other session content and revocation, logout, managed bearer refusal secrecy\n' "${STAMP}"
+printf 'standalone live harness passed\nstamp: %s\nchecks: wrong-password refusal/login success, Member denial, persisted Owner/Admin boundaries, HTTP array-mail bearer-to-clean invitation/reset handoffs, zero bearer-request session writes, body validation-error session secrecy, no-Referer clean retry, acceptance/replay, reset old/stale refusal and new-password success, current/other session content and revocation, logout, managed handoff/bearer refusal secrecy\n' "${STAMP}"

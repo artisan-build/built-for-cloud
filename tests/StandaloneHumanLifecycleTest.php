@@ -10,6 +10,7 @@ use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\Notifications\HumanInvitationNotification;
 use ArtisanBuild\BuiltForCloud\Notifications\StandalonePasswordResetNotification;
 use ArtisanBuild\BuiltForCloud\StandaloneAccess;
+use ArtisanBuild\BuiltForCloud\StandaloneHandoff;
 use ArtisanBuild\BuiltForCloud\Tests\TestCase;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
@@ -22,6 +23,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Testing\TestResponse;
 use Symfony\Component\HttpFoundation\Cookie;
 
 uses(RefreshDatabase::class);
@@ -65,11 +67,25 @@ function loginStandalone(TestCase $test, User $user, string $password = 'correct
     ])->assertRedirect('/');
 }
 
+function beginStandaloneHandoff(TestCase $test, string $routeName, string $token): TestResponse
+{
+    $cleanRoute = $routeName === 'bfc.password.reset'
+        ? 'bfc.password.reset.form'
+        : 'bfc.invitations.accept.form';
+    $response = $test->get(route($routeName, ['token' => $token], false));
+    $response->assertRedirect(route($cleanRoute));
+    $cookie = $response->getCookie(StandaloneHandoff::COOKIE);
+    expect($cookie)->toBeInstanceOf(Cookie::class);
+    $test->withCookie(StandaloneHandoff::COOKIE, $cookie->getValue());
+
+    return $test->get(route($cleanRoute, absolute: false))->assertOk();
+}
+
 it('mounts every named standalone route and renders package structural hooks', function (): void {
     $expected = [
         'bfc.login', 'bfc.login.store', 'bfc.logout',
-        'bfc.password.request', 'bfc.password.email', 'bfc.password.reset', 'bfc.password.update',
-        'bfc.invitations.accept', 'bfc.invitations.accept.store',
+        'bfc.password.request', 'bfc.password.email', 'bfc.password.reset', 'bfc.password.reset.form', 'bfc.password.update',
+        'bfc.invitations.accept', 'bfc.invitations.accept.form', 'bfc.invitations.accept.store',
         'bfc.members.index', 'bfc.members.invitations.store', 'bfc.members.role.update', 'bfc.members.destroy',
         'bfc.sessions.index', 'bfc.sessions.destroy', 'bfc.sessions.destroy-others',
     ];
@@ -82,10 +98,24 @@ it('mounts every named standalone route and renders package structural hooks', f
 
     $this->get('/bfc/login')->assertOk()->assertSeeHtml('data-testid="login-form"');
     $this->get('/bfc/forgot-password')->assertOk()->assertSeeHtml('data-testid="password-request-form"');
-    $this->get('/bfc/reset-password/test-token?email=person%40example.test')
-        ->assertOk()->assertSeeHtml('data-testid="password-reset-form"');
-    $this->get('/bfc/invitations/test-token?email=invitee%40example.test')
-        ->assertOk()->assertSeeHtml('data-testid="invitation-accept-form"');
+    $resetUser = standaloneUser('person@example.test');
+    DB::table('password_reset_tokens')->insert([
+        'email' => $resetUser->email,
+        'token' => hash('sha256', 'test-reset-token'),
+        'created_at' => now(),
+    ]);
+    beginStandaloneHandoff($this, 'bfc.password.reset', 'test-reset-token')
+        ->assertSeeHtml('data-testid="password-reset-form"')
+        ->assertSee($resetUser->email);
+    $invitation = Invitation::factory()->create([
+        'email' => 'invitee@example.test',
+        'token' => Invitation::hashToken('test-invitation-token'),
+        'role' => UserRole::Member->value,
+        'expires_at' => now()->addHour(),
+    ]);
+    beginStandaloneHandoff($this, 'bfc.invitations.accept', 'test-invitation-token')
+        ->assertSeeHtml('data-testid="invitation-accept-form"')
+        ->assertSee($invitation->email);
 
     $owner = standaloneUser('route-owner@example.test', UserRole::Owner);
     loginStandalone($this, $owner);
@@ -153,6 +183,7 @@ it('invalidates previously unmarked sessions after password reset on a non-enume
         ->and(session()->has(StandaloneAccess::SESSION_VERSION_KEY))->toBeFalse()
         ->and(config('session.driver'))->toBe('array');
 
+    beginStandaloneHandoff($this, 'bfc.password.reset', $token);
     $this->post('/bfc/reset-password', [
         'token' => $token,
         'email' => $user->email,
@@ -174,6 +205,7 @@ it('invalidates marked stale sessions after password reset on a non-enumerable s
     ]);
 
     loginStandalone($this, $user);
+    beginStandaloneHandoff($this, 'bfc.password.reset', $token);
     $this->post('/bfc/reset-password', [
         'token' => $token,
         'email' => $user->email,
@@ -189,6 +221,7 @@ it('invalidates missing and stale local session markers on admin-only routes aft
     Route::middleware(['web', 'bfc.admin'])->get('/reset-admin-only', static fn (): string => 'admin');
     $user = standaloneUser('reset-admin-'.($marked ? 'stale' : 'missing').'@example.test', UserRole::Admin);
     $token = bin2hex(random_bytes(32));
+    $oldSessionVersion = $user->auth_session_version;
     DB::table('password_reset_tokens')->insert([
         'email' => $user->email,
         'token' => hash('sha256', $token),
@@ -207,6 +240,7 @@ it('invalidates missing and stale local session markers on admin-only routes aft
         $this->get('/reset-admin-unmarked-login')->assertOk();
     }
 
+    beginStandaloneHandoff($this, 'bfc.password.reset', $token);
     $this->post('/bfc/reset-password', [
         'token' => $token,
         'email' => $user->email,
@@ -214,7 +248,14 @@ it('invalidates missing and stale local session markers on admin-only routes aft
         'password_confirmation' => 'replacement secure password',
     ])->assertRedirect(route('bfc.login'));
 
-    $this->withSession(['admin-session-residue' => 'present'])
+    Auth::guard('web')->login($user->refresh(), false);
+    $session = ['admin-session-residue' => 'present'];
+
+    if ($marked) {
+        $session[StandaloneAccess::SESSION_VERSION_KEY] = $oldSessionVersion;
+    }
+
+    $this->withSession($session)
         ->get('/reset-admin-only')
         ->assertForbidden()
         ->assertSessionMissing('admin-session-residue');
@@ -467,6 +508,7 @@ it('keeps password requests non-enumerating and resets only eligible local accou
     $status = $eligible->status;
     $original = $eligible->original_contact_email;
 
+    beginStandaloneHandoff($this, 'bfc.password.reset', $token);
     $this->post('/bfc/reset-password', [
         'token' => $token,
         'email' => $eligible->email,
@@ -559,6 +601,7 @@ it('enforces addressed invitation roles and accepts once with server-owned ident
     expect($stored->token)->toBe(hash('sha256', $token));
 
     $this->post('/bfc/logout')->assertRedirect(route('bfc.login'));
+    beginStandaloneHandoff($this, 'bfc.invitations.accept', $token);
     $this->post('/bfc/invitations/accept', [
         'token' => $token,
         'name' => 'Invited Administrator',

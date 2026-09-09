@@ -6,6 +6,7 @@ use ArtisanBuild\BuiltForCloud\Actions\AcceptHumanInvitation;
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\Invitation;
+use ArtisanBuild\BuiltForCloud\StandaloneHandoff;
 use ArtisanBuild\BuiltForCloud\Tests\Support\PostgresLane;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
@@ -267,6 +268,12 @@ it('runs password reset burn and owned session controllers on Postgres', functio
         'payload' => 'test',
         'last_activity' => now()->timestamp,
     ]);
+
+    $handoff = $this->get(route('bfc.password.reset', ['token' => $token], false));
+    $handoff->assertRedirect(route('bfc.password.reset.form'));
+    $handoffCookie = $handoff->getCookie(StandaloneHandoff::COOKIE);
+    expect($handoffCookie)->not->toBeNull();
+    $this->withCookie(StandaloneHandoff::COOKIE, $handoffCookie->getValue());
 
     $this->post('/bfc/reset-password', [
         'token' => $token,

@@ -288,13 +288,19 @@ membership actions, and session management under `/bfc/*`. Every route carries t
 `bfc.standalone` authority gate; managed installations receive `404` before local authentication,
 writes, or mail. Mutating browser routes use Laravel's web session and CSRF protection.
 
+Password-reset and invitation links enter through stateless bearer handoff routes. Those routes
+exclude Laravel's `StartSession` middleware, set a short-lived encrypted cookie, and redirect to a
+clean session-backed form URL. Hosts may add session middleware to route groups, but must not put
+`StartSession` or a subclass in the global HTTP kernel: global middleware executes outside Laravel's
+route-level exclusion and is not a supported package configuration.
+
 Owner and Admin may invite a Member, while only Owner may invite an Admin. Issuance stores only a
 SHA-256 digest of a bounded, single-use token and sends the acceptance link through the configured
 Laravel mailer. Acceptance creates the canonical package user with the addressed email and the role
 fixed at issuance; request-supplied identity, role, status, provenance, and off-site redirects are
 ignored. The supported invitation entry points are:
 
-- `GET /bfc/invitations/{token}` and `POST /bfc/invitations/accept` for acceptance.
+- `GET /bfc/invitations/{token}` for the stateless handoff, then `GET` and `POST /bfc/invitations/accept` for acceptance.
 - `POST /bfc/members/invitations` for Owner/Admin issuance.
 - `GET /bfc/members`, `PUT /bfc/members/{user}/role`, and `DELETE /bfc/members/{user}` for membership management.
 

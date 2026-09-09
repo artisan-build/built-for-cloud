@@ -66,8 +66,7 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\PreventBearerUrlPersistence;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\RestoreBearerRequestClassification;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\ExpireStandaloneHandoffOnRefusal;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\VerifyHmacSignature;
 use ArtisanBuild\BuiltForCloud\Listeners\EvictConsolePrincipal;
@@ -84,7 +83,6 @@ use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Http\Request;
-use Illuminate\Routing\Events\RouteMatched;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
 use Illuminate\Session\Middleware\StartSession;
@@ -95,7 +93,6 @@ use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 use Livewire\LivewireManager;
-use LogicException;
 use Throwable;
 
 final class BuiltForCloudServiceProvider extends ServiceProvider
@@ -397,21 +394,43 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // could mint or revoke their credentials.
         $personal = $this->browserSessionMiddleware($router);
 
-        $bearerPageMiddleware = [
+        $handoffMiddleware = [
+            EncryptCookies::class,
+            AddQueuedCookiesToResponse::class,
+            ExpireStandaloneHandoffOnRefusal::class,
+        ];
+        $handoffSessionMiddleware = [
+            ...$handoffMiddleware,
+            'bfc.standalone',
             ...$personal,
-            RestoreBearerRequestClassification::class,
-            PreventBearerUrlPersistence::class,
+        ];
+        $standaloneRoutes = [];
+        $standaloneRoutes[] = $router->get('/bfc/reset-password', [StandalonePasswordRecovery::class, 'edit'])
+            ->middleware($handoffSessionMiddleware)
+            ->name('bfc.password.reset.form');
+        $standaloneRoutes[] = $router->post('/bfc/reset-password', [StandalonePasswordRecovery::class, 'update'])
+            ->middleware([...$handoffSessionMiddleware, 'throttle:bfc-password-reset'])
+            ->name('bfc.password.update');
+        $standaloneRoutes[] = $router->get('/bfc/invitations/accept', [StandaloneInvitations::class, 'show'])
+            ->middleware($handoffSessionMiddleware)
+            ->name('bfc.invitations.accept.form');
+        $standaloneRoutes[] = $router->post('/bfc/invitations/accept', [StandaloneInvitations::class, 'store'])
+            ->middleware([...$handoffSessionMiddleware, 'throttle:bfc-invitation-accept'])
+            ->name('bfc.invitations.accept.store');
+
+        $bearerPageMiddleware = [
+            ...$handoffMiddleware,
+            'throttle:bfc-bearer-handoff',
             'bfc.standalone',
         ];
-        $bearerPageRoutes = [
-            $router->get('/bfc/reset-password/{token}', [StandalonePasswordRecovery::class, 'edit'])
-                ->middleware($bearerPageMiddleware)
-                ->name('bfc.password.reset'),
-            $router->get('/bfc/invitations/{token}', [StandaloneInvitations::class, 'show'])
-                ->middleware($bearerPageMiddleware)
-                ->name('bfc.invitations.accept'),
-        ];
-        $standaloneRoutes = $bearerPageRoutes;
+        $standaloneRoutes[] = $router->get('/bfc/reset-password/{token}', [StandalonePasswordRecovery::class, 'handoff'])
+            ->middleware($bearerPageMiddleware)
+            ->withoutMiddleware([StartSession::class])
+            ->name('bfc.password.reset');
+        $standaloneRoutes[] = $router->get('/bfc/invitations/{token}', [StandaloneInvitations::class, 'handoff'])
+            ->middleware($bearerPageMiddleware)
+            ->withoutMiddleware([StartSession::class])
+            ->name('bfc.invitations.accept');
 
         $router->middleware([...$personal, 'bfc.standalone'])->group(function (Router $router) use (&$standaloneRoutes): void {
             $standaloneRoutes[] = $router->get('/bfc/login', [StandaloneAuthentication::class, 'create'])
@@ -428,14 +447,6 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $standaloneRoutes[] = $router->post('/bfc/forgot-password', [StandalonePasswordRecovery::class, 'store'])
                 ->middleware('throttle:bfc-password-reset')
                 ->name('bfc.password.email');
-            $standaloneRoutes[] = $router->post('/bfc/reset-password', [StandalonePasswordRecovery::class, 'update'])
-                ->middleware('throttle:bfc-password-reset')
-                ->name('bfc.password.update');
-
-            $standaloneRoutes[] = $router->post('/bfc/invitations/accept', [StandaloneInvitations::class, 'store'])
-                ->middleware('throttle:bfc-invitation-accept')
-                ->name('bfc.invitations.accept.store');
-
             $standaloneRoutes[] = $router->get('/bfc/members', [StandaloneMemberships::class, 'index'])
                 ->middleware('bfc.auth')
                 ->name('bfc.members.index');
@@ -459,7 +470,6 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 ->middleware(['throttle:bfc-session-confirm', 'bfc.auth'])
                 ->name('bfc.sessions.destroy');
         });
-        $router->matched(fn (RouteMatched $event) => $this->assertBearerPageSessionMiddleware($router, $event));
         $this->app->booted(function () use ($router, $standaloneRoutes): void {
             StandaloneRouteOwnership::assertOwned($router, $standaloneRoutes);
         });
@@ -711,92 +721,6 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         ];
     }
 
-    private function assertBearerPageSessionMiddleware(Router $router, RouteMatched $event): void
-    {
-        $route = $event->route;
-
-        if (! in_array($route->getName(), ['bfc.password.reset', 'bfc.invitations.accept'], true)) {
-            return;
-        }
-
-        if ($this->app->bound('middleware.disable') && $this->app->make('middleware.disable') === true) {
-            $middleware = [];
-        } else {
-            $router->middlewarePriority = array_values(array_filter(
-                $router->middlewarePriority,
-                static fn (string $middleware): bool => ! in_array($middleware, [
-                    RestoreBearerRequestClassification::class,
-                    PreventBearerUrlPersistence::class,
-                ], true),
-            ));
-            $middleware = $router->gatherRouteMiddleware($route);
-        }
-        $classes = array_map(
-            static fn (mixed $middleware): ?string => is_string($middleware)
-                ? explode(':', $middleware, 2)[0]
-                : null,
-            $middleware,
-        );
-        $sessionIndexes = array_keys(array_filter(
-            $classes,
-            static fn (?string $middleware): bool => $middleware !== null
-                && is_a($middleware, StartSession::class, true),
-        ));
-
-        if (count($sessionIndexes) !== 1) {
-            $sessionClasses = array_values(array_intersect_key($classes, array_flip($sessionIndexes)));
-            $found = $sessionClasses === [] ? 'none' : implode(', ', $sessionClasses);
-
-            throw new LogicException(
-                "Built for Cloud bearer route [{$route->getName()}] requires exactly one effective StartSession middleware at request dispatch; found "
-                .count($sessionClasses)." [{$found}].",
-            );
-        }
-
-        $sessionIndex = $sessionIndexes[0];
-        $sessionClass = $classes[$sessionIndex];
-        $priorityNames = [$sessionClass, ...array_values(class_parents($sessionClass) ?: [])];
-        $priorityIndex = null;
-
-        foreach ($priorityNames as $priorityName) {
-            $index = array_search($priorityName, $router->middlewarePriority, true);
-
-            if ($index !== false) {
-                $priorityIndex = $index;
-
-                break;
-            }
-        }
-
-        if ($priorityIndex === null) {
-            throw new LogicException(
-                "Built for Cloud bearer route [{$route->getName()}] requires its effective StartSession middleware in Laravel's middleware priority list at request dispatch.",
-            );
-        }
-
-        array_splice($router->middlewarePriority, $priorityIndex, 0, [RestoreBearerRequestClassification::class]);
-        array_splice($router->middlewarePriority, $priorityIndex + 2, 0, [PreventBearerUrlPersistence::class]);
-
-        $middleware = $router->gatherRouteMiddleware($route);
-        $classes = array_map(
-            static fn (mixed $middleware): ?string => is_string($middleware)
-                ? explode(':', $middleware, 2)[0]
-                : null,
-            $middleware,
-        );
-        $sessionIndex = array_search($sessionClass, $classes, true);
-        $restoreIndexes = array_keys($classes, RestoreBearerRequestClassification::class, true);
-        $preventIndexes = array_keys($classes, PreventBearerUrlPersistence::class, true);
-
-        if (! is_int($sessionIndex)
-            || $restoreIndexes !== [$sessionIndex - 1]
-            || $preventIndexes !== [$sessionIndex + 1]) {
-            throw new LogicException(
-                "Built for Cloud bearer route [{$route->getName()}] requires its request-classification middleware immediately around the effective StartSession middleware at request dispatch.",
-            );
-        }
-    }
-
     /**
      * The session stack `POST /bfc/console/enter` rides (Console PRD
      * D12/D13) — assembled here rather than taken from the host's `web`
@@ -905,6 +829,10 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
 
         RateLimiter::for('bfc-invitation-accept', fn (Request $request): Limit => Limit::perMinute(10)->by(
             'bfc-invitation-accept|'.($request->ip() ?? 'unknown'),
+        ));
+
+        RateLimiter::for('bfc-bearer-handoff', fn (Request $request): Limit => Limit::perMinute(10)->by(
+            'bfc-bearer-handoff|'.($request->ip() ?? 'unknown'),
         ));
 
         // The personal surface's limiter (PRD 1.17). Keyed on the

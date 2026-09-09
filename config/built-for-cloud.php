@@ -517,6 +517,7 @@ return [
     'standalone' => [
         'invitation_ttl_seconds' => env('BUILT_FOR_CLOUD_INVITATION_TTL', 259200),
         'password_reset_minutes' => env('BUILT_FOR_CLOUD_PASSWORD_RESET_MINUTES', 60),
+        'handoff_minutes' => env('BUILT_FOR_CLOUD_HANDOFF_MINUTES', 10),
     ],
 
     /*

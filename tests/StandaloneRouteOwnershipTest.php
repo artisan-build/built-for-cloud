@@ -3,14 +3,12 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\PreventBearerUrlPersistence;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\RestoreBearerRequestClassification;
-use Illuminate\Contracts\Http\Kernel as KernelContract;
-use Illuminate\Http\Request;
-use Illuminate\Routing\Events\RouteMatched;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\ExpireStandaloneHandoffOnRefusal;
+use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
+use Illuminate\Cookie\Middleware\EncryptCookies;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Routing\Router;
 use Illuminate\Session\Middleware\StartSession;
-use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 use Symfony\Component\Process\Process;
 
@@ -42,46 +40,40 @@ it('keeps the standalone authority gate effective on every owned route', functio
     }
 });
 
-it('keeps exactly one host session starter on each bearer page', function (): void {
+it('keeps bearer pages stateless and clean handoff pages on the ordinary session stack', function (): void {
     /** @var Router $router */
     $router = app('router');
-    $bearerPages = ['bfc.password.reset', 'bfc.invitations.accept'];
-    app(KernelContract::class);
 
-    foreach ($bearerPages as $name) {
+    foreach (['bfc.password.reset', 'bfc.invitations.accept'] as $name) {
         $route = Route::getRoutes()->getByName($name);
-
         expect($route)->not->toBeNull();
-        Event::dispatch(new RouteMatched($route, Request::create($route->uri(), 'GET')));
-    }
-
-    foreach (Route::getRoutes() as $route) {
-        if (! is_string($route->getName()) || ! str_starts_with($route->getName(), 'bfc.')) {
-            continue;
-        }
-
         $middleware = $router->gatherRouteMiddleware($route);
 
-        if (! in_array($route->getName(), $bearerPages, true)) {
-            expect($middleware)
-                ->not->toContain(PreventBearerUrlPersistence::class)
-                ->not->toContain(RestoreBearerRequestClassification::class);
-
-            continue;
-        }
-
-        $sessionMiddleware = array_values(array_filter(
+        expect($middleware)
+            ->toContain(EncryptCookies::class)
+            ->toContain(AddQueuedCookiesToResponse::class)
+            ->toContain(ExpireStandaloneHandoffOnRefusal::class)
+            ->toContain(EnsureStandaloneAuthority::class)
+            ->not->toContain('web')
+            ->not->toContain(PreventRequestForgery::class);
+        expect(array_filter(
             $middleware,
-            static fn (mixed $name): bool => is_string($name) && is_a($name, StartSession::class, true),
-        ));
-
-        $sessionIndex = array_search(StartSession::class, $middleware, true);
-
-        expect($sessionMiddleware)->toBe([StartSession::class])
-            ->and($middleware[$sessionIndex - 1] ?? null)->toBe(RestoreBearerRequestClassification::class)
-            ->and($middleware[$sessionIndex + 1] ?? null)->toBe(PreventBearerUrlPersistence::class)
-            ->and($sessionIndex)->toBeLessThan(array_search(EnsureStandaloneAuthority::class, $middleware, true))
-            ->and(app(StartSession::class))->toBeInstanceOf(StartSession::class)
-            ->not->toBeInstanceOf(PreventBearerUrlPersistence::class);
+            static fn (mixed $candidate): bool => is_string($candidate)
+                && is_a(explode(':', $candidate, 2)[0], StartSession::class, true),
+        ))->toBe([]);
+        expect($route->excludedMiddleware())->toContain(StartSession::class);
     }
+
+    foreach (['bfc.password.reset.form', 'bfc.password.update', 'bfc.invitations.accept.form', 'bfc.invitations.accept.store'] as $name) {
+        $route = Route::getRoutes()->getByName($name);
+        expect($route)->not->toBeNull();
+        $middleware = $router->gatherRouteMiddleware($route);
+
+        expect($middleware)
+            ->toContain(StartSession::class)
+            ->toContain(PreventRequestForgery::class)
+            ->toContain(EnsureStandaloneAuthority::class);
+    }
+
+    expect(app(StartSession::class))->toBeInstanceOf(StartSession::class);
 });
