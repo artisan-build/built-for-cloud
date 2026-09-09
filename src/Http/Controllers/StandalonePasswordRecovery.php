@@ -32,6 +32,8 @@ final class StandalonePasswordRecovery
 
     public function edit(Request $request, string $token): View
     {
+        $this->preventBearerUrlPersistence($request);
+
         return view()->file(__DIR__.'/../../../resources/views/auth/reset-password.blade.php', [
             'token' => $token,
             'email' => StandaloneAccess::normalizeEmail((string) $request->query('email', '')),
@@ -40,11 +42,15 @@ final class StandalonePasswordRecovery
 
     public function update(Request $request): RedirectResponse
     {
-        $input = $request->validate([
-            'token' => ['required', 'string', 'max:255'],
-            'email' => ['required', 'string', 'max:255'],
-            'password' => ['required', 'string', 'min:12', 'max:255', 'confirmed'],
-        ]);
+        try {
+            $input = $request->validate([
+                'token' => ['required', 'string', 'max:255'],
+                'email' => ['required', 'string', 'max:255'],
+                'password' => ['required', 'string', 'min:12', 'max:255', 'confirmed'],
+            ]);
+        } catch (ValidationException $exception) {
+            $this->rethrowWithoutBearer($request, $exception);
+        }
         $email = StandaloneAccess::normalizeEmail($input['email']);
         $lifetime = max(5, min(1440, (int) config('built-for-cloud.standalone.password_reset_minutes', 60)));
 
@@ -69,9 +75,28 @@ final class StandalonePasswordRecovery
                 DB::table('password_reset_tokens')->where('email', $user->email)->delete();
             }, 3);
         } catch (RuntimeException) {
-            throw ValidationException::withMessages(['email' => 'This reset request is not available.']);
+            $this->rethrowWithoutBearer(
+                $request,
+                ValidationException::withMessages(['email' => 'This reset request is not available.']),
+            );
         }
 
         return redirect()->route('bfc.login');
+    }
+
+    private function preventBearerUrlPersistence(Request $request): void
+    {
+        // StartSession must not copy a bearer-bearing GET URL into persisted previous-request state.
+        $request->session()->forget(['_previous.url', '_previous.route']);
+        $request->headers->set('X-Requested-With', 'XMLHttpRequest');
+    }
+
+    private function rethrowWithoutBearer(Request $request, ValidationException $exception): never
+    {
+        $exception->redirectTo(url()->previous());
+        $request->offsetUnset('token');
+        $request->session()->forget(['_previous.url', '_previous.route']);
+
+        throw $exception;
     }
 }

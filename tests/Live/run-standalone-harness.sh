@@ -52,6 +52,22 @@ assert_file_contains() {
     fi
 }
 
+assert_bearer_absent_from_session() {
+    local bearer="$1"
+    local cookie_file="$2"
+    local label="$3"
+    local state
+
+    if ! state="$(printf '%s' "${bearer}" | "${HARNESS_ENV[@]}" php tests/Live/bearer-session-diagnostics.php "${cookie_file}")"; then
+        fail "${label}: observed [${state}]"
+    fi
+
+    assert_equal \
+        "session_found=yes payload_decoded=yes bearer_absent=yes old_input_token_absent=yes previous_url_bearer_absent=yes" \
+        "${state}" \
+        "${label}"
+}
+
 csrf_from_file() {
     perl -0777 -ne 'print $1 if /name="_token" value="([^"]+)"/' "$1"
 }
@@ -229,6 +245,16 @@ INVITE_TOKEN="${INVITE_TOKEN##*/}"
 INVITE_CSRF="$(csrf_from_file "${RUN_DIR}/invitation.html")"
 assert_nonempty "${INVITE_TOKEN}" "invitation token"
 assert_nonempty "${INVITE_CSRF}" "invitation CSRF token"
+request "invitation correctable validation error" 302 "${RUN_DIR}/invitation-invalid.html" --cookie "${INVITEE_COOKIE}" --cookie-jar "${INVITEE_COOKIE}" \
+    --referer "${INVITE_URL}" --data-urlencode "_token=${INVITE_CSRF}" --data-urlencode "token=${INVITE_TOKEN}" \
+    --data-urlencode "name=Harness Invitee" --data-urlencode "password=short" --data-urlencode "password_confirmation=mismatch" \
+    "${BASE}/bfc/invitations/accept"
+assert_bearer_absent_from_session "${INVITE_TOKEN}" "${INVITEE_COOKIE}" "invitation validation session secrecy"
+request "invitation retry page" 200 "${RUN_DIR}/invitation-retry.html" --cookie "${INVITEE_COOKIE}" --cookie-jar "${INVITEE_COOKIE}" "${INVITE_URL}"
+assert_file_contains "${RUN_DIR}/invitation-retry.html" 'data-testid="invitation-accept-errors"' "invitation correctable validation error"
+assert_bearer_absent_from_session "${INVITE_TOKEN}" "${INVITEE_COOKIE}" "invitation retry page session secrecy"
+INVITE_CSRF="$(csrf_from_file "${RUN_DIR}/invitation-retry.html")"
+assert_nonempty "${INVITE_CSRF}" "invitation retry CSRF token"
 request "invitation acceptance" 302 "${RUN_DIR}/invitation-accepted.html" --cookie "${INVITEE_COOKIE}" --cookie-jar "${INVITEE_COOKIE}" \
     --data-urlencode "_token=${INVITE_CSRF}" --data-urlencode "token=${INVITE_TOKEN}" --data-urlencode "name=Harness Invitee" \
     --data-urlencode "password=harness invitee password" --data-urlencode "password_confirmation=harness invitee password" \
@@ -254,6 +280,16 @@ RESET_TOKEN="${RESET_TOKEN##*/}"
 RESET_CSRF="$(csrf_from_file "${RUN_DIR}/reset.html")"
 assert_nonempty "${RESET_TOKEN}" "password reset token"
 assert_nonempty "${RESET_CSRF}" "password reset CSRF token"
+request "password reset correctable validation error" 302 "${RUN_DIR}/reset-invalid.html" --cookie "${RESET_COOKIE}" --cookie-jar "${RESET_COOKIE}" \
+    --referer "${RESET_URL}" --data-urlencode "_token=${RESET_CSRF}" --data-urlencode "token=${RESET_TOKEN}" \
+    --data-urlencode "email=member@example.test" --data-urlencode "password=short" --data-urlencode "password_confirmation=mismatch" \
+    "${BASE}/bfc/reset-password"
+assert_bearer_absent_from_session "${RESET_TOKEN}" "${RESET_COOKIE}" "password reset validation session secrecy"
+request "password reset retry page" 200 "${RUN_DIR}/reset-retry.html" --cookie "${RESET_COOKIE}" --cookie-jar "${RESET_COOKIE}" "${RESET_URL}"
+assert_file_contains "${RUN_DIR}/reset-retry.html" 'data-testid="password-reset-errors"' "password reset correctable validation error"
+assert_bearer_absent_from_session "${RESET_TOKEN}" "${RESET_COOKIE}" "password reset retry page session secrecy"
+RESET_CSRF="$(csrf_from_file "${RUN_DIR}/reset-retry.html")"
+assert_nonempty "${RESET_CSRF}" "password reset retry CSRF token"
 request "password reset" 302 "${RUN_DIR}/reset-complete.html" --cookie "${RESET_COOKIE}" --cookie-jar "${RESET_COOKIE}" \
     --data-urlencode "_token=${RESET_CSRF}" --data-urlencode "token=${RESET_TOKEN}" --data-urlencode "email=member@example.test" \
     --data-urlencode "password=harness reset password" --data-urlencode "password_confirmation=harness reset password" \
@@ -311,4 +347,4 @@ request "Owner domain after logout" 302 "${RUN_DIR}/owner-domain-logged-out.html
 "${HARNESS_ENV[@]}" php tests/Live/set-managed-authority.php
 request "managed-mode standalone refusal" 404 "${RUN_DIR}/managed-login.html" "${BASE}/bfc/login"
 
-printf 'standalone live harness passed\nstamp: %s\nchecks: wrong-password refusal/login success, Member denial, persisted Owner/Admin boundaries, HTTP array-mail invitation/reset delivery, acceptance, reset old/stale refusal and new-password success, current/other session content and revocation, logout, managed refusal\n' "${STAMP}"
+printf 'standalone live harness passed\nstamp: %s\nchecks: wrong-password refusal/login success, Member denial, persisted Owner/Admin boundaries, HTTP array-mail invitation/reset delivery, validation-error session secrecy and retry, acceptance, reset old/stale refusal and new-password success, current/other session content and revocation, logout, managed refusal\n' "${STAMP}"

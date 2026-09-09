@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
+use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\User;
+use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -96,11 +98,133 @@ final class StandaloneDatabaseSessionsTest extends TestCase
             ->and($this->isAuthenticated())->toBeTrue();
     }
 
+    public function test_password_reset_validation_never_persists_its_bearer_and_allows_a_safe_retry(): void
+    {
+        $user = $this->eligibleUser('session-reset@example.test');
+        $token = 'reset-'.bin2hex(random_bytes(32));
+        DB::table('password_reset_tokens')->insert([
+            'email' => $user->email,
+            'token' => hash('sha256', $token),
+            'created_at' => now(),
+        ]);
+        $retryUrl = '/bfc/reset-password/'.$token.'?email='.rawurlencode($user->email);
+
+        $this->from($retryUrl)->post('/bfc/reset-password', [
+            'token' => $token,
+            'email' => $user->email,
+            'password' => 'short',
+            'password_confirmation' => 'mismatch',
+        ])->assertRedirect($retryUrl)->assertSessionHasErrors(['password']);
+
+        expect(DB::table('password_reset_tokens')->where('email', $user->email)->value('token'))
+            ->toBe(hash('sha256', $token));
+        $this->assertBearerAbsentFromPersistedSessions($token);
+        $this->get($retryUrl)->assertOk()->assertSeeHtml('data-testid="password-reset-errors"');
+        $this->assertBearerAbsentFromPersistedSessions($token);
+
+        $this->post('/bfc/reset-password', [
+            'token' => $token,
+            'email' => $user->email,
+            'password' => 'corrected reset password',
+            'password_confirmation' => 'corrected reset password',
+        ])->assertRedirect(route('bfc.login'));
+
+        expect(Hash::check('corrected reset password', (string) $user->refresh()->password))->toBeTrue()
+            ->and(DB::table('password_reset_tokens')->where('email', $user->email)->exists())->toBeFalse();
+
+        $this->from($retryUrl)->post('/bfc/reset-password', [
+            'token' => $token,
+            'email' => $user->email,
+            'password' => 'another reset password',
+            'password_confirmation' => 'another reset password',
+        ])->assertRedirect($retryUrl)->assertSessionHasErrors(['email']);
+        $this->assertBearerAbsentFromPersistedSessions($token);
+    }
+
+    public function test_invitation_validation_never_persists_its_bearer_and_allows_a_safe_retry(): void
+    {
+        $token = 'invite-'.bin2hex(random_bytes(32));
+        $invitation = Invitation::factory()->create([
+            'email' => 'session-invitee@example.test',
+            'token' => Invitation::hashToken($token),
+            'role' => UserRole::Member->value,
+            'expires_at' => now()->addHour(),
+        ]);
+        $retryUrl = '/bfc/invitations/'.$token.'?email=session-invitee%40example.test&intended=%2Fdomain';
+
+        $this->from($retryUrl)->post('/bfc/invitations/accept', [
+            'token' => $token,
+            'name' => 'Session Invitee',
+            'password' => 'short',
+            'password_confirmation' => 'mismatch',
+            'intended' => '/domain',
+        ])->assertRedirect($retryUrl)->assertSessionHasErrors(['password']);
+
+        expect($invitation->refresh()->accepted_at)->toBeNull();
+        $this->assertBearerAbsentFromPersistedSessions($token);
+        $this->get($retryUrl)->assertOk()->assertSeeHtml('data-testid="invitation-accept-errors"');
+        $this->assertBearerAbsentFromPersistedSessions($token);
+
+        $this->post('/bfc/invitations/accept', [
+            'token' => $token,
+            'name' => 'Session Invitee',
+            'password' => 'corrected invite password',
+            'password_confirmation' => 'corrected invite password',
+            'intended' => '/domain',
+        ])->assertRedirect('/domain');
+
+        expect($invitation->refresh()->accepted_at)->not->toBeNull()
+            ->and(User::query()->where('email', 'session-invitee@example.test')->count())->toBe(1);
+
+        $this->post('/bfc/logout');
+        $this->from($retryUrl)->post('/bfc/invitations/accept', [
+            'token' => $token,
+            'name' => 'Replay',
+            'password' => 'another invite password',
+            'password_confirmation' => 'another invite password',
+            'intended' => '/domain',
+        ])->assertRedirect($retryUrl)->assertSessionHasErrors(['token']);
+        $this->assertBearerAbsentFromPersistedSessions($token);
+    }
+
     private function login(User $user, string $password): void
     {
         $this->post('/bfc/login', [
             'email' => $user->email,
             'password' => $password,
         ])->assertRedirect('/');
+    }
+
+    private function eligibleUser(string $email): User
+    {
+        $user = User::query()->create([
+            'name' => 'Session Recovery User',
+            'email' => $email,
+            'password' => Hash::make('original reset password'),
+        ]);
+        $user->forceFill([
+            'role' => UserRole::Member->value,
+            'status' => 'active',
+            'email_verified_at' => now(),
+            'original_contact_email' => $email,
+        ])->save();
+
+        return $user;
+    }
+
+    private function assertBearerAbsentFromPersistedSessions(string $bearer): void
+    {
+        $payloads = DB::table('sessions')->pluck('payload');
+
+        $this->assertNotEmpty($payloads);
+
+        foreach ($payloads as $payload) {
+            $encoded = (string) $payload;
+            $decoded = base64_decode($encoded, true);
+
+            $this->assertIsString($decoded);
+            $this->assertFalse(str_contains($encoded, $bearer), 'Bearer found in an encoded session payload.');
+            $this->assertFalse(str_contains($decoded, $bearer), 'Bearer found in a decoded session payload.');
+        }
     }
 }

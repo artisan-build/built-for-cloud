@@ -19,6 +19,8 @@ final class StandaloneInvitations
 {
     public function show(Request $request, string $token): View
     {
+        $this->preventBearerUrlPersistence($request);
+
         return view()->file(__DIR__.'/../../../resources/views/auth/accept-invitation.blade.php', [
             'token' => $token,
             'email' => StandaloneAccess::normalizeEmail((string) $request->query('email', '')),
@@ -28,17 +30,24 @@ final class StandaloneInvitations
 
     public function store(Request $request, AcceptHumanInvitation $accept): RedirectResponse
     {
-        $input = $request->validate([
-            'token' => ['required', 'string', 'max:255'],
-            'name' => ['required', 'string', 'max:255'],
-            'password' => ['required', 'string', 'min:12', 'max:255', 'confirmed'],
-            'intended' => ['nullable', 'string', 'max:2048'],
-        ]);
+        try {
+            $input = $request->validate([
+                'token' => ['required', 'string', 'max:255'],
+                'name' => ['required', 'string', 'max:255'],
+                'password' => ['required', 'string', 'min:12', 'max:255', 'confirmed'],
+                'intended' => ['nullable', 'string', 'max:2048'],
+            ]);
+        } catch (ValidationException $exception) {
+            $this->rethrowWithoutBearer($request, $exception);
+        }
 
         try {
             $user = $accept($input['token'], $input['name'], $input['password']);
         } catch (RuntimeException|QueryException) {
-            throw ValidationException::withMessages(['token' => 'This invitation is not available.']);
+            $this->rethrowWithoutBearer(
+                $request,
+                ValidationException::withMessages(['token' => 'This invitation is not available.']),
+            );
         }
 
         Auth::guard('web')->login($user, false);
@@ -47,5 +56,21 @@ final class StandaloneInvitations
         $user->forceFill(['last_authenticated_at' => now()])->save();
 
         return redirect()->to(ConsoleReturnTo::firstRelative([$input['intended'] ?? null]));
+    }
+
+    private function preventBearerUrlPersistence(Request $request): void
+    {
+        // StartSession must not copy a bearer-bearing GET URL into persisted previous-request state.
+        $request->session()->forget(['_previous.url', '_previous.route']);
+        $request->headers->set('X-Requested-With', 'XMLHttpRequest');
+    }
+
+    private function rethrowWithoutBearer(Request $request, ValidationException $exception): never
+    {
+        $exception->redirectTo(url()->previous());
+        $request->offsetUnset('token');
+        $request->session()->forget(['_previous.url', '_previous.route']);
+
+        throw $exception;
     }
 }
