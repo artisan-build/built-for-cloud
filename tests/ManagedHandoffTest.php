@@ -365,11 +365,3 @@ it('enforces managed and standalone exclusivity in both directions over the deri
     $this->get('/bfc/managed/callback')->assertNotFound();
     Http::assertNothingSent();
 });
-
-it('keeps the fixture and client on distinct application keys', function (): void {
-    $clientKey = base64_encode(random_bytes(32));
-    $fixtureKey = base64_encode(random_bytes(32));
-    config(['app.key' => 'base64:'.$clientKey]);
-
-    expect($fixtureKey)->not->toBe($clientKey);
-});

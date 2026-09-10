@@ -122,7 +122,7 @@ CALLBACK_HEADERS="$(curl --silent --show-error --header "Cookie: ${COOKIE}" --du
 CALLBACK_STATUS="$(status_of "${CALLBACK_HEADERS}")"
 [[ "${CALLBACK_STATUS}" == 302 ]] || fail "managed callback did not establish a session; status ${CALLBACK_STATUS}"
 ROTATED_COOKIE="$(cookie_of "${CALLBACK_HEADERS}")"
-[[ -n "${ROTATED_COOKIE}" ]] || fail "managed callback did not rotate the session cookie"
+[[ -n "${ROTATED_COOKIE}" ]] && [[ "${ROTATED_COOKIE}" != "${COOKIE}" ]] || fail "managed callback did not rotate the session cookie"
 DOMAIN_STATUS="$(curl --silent --show-error --header "Cookie: ${ROTATED_COOKIE}" --output /dev/null --write-out '%{http_code}' "${APP_BASE}/domain")"
 [[ "${DOMAIN_STATUS}" == 200 ]] || fail "managed session did not reach a protected route"
 

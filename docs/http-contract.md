@@ -1022,10 +1022,10 @@ caller. Foreign, current, and absent identifiers do not produce revocation succe
 ## Managed human entry
 
 These browser routes are available only while the installation authority is managed; standalone
-authority receives the same plain-text `404 Not Found` as every other refusal. Both routes use the
-ordinary Laravel web session stack and bind `EnsureManagedAuthority` by class.
+authority is refused by the managed-authority gate with Laravel's ordinary 404 response. Both
+routes use the ordinary Laravel web session stack and bind `EnsureManagedAuthority` by class.
 
-The trusted connection origin, installation id, connection id, generation, issuer, audience and
+The trusted connection origin, installation id, connection id, generation, issuer and
 required client secret are server-side configuration or stored connection facts. Browser input
 cannot select or override them. Origin validation assumes the stored connection record itself has
 not been tampered with; connection-record integrity is outside this contract.
@@ -1046,11 +1046,12 @@ browser redirect appends the one exact `state` field.
 
 Accepts the authority-provided `state` and `code`. The correlation can be claimed once and only by
 the initiating browser session; concurrent or replayed claims refuse before exchange. After the
-claim, the package exchanges the code with the configured authority over authenticated HTTPS and
-enforces invariant installation, connection, generation, issuer and audience bindings, exact
-subject identity, and the wire types of the roster and response sequence values. This P3a entry
-slice does not persist either required high-water mark, so it does not enforce order regression;
-P3c adds the durable per-subject and per-connection marks and their per-dimension apply decisions.
+claim, the package exchanges the code with the configured authority over authenticated HTTPS,
+enforces its invariant response bindings, and requires the returned issuer, connection and subject
+to resolve an already-linked local user. It also enforces the wire types of the roster and response
+sequence values. This P3a entry slice does not persist either required high-water mark, so it does
+not enforce order regression; P3c adds the durable per-subject and per-connection marks and their
+per-dimension apply decisions.
 
 This entry slice authenticates only an active canonical user already linked to the returned
 subject. It does not allocate users or refresh membership data. On success it regenerates the
