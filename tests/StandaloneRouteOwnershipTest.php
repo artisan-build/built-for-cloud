@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\ExpireStandaloneHandoffOnRefusal;
+use ArtisanBuild\BuiltForCloud\StandaloneRouteOwnership;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
+use Illuminate\Routing\Route as RoutingRoute;
 use Illuminate\Routing\Router;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Route;
@@ -84,4 +86,50 @@ it('keeps bearer pages stateless and clean handoff pages on the ordinary session
     }
 
     expect(app(StartSession::class))->toBeInstanceOf(StartSession::class);
+});
+
+it('asserts ownership and refuses resolution attacks without populating the route middleware cache', function (): void {
+    /** @var Router $router */
+    $router = app('router');
+
+    $names = [
+        'bfc.login', 'bfc.login.store', 'bfc.logout',
+        'bfc.password.request', 'bfc.password.email',
+        'bfc.password.reset', 'bfc.password.reset.form', 'bfc.password.update',
+        'bfc.invitations.accept', 'bfc.invitations.accept.form', 'bfc.invitations.accept.store',
+        'bfc.members.index', 'bfc.members.invitations.store', 'bfc.members.role.update', 'bfc.members.destroy',
+        'bfc.sessions.index', 'bfc.sessions.destroy-others', 'bfc.sessions.destroy',
+    ];
+
+    $ownedRoutes = [];
+
+    foreach ($names as $name) {
+        $route = Route::getRoutes()->getByName($name);
+        expect($route)->not->toBeNull();
+        $ownedRoutes[] = $route;
+    }
+
+    $computed = new ReflectionProperty(RoutingRoute::class, 'computedMiddleware');
+    $computed->setAccessible(true);
+
+    $assertAllUncached = function () use ($computed, $ownedRoutes): void {
+        foreach ($ownedRoutes as $route) {
+            expect($computed->getValue($route))->toBeNull();
+        }
+    };
+
+    $assertAllUncached();
+
+    StandaloneRouteOwnership::assertOwned($router, $ownedRoutes);
+
+    $assertAllUncached();
+
+    $router->aliasMiddleware(EnsureStandaloneAuthority::class, AddQueuedCookiesToResponse::class);
+
+    $assertAllUncached();
+
+    expect(fn () => StandaloneRouteOwnership::assertOwned($router, $ownedRoutes))
+        ->toThrow(RuntimeException::class, 'reserved by built-for-cloud standalone authentication');
+
+    $assertAllUncached();
 });

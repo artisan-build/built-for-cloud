@@ -12,6 +12,15 @@ use RuntimeException;
 final class StandaloneRouteOwnership
 {
     /**
+     * Ownership is asserted through stable structural facts — reserved name,
+     * domain, URI, methods and package action — because a compiled route
+     * collection reconstructs fresh Route instances from cached attributes on
+     * every lookup, so object identity can never recognise the package's own
+     * routes after `route:cache`. The effective authority check resolves the
+     * candidate's declared middleware and exclusions through the router's
+     * alias and group tables, so spellings that resolve away from the
+     * authority class — or exclusions that resolve ONTO it — fail closed.
+     *
      * @param  list<Route>  $ownedRoutes
      */
     public static function assertOwned(Router $router, array $ownedRoutes): void
@@ -32,16 +41,22 @@ final class StandaloneRouteOwnership
                 static fn (Route $route): bool => $route->getName() === $name,
             ));
 
-            if ($named !== [$ownedRoute]
-                || ! in_array(EnsureStandaloneAuthority::class, $ownedRoute->middleware(), true)
-                || in_array(EnsureStandaloneAuthority::class, $ownedRoute->excludedMiddleware(), true)) {
+            if (count($named) !== 1
+                || ! self::occupiesReservedShape($named[0], $ownedRoute)
+                || ! in_array(
+                    EnsureStandaloneAuthority::class,
+                    $router->resolveMiddleware($named[0]->middleware(), $named[0]->excludedMiddleware()),
+                    true,
+                )) {
                 throw new RuntimeException("The route name [{$name}] is reserved by built-for-cloud standalone authentication.");
             }
 
             $domainAndUri = $ownedRoute->getDomain().$ownedRoute->uri();
 
             foreach ($ownedRoute->methods() as $method) {
-                if (($byMethod[$method][$domainAndUri] ?? null) !== $ownedRoute) {
+                $occupant = $byMethod[$method][$domainAndUri] ?? null;
+
+                if (! $occupant instanceof Route || ! self::occupiesReservedShape($occupant, $ownedRoute)) {
                     throw new RuntimeException("The route [{$method} {$ownedRoute->uri()}] is reserved by built-for-cloud standalone authentication.");
                 }
             }
@@ -69,5 +84,22 @@ final class StandaloneRouteOwnership
         return $route->getDomain() === $ownedRoute->getDomain()
             && $route->uri() === $ownedRoute->uri()
             && array_intersect($route->methods(), $ownedRoute->methods()) !== [];
+    }
+
+    /**
+     * A route occupies the reserved shape when its stable structural facts —
+     * name, domain, URI, method set and controller action — are exactly the
+     * package's, which survives compilation/reconstruction and still fails
+     * closed for every host takeover of a reserved name or method/domain/URI
+     * slot.
+     */
+    private static function occupiesReservedShape(Route $candidate, Route $ownedRoute): bool
+    {
+        return $candidate->getName() === $ownedRoute->getName()
+            && $candidate->getDomain() === $ownedRoute->getDomain()
+            && $candidate->uri() === $ownedRoute->uri()
+            && array_diff($candidate->methods(), $ownedRoute->methods()) === []
+            && array_diff($ownedRoute->methods(), $candidate->methods()) === []
+            && $candidate->getActionName() === $ownedRoute->getActionName();
     }
 }
