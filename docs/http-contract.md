@@ -460,6 +460,8 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/claim` | `content` | single reveal of the durable secret (`token`), plus the free-text suggested name |
 | `POST /bfc/onboarding/exchange` | `content` | single reveal of the durable secret, plus the free-text credential name |
 | `POST /bfc/onboarding/verify` | `content` | carries the free-text credential name |
+| `GET /bfc/managed/login` | `content` | redirect carrying an opaque one-time browser state, plus the initiating session cookie |
+| `GET /bfc/managed/callback` | `content` | redirect plus a newly established authenticated session cookie |
 | `GET /bfc/login` | `content` | package-owned HTML login form |
 | `POST /bfc/login` | `content` | redirect plus a newly established session cookie |
 | `POST /bfc/logout` | `metadata` | redirect after session invalidation |
@@ -1014,6 +1016,45 @@ After current-password confirmation, deletes only the caller's other database se
 
 After current-password confirmation, deletes one non-current session only when it belongs to the
 caller. Foreign, current, and absent identifiers do not produce revocation success.
+
+---
+
+## Managed human entry
+
+These browser routes are available only while the installation authority is managed; standalone
+authority receives the same plain-text `404 Not Found` as every other refusal. Both routes use the
+ordinary Laravel web session stack and bind `EnsureManagedAuthority` by class.
+
+The trusted connection origin, installation id, connection id, generation, issuer, audience and
+required client secret are server-side configuration or stored connection facts. Browser input
+cannot select or override them. Origin validation assumes the stored connection record itself has
+not been tampered with; connection-record integrity is outside this contract.
+
+### GET /bfc/managed/login
+
+Creates at least 256 bits of opaque state and a nonce in the initiating browser session. The
+package stores only SHA-256 digests in its correlation row, bound to the installation, connection
+and generation, with an expiry capped at five minutes and shortened by the authority's expiry.
+The same opaque value is used as the server-to-server `request_id` and browser `state`.
+
+The package creates the handoff through the configured authority over authenticated HTTPS. It
+accepts the returned authorization base URL only when it has the stored connection's exact HTTPS
+scheme, host and port, the frozen `/managed-auth/v1/authorize` path, and no query or fragment. The
+browser redirect appends the one exact `state` field.
+
+### GET /bfc/managed/callback
+
+Accepts the authority-provided `state` and `code`. The correlation can be claimed once and only by
+the initiating browser session; concurrent or replayed claims refuse before exchange. After the
+claim, the package exchanges the code with the configured authority over authenticated HTTPS and
+enforces invariant installation, connection, generation, issuer and audience bindings, exact
+subject identity, and non-decreasing subject and response sequence values.
+
+This entry slice authenticates only an active canonical user already linked to the returned
+subject. It does not allocate users or refresh membership data. On success it regenerates the
+session and redirects to `/`; every malformed, expired, mismatched, unlinked or upstream-failure
+case is the same plain-text `404 Not Found`. Authority contact and display fields are not stored by
+this slice, so their syntax and storage-length rules remain outside this endpoint's acceptance.
 
 ---
 
@@ -2500,8 +2541,7 @@ an operator gets in.
   state is what replaces it.
 
   *Pinned by* `tests/PersonalSurfaceWebGroupTest.php` ("the console door starts a session
-  without csrf validation" and "only the personal surface and the console browser routes ride
-  the session stack").
+  without csrf validation" and "only package browser routes ride the session stack").
 
 - **The presented credential is marked sensitive, and then removed.** Every frame in the package
   that can hold a console assertion — a string named for a token, and the `Request` that carries
