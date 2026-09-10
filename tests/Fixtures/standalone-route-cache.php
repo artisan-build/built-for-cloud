@@ -20,6 +20,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Str;
 use Orchestra\Testbench\TestCase;
+use Symfony\Component\Process\Process;
 
 require __DIR__.'/../../vendor/autoload.php';
 
@@ -59,11 +60,28 @@ if ($mode === 'generate') {
         {
             parent::setUp();
 
+            // Run the real artisan CLI as its own process: framework route
+            // caching boots a second application from the Testbench
+            // skeleton, and booting that second app inside this already-
+            // booted TestCase process loses the skeleton's yaml providers
+            // on newer framework static-state handling. One process, one
+            // boot — exactly how a consuming app runs `php artisan
+            // route:cache`.
             $cachePath = $this->app->getCachedRoutesPath();
+            $cacheDir = dirname($cachePath);
+            $before = is_dir($cacheDir) ? scandir($cacheDir) : [];
 
             try {
                 @unlink($cachePath);
-                $exitCode = $this->artisan('route:cache')->run();
+
+                $repoRoot = dirname(__DIR__, 2);
+                $artisan = $repoRoot.'/vendor/orchestra/testbench-core/laravel/artisan';
+                $process = new Process(
+                    [PHP_BINARY, $artisan, 'route:cache'],
+                    $repoRoot,
+                    ['TESTBENCH_WORKING_PATH' => $repoRoot],
+                );
+                $exitCode = $process->run();
 
                 if ($exitCode !== 0 || ! is_file($cachePath)) {
                     return ['exit' => $exitCode, 'cache' => false, 'copied' => false, 'size' => 0, 'contains' => false];
@@ -81,6 +99,14 @@ if ($mode === 'generate') {
                 ];
             } finally {
                 @unlink($cachePath);
+
+                $after = is_dir($cacheDir) ? scandir($cacheDir) : [];
+
+                foreach (array_diff($after, $before) as $created) {
+                    if (is_file($cacheDir.'/'.$created)) {
+                        @unlink($cacheDir.'/'.$created);
+                    }
+                }
             }
         }
 
