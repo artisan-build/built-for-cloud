@@ -471,55 +471,6 @@ it('cannot verify another subject\'s key id however valid the signature: selecti
     }
 });
 
-it('refuses a directly written account-bound hmac row in the verifier and middleware while an unbound row still passes', function (): void {
-    app()->bind(CredentialDeclaration::class, static fn (): CredentialDeclaration => new class implements CredentialDeclaration, ResolvesHmacSubjects
-    {
-        public function resolveHmacSubject(Request $request): ?Subject
-        {
-            $client = $request->route('client');
-
-            return is_string($client) ? new Subject(SubjectType::ExternalConsumer, $client) : null;
-        }
-
-        public function resolveSubject(Request $request): ?Subject
-        {
-            return null;
-        }
-
-        public function authorize(Credential $credential, ?string $ability, Request $request): bool
-        {
-            return true;
-        }
-    });
-    Route::post('/account-bound-hooks/{client}', static fn (): array => ['ok' => true])
-        ->middleware('bfc.hmac');
-
-    $bound = activeKeyFor('bound-client');
-    $bound->forceFill(['user_id' => 'directly-written-account'])->save();
-    $body = '{"event":"bound"}';
-    $header = headerSignedBy($bound, $body);
-
-    try {
-        app(HmacVerifier::class)->verify(hmacSubject('bound-client'), $header, $body);
-        $this->fail('An account-bound hmac row must not verify.');
-    } catch (HmacVerificationFailed $failed) {
-        expect($failed->reason)->toBe('unusable_key');
-    }
-
-    $this->call('POST', '/account-bound-hooks/bound-client', server: [
-        'HTTP_'.str_replace('-', '_', strtoupper(HmacEnvelope::HEADER)) => headerSignedBy($bound, $body),
-        'CONTENT_TYPE' => 'application/json',
-    ], content: $body)->assertUnauthorized();
-
-    expect($bound->refresh()->last_used_at)->toBeNull();
-
-    $unbound = activeKeyFor('unbound-client');
-    $this->call('POST', '/account-bound-hooks/unbound-client', server: [
-        'HTTP_'.str_replace('-', '_', strtoupper(HmacEnvelope::HEADER)) => headerSignedBy($unbound, $body),
-        'CONTENT_TYPE' => 'application/json',
-    ], content: $body)->assertOk();
-});
-
 // ------------------------------------------------------------ middleware
 
 it('gates a route through bfc.hmac: the declaration derives the subject server-side, valid signatures pass, everything else is one 401', function (): void {

@@ -45,6 +45,10 @@ set_authority_response() {
     php -r 'file_put_contents($argv[1], json_encode(["membership_status" => $argv[2], "connection_status" => "active", "role" => $argv[3]], JSON_THROW_ON_ERROR));' "${STATUS}.response" "$1" "$2"
 }
 
+set_confirmation_status() {
+    php -r 'file_put_contents($argv[1], $argv[2]);' "${STATUS}.confirmation-status" "$1"
+}
+
 cleanup() {
     if [[ -n "${SERVER_PID:-}" ]]; then
         kill "${SERVER_PID}" 2>/dev/null || true
@@ -130,6 +134,26 @@ ROTATED_COOKIE="$(cookie_of "${CALLBACK_HEADERS}")"
 DOMAIN_STATUS="$(curl --silent --show-error --header "Cookie: ${ROTATED_COOKIE}" --output /dev/null --write-out '%{http_code}' "${APP_BASE}/domain")"
 [[ "${DOMAIN_STATUS}" == 200 ]] || fail "managed session did not reach a protected route"
 
+USER_ID_BEFORE="$("${HARNESS_ENV[@]}" php tests/Live/managed-user-state.php expire)"
+set_confirmation_status 503
+OUTAGE_HEADERS="$(curl --silent --show-error --header "Cookie: ${ROTATED_COOKIE}" --dump-header - --output /dev/null "${APP_BASE}/domain")"
+[[ "$(status_of "${OUTAGE_HEADERS}")" == 302 ]] || fail "expired managed session was not denied during an authority outage"
+[[ "$(header_of Location "${OUTAGE_HEADERS}")" == "${APP_BASE}/bfc/login" ]] || fail "outage denial did not use the package unauthenticated path"
+
+set_confirmation_status 200
+RESTORE_HEADERS="$(curl --silent --show-error --dump-header - --output /dev/null "${APP_BASE}/bfc/managed/login")"
+RESTORE_URL="$(header_of Location "${RESTORE_HEADERS}")"
+RESTORE_COOKIE="$(cookie_of "${RESTORE_HEADERS}")"
+RESTORE_AUTH_HEADERS="$(curl --silent --show-error --cacert "${CERT}" --dump-header - --output /dev/null "${RESTORE_URL}")"
+RESTORE_CALLBACK="$(header_of Location "${RESTORE_AUTH_HEADERS}")"
+RESTORE_CALLBACK_HEADERS="$(curl --silent --show-error --header "Cookie: ${RESTORE_COOKIE}" --dump-header - --output /dev/null "${RESTORE_CALLBACK}")"
+[[ "$(status_of "${RESTORE_CALLBACK_HEADERS}")" == 302 ]] || fail "managed login did not restore access after the outage"
+RESTORED_COOKIE="$(cookie_of "${RESTORE_CALLBACK_HEADERS}")"
+RESTORED_STATUS="$(curl --silent --show-error --header "Cookie: ${RESTORED_COOKIE}" --output /dev/null --write-out '%{http_code}' "${APP_BASE}/domain")"
+[[ "${RESTORED_STATUS}" == 200 ]] || fail "restored managed session did not reach the protected route"
+USER_ID_AFTER="$("${HARNESS_ENV[@]}" php tests/Live/managed-user-state.php id)"
+[[ "${USER_ID_AFTER}" == "${USER_ID_BEFORE}" ]] || fail "outage restoration recreated the managed user"
+
 set_authority_response active admin
 SECOND_HEADERS="$(curl --silent --show-error --dump-header - --output /dev/null "${APP_BASE}/bfc/managed/login")"
 SECOND_URL="$(header_of Location "${SECOND_HEADERS}")"
@@ -181,6 +205,6 @@ STANDALONE_MANAGED_STATUS="$(curl --silent --show-error --output /dev/null --wri
 [[ "${STANDALONE_MANAGED_STATUS}" == 404 ]] || fail "managed route did not refuse standalone mode"
 
 EXCHANGE_COUNT="$(php -r '$status = json_decode(file_get_contents($argv[1]), true, flags: JSON_THROW_ON_ERROR); echo $status["exchange_count"];' "${STATUS}")"
-[[ "${EXCHANGE_COUNT}" == 4 ]] || fail "fixture observed an unexpected exchange count"
+[[ "${EXCHANGE_COUNT}" == 5 ]] || fail "fixture observed an unexpected exchange count"
 
-printf 'managed live harness passed\nstamp: %s\nchecks: authenticated TLS handoff/exchange, exact authority redirect origin/path, browser-session binding refusal and success, session rotation/protected access, role promotion and demotion on the next authorization decision, immediate authoritative browser denial and session ending, mode exclusivity\n' "${STAMP}"
+printf 'managed live harness passed\nstamp: %s\nchecks: authenticated TLS handoff/exchange, exact authority redirect origin/path, browser-session binding refusal and success, session rotation/protected access, 1800-second outage denial and session ending, same-user restoration after authority recovery, role promotion and demotion on the next authorization decision, immediate authoritative browser denial and session ending, mode exclusivity\n' "${STAMP}"

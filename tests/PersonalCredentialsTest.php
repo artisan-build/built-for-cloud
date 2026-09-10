@@ -11,6 +11,8 @@ use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacSigner;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
@@ -561,19 +563,33 @@ it('refuses a self-service credential kind the app has not opted in', function (
     expect(Credential::query()->where('name', 'default-kind')->sole()->kind)->toBe(CredentialKind::Bearer);
 });
 
-it('offers a kind once the self-service policy opts it in', function (): void {
+it('mints and uses an account-bound hmac key once the self-service policy opts it in', function (): void {
     config(['built-for-cloud.credentials.declaration' => SelfServicePolicyDeclaration::class]);
 
     SelfServicePolicyDeclaration::$kinds = [CredentialKind::Bearer, CredentialKind::Hmac];
 
     $mine = personalUser('mine@example.test');
 
-    $this->actingAsVersioned($mine, 'web')
+    $mint = $this->actingAsVersioned($mine, 'web')
         ->postJson('/bfc/me/credentials', ['name' => 'signing', 'kind' => CredentialKind::Hmac->value])
         ->assertCreated()
         ->assertJsonPath('delivery.shape', 'signing_key');
 
-    expect(Credential::query()->where('name', 'signing')->sole()->kind)->toBe(CredentialKind::Hmac);
+    $credential = Credential::query()->where('name', 'signing')->sole();
+    $this->postJson('/bfc/credentials/'.$credential->id.'/activate', [
+        'delivery_fingerprint' => $mint->json('delivery.delivery_fingerprint'),
+    ], [
+        'Authorization' => 'Bearer '.auditAdminToken('self-service-hmac-activation'),
+    ])->assertOk();
+
+    $subject = new Subject(SubjectType::UserPrincipal, personalSubjectRef($mine));
+    $body = '{"event":"self-service"}';
+    $header = app(HmacSigner::class)->sign($subject, $body, 'self-service.test');
+
+    expect($credential->kind)->toBe(CredentialKind::Hmac)
+        ->and((string) $credential->user_id)->toBe((string) $mine->getKey())
+        ->and(app(HmacVerifier::class)->verify($subject, $header, $body)->id)->toBe($credential->id)
+        ->and($credential->refresh()->last_used_at)->not->toBeNull();
 });
 
 it('leaves the durable expiry caller-chosen and never defaults one on the self-service mint', function (): void {

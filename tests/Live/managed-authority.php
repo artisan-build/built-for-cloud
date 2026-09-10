@@ -253,7 +253,9 @@ while (true) {
                 usleep($confirmationDelay);
             }
 
-            if ($confirmationStatus === 200) {
+            $currentConfirmationStatus = confirmationStatus($statusPath, $confirmationStatus);
+
+            if ($currentConfirmationStatus === 200) {
                 respond($connection, 200, [
                     'contract_version' => 'managed-auth-v1',
                     'issuer' => 'https://live-issuer.example.test',
@@ -270,7 +272,7 @@ while (true) {
                     'role' => 'member',
                 ]);
             } else {
-                respond($connection, $confirmationStatus, [
+                respond($connection, $currentConfirmationStatus, [
                     'contract_version' => 'managed-auth-v1',
                     'error' => 'server_error',
                 ]);
@@ -312,6 +314,19 @@ function writeStatus(string $path, int $exchangeCount, int $confirmationCount, b
         'confirmation_count' => $confirmationCount,
         'confirmation_in_flight' => $confirmationInFlight,
     ], JSON_THROW_ON_ERROR));
+}
+
+function confirmationStatus(string $statusPath, int $default): int
+{
+    $contents = @file_get_contents($statusPath.'.confirmation-status');
+
+    if (! is_string($contents)) {
+        return $default;
+    }
+
+    $status = filter_var(trim($contents), FILTER_VALIDATE_INT);
+
+    return is_int($status) ? $status : $default;
 }
 
 /** @return array{membership_status?: string, connection_status?: string, role?: string} */

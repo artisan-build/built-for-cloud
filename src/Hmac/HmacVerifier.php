@@ -101,9 +101,7 @@ final class HmacVerifier
         // no oracle). The registry check rides key selection because this
         // verifier resolves credentials directly rather than via the bfc
         // guard, and containment must hold at every authentication point.
-        if ($credential === null
-            || $credential->user_id !== null
-            || OffboardedSubject::rejects($credential)) {
+        if ($credential === null || OffboardedSubject::rejects($credential)) {
             throw HmacVerificationFailed::unusableKey();
         }
 
