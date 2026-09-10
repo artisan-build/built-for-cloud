@@ -69,8 +69,8 @@ it('names a chrome route that carries only one half of the seam, and one that ca
     $breaks = ConsoleChromeRouteScan::seamBreaksIn(Route::getRoutes()->getRoutes());
 
     expect($breaks)->toBe([
-        'GET /probe-chrome-bare: missing auth:bfc-console and bfc.console',
-        'GET /probe-chrome-guard-only: missing bfc.console',
+        'GET /probe-chrome-bare: missing auth:bfc-console and '.EnsureConsoleSession::class,
+        'GET /probe-chrome-guard-only: missing '.EnsureConsoleSession::class,
         'GET /probe-chrome-session-only: missing auth:bfc-console',
         'GET /probe-unmarked-session-only: missing auth:bfc-console',
     ]);

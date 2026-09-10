@@ -269,6 +269,11 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router->aliasMiddleware('bfc.mcp', AuthenticateMcp::class);
             $router->aliasMiddleware('bfc.standalone', EnsureStandaloneAuthority::class);
 
+            // The token, credential and console routes bind their gates by
+            // class below, so collisions on these convenience aliases do not
+            // replace those gates. A host group named as the full class could
+            // still shadow one.
+
             // Livewire remains optional; its provider is what supplies this binding.
             if ($this->app->bound(LivewireManager::class)) {
                 $this->app->make(LivewireManager::class)
@@ -319,10 +324,10 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             ->middleware('throttle:bfc-claim');
 
         $router->post('/bfc/ownership/release', [ManageOwnership::class, 'release'])
-            ->middleware('bfc.token.admin');
+            ->middleware(EnsureAdminToken::class);
 
         $router->post('/bfc/ownership/cancel-transfer', [ManageOwnership::class, 'cancelTransfer'])
-            ->middleware('bfc.token.admin');
+            ->middleware(EnsureAdminToken::class);
 
         // The hitch claim-contract route (PRD 1.12 / OSS-8): the wire
         // face of hitch/docs/claim-contract.md over the same claim
@@ -333,7 +338,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             ->middleware('throttle:bfc-claim');
 
         $router->post('/bfc/onboarding/issue', [ManageOnboarding::class, 'issue'])
-            ->middleware('bfc.token.admin');
+            ->middleware(EnsureAdminToken::class);
 
         $router->post('/bfc/onboarding/exchange', [ManageOnboarding::class, 'exchange'])
             ->middleware('throttle:bfc-claim');
@@ -355,16 +360,16 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // credential + per-IP rate limiter (throttle FIRST, so even
         // failing auth attempts are bounded).
         $router->get('/bfc/credentials', [ManageCredentials::class, 'index'])
-            ->middleware('bfc.credential.admin:'.OperatorAbility::CredentialRead->value);
+            ->middleware(EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRead->value);
 
         $router->post('/bfc/credentials', [ManageCredentials::class, 'store'])
-            ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::CredentialMint->value]);
+            ->middleware(['throttle:bfc-operator-write', EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialMint->value]);
 
         $router->delete('/bfc/credentials/{id}', [ManageCredentials::class, 'destroy'])
-            ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::CredentialRevoke->value]);
+            ->middleware(['throttle:bfc-operator-write', EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRevoke->value]);
 
         $router->post('/bfc/credentials/{id}/rotate', [ManageCredentials::class, 'rotate'])
-            ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::CredentialRotate->value]);
+            ->middleware(['throttle:bfc-operator-write', EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRotate->value]);
 
         // The hmac signing cutover (PRD 1.21, SEC-V3-01): a separate
         // operator-authorized verb — the claim exchange delivers and
@@ -373,7 +378,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // rotation's dance); the declaration matrix's own `activate`
         // verb stays the finer split.
         $router->post('/bfc/credentials/{id}/activate', [ManageCredentials::class, 'activate'])
-            ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::CredentialRotate->value]);
+            ->middleware(['throttle:bfc-operator-write', EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRotate->value]);
 
         // The personal-credentials surface (PRD 1.17): the SAME verbs
         // above, session-authenticated and scoped to the caller's OWN
@@ -525,7 +530,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             ->middleware([
                 'throttle:bfc-operator-write',
                 UniformConsoleKeyRefusal::class,
-                'bfc.credential.admin:'.OperatorAbility::ConsoleKeyWrite->value,
+                EnsureCredentialAdmin::class.':'.OperatorAbility::ConsoleKeyWrite->value,
             ]);
 
         // The retirement verb (Console PRD D12): the other half of
@@ -551,7 +556,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             ->middleware([
                 'throttle:bfc-operator-write',
                 UniformConsoleKeyRefusal::class,
-                'bfc.credential.admin:'.OperatorAbility::ConsoleKeyWrite->value,
+                EnsureCredentialAdmin::class.':'.OperatorAbility::ConsoleKeyWrite->value,
             ]);
 
         // THE DOOR (Console PRD D12/D13): `POST /bfc/console/enter`,
@@ -665,7 +670,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 ->name(ConsoleChrome::SCRIPT_ROUTE)
                 ->middleware([
                     ...$this->browserSessionMiddleware($router),
-                    'bfc.console',
+                    EnsureConsoleSession::class,
                     'auth:'.ConsoleGuardConfiguration::GUARD,
                     'throttle:bfc-console-chrome',
                 ]);
@@ -676,11 +681,11 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // verb, so a stolen mint- or revoke-scoped credential cannot
         // reach it.
         $router->post('/bfc/subjects/offboard', [ManageSubjects::class, 'offboard'])
-            ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::SubjectOffboard->value]);
+            ->middleware(['throttle:bfc-operator-write', EnsureCredentialAdmin::class.':'.OperatorAbility::SubjectOffboard->value]);
 
         if ((bool) config('built-for-cloud.credential_api.enabled', false)) {
             $router->prefix(trim((string) config('built-for-cloud.credential_api.prefix', 'api/credentials'), '/'))
-                ->middleware('bfc.token.admin')
+                ->middleware(EnsureAdminToken::class)
                 ->group(function (Router $router): void {
                     $router->get('/', [ManageTokens::class, 'index']);
                     $router->get('/client-observations', ClientObservations::class);

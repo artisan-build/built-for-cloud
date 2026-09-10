@@ -115,8 +115,11 @@ final class ConsoleChromeRouteScan
     /** The guard scoping half, as a route names it. */
     public const string GUARD_SCOPING = 'auth:'.ConsoleGuardConfiguration::GUARD;
 
-    /** The session half, as a route names it. */
-    public const string SESSION_MIDDLEWARE = 'bfc.console';
+    /** The class-bound session half required on package routes. */
+    public const string SESSION_MIDDLEWARE = EnsureConsoleSession::class;
+
+    /** The convenience alias host routes may use for the session half. */
+    private const string SESSION_ALIAS = 'bfc.console';
 
     /**
      * Every registered route, keyed as `METHOD[,METHOD] /uri`, with the
@@ -358,7 +361,7 @@ final class ConsoleChromeRouteScan
             $name = strstr($middleware, ':', true);
             $name = $name === false ? $middleware : $name;
 
-            if ($name === self::SESSION_MIDDLEWARE || $name === EnsureConsoleSession::class) {
+            if ($name === self::SESSION_MIDDLEWARE || $name === self::SESSION_ALIAS) {
                 return true;
             }
         }
