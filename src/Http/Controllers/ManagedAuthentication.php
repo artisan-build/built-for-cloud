@@ -42,11 +42,6 @@ final class ManagedAuthentication
             $connection = ManagedAuthConnection::current();
             $user = $identities->upsert($connection, $exchange);
 
-            if ($user->status !== 'active'
-                || $user->role !== $exchange->role) {
-                throw new ManagedAuthRefused;
-            }
-
             Auth::guard('web')->login($user, false);
             $request->session()->regenerate();
             $request->session()->put(StandaloneAccess::SESSION_VERSION_KEY, $user->auth_session_version);

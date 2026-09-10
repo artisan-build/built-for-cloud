@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\QueryException;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 
 final class ManagedIdentityUpsert
@@ -15,10 +16,7 @@ final class ManagedIdentityUpsert
 
     public function upsert(ManagedAuthConnection $connection, ManagedAuthExchange $exchange): User
     {
-        if ($exchange->membershipStatus !== 'active'
-            || $exchange->connectionStatus !== 'active'
-            || ! $exchange->contactEmailVerified
-            || strlen($exchange->displayName) > 255
+        if (strlen($exchange->displayName) > 255
             || ! $this->validEmail($exchange->contactEmail)) {
             throw new ManagedAuthRefused;
         }
@@ -52,6 +50,11 @@ final class ManagedIdentityUpsert
                     continue;
                 }
 
+                if ($exception instanceof UniqueConstraintViolationException
+                    || $this->isIntegrityConstraintViolation($exception)) {
+                    throw new ManagedAuthRefused(previous: $exception);
+                }
+
                 throw $exception;
             }
         }
@@ -62,7 +65,7 @@ final class ManagedIdentityUpsert
     private function update(User $user, ManagedAuthExchange $exchange): User
     {
         $now = CarbonImmutable::now();
-        $conflict = User::query()
+        $bestEffortConflict = User::query()
             ->where($user->getKeyName(), '!=', $user->getKey())
             ->where('normalized_email', strtolower($exchange->contactEmail))
             ->exists();
@@ -76,8 +79,8 @@ final class ManagedIdentityUpsert
             'membership_confirmed_at' => $now,
             'membership_checked_at' => $now,
             'membership_response_at' => $now,
-            'email_conflict_at' => $conflict ? $now : null,
-            'email_conflict_source' => $conflict ? $exchange->contactEmail : null,
+            'email_conflict_at' => $bestEffortConflict ? $now : null,
+            'email_conflict_source' => $bestEffortConflict ? $exchange->contactEmail : null,
         ])->save();
 
         return $user->refresh();
@@ -133,6 +136,10 @@ final class ManagedIdentityUpsert
             throw new ManagedAuthRefused;
         }
 
+        if (strlen($local) > $prefixLength && str_contains($local, '+')) {
+            throw new ManagedAuthRefused;
+        }
+
         $candidate = substr($local, 0, $prefixLength).$suffix.'@'.$domain;
 
         if (! $this->validEmail($candidate)) {
@@ -149,22 +156,33 @@ final class ManagedIdentityUpsert
 
     private function violatedExternalIdentity(QueryException $exception): bool
     {
-        $message = strtolower($exception->getMessage());
+        if (! $exception instanceof UniqueConstraintViolationException) {
+            return false;
+        }
 
-        return str_contains($message, 'users_scalpels_identity_unique')
-            || str_contains(
-                $message,
-                'users.scalpels_issuer, users.scalpels_connection_id, users.scalpels_id',
-            );
+        return $exception->index === 'users_scalpels_identity_unique'
+            || $exception->columns === ['scalpels_issuer', 'scalpels_connection_id', 'scalpels_id'];
     }
 
     private function violatedEmail(QueryException $exception): bool
     {
-        $message = strtolower($exception->getMessage());
+        if (! $exception instanceof UniqueConstraintViolationException) {
+            return false;
+        }
 
-        return str_contains($message, 'users_normalized_email_unique')
-            || str_contains($message, 'users_email_unique')
-            || str_contains($message, 'users.normalized_email')
-            || str_contains($message, 'users.email');
+        return in_array($exception->index, [
+            'users_normalized_email_unique',
+            'users_email_unique',
+        ], true) || in_array($exception->columns, [
+            ['normalized_email'],
+            ['email'],
+        ], true);
+    }
+
+    private function isIntegrityConstraintViolation(QueryException $exception): bool
+    {
+        $sqlState = $exception->errorInfo[0] ?? $exception->getCode();
+
+        return str_starts_with((string) $sqlState, '23');
     }
 }

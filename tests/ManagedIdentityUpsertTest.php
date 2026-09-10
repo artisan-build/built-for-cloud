@@ -5,6 +5,7 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\Actions\IssueHumanInvitation;
 use ArtisanBuild\BuiltForCloud\Actions\RequestStandalonePasswordReset;
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
+use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;
 use ArtisanBuild\BuiltForCloud\ManagedAuthExchange;
@@ -130,6 +131,27 @@ it('moves the unknown-subject case to a distinct identity and never adopts the s
         ->and(auth('web')->id())->toBe($created->getKey());
 });
 
+it('refuses an unrecognised integrity violation through the managed callback', function (): void {
+    $owner = User::query()->create([
+        'name' => 'Existing Owner',
+        'email' => 'owner@example.test',
+    ]);
+    $owner->forceFill(['role' => UserRole::Owner->value])->save();
+    $handoff = p3bBegin();
+    $handoff['fixture']->exchangeOverrides = ['role' => UserRole::Owner->value];
+
+    $response = $this->withSession([ManagedHandoff::SESSION_NONCE_KEY => $handoff['nonce']])
+        ->get('/bfc/managed/callback?'.http_build_query([
+            'state' => $handoff['state'],
+            'code' => 'new-owner-subject-code',
+        ]));
+
+    $response->assertStatus(404)->assertSeeText('Not Found');
+    expect(User::query()->count())->toBe(1)
+        ->and(User::query()->whereNotNull('scalpels_id')->exists())->toBeFalse()
+        ->and(auth('web')->check())->toBeFalse();
+});
+
 it('keys strictly on issuer connection and subject while the exact tuple converges', function (): void {
     $upsert = app(ManagedIdentityUpsert::class);
     $sameSubject = 'same-subject';
@@ -233,6 +255,22 @@ it('checks every alias candidate including real plus addresses and respects emai
     );
     expect($tagged->email)->toBe('person+real+bfc@example.test')
         ->and($tagged->original_contact_email)->toBe('person+real@example.test');
+});
+
+it('refuses rather than truncating into a real plus tag', function (): void {
+    $source = str_repeat('a', 59).'+real@example.test';
+    $holder = User::query()->create(['name' => 'Tagged Source Holder', 'email' => $source]);
+    $holder->forceFill(['original_contact_email' => $source])->save();
+
+    expect(fn () => app(ManagedIdentityUpsert::class)->upsert(
+        p3bConnection(),
+        p3bExchange(subject: 'long-tagged-subject', email: $source),
+    ))->toThrow(ManagedAuthRefused::class);
+
+    expect(User::query()->count())->toBe(1)
+        ->and($holder->fresh()->email)->toBe($source)
+        ->and($holder->fresh()->original_contact_email)->toBe($source)
+        ->and(User::query()->where('email', 'like', '%++%')->exists())->toBeFalse();
 });
 
 it('preserves identity and assigned email across all source-email changes and persists conflict state', function (): void {

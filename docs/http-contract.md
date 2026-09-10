@@ -1053,11 +1053,15 @@ sequence values. This P3a entry slice does not persist either required high-wate
 not enforce order regression; P3c adds the durable per-subject and per-connection marks and their
 per-dimension apply decisions.
 
-This entry slice authenticates only an active canonical user already linked to the returned
-subject. It does not allocate users or refresh membership data. On success it regenerates the
-session and redirects to `/`; every malformed, expired, mismatched, unlinked or upstream-failure
-case is the same plain-text `404 Not Found`. Authority contact and display fields are not stored by
-this slice, so their syntax and storage-length rules remain outside this endpoint's acceptance.
+An active, verified response upserts a canonical user by the exact issuer, connection and subject
+tuple. A new tuple never adopts an existing row by email; a case-insensitive collision instead uses
+a database-arbitrated `+bfc` alias while preserving the authority address as the original contact
+email. If an honest alias cannot fit without truncating an existing plus tag, or another integrity
+constraint refuses the write, the callback fails closed with the same plain-text `404 Not Found`.
+The source-email conflict artifact is best-effort under concurrency: it can miss a conflict when the
+other identity is created concurrently with the check, then is re-evaluated and corrected on this
+subject's next login. It does not arbitrate email uniqueness or an access decision. On success the
+callback regenerates the session and redirects to `/`.
 
 ---
 
