@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\ManagedAuthConfirmation;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;
 use ArtisanBuild\BuiltForCloud\ManagedAuthExchange;
 use ArtisanBuild\BuiltForCloud\ManagedFreshness;
+use ArtisanBuild\BuiltForCloud\ManagedHandoff;
 use ArtisanBuild\BuiltForCloud\ManagedMembershipResponses;
 use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ManagedAuthorityFixture;
@@ -133,6 +134,62 @@ it('serves stored state at 299 seconds and calls the authority at exactly 300 se
     expect($freshness->allows($user))->toBeTrue()
         ->and(p3cConfirmationCalls($fixture))->toBe(1)
         ->and($user->fresh()->membership_confirmed_at?->toAtomString())->toBe(now()->toAtomString());
+});
+
+it('authenticates two consecutive managed logins with one unchanged authority payload without advancing confirmation', function (): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    $fixture = p3cConfigureAuthority();
+    $login = function (string $code) {
+        $entry = $this->get('/bfc/managed/login')->assertRedirect();
+        parse_str((string) parse_url((string) $entry->headers->get('Location'), PHP_URL_QUERY), $query);
+
+        return $this->withSession([
+            ManagedHandoff::SESSION_NONCE_KEY => session(ManagedHandoff::SESSION_NONCE_KEY),
+        ])->get('/bfc/managed/callback?'.http_build_query([
+            'state' => $query['state'],
+            'code' => $code,
+        ]));
+    };
+
+    $login('first-login-code')->assertRedirect('/');
+    $user = User::query()->where('scalpels_id', 'subject-fixture')->sole();
+    $firstConfirmation = $user->membership_confirmed_at?->toAtomString();
+    auth('web')->logout();
+
+    CarbonImmutable::setTestNow('2026-09-10T12:01:00+00:00');
+    $login('second-login-code')->assertRedirect('/');
+
+    expect(auth('web')->id())->toBe($user->getKey())
+        ->and(User::query()->where('scalpels_id', 'subject-fixture')->count())->toBe(1)
+        ->and($user->fresh()->membership_confirmed_at?->toAtomString())->toBe($firstConfirmation)
+        ->and($user->fresh()->managed_membership_response_sequence)->toBe(13)
+        ->and(count(array_filter(
+            $fixture->calls,
+            static fn (array $call): bool => str_contains($call['path'], '/exchange'),
+        )))->toBe(2);
+});
+
+it('allows a duplicate confirmation from stored active grace without advancing confirmation', function (): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    $fixture = p3cConfigureAuthority();
+    $user = p3cUser();
+    $confirmedAt = $user->membership_confirmed_at?->toAtomString();
+    DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
+        'managed_connection_status' => 'active',
+        'managed_connection_generation' => 7,
+        'managed_connection_roster_version' => 13,
+        'managed_connection_response_sequence' => 13,
+    ]);
+    $fixture->confirmationOverrides = [
+        'roster_version' => 13,
+        'response_sequence' => 13,
+    ];
+
+    CarbonImmutable::setTestNow('2026-09-10T12:05:00+00:00');
+    expect(app(ManagedFreshness::class)->allows($user))->toBeTrue()
+        ->and(p3cConfirmationCalls($fixture))->toBe(1)
+        ->and($user->fresh()->membership_confirmed_at?->toAtomString())->toBe($confirmedAt)
+        ->and($user->fresh()->managed_membership_response_sequence)->toBe(13);
 });
 
 it('records the exact per-outcome freshness timestamps without letting denial or failure confirm', function (): void {
@@ -304,9 +361,10 @@ it('does not let duplicate older or lower-roster answers advance or revive membe
         p3cConfirmation($user, 21, membershipStatus: 'removed'),
     );
     CarbonImmutable::setTestNow('2026-09-10T12:02:00+00:00');
-    $responses->applyConfirmation(p3cConnection(), $user, p3cConfirmation($user, 20));
+    $allowed = $responses->applyConfirmation(p3cConnection(), $user, p3cConfirmation($user, 20));
 
-    expect($user->fresh()->managed_membership_status)->toBe('removed')
+    expect($allowed)->toBeFalse()
+        ->and($user->fresh()->managed_membership_status)->toBe('removed')
         ->and($user->fresh()->managed_membership_role)->toBe('member')
         ->and($user->fresh()->managed_membership_roster_version)->toBe(21)
         ->and($user->fresh()->managed_membership_response_sequence)->toBe(21)

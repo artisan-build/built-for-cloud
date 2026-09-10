@@ -71,8 +71,9 @@ final class ManagedFreshness
 
             try {
                 $confirmation = $this->client->confirm($connection, $subject);
+                $this->responses->applyConfirmation($connection, $subject, $confirmation);
 
-                return $this->responses->applyConfirmation($connection, $subject, $confirmation);
+                return $this->storedAllows($subject->refresh());
             } catch (ManagedAuthRefused $exception) {
                 if ($exception->recordsFailedAttempt) {
                     $this->responses->recordFailedAttempt($connection, $subject);

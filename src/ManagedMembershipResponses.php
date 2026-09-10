@@ -54,8 +54,9 @@ final class ManagedMembershipResponses
                 $this->fillMembershipDimension($user, $response, $connection);
             }
 
-            $active = $membershipAccepted
-                && $response->membershipStatus === 'active'
+            $active = ($membershipAccepted
+                ? $response->membershipStatus
+                : $user->managed_membership_status) === 'active'
                 && ($connectionAccepted
                     ? $response->connectionStatus
                     : ($authority->managed_connection_status ?? 'active')) === 'active';
@@ -64,7 +65,7 @@ final class ManagedMembershipResponses
                 'membership_response_at' => $receipt,
             ];
 
-            if ($active) {
+            if ($membershipAccepted && $active) {
                 $timestamps['membership_confirmed_at'] = $receipt;
             }
 
@@ -111,8 +112,9 @@ final class ManagedMembershipResponses
                 $this->storeConnectionDimension($response, $connection);
             }
 
-            $active = $membershipAccepted
-                && $response->membershipStatus === 'active'
+            $active = ($membershipAccepted
+                ? $response->membershipStatus
+                : $user?->managed_membership_status) === 'active'
                 && ($connectionAccepted
                     ? $response->connectionStatus
                     : ($authority->managed_connection_status ?? 'active')) === 'active';
@@ -131,6 +133,10 @@ final class ManagedMembershipResponses
                 }
 
                 return null;
+            }
+
+            if (! $membershipAccepted) {
+                return $user;
             }
 
             $user = $this->identities->upsert($connection, $response);
