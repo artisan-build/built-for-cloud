@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud;
 
 use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
+use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\Auth\HumanAuthConfiguration;
 use ArtisanBuild\BuiltForCloud\Commands\ConsoleReKeyCommand;
 use ArtisanBuild\BuiltForCloud\Commands\ConsoleRetireKeyCommand;
@@ -209,7 +210,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         Auth::resolved(function (AuthManager $auth) use ($localGuardName): void {
             $auth->extend('bfc', function (Application $app, string $name, array $config): CredentialGuard {
                 /** @var array<string, mixed> $config */
-                return new CredentialGuard($app, $name, $config);
+                return new CredentialGuard($app, $name, $config, $app->make(CredentialResolver::class));
             });
 
             // The delegated guard (Console PRD D10) — a SECOND,

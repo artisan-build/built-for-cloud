@@ -3,12 +3,14 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\AuditActor;
+use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
@@ -18,6 +20,7 @@ use ArtisanBuild\BuiltForCloud\ManagedAuthExchange;
 use ArtisanBuild\BuiltForCloud\ManagedFreshness;
 use ArtisanBuild\BuiltForCloud\ManagedHandoff;
 use ArtisanBuild\BuiltForCloud\ManagedMembershipResponses;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ManagedAuthorityFixture;
@@ -71,6 +74,16 @@ function p3cConfigureAuthority(): ManagedAuthorityFixture
     Http::fake(fn (ClientRequest $request) => $fixture->respond($request));
 
     return $fixture;
+}
+
+function p3cConfigureCredentialGuard(): void
+{
+    config([
+        'auth.guards.bfc' => ['driver' => 'bfc', 'provider' => 'users'],
+        'auth.providers.users' => ['driver' => 'eloquent', 'model' => User::class],
+        'built-for-cloud.credentials.guard' => 'bfc',
+    ]);
+    app('auth')->forgetGuards();
 }
 
 function p3cUser(
@@ -130,14 +143,21 @@ function p3cConfirmationCalls(ManagedAuthorityFixture $fixture): int
     ));
 }
 
-function p3cAccountCredential(User $user, string $secret): Credential
-{
+/** @param list<string>|null $abilities */
+function p3cAccountCredential(
+    User $user,
+    string $secret,
+    CredentialKind $kind = CredentialKind::Bearer,
+    SubjectType $subjectType = SubjectType::UserPrincipal,
+    ?array $abilities = null,
+): Credential {
     return Credential::query()->create([
-        'kind' => CredentialKind::Bearer,
-        'subject_type' => SubjectType::UserPrincipal,
+        'kind' => $kind,
+        'subject_type' => $subjectType,
         'subject_ref' => (string) $user->scalpels_id,
         'name' => 'account-'.$user->scalpels_id,
         'user_id' => (string) $user->getKey(),
+        'abilities' => $abilities,
         'secret_hash' => hash('sha256', $secret),
     ]);
 }
@@ -919,3 +939,260 @@ it('treats every authority failure class as infrastructure without revoking acco
     'transport failure' => 'transport',
     'malformed 200 body' => 'malformed',
 ]);
+
+it('ends the expired browser session without revoking and resolves the same credential after a later success', function (): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    $fixture = p3cConfigureAuthority();
+    p3cConfigureCredentialGuard();
+    $user = p3cUser('restored-subject');
+    $credential = p3cAccountCredential($user, 'restored-account-secret');
+    $userId = $user->getKey();
+    $credentialId = $credential->id;
+    Route::middleware(['web', 'bfc.auth'])->get('/managed-ingress/browser', static fn (): string => 'allowed');
+    Route::middleware('auth:bfc')->get('/managed-ingress/credential', static function (): array {
+        $guard = auth('bfc');
+
+        return ['credential' => $guard instanceof CredentialGuard ? $guard->credential()?->id : null];
+    });
+    $fixture->confirmationResponder = static fn (): mixed => Http::response([
+        'contract_version' => 'managed-auth-v1',
+        'error' => 'server_error',
+    ], 503);
+
+    CarbonImmutable::setTestNow('2026-09-10T12:30:00+00:00');
+    $this->actingAsVersioned($user)->getJson('/managed-ingress/browser')->assertUnauthorized();
+    $this->assertGuest('web');
+    $this->getJson('/managed-ingress/credential', [
+        'Authorization' => 'Bearer restored-account-secret',
+    ])->assertUnauthorized();
+
+    expect($credential->refresh()->id)->toBe($credentialId)
+        ->and($credential->revoked_at)->toBeNull()
+        ->and($credential->status->value)->toBe('active')
+        ->and(User::query()->whereKey($userId)->count())->toBe(1)
+        ->and($user->fresh()->membership_confirmed_at?->toAtomString())->toBe('2026-09-10T12:00:00+00:00');
+
+    $fixture->confirmationResponder = null;
+    CarbonImmutable::setTestNow('2026-09-10T12:30:30+00:00');
+    $this->getJson('/managed-ingress/credential', [
+        'Authorization' => 'Bearer restored-account-secret',
+    ])->assertOk()->assertJsonPath('credential', $credentialId);
+
+    expect(User::query()->whereKey($userId)->count())->toBe(1)
+        ->and(User::query()->where('scalpels_id', 'restored-subject')->sole()->getKey())->toBe($userId)
+        ->and($credential->refresh()->id)->toBe($credentialId)
+        ->and($credential->revoked_at)->toBeNull()
+        ->and($credential->last_used_at)->not->toBeNull()
+        ->and($user->fresh()->membership_confirmed_at?->toAtomString())->toBe(now()->toAtomString());
+});
+
+it('enforces deadline and authoritative denial on the bfc guard through BearerAuthenticator and CredentialResolver', function (string $outcome): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    $fixture = p3cConfigureAuthority();
+    p3cConfigureCredentialGuard();
+    $user = p3cUser('bearer-ingress-'.$outcome);
+    $secret = 'bearer-ingress-'.$outcome.'-secret';
+    $credential = p3cAccountCredential($user, $secret);
+    Route::middleware('auth:bfc')->get('/managed-ingress/bearer-'.$outcome, static fn (): string => 'allowed');
+    $this->getJson('/managed-ingress/bearer-'.$outcome, [
+        'Authorization' => 'Bearer '.$secret,
+    ])->assertOk();
+    $lastUsedAt = $credential->fresh()->last_used_at?->toAtomString();
+
+    if ($outcome === 'deadline') {
+        $fixture->confirmationResponder = static fn (): mixed => Http::response([
+            'contract_version' => 'managed-auth-v1',
+            'error' => 'server_error',
+        ], 503);
+        CarbonImmutable::setTestNow('2026-09-10T12:30:00+00:00');
+    } else {
+        $fixture->confirmationOverrides = ['membership_status' => 'removed'];
+        CarbonImmutable::setTestNow('2026-09-10T12:05:00+00:00');
+    }
+
+    $this->getJson('/managed-ingress/bearer-'.$outcome, [
+        'Authorization' => 'Bearer '.$secret,
+    ])->assertUnauthorized();
+
+    expect($credential->refresh()->last_used_at?->toAtomString())->toBe($lastUsedAt)
+        ->and($credential->revoked_at === null)->toBe($outcome === 'deadline');
+})->with(['deadline', 'authoritative']);
+
+it('enforces deadline and authoritative denial on the bfc guard through BasicAuthenticator and CredentialResolver', function (string $outcome): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    $fixture = p3cConfigureAuthority();
+    p3cConfigureCredentialGuard();
+    $user = p3cUser('basic-ingress-'.$outcome);
+    $secret = 'basic-ingress-'.$outcome.'-secret';
+    $credential = p3cAccountCredential($user, $secret, CredentialKind::Basic);
+    Route::middleware('auth:bfc')->get('/managed-ingress/basic-'.$outcome, static fn (): string => 'allowed');
+    $this->getJson('/managed-ingress/basic-'.$outcome, [
+        'Authorization' => 'Basic '.base64_encode('credential:'.$secret),
+    ])->assertOk();
+    $lastUsedAt = $credential->fresh()->last_used_at?->toAtomString();
+
+    if ($outcome === 'deadline') {
+        $fixture->confirmationResponder = static fn (): mixed => Http::response([
+            'contract_version' => 'managed-auth-v1',
+            'error' => 'server_error',
+        ], 503);
+        CarbonImmutable::setTestNow('2026-09-10T12:30:00+00:00');
+    } else {
+        $fixture->confirmationOverrides = ['membership_status' => 'removed'];
+        CarbonImmutable::setTestNow('2026-09-10T12:05:00+00:00');
+    }
+
+    $this->getJson('/managed-ingress/basic-'.$outcome, [
+        'Authorization' => 'Basic '.base64_encode('credential:'.$secret),
+    ])->assertUnauthorized();
+
+    expect($credential->refresh()->last_used_at?->toAtomString())->toBe($lastUsedAt)
+        ->and($credential->revoked_at === null)->toBe($outcome === 'deadline');
+})->with(['deadline', 'authoritative']);
+
+it('enforces deadline and authoritative denial on bfc.auth browser routes', function (string $outcome): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    $fixture = p3cConfigureAuthority();
+    $user = p3cUser('browser-auth-'.$outcome);
+    Route::middleware(['web', 'bfc.auth'])->get('/managed-ingress/user-auth-'.$outcome, static fn (): string => 'allowed');
+    $this->actingAsVersioned($user)->getJson('/managed-ingress/user-auth-'.$outcome)->assertOk();
+
+    if ($outcome === 'deadline') {
+        $fixture->confirmationResponder = static fn (): mixed => Http::response([
+            'contract_version' => 'managed-auth-v1',
+            'error' => 'server_error',
+        ], 503);
+        CarbonImmutable::setTestNow('2026-09-10T12:30:00+00:00');
+    } else {
+        $fixture->confirmationOverrides = ['membership_status' => 'removed'];
+        CarbonImmutable::setTestNow('2026-09-10T12:05:00+00:00');
+    }
+
+    $this->actingAsVersioned($user)->getJson('/managed-ingress/user-auth-'.$outcome)->assertUnauthorized();
+    $this->assertGuest('web');
+})->with(['deadline', 'authoritative']);
+
+it('enforces deadline and authoritative denial on bfc.admin browser routes', function (string $outcome): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    $fixture = p3cConfigureAuthority();
+    $user = p3cUser('browser-admin-'.$outcome, 'admin');
+    Route::middleware(['web', 'bfc.admin'])->get('/managed-ingress/user-admin-'.$outcome, static fn (): string => 'allowed');
+    $this->actingAsVersioned($user)->getJson('/managed-ingress/user-admin-'.$outcome)->assertOk();
+
+    if ($outcome === 'deadline') {
+        $fixture->confirmationResponder = static fn (): mixed => Http::response([
+            'contract_version' => 'managed-auth-v1',
+            'error' => 'server_error',
+        ], 503);
+        CarbonImmutable::setTestNow('2026-09-10T12:30:00+00:00');
+    } else {
+        $fixture->confirmationOverrides = ['membership_status' => 'removed', 'role' => 'admin'];
+        CarbonImmutable::setTestNow('2026-09-10T12:05:00+00:00');
+    }
+
+    $this->actingAsVersioned($user)->getJson('/managed-ingress/user-admin-'.$outcome)->assertForbidden();
+    $this->assertGuest('web');
+})->with(['deadline', 'authoritative']);
+
+it('enforces deadline and authoritative denial through EnsureCredentialAbility', function (string $outcome): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    $fixture = p3cConfigureAuthority();
+    p3cConfigureCredentialGuard();
+    $user = p3cUser('ability-'.$outcome);
+    $secret = 'ability-'.$outcome.'-secret';
+    $credential = p3cAccountCredential($user, $secret, abilities: [OperatorAbility::CredentialRead->value]);
+    Route::middleware(['auth:bfc', 'bfc.ability:'.OperatorAbility::CredentialRead->value])
+        ->get('/managed-ingress/ability-'.$outcome, static fn (): string => 'allowed');
+    $this->getJson('/managed-ingress/ability-'.$outcome, [
+        'Authorization' => 'Bearer '.$secret,
+    ])->assertOk();
+    $lastUsedAt = $credential->fresh()->last_used_at?->toAtomString();
+
+    if ($outcome === 'deadline') {
+        $fixture->confirmationResponder = static fn (): mixed => Http::response([
+            'contract_version' => 'managed-auth-v1',
+            'error' => 'server_error',
+        ], 503);
+        CarbonImmutable::setTestNow('2026-09-10T12:30:00+00:00');
+    } else {
+        $fixture->confirmationOverrides = ['membership_status' => 'removed'];
+        CarbonImmutable::setTestNow('2026-09-10T12:05:00+00:00');
+    }
+
+    $this->getJson('/managed-ingress/ability-'.$outcome, [
+        'Authorization' => 'Bearer '.$secret,
+    ])->assertUnauthorized();
+    expect($credential->refresh()->last_used_at?->toAtomString())->toBe($lastUsedAt);
+})->with(['deadline', 'authoritative']);
+
+it('enforces deadline and authoritative denial through EnsureCredentialAdmin', function (string $outcome): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    $fixture = p3cConfigureAuthority();
+    p3cConfigureCredentialGuard();
+    $user = p3cUser('credential-admin-'.$outcome);
+    $secret = 'credential-admin-'.$outcome.'-secret';
+    $credential = p3cAccountCredential(
+        $user,
+        $secret,
+        subjectType: SubjectType::Operator,
+        abilities: [OperatorAbility::ADMIN],
+    );
+    Route::middleware('bfc.credential.admin:'.OperatorAbility::CredentialRead->value)
+        ->get('/managed-ingress/credential-admin-'.$outcome, static fn (): string => 'allowed');
+    $this->getJson('/managed-ingress/credential-admin-'.$outcome, [
+        'Authorization' => 'Bearer '.$secret,
+    ])->assertOk();
+    $lastUsedAt = $credential->fresh()->last_used_at?->toAtomString();
+
+    if ($outcome === 'deadline') {
+        $fixture->confirmationResponder = static fn (): mixed => Http::response([
+            'contract_version' => 'managed-auth-v1',
+            'error' => 'server_error',
+        ], 503);
+        CarbonImmutable::setTestNow('2026-09-10T12:30:00+00:00');
+    } else {
+        $fixture->confirmationOverrides = ['membership_status' => 'removed'];
+        CarbonImmutable::setTestNow('2026-09-10T12:05:00+00:00');
+    }
+
+    $this->getJson('/managed-ingress/credential-admin-'.$outcome, [
+        'Authorization' => 'Bearer '.$secret,
+    ])->assertUnauthorized();
+    expect($credential->refresh()->last_used_at?->toAtomString())->toBe($lastUsedAt);
+})->with(['deadline', 'authoritative']);
+
+it('enforces deadline and authoritative denial through EnsureDashboardCredential', function (string $outcome): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    $fixture = p3cConfigureAuthority();
+    p3cConfigureCredentialGuard();
+    $user = p3cUser('dashboard-'.$outcome);
+    $secret = 'dashboard-'.$outcome.'-secret';
+    $credential = p3cAccountCredential(
+        $user,
+        $secret,
+        subjectType: SubjectType::Operator,
+        abilities: [OperatorAbility::MetadataRead->value],
+    );
+    Route::middleware(EnsureDashboardCredential::class)
+        ->get('/managed-ingress/dashboard-'.$outcome, static fn (): string => 'allowed');
+    $this->getJson('/managed-ingress/dashboard-'.$outcome, [
+        'Authorization' => 'Bearer '.$secret,
+    ])->assertOk();
+    $lastUsedAt = $credential->fresh()->last_used_at?->toAtomString();
+
+    if ($outcome === 'deadline') {
+        $fixture->confirmationResponder = static fn (): mixed => Http::response([
+            'contract_version' => 'managed-auth-v1',
+            'error' => 'server_error',
+        ], 503);
+        CarbonImmutable::setTestNow('2026-09-10T12:30:00+00:00');
+    } else {
+        $fixture->confirmationOverrides = ['membership_status' => 'removed'];
+        CarbonImmutable::setTestNow('2026-09-10T12:05:00+00:00');
+    }
+
+    $this->getJson('/managed-ingress/dashboard-'.$outcome, [
+        'Authorization' => 'Bearer '.$secret,
+    ])->assertUnauthorized();
+    expect($credential->refresh()->last_used_at?->toAtomString())->toBe($lastUsedAt);
+})->with(['deadline', 'authoritative']);
