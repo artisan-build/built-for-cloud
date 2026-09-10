@@ -479,7 +479,14 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             StandaloneRouteOwnership::assertMatched($router, $event->route, $standaloneRoutes);
 
             if (in_array($event->route, $bearerRoutes, true)) {
-                // Include normal host middleware attached after an earlier route gather.
+                // Include normal host middleware attached after an earlier
+                // route gather. Uncached collections only: a compiled
+                // collection reconstructs the matched route, so this object-
+                // identity gate never matches there and the flush is inert —
+                // a post-cache late attachment rides the framework's own
+                // gather/mutate behavior instead. The security properties
+                // (starter exclusion, zero bearer-request session writes,
+                // clean 302 handoff) do not depend on this flush.
                 $event->route->flushController();
             }
         });

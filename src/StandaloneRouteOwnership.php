@@ -14,8 +14,8 @@ final class StandaloneRouteOwnership
     /**
      * Ownership is asserted through stable structural facts — reserved name,
      * domain, URI, methods and package action — because a compiled route
-     * collection reconstructs fresh Route instances from cached attributes on
-     * every lookup, so object identity can never recognise the package's own
+     * collection reconstructs Route instances from cached attributes on
+     * lookup, so object identity can never recognise the package's own
      * routes after `route:cache`. The effective authority check resolves the
      * candidate's declared middleware and exclusions through the router's
      * alias and group tables, so spellings that resolve away from the
@@ -89,9 +89,14 @@ final class StandaloneRouteOwnership
     /**
      * A route occupies the reserved shape when its stable structural facts —
      * name, domain, URI, method set and controller action — are exactly the
-     * package's, which survives compilation/reconstruction and still fails
-     * closed for every host takeover of a reserved name or method/domain/URI
-     * slot.
+     * package's, which survives compilation/reconstruction. What is pinned
+     * is the identity facts plus (in assertOwned) the authority — never the
+     * rest of the stack, by design. Named residue: a host clone reproducing
+     * every structural fact including the package's own controller action,
+     * and carrying the authority, is accepted as the owner; the measured
+     * consequence is a fail-closed broken route (request ends 500, nothing
+     * completes or persists), not a takeover — reaching it requires the
+     * host to name the package's controller at the reserved name and URI.
      */
     private static function occupiesReservedShape(Route $candidate, Route $ownedRoute): bool
     {
