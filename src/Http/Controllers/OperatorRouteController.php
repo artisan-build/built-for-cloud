@@ -10,6 +10,11 @@ use Illuminate\Routing\Controller;
 use Illuminate\Routing\Route;
 use RuntimeException;
 
+/**
+ * @internal For package controllers only.
+ *
+ * The receipt proves a gate ran, so host code that records the receipt itself or reaches an action outside controller dispatch is outside what this mechanism can see.
+ */
 abstract class OperatorRouteController extends Controller
 {
     /**

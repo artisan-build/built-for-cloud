@@ -31,6 +31,8 @@ final class StandaloneRouteOwnership
      * Record the exact gate and ability that granted passage. The operator
      * controller checks this executed state at the point of no return, rather
      * than relying only on a listener-time prediction of the eventual stack.
+     *
+     * @internal For package middleware only.
      */
     public static function markOperatorGateExecuted(Request $request, string $gate): void
     {

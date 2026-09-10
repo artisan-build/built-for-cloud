@@ -307,6 +307,10 @@ it('fails closed when an operator controller action is absent from the inventory
         ->toThrow(RuntimeException::class, 'is missing from the operator route inventory');
 });
 
+it('keeps the public ownership claim action explicitly free of an operator gate', function (): void {
+    expect(StandaloneRouteOwnership::operatorGateForAction(ManageOwnership::class.'@claim'))->toBeNull();
+});
+
 it('derives the required gate from the executing action when setAction diverges from uses', function (): void {
     /** @var Router $router */
     $router = app('router');
