@@ -21,8 +21,10 @@ use Symfony\Component\HttpFoundation\Response;
 require __DIR__.'/../../vendor/autoload.php';
 
 $payload = $argv[1] ?? '';
+$vector = $argv[2] ?? 'fqcn-alias';
 
-if (! is_file($payload)) {
+if (! is_file($payload)
+    || ! in_array($vector, ['fqcn-alias', 'memo-set-action', 'memo-property'], true)) {
     fwrite(STDERR, "The generated route cache is unavailable.\n");
     exit(2);
 }
@@ -64,7 +66,7 @@ $case = new class('testProbe') extends TestCase
         $app['config']->set('app.key', 'base64:'.base64_encode(str_repeat('h', 32)));
     }
 
-    public function runProbe(string $payload): bool
+    public function runProbe(string $payload, string $vector): bool
     {
         parent::setUp();
         $this->artisan('migrate:fresh', ['--force' => true])->run();
@@ -77,10 +79,25 @@ $case = new class('testProbe') extends TestCase
             return false;
         }
 
-        $routes = array_values(array_filter(
-            $router->getRoutes()->getRoutes(),
-            static fn (Route $route): bool => in_array(EnsureUserIsAuthenticated::class, $route->middleware(), true),
-        ));
+        $routes = [];
+        $seen = [];
+
+        // CompiledRouteCollection::getRoutes() creates throwaway clones. get()
+        // resolves through getByName() and returns the memoised objects that the
+        // dispatcher will run, so poisoning any other handle is a false negative.
+        foreach (['GET', 'POST', 'PUT', 'DELETE'] as $method) {
+            foreach ($router->getRoutes()->get($method) as $route) {
+                $id = spl_object_id($route);
+
+                if (isset($seen[$id])
+                    || ! in_array(EnsureUserIsAuthenticated::class, $route->middleware(), true)) {
+                    continue;
+                }
+
+                $seen[$id] = true;
+                $routes[] = $route;
+            }
+        }
 
         if (count($routes) !== 11) {
             fwrite(STDERR, 'compiled-auth-route-count-'.count($routes).PHP_EOL);
@@ -101,7 +118,43 @@ $case = new class('testProbe') extends TestCase
         ])->save();
         $credential = CredentialFactory::new()->forUser((string) $member->getKey())->create();
         $credentialCount = Credential::query()->count();
-        $router->aliasMiddleware(EnsureUserIsAuthenticated::class, BfcStandaloneAuthCachePassThrough::class);
+
+        if ($vector === 'fqcn-alias') {
+            $router->aliasMiddleware(EnsureUserIsAuthenticated::class, BfcStandaloneAuthCachePassThrough::class);
+        } else {
+            foreach ($routes as $route) {
+                $gateless = array_values(array_filter(
+                    $route->middleware(),
+                    static fn (mixed $middleware): bool => $middleware !== EnsureUserIsAuthenticated::class,
+                ));
+
+                if ($vector === 'memo-property') {
+                    $route->computedMiddleware = $gateless;
+
+                    continue;
+                }
+
+                $action = $route->getAction();
+                $stripped = $action;
+                $stripped['middleware'] = $gateless;
+                $route->setAction($stripped);
+                $route->gatherMiddleware();
+                $route->setAction($action);
+            }
+        }
+
+        $poisonedStacks = $vector === 'fqcn-alias'
+            ? 0
+            : count(array_filter(
+                $routes,
+                static fn (Route $route): bool => ! in_array(
+                    EnsureUserIsAuthenticated::class,
+                    $router->gatherRouteMiddleware($route),
+                    true,
+                ),
+            ));
+        $statuses = [];
+        $recomputed = [];
 
         foreach ($routes as $route) {
             $path = '/'.str_replace(
@@ -115,16 +168,27 @@ $case = new class('testProbe') extends TestCase
                 'name' => 'compiled-auth-gate-created',
                 'password' => 'not-used-before-refusal',
             ]);
+            $statuses[] = $response->getStatusCode();
+            $recomputed[] = in_array(
+                EnsureUserIsAuthenticated::class,
+                $router->gatherRouteMiddleware($route),
+                true,
+            );
 
-            if ($response->getStatusCode() !== 500
-                || str_contains($response->getContent(), (string) $member->email)) {
+            if (str_contains($response->getContent(), (string) $member->email)) {
                 fwrite(STDERR, "compiled-auth-route-served-{$route->uri()}-{$response->getStatusCode()}".PHP_EOL);
 
                 return false;
             }
         }
 
-        return BfcStandaloneAuthCacheState::$paths === []
+        $allRefused = $vector === 'fqcn-alias'
+            ? $statuses === array_fill(0, 11, 500)
+            : count(array_filter($statuses, static fn (int $status): bool => $status < 200 || $status >= 300)) === 11;
+
+        return $allRefused
+            && ($vector === 'fqcn-alias' || ($poisonedStacks === 11 && ! in_array(false, $recomputed, true)))
+            && BfcStandaloneAuthCacheState::$paths === []
             && Invitation::query()->count() === 0
             && Credential::query()->count() === $credentialCount
             && $member->refresh()->role === UserRole::Member->value
@@ -135,7 +199,7 @@ $case = new class('testProbe') extends TestCase
 };
 
 try {
-    $valid = $case->runProbe($payload);
+    $valid = $case->runProbe($payload, $vector);
 } catch (Throwable $exception) {
     fwrite(STDERR, $exception::class.': '.$exception->getMessage().PHP_EOL);
     exit(1);
@@ -146,4 +210,8 @@ if (! $valid) {
     exit(1);
 }
 
-fwrite(STDOUT, "standalone-auth-route-cache-refused-11\n");
+if ($vector === 'fqcn-alias') {
+    fwrite(STDOUT, "standalone-auth-route-cache-refused-11\n");
+} else {
+    fwrite(STDOUT, "standalone-auth-route-cache-{$vector}-refused-11\n");
+}

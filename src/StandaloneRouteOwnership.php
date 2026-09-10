@@ -154,10 +154,11 @@ final class StandaloneRouteOwnership
     }
 
     /**
-     * Resolve every package middleware declaration at boot and match time, so
-     * alias, group and exclusion changes cannot silently remove one. Standalone
-     * controllers do not issue execution receipts, so mutation after the match
-     * assertion remains outside what this check can see.
+     * Resolve every package middleware declaration at boot and match time. At
+     * match, discard any earlier computed stack so uncached and compiled routes
+     * execute middleware recomputed from the declaration just asserted. A later
+     * RouteMatched listener can re-poison that memo before dispatch; standalone
+     * controllers issue no execution receipt to close that remaining seam.
      *
      * @param  list<array{route: Route, middleware: list<string>}>  $ownedRoutes
      */
@@ -191,6 +192,7 @@ final class StandaloneRouteOwnership
     {
         foreach ($ownedRoutes as ['route' => $ownedRoute]) {
             if (self::sharesMethodAndUri($matchedRoute, $ownedRoute)) {
+                $matchedRoute->flushController();
                 self::assertPackageMiddlewareOwned($router, $ownedRoutes);
 
                 return;

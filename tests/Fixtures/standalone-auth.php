@@ -23,7 +23,7 @@ require __DIR__.'/../../vendor/autoload.php';
 $vector = $argv[1] ?? '';
 $ordering = $argv[2] ?? '';
 
-if (! in_array($vector, ['fqcn-alias', 'fqcn-group', 'fqcn-exclusion', 'alias-exclusion'], true)
+if (! in_array($vector, ['fqcn-alias', 'fqcn-group', 'fqcn-exclusion', 'alias-exclusion', 'memo-set-action', 'memo-property'], true)
     || ! in_array($ordering, ['boot', 'match'], true)) {
     fwrite(STDERR, "Unknown standalone authentication gate probe.\n");
     exit(2);
@@ -61,6 +61,34 @@ final class BfcStandaloneAuthGateHostProvider extends ServiceProvider
 
             if ($vector === 'fqcn-group') {
                 $router->middlewareGroup(EnsureUserIsAuthenticated::class, [BfcStandaloneAuthGatePassThrough::class]);
+
+                return;
+            }
+
+            if (in_array($vector, ['memo-set-action', 'memo-property'], true)) {
+                foreach ($router->getRoutes() as $route) {
+                    if (! in_array(EnsureUserIsAuthenticated::class, $route->middleware(), true)) {
+                        continue;
+                    }
+
+                    $gateless = array_values(array_filter(
+                        $route->middleware(),
+                        static fn (mixed $middleware): bool => $middleware !== EnsureUserIsAuthenticated::class,
+                    ));
+
+                    if ($vector === 'memo-property') {
+                        $route->computedMiddleware = $gateless;
+
+                        continue;
+                    }
+
+                    $action = $route->getAction();
+                    $stripped = $action;
+                    $stripped['middleware'] = $gateless;
+                    $route->setAction($stripped);
+                    $route->gatherMiddleware();
+                    $route->setAction($action);
+                }
 
                 return;
             }
@@ -128,6 +156,18 @@ $case = new class('testProbe') extends TestCase
             return false;
         }
 
+        $memoPoisoning = in_array($vector = $_SERVER['BFC_STANDALONE_AUTH_VECTOR'] ?? '', ['memo-set-action', 'memo-property'], true);
+        $poisonedStacks = $memoPoisoning
+            ? count(array_filter(
+                $routes,
+                static fn (Route $route): bool => ! in_array(
+                    EnsureUserIsAuthenticated::class,
+                    $router->gatherRouteMiddleware($route),
+                    true,
+                ),
+            ))
+            : 0;
+
         $member = User::query()->create([
             'name' => 'Authentication Gate Member',
             'email' => 'auth-gate-member@example.test',
@@ -144,6 +184,7 @@ $case = new class('testProbe') extends TestCase
 
         $statuses = [];
         $disclosed = [];
+        $recomputed = [];
 
         foreach ($routes as $route) {
             $path = '/'.str_replace(
@@ -159,11 +200,21 @@ $case = new class('testProbe') extends TestCase
             ]);
             $statuses[] = $response->getStatusCode();
             $disclosed[] = str_contains($response->getContent(), (string) $member->email);
+            $recomputed[] = in_array(
+                EnsureUserIsAuthenticated::class,
+                $router->gatherRouteMiddleware($route),
+                true,
+            );
         }
 
         Notification::assertNothingSent();
 
-        return $statuses === array_fill(0, 11, 500)
+        $allRefused = $memoPoisoning
+            ? count(array_filter($statuses, static fn (int $status): bool => $status < 200 || $status >= 300)) === 11
+            : $statuses === array_fill(0, 11, 500);
+
+        return $allRefused
+            && (! $memoPoisoning || ($poisonedStacks === 11 && ! in_array(false, $recomputed, true)))
             && ! in_array(true, $disclosed, true)
             && BfcStandaloneAuthGateState::$paths === []
             && Invitation::query()->count() === 0
@@ -196,4 +247,8 @@ if ($ordering !== 'match' || ! $valid) {
     exit(1);
 }
 
-fwrite(STDOUT, "standalone-auth-gate-match-refused-11\n");
+if (in_array($vector, ['memo-set-action', 'memo-property'], true)) {
+    fwrite(STDOUT, "standalone-auth-gate-{$vector}-refused-11\n");
+} else {
+    fwrite(STDOUT, "standalone-auth-gate-match-refused-11\n");
+}
