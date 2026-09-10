@@ -127,6 +127,14 @@ final class MetadataEndpointShapes
     {
         return [
             'GET /bfc/console/vitals' => self::vitals(),
+            'POST /bfc/logout' => ['type' => 'empty'],
+            'POST /bfc/forgot-password' => ['type' => 'empty'],
+            'POST /bfc/reset-password' => ['type' => 'empty'],
+            'POST /bfc/members/invitations' => ['type' => 'empty'],
+            'PUT /bfc/members/{user}/role' => ['type' => 'empty'],
+            'DELETE /bfc/members/{user}' => ['type' => 'empty'],
+            'DELETE /bfc/me/sessions/others' => ['type' => 'empty'],
+            'DELETE /bfc/me/sessions/{session}' => ['type' => 'empty'],
             // `ok` is `true` and can be nothing else: the verb has one
             // success path and {@see ManageOwnership::cancelTransfer}
             // returns that literal. `bool` was a domain wider than the
@@ -446,11 +454,9 @@ final class MetadataEndpointShapes
     private static function headlineLabel(string $value, string $context, string $path): void
     {
         $declaration = app(CredentialDeclaration::class);
-        $vocabulary = $declaration instanceof DeclaresHeadlineStat
-            ? $declaration::HEADLINE_VOCABULARY
-            : null;
+        $vocabulary = self::headlineVocabulary($declaration);
 
-        if (! is_string($vocabulary) || ! enum_exists($vocabulary) || ! is_a($vocabulary, HeadlineLabel::class, true)) {
+        if (! self::isHeadlineVocabulary($vocabulary)) {
             Assert::fail(
                 $context.': '.$path.' carries a headline label while this app declares no headline vocabulary. '
                 .'The producer reports no headline at all in that case, so this payload could not have come from it.',
@@ -468,6 +474,21 @@ final class MetadataEndpointShapes
             $context.': '.$path.' is not a case of the vocabulary this app declares ('.$vocabulary.'). '
             .'Being identifier-shaped is not membership.',
         );
+    }
+
+    /** @phpstan-assert-if-true class-string<HeadlineLabel> $vocabulary */
+    private static function isHeadlineVocabulary(mixed $vocabulary): bool
+    {
+        return is_string($vocabulary)
+            && enum_exists($vocabulary)
+            && is_a($vocabulary, HeadlineLabel::class, true);
+    }
+
+    private static function headlineVocabulary(CredentialDeclaration $declaration): mixed
+    {
+        return $declaration instanceof DeclaresHeadlineStat
+            ? $declaration::HEADLINE_VOCABULARY
+            : null;
     }
 
     /**

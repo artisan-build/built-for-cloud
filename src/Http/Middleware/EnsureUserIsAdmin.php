@@ -9,9 +9,11 @@ use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleRole;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\RolePolicy;
+use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\User;
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -95,6 +97,15 @@ final class EnsureUserIsAdmin
         }
 
         if (! RolePolicy::canManageMembers($user->role)) {
+            abort(403);
+        }
+
+        if (! StandaloneAccess::sessionVersionIsCurrent($request, $user)) {
+            StandaloneAccess::endCurrentSession(
+                $request,
+                is_string($acting->guard) ? Auth::guard($acting->guard) : null,
+            );
+
             abort(403);
         }
 

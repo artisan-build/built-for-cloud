@@ -281,30 +281,31 @@ When an option is omitted, the command prompts for it using Laravel Prompts.
 The command requires the package `role` column. Its command name is retained as legacy residue until
 the standalone lifecycle slice replaces initial-owner and membership-management flows.
 
-### Invitations
+### Standalone membership
 
-The existing `ArtisanBuild\BuiltForCloud\Invitation` primitive remains available as legacy residue.
-It now creates the package model and always leaves the new account as Member, even if incoming or
-hook-composed attributes attempt to set a role. Package-owned invitation UI and lifecycle belong to a
-later slice.
+In standalone authority mode the package owns login, password recovery, addressed invitations,
+membership actions, and session management under `/bfc/*`. Every route carries the
+`bfc.standalone` authority gate; managed installations receive `404` before local authentication,
+writes, or mail. Mutating browser routes use Laravel's web session and CSRF protection.
 
-```php
-use ArtisanBuild\BuiltForCloud\Invitation;
+Password-reset and invitation links enter through stateless bearer handoff routes. Those routes
+exclude Laravel's `StartSession` middleware, set a short-lived encrypted cookie, and redirect to a
+clean session-backed form URL. Hosts may add session middleware to route groups, but must not put
+`StartSession` or a subclass in the global HTTP kernel: global middleware executes outside Laravel's
+route-level exclusion and is not a supported package configuration.
 
-$invitation = Invitation::invite('new@user.test');
+Owner and Admin may invite a Member, while only Owner may invite an Admin. Issuance stores only a
+SHA-256 digest of a bounded, single-use token and sends the acceptance link through the configured
+Laravel mailer. Acceptance creates the canonical package user with the addressed email and the role
+fixed at issuance; request-supplied identity, role, status, provenance, and off-site redirects are
+ignored. The supported invitation entry points are:
 
-$user = Invitation::accept($invitation->token, [
-    'name' => 'New User',
-    'password' => 'plain-password',
-]);
-```
+- `GET /bfc/invitations/{token}` for the stateless handoff, then `GET` and `POST /bfc/invitations/accept` for acceptance.
+- `POST /bfc/members/invitations` for Owner/Admin issuance.
+- `GET /bfc/members`, `PUT /bfc/members/{user}/role`, and `DELETE /bfc/members/{user}` for membership management.
 
-`invite()` generates a unique token with a required bounded TTL. `accept()` only
-accepts pending, unexpired invitations; it creates the package user with the invitation email,
-hashes a provided `password`, marks `accepted_at`, and returns the new user. Invalid, expired, or already accepted tokens throw
-`ArtisanBuild\BuiltForCloud\Exceptions\InvalidInvitation`.
-
-Useful scopes are available for app UI and housekeeping:
+`Invitation` remains the persisted model. Its query scopes are available for reporting and
+housekeeping, but invitation creation and acceptance run through the package actions and routes:
 
 ```php
 Invitation::pending()->get();
@@ -347,11 +348,11 @@ consumer-facing assertion wrapper so a scanner that visits nothing cannot report
 
 ### Foundation boundary
 
-This foundation does not implement local login/recovery UI, managed Scalpels HTTP exchange, email
-collision allocation, five/thirty-minute freshness calls, transition orchestration, or unified
-credential replacement. Existing `api_tokens`, fallback-token, invitation, ownership, delegated
-Console actor/guard, and app-specific credential declaration surfaces remain legacy residue for later
-authorized slices; they are not evidence that those later unified-auth behaviors exist.
+This slice does not implement managed Scalpels HTTP exchange, email collision allocation,
+five/thirty-minute freshness calls, transition orchestration, or unified credential replacement.
+Existing `api_tokens`, fallback-token, ownership, delegated Console actor/guard, and app-specific
+credential declaration surfaces remain separate contracts; they are not evidence that those later
+unified-auth behaviors exist.
 
 ## Installer scaffold
 

@@ -1,5 +1,11 @@
 # Invitations converge onto the claim-code primitive (PRD 1.13 / D4 / D1e)
 
+> **Historical and superseded:** this note describes the earlier operator/open-code invitation
+> design. The supported standalone lifecycle now issues addressed invitations through
+> `POST /bfc/members/invitations` and accepts them through `POST /bfc/invitations/accept`.
+> `Invitation::invite()`, `Invitation::accept()`, `POST /bfc/invitations`, and
+> `bfc:invitation:issue` are not current package APIs.
+
 The package `Invitation` is now a claim code in `at_exchange` mode: hashed at rest (as it always
 was), single-use under a conditional-update burn, optionally addressed, with a REQUIRED bounded
 ttl — and an app hook for composing the user its acceptance creates. The invite verb is

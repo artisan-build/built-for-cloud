@@ -29,6 +29,8 @@ use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
  */
 final readonly class OffboardOptions
 {
+    public const int MAX_FIELD_LENGTH = 255;
+
     public function __construct(
         public ?SubjectType $subjectType,
         public ?string $subjectRef,
@@ -68,8 +70,8 @@ final readonly class OffboardOptions
         $parsedRef = null;
 
         if (is_string($subjectRef) && $subjectRef !== '') {
-            if (strlen($subjectRef) > InvitationOptions::MAX_FIELD_LENGTH) {
-                throw InvalidCredentialInput::invitationFieldTooLong('subject_ref', InvitationOptions::MAX_FIELD_LENGTH);
+            if (strlen($subjectRef) > self::MAX_FIELD_LENGTH) {
+                throw InvalidCredentialInput::invitationFieldTooLong('subject_ref', self::MAX_FIELD_LENGTH);
             }
 
             $parsedRef = $subjectRef;
@@ -121,8 +123,8 @@ final readonly class OffboardOptions
             return null;
         }
 
-        if (strlen($value) > InvitationOptions::MAX_FIELD_LENGTH) {
-            throw InvalidCredentialInput::invitationFieldTooLong($field, InvitationOptions::MAX_FIELD_LENGTH);
+        if (strlen($value) > self::MAX_FIELD_LENGTH) {
+            throw InvalidCredentialInput::invitationFieldTooLong($field, self::MAX_FIELD_LENGTH);
         }
 
         return $value;

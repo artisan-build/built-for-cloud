@@ -514,18 +514,10 @@ return [
         'data_migrations' => env('BUILT_FOR_CLOUD_SURFACE_DATA_MIGRATIONS', true),
     ],
 
-    /*
-    |--------------------------------------------------------------------------
-    | Auth Foundation
-    |--------------------------------------------------------------------------
-    |
-    | Invitations are a legacy package surface until the standalone lifecycle
-    | slice replaces them. Human users and roles are always package-owned.
-    |
-    */
-
-    'auth_foundation' => [
-        'invitations' => env('BUILT_FOR_CLOUD_INVITATIONS', true),
+    'standalone' => [
+        'invitation_ttl_seconds' => env('BUILT_FOR_CLOUD_INVITATION_TTL', 259200),
+        'password_reset_minutes' => env('BUILT_FOR_CLOUD_PASSWORD_RESET_MINUTES', 60),
+        'handoff_minutes' => env('BUILT_FOR_CLOUD_HANDOFF_MINUTES', 10),
     ],
 
     /*

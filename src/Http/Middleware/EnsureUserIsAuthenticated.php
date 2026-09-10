@@ -8,9 +8,11 @@ use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
 use ArtisanBuild\BuiltForCloud\RolePolicy;
+use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\User;
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -93,6 +95,15 @@ final class EnsureUserIsAuthenticated
             abort(403);
         }
 
+        if (! StandaloneAccess::sessionVersionIsCurrent($request, $user)) {
+            StandaloneAccess::endCurrentSession(
+                $request,
+                is_string($acting->guard) ? Auth::guard($acting->guard) : null,
+            );
+
+            return $this->unauthenticated($request);
+        }
+
         // Full account containment (PRD 1.15, SEC-V3-04): a session
         // that survived offboarding — a store the offboard verb could
         // not enumerate — dies HERE, on its first appearance: the
@@ -121,6 +132,10 @@ final class EnsureUserIsAuthenticated
     {
         if ($request->expectsJson()) {
             abort(401);
+        }
+
+        if (Route::has('bfc.login')) {
+            return redirect()->route('bfc.login');
         }
 
         if (Route::has('login')) {

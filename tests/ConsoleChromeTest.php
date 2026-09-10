@@ -103,7 +103,7 @@ it('renders one and the same layout file for a local session and a delegated one
     $files = array_values(array_diff((array) scandir($viewDirectory), ['.', '..']));
     sort($files);
 
-    expect($files)->toBe(['chrome.blade.php', 'layout.blade.php']);
+    expect($files)->toBe(['auth', 'chrome.blade.php', 'layout.blade.php']);
 
     // And the one name resolves to that one file.
     expect(realpath(view()->getFinder()->find('bfc::layout')))

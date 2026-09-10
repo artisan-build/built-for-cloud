@@ -51,7 +51,7 @@ final class PersonalSurfaceWebGroupTest extends TestCase
     public function test_the_personal_routes_ride_the_hosts_own_web_group_when_it_exists(): void
     {
         $personal = collect(Route::getRoutes()->getRoutes())
-            ->filter(fn (RoutingRoute $route): bool => str_starts_with($route->uri(), 'bfc/me/'));
+            ->filter(fn (RoutingRoute $route): bool => str_starts_with($route->uri(), 'bfc/me/credentials'));
 
         $this->assertCount(3, $personal);
 
@@ -103,18 +103,32 @@ final class PersonalSurfaceWebGroupTest extends TestCase
         $sessioned = collect(Route::getRoutes()->getRoutes())
             ->filter(fn (RoutingRoute $route): bool => str_starts_with($route->getActionName(), 'ArtisanBuild\\BuiltForCloud\\'))
             ->reject(fn (RoutingRoute $route): bool => str_starts_with($route->uri(), 'bfc/me/'))
-            ->filter(fn (RoutingRoute $route): bool => in_array(
-                StartSession::class,
-                $this->app['router']->gatherRouteMiddleware($route),
-                true,
-            ))
+            ->filter(fn (RoutingRoute $route): bool => collect($this->app['router']->gatherRouteMiddleware($route))
+                ->contains(static fn (mixed $middleware): bool => is_string($middleware)
+                    && is_a($middleware, StartSession::class, true)))
             ->map(fn (RoutingRoute $route): string => $route->methods()[0].' /'.$route->uri())
             ->values()
             ->all();
 
         sort($sessioned);
 
-        $this->assertSame(['GET /bfc/console/chrome.js', 'POST /bfc/console/enter'], $sessioned);
+        $this->assertSame([
+            'DELETE /bfc/members/{user}',
+            'GET /bfc/console/chrome.js',
+            'GET /bfc/forgot-password',
+            'GET /bfc/invitations/accept',
+            'GET /bfc/login',
+            'GET /bfc/members',
+            'GET /bfc/reset-password',
+            'POST /bfc/console/enter',
+            'POST /bfc/forgot-password',
+            'POST /bfc/invitations/accept',
+            'POST /bfc/login',
+            'POST /bfc/logout',
+            'POST /bfc/members/invitations',
+            'POST /bfc/reset-password',
+            'PUT /bfc/members/{user}/role',
+        ], $sessioned);
     }
 
     /**
@@ -156,7 +170,7 @@ final class PersonalSurfaceWebGroupTest extends TestCase
     public function test_the_personal_controller_is_the_only_action_behind_that_stack(): void
     {
         $personal = collect(Route::getRoutes()->getRoutes())
-            ->filter(fn (RoutingRoute $route): bool => str_starts_with($route->uri(), 'bfc/me/'))
+            ->filter(fn (RoutingRoute $route): bool => str_starts_with($route->uri(), 'bfc/me/credentials'))
             ->map(fn (RoutingRoute $route): string => $route->getActionName())
             ->unique()
             ->values()

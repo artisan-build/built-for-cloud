@@ -156,6 +156,13 @@ $expectedCitations = [
  * or in the floor above.
  */
 $exemptFromCitation = [
+    'resources/views/auth/accept-invitation.blade.php' => 'package form template; structural rendering and request-owned data are driven by StandaloneHumanLifecycleTest',
+    'resources/views/auth/forgot-password.blade.php' => 'package form template; structural rendering is driven by StandaloneHumanLifecycleTest',
+    'resources/views/auth/login.blade.php' => 'package form template; structural rendering is driven by StandaloneHumanLifecycleTest',
+    'resources/views/auth/members.blade.php' => 'package form template; structural rendering and test-created members are driven by StandaloneHumanLifecycleTest',
+    'resources/views/auth/reset-password.blade.php' => 'package form template; structural rendering and request-owned data are driven by StandaloneHumanLifecycleTest',
+    'resources/views/auth/sessions.blade.php' => 'package form template; structural rendering and test-created sessions are driven by StandaloneDatabaseSessionsTest',
+    'resources/views/auth/styles.blade.php' => 'presentation-only shared CSS with no security guarantee',
     'src/Audit/AppActionEventBuilder.php' => 'a two-line binding of the shared AppendOnlyBuilder to one model; it adds and overrides nothing, and every claim is on the base',
     'src/Audit/AppActionLedgerBuilder.php' => 'a two-line binding of the shared AppendOnlyBuilder to one model; it adds and overrides nothing, and every claim is on the base',
     'src/Audit/AppActionReason.php' => 'a bounded enum: the closed app-action reason vocabulary, whose doc-to-code check is HttpContractDocTest\'s',

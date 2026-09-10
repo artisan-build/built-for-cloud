@@ -34,6 +34,10 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('credentials', function (Blueprint $table): void {
+            $table->dropIndex(['secret_key_version']);
+        });
+
+        Schema::table('credentials', function (Blueprint $table): void {
             $table->dropColumn(['secret_ciphertext', 'secret_key_version', 'delivered_at', 'activated_at']);
         });
     }

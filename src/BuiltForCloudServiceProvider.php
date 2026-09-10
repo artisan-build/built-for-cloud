@@ -17,7 +17,6 @@ use ArtisanBuild\BuiltForCloud\Commands\CredentialRotateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\FallbackTokenGenerateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\HmacRewrapCommand;
 use ArtisanBuild\BuiltForCloud\Commands\InstallOperatorCredentialCommand;
-use ArtisanBuild\BuiltForCloud\Commands\InvitationIssueCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand;
@@ -47,22 +46,27 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleEnter;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageInvitations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\PersonalCredentials;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneAuthentication;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneInvitations;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneMemberships;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\StandalonePasswordRecovery;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneSessions;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureSupportedSessionDriver;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\ExpireStandaloneHandoffOnRefusal;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\VerifyHmacSignature;
 use ArtisanBuild\BuiltForCloud\Listeners\EvictConsolePrincipal;
@@ -73,14 +77,14 @@ use Illuminate\Auth\SessionGuard;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
-use Illuminate\Contracts\Http\Kernel as HttpKernelContract;
 use Illuminate\Contracts\Session\Session;
 use Illuminate\Contracts\View\View as ViewContract;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
-use Illuminate\Foundation\Http\Kernel as HttpKernel;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Events\RouteMatched;
+use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Auth;
@@ -88,6 +92,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
+use Illuminate\View\Middleware\ShareErrorsFromSession;
 use Livewire\LivewireManager;
 use Throwable;
 
@@ -98,11 +103,6 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/built-for-cloud.php', 'built-for-cloud');
         $this->app->booting(
             static fn (Application $app) => HumanAuthConfiguration::apply($app->make(Repository::class)),
-        );
-
-        $this->callAfterResolving(
-            HttpKernelContract::class,
-            static fn (HttpKernel $kernel) => $kernel->prependMiddleware(EnsureSupportedSessionDriver::class),
         );
 
         $this->app->singleton(UsageReporter::class, NullUsageReporter::class);
@@ -267,6 +267,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             // ConsoleGuard does that on every route.
             $router->aliasMiddleware('bfc.console', EnsureConsoleSession::class);
             $router->aliasMiddleware('bfc.mcp', AuthenticateMcp::class);
+            $router->aliasMiddleware('bfc.standalone', EnsureStandaloneAuthority::class);
 
             // Livewire remains optional; its provider is what supplies this binding.
             if ($this->app->bound(LivewireManager::class)) {
@@ -394,22 +395,110 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // could mint or revoke their credentials.
         $personal = $this->browserSessionMiddleware($router);
 
+        $handoffMiddleware = [
+            EncryptCookies::class,
+            AddQueuedCookiesToResponse::class,
+            ExpireStandaloneHandoffOnRefusal::class,
+        ];
+        $handoffSessionMiddleware = [
+            ...$handoffMiddleware,
+            EnsureStandaloneAuthority::class,
+            ...$personal,
+        ];
+        $standaloneRoutes = [];
+        $standaloneRoutes[] = $router->get('/bfc/reset-password', [StandalonePasswordRecovery::class, 'edit'])
+            ->middleware($handoffSessionMiddleware)
+            ->name('bfc.password.reset.form');
+        $standaloneRoutes[] = $router->post('/bfc/reset-password', [StandalonePasswordRecovery::class, 'update'])
+            ->middleware([...$handoffSessionMiddleware, 'throttle:bfc-password-reset'])
+            ->name('bfc.password.update');
+        $standaloneRoutes[] = $router->get('/bfc/invitations/accept', [StandaloneInvitations::class, 'show'])
+            ->middleware($handoffSessionMiddleware)
+            ->name('bfc.invitations.accept.form');
+        $standaloneRoutes[] = $router->post('/bfc/invitations/accept', [StandaloneInvitations::class, 'store'])
+            ->middleware([...$handoffSessionMiddleware, 'throttle:bfc-invitation-accept'])
+            ->name('bfc.invitations.accept.store');
+
+        $bearerPageMiddleware = [
+            ...$handoffMiddleware,
+            'throttle:bfc-bearer-handoff',
+            EnsureStandaloneAuthority::class,
+        ];
+        $bearerRoutes = [];
+        $bearerRoutes[] = $standaloneRoutes[] = $router->get('/bfc/reset-password/{token}', [StandalonePasswordRecovery::class, 'handoff'])
+            ->middleware($bearerPageMiddleware)
+            ->withoutMiddleware([StartSession::class])
+            ->name('bfc.password.reset');
+        $bearerRoutes[] = $standaloneRoutes[] = $router->get('/bfc/invitations/{token}', [StandaloneInvitations::class, 'handoff'])
+            ->middleware($bearerPageMiddleware)
+            ->withoutMiddleware([StartSession::class])
+            ->name('bfc.invitations.accept');
+
+        $router->middleware([EnsureStandaloneAuthority::class, ...$personal])->group(function (Router $router) use (&$standaloneRoutes): void {
+            $standaloneRoutes[] = $router->get('/bfc/login', [StandaloneAuthentication::class, 'create'])
+                ->name('bfc.login');
+            $standaloneRoutes[] = $router->post('/bfc/login', [StandaloneAuthentication::class, 'store'])
+                ->middleware('throttle:bfc-login')
+                ->name('bfc.login.store');
+            $standaloneRoutes[] = $router->post('/bfc/logout', [StandaloneAuthentication::class, 'destroy'])
+                ->middleware(EnsureUserIsAuthenticated::class)
+                ->name('bfc.logout');
+
+            $standaloneRoutes[] = $router->get('/bfc/forgot-password', [StandalonePasswordRecovery::class, 'create'])
+                ->name('bfc.password.request');
+            $standaloneRoutes[] = $router->post('/bfc/forgot-password', [StandalonePasswordRecovery::class, 'store'])
+                ->middleware('throttle:bfc-password-reset')
+                ->name('bfc.password.email');
+            $standaloneRoutes[] = $router->get('/bfc/members', [StandaloneMemberships::class, 'index'])
+                ->middleware(EnsureUserIsAuthenticated::class)
+                ->name('bfc.members.index');
+            $standaloneRoutes[] = $router->post('/bfc/members/invitations', [StandaloneMemberships::class, 'invite'])
+                ->middleware(['throttle:bfc-invitation-issue', EnsureUserIsAuthenticated::class])
+                ->name('bfc.members.invitations.store');
+            $standaloneRoutes[] = $router->put('/bfc/members/{user}/role', [StandaloneMemberships::class, 'role'])
+                ->middleware(EnsureUserIsAuthenticated::class)
+                ->name('bfc.members.role.update');
+            $standaloneRoutes[] = $router->delete('/bfc/members/{user}', [StandaloneMemberships::class, 'deactivate'])
+                ->middleware(EnsureUserIsAuthenticated::class)
+                ->name('bfc.members.destroy');
+
+            $standaloneRoutes[] = $router->get('/bfc/me/sessions', [StandaloneSessions::class, 'index'])
+                ->middleware(EnsureUserIsAuthenticated::class)
+                ->name('bfc.sessions.index');
+            $standaloneRoutes[] = $router->delete('/bfc/me/sessions/others', [StandaloneSessions::class, 'destroyOthers'])
+                ->middleware(['throttle:bfc-session-confirm', EnsureUserIsAuthenticated::class])
+                ->name('bfc.sessions.destroy-others');
+            $standaloneRoutes[] = $router->delete('/bfc/me/sessions/{session}', [StandaloneSessions::class, 'destroy'])
+                ->middleware(['throttle:bfc-session-confirm', EnsureUserIsAuthenticated::class])
+                ->name('bfc.sessions.destroy');
+        });
+        $this->app->booted(function () use ($router, $standaloneRoutes): void {
+            StandaloneRouteOwnership::assertOwned($router, $standaloneRoutes);
+        });
+        Event::listen(RouteMatched::class, static function (RouteMatched $event) use ($bearerRoutes, $router, $standaloneRoutes): void {
+            StandaloneRouteOwnership::assertMatched($router, $event->route, $standaloneRoutes);
+
+            if (in_array($event->route, $bearerRoutes, true)) {
+                // Include normal host middleware attached after an earlier
+                // route gather. Uncached collections only: a compiled
+                // collection reconstructs the matched route, so this object-
+                // identity gate never matches there and the flush is inert —
+                // a post-cache late attachment rides the framework's own
+                // gather/mutate behavior instead. The security properties
+                // (starter exclusion, zero bearer-request session writes,
+                // clean 302 handoff) do not depend on this flush.
+                $event->route->flushController();
+            }
+        });
+
         $router->get('/bfc/me/credentials', [PersonalCredentials::class, 'index'])
-            ->middleware(['throttle:bfc-personal', ...$personal, 'bfc.auth']);
+            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
 
         $router->post('/bfc/me/credentials', [PersonalCredentials::class, 'store'])
-            ->middleware(['throttle:bfc-personal', ...$personal, 'bfc.auth']);
+            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
 
         $router->delete('/bfc/me/credentials/{id}', [PersonalCredentials::class, 'destroy'])
-            ->middleware(['throttle:bfc-personal', ...$personal, 'bfc.auth']);
-
-        // The machine-callable invite verb (PRD 1.13, SEC-V3-05): the
-        // HTTP half of its two transports, behind the same operator
-        // gate as the unified verb routes — an integration triggers
-        // the INVITATION, never a key mint. Its family is `mint` (an
-        // invitation is a minted claim code).
-        $router->post('/bfc/invitations', [ManageInvitations::class, 'store'])
-            ->middleware(['throttle:bfc-operator-write', 'bfc.credential.admin:'.OperatorAbility::CredentialMint->value]);
+            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
 
         // The console re-key verb (Console PRD D12): the retrofit path
         // that files a countersigning key onto an ALREADY-CLAIMED
@@ -644,6 +733,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             EncryptCookies::class,
             AddQueuedCookiesToResponse::class,
             StartSession::class,
+            ShareErrorsFromSession::class,
             PreventRequestForgery::class,
         ];
     }
@@ -704,7 +794,6 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             FallbackTokenGenerateCommand::class,
             HmacRewrapCommand::class,
             InstallOperatorCredentialCommand::class,
-            InvitationIssueCommand::class,
             OutboxDrainCommand::class,
             OwnershipMintClaimCommand::class,
             OwnershipRemintOwnerTokenCommand::class,
@@ -732,6 +821,36 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         RateLimiter::for('bfc-public', fn (Request $request): Limit => Limit::perMinute(60)->by($request->ip() ?? 'unknown'));
 
         RateLimiter::for('bfc-claim', fn (Request $request): Limit => Limit::perMinute(10)->by($request->ip() ?? 'unknown'));
+
+        RateLimiter::for('bfc-login', fn (Request $request): array => [
+            Limit::perMinute(5)->by('bfc-login-address|'.StandaloneAccess::normalizeEmail((string) $request->input('email', ''))),
+            Limit::perMinute(5)->by('bfc-login-ip|'.($request->ip() ?? 'unknown')),
+        ]);
+
+        RateLimiter::for('bfc-password-reset', fn (Request $request): array => [
+            Limit::perMinute(5)->by('bfc-password-reset-address|'.StandaloneAccess::normalizeEmail((string) $request->input('email', ''))),
+            Limit::perMinute(5)->by('bfc-password-reset-ip|'.($request->ip() ?? 'unknown')),
+        ]);
+
+        RateLimiter::for('bfc-invitation-issue', fn (Request $request): array => [
+            Limit::perMinute(5)->by('bfc-invitation-issue-actor|'.($this->limiterPrincipal($request) ?? 'anonymous')),
+            Limit::perMinute(5)->by('bfc-invitation-issue-address|'.StandaloneAccess::normalizeEmail((string) $request->input('email', ''))),
+            Limit::perMinute(5)->by('bfc-invitation-issue-ip|'.($request->ip() ?? 'unknown')),
+        ]);
+
+        RateLimiter::for('bfc-session-confirm', fn (Request $request): array => [
+            Limit::perMinute(4)->by('bfc-session-confirm-user|'.($this->limiterPrincipal($request) ?? 'anonymous')),
+            Limit::perMinute(2)->by('bfc-session-confirm-session|'.($request->hasSession() ? $request->session()->getId() : 'none')),
+            Limit::perMinute(6)->by('bfc-session-confirm-ip|'.($request->ip() ?? 'unknown')),
+        ]);
+
+        RateLimiter::for('bfc-invitation-accept', fn (Request $request): Limit => Limit::perMinute(10)->by(
+            'bfc-invitation-accept|'.($request->ip() ?? 'unknown'),
+        ));
+
+        RateLimiter::for('bfc-bearer-handoff', fn (Request $request): Limit => Limit::perMinute(10)->by(
+            'bfc-bearer-handoff|'.($request->ip() ?? 'unknown'),
+        ));
 
         // The personal surface's limiter (PRD 1.17). Keyed on the
         // SESSION principal, not a bearer digest: this surface has no

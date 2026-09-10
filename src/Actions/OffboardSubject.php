@@ -94,6 +94,10 @@ final class OffboardSubject
 
     public const string EVENT_KIND = 'offboard';
 
+    public const int MAX_ENTITLEMENT_VERSION = 9007199254740992;
+
+    public const int GATE_ATTEMPTS = 3;
+
     /**
      * The principal-traversal hard ceiling (rework 3 Fix 3): discovery
      * iterates to a FIXED POINT (a round that adds no new principal ends
@@ -115,7 +119,7 @@ final class OffboardSubject
         }
 
         if ($options->entitlementVersion !== null
-            && ($options->entitlementVersion < 1 || $options->entitlementVersion > IssueInvitation::MAX_ENTITLEMENT_VERSION)) {
+            && ($options->entitlementVersion < 1 || $options->entitlementVersion > self::MAX_ENTITLEMENT_VERSION)) {
             throw InvalidCredentialInput::entitlementVersionOutOfBounds();
         }
 
@@ -135,7 +139,7 @@ final class OffboardSubject
             ? fn (): OffboardResult => $this->decideIntegrationEvent($options, $subject, $actor)
             : fn (): OffboardResult => $this->contain($subject, $actor);
 
-        for ($attempt = 1; $attempt <= IssueInvitation::GATE_ATTEMPTS; $attempt++) {
+        for ($attempt = 1; $attempt <= self::GATE_ATTEMPTS; $attempt++) {
             try {
                 /** @var OffboardResult */
                 return DB::transaction($decide);
@@ -144,7 +148,7 @@ final class OffboardSubject
             }
         }
 
-        throw IntegrationEventContention::afterAttempts(IssueInvitation::GATE_ATTEMPTS);
+        throw IntegrationEventContention::afterAttempts(self::GATE_ATTEMPTS);
     }
 
     /**
@@ -152,7 +156,7 @@ final class OffboardSubject
      * subject (required by the options). Integration path: DERIVED
      * server-side from the gated (namespace, external_subject) identity —
      * `Subject(external_consumer, external_subject)`, the exact binding
-     * {@see IssueInvitation::subjectFor} uses — so the identity the
+     * legacy invitation integration used — so the identity the
      * version gate checks IS the identity that gets contained; a decoy
      * external_subject can never pass its own (empty) gate while a
      * different victim named in subject_ref is offboarded. A supplied
