@@ -106,6 +106,54 @@ final class ManagedAuthClient
         );
     }
 
+    public function confirm(ManagedAuthConnection $connection, User $user): ManagedAuthConfirmation
+    {
+        $response = $this->post(
+            $this->request($connection),
+            $connection->baseUrl.'/managed-auth/v1/memberships/confirm',
+            [
+                'contract_version' => self::CONTRACT_VERSION,
+                'issuer' => $connection->issuer,
+                'connection_id' => $connection->connectionId,
+                'organization_id' => $connection->organizationId,
+                'installation_id' => $connection->installationId,
+                'authority_generation' => $connection->authorityGeneration,
+                'roster_version' => $user->managed_membership_roster_version ?? 0,
+                'response_sequence' => $user->managed_membership_response_sequence ?? 0,
+                'responded_at' => $user->managed_membership_responded_at ?? '1970-01-01T00:00:00+00:00',
+                'scalpels_id' => $user->scalpels_id,
+            ],
+        );
+        $payload = $this->successfulPayload($response);
+
+        foreach ([
+            'issuer' => $connection->issuer,
+            'connection_id' => $connection->connectionId,
+            'organization_id' => $connection->organizationId,
+            'installation_id' => $connection->installationId,
+            'authority_generation' => $connection->authorityGeneration,
+            'scalpels_id' => $user->scalpels_id,
+        ] as $field => $expected) {
+            if (($payload[$field] ?? null) !== $expected) {
+                throw new ManagedAuthRefused;
+            }
+        }
+
+        try {
+            return new ManagedAuthConfirmation(
+                $this->requiredString($payload, 'scalpels_id'),
+                $this->requiredEnum($payload, 'membership_status', ['active', 'removed', 'disabled']),
+                $this->requiredEnum($payload, 'connection_status', ['active', 'inactive']),
+                $this->requiredEnum($payload, 'role', ['owner', 'admin', 'member']),
+                $this->unsignedInteger($payload, 'roster_version'),
+                $this->unsignedInteger($payload, 'response_sequence'),
+                $this->date($this->requiredString($payload, 'responded_at')),
+            );
+        } catch (ManagedAuthRefused $exception) {
+            throw new ManagedAuthRefused(previous: $exception, recordsFailedAttempt: true);
+        }
+    }
+
     private function request(ManagedAuthConnection $connection): PendingRequest
     {
         $request = $this->http
@@ -120,13 +168,17 @@ final class ManagedAuthClient
             : $request->withOptions(['verify' => $connection->caBundle]);
     }
 
-    /** @param array<string, string> $payload */
+    /** @param array<string, mixed> $payload */
     private function post(PendingRequest $request, string $url, array $payload): Response
     {
         try {
             return $request->post($url, $payload);
         } catch (Throwable $exception) {
-            throw new ManagedAuthRefused($exception->getMessage(), previous: $exception);
+            throw new ManagedAuthRefused(
+                $exception->getMessage(),
+                previous: $exception,
+                recordsFailedAttempt: true,
+            );
         }
     }
 
@@ -134,13 +186,20 @@ final class ManagedAuthClient
     private function successfulPayload(Response $response): array
     {
         $payload = $response->json();
+        $retryAfter = $this->retryAfter($response);
 
         if (! is_array($payload) || ($payload['contract_version'] ?? null) !== self::CONTRACT_VERSION) {
-            throw new ManagedAuthRefused;
+            throw new ManagedAuthRefused(
+                retryAfterSeconds: $retryAfter,
+                recordsFailedAttempt: true,
+            );
         }
 
         if ($response->status() !== 200) {
-            throw new ManagedAuthRefused;
+            throw new ManagedAuthRefused(
+                retryAfterSeconds: $retryAfter,
+                recordsFailedAttempt: true,
+            );
         }
 
         return $payload;
@@ -200,5 +259,16 @@ final class ManagedAuthClient
         } catch (Throwable) {
             throw new ManagedAuthRefused;
         }
+    }
+
+    private function retryAfter(Response $response): ?int
+    {
+        $value = trim($response->header('Retry-After'));
+
+        if ($value === '' || ! ctype_digit($value)) {
+            return null;
+        }
+
+        return min((int) $value, 300);
     }
 }

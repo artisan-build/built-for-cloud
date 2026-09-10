@@ -17,11 +17,17 @@ final class ManagedAuthorityFixture
     /** @var array<string, mixed> */
     public array $exchangeOverrides = [];
 
+    /** @var array<string, mixed> */
+    public array $confirmationOverrides = [];
+
     /** @var null|callable(array<string, mixed>): array<string, mixed> */
     public mixed $handoffTransform = null;
 
     /** @var null|callable(array<string, mixed>): array<string, mixed> */
     public mixed $exchangeTransform = null;
+
+    /** @var null|callable(array<string, mixed>, array<string, mixed>): mixed */
+    public mixed $confirmationResponder = null;
 
     public function __construct(
         private readonly string $baseUrl,
@@ -96,6 +102,25 @@ final class ManagedAuthorityFixture
             return Http::response($payload);
         }
 
+        if ($path === '/managed-auth/v1/memberships/confirm') {
+            $this->assertConfirmationBody($body);
+            $payload = array_merge($this->binding(), [
+                'scalpels_id' => $body['scalpels_id'],
+                'membership_status' => 'active',
+                'connection_status' => 'active',
+                'role' => 'member',
+                'roster_version' => ((int) $body['roster_version']) + 1,
+                'response_sequence' => ((int) $body['response_sequence']) + 1,
+                'responded_at' => now()->toAtomString(),
+            ], $this->confirmationOverrides);
+
+            if (is_callable($this->confirmationResponder)) {
+                return ($this->confirmationResponder)($body, $payload);
+            }
+
+            return Http::response($payload);
+        }
+
         return Http::response([
             'contract_version' => ManagedAuthClient::CONTRACT_VERSION,
             'error' => 'server_error',
@@ -136,6 +161,36 @@ final class ManagedAuthorityFixture
             if ($value === null && (! is_string($actual[$field]) || $actual[$field] === '')) {
                 throw new RuntimeException('Fixture received a malformed managed-auth-v1 request.');
             }
+        }
+    }
+
+    /** @param array<string, mixed> $body */
+    private function assertConfirmationBody(array $body): void
+    {
+        if (array_keys($body) !== [
+            'contract_version',
+            'issuer',
+            'connection_id',
+            'organization_id',
+            'installation_id',
+            'authority_generation',
+            'roster_version',
+            'response_sequence',
+            'responded_at',
+            'scalpels_id',
+        ]
+            || $body['contract_version'] !== ManagedAuthClient::CONTRACT_VERSION
+            || $body['issuer'] !== $this->issuer
+            || $body['connection_id'] !== $this->connectionId
+            || $body['organization_id'] !== $this->organizationId
+            || $body['installation_id'] !== $this->installationId
+            || $body['authority_generation'] !== $this->authorityGeneration
+            || ! is_int($body['roster_version'])
+            || ! is_int($body['response_sequence'])
+            || ! is_string($body['responded_at'])
+            || ! is_string($body['scalpels_id'])
+            || $body['scalpels_id'] === '') {
+            throw new RuntimeException('Fixture received a confirmation outside managed-auth-v1.');
         }
     }
 }

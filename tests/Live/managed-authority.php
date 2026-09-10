@@ -9,6 +9,8 @@ $statusPath = $argv[4] ?? '';
 $clientSecret = getenv('BFC_MANAGED_FIXTURE_CLIENT_SECRET');
 $authorityAppKey = getenv('BFC_MANAGED_FIXTURE_APP_KEY');
 $clientAppKey = getenv('BFC_MANAGED_CLIENT_APP_KEY');
+$confirmationDelay = (int) (getenv('BFC_MANAGED_FIXTURE_CONFIRM_DELAY_US') ?: 0);
+$confirmationStatus = (int) (getenv('BFC_MANAGED_FIXTURE_CONFIRM_STATUS') ?: 200);
 
 if ($port < 1
     || $certificatePath === ''
@@ -94,7 +96,9 @@ if ($server === false) {
 
 $handoffs = [];
 $exchangeCount = 0;
-file_put_contents($statusPath, json_encode(['exchange_count' => 0], JSON_THROW_ON_ERROR));
+$confirmationCount = 0;
+$confirmationInFlight = false;
+writeStatus($statusPath, $exchangeCount, $confirmationCount, $confirmationInFlight);
 fwrite(STDOUT, 'READY'.PHP_EOL);
 fflush(STDOUT);
 
@@ -186,7 +190,7 @@ while (true) {
 
         if ($valid) {
             $exchangeCount++;
-            file_put_contents($statusPath, json_encode(['exchange_count' => $exchangeCount], JSON_THROW_ON_ERROR));
+            writeStatus($statusPath, $exchangeCount, $confirmationCount, $confirmationInFlight);
             respond($connection, 200, [
                 'contract_version' => 'managed-auth-v1',
                 'issuer' => 'https://live-issuer.example.test',
@@ -206,6 +210,73 @@ while (true) {
                 'contact_email' => 'live-fixture@example.test',
                 'contact_email_verified' => true,
             ]);
+
+            continue;
+        }
+    }
+
+    if ($method === 'POST'
+        && $path === '/managed-auth/v1/memberships/confirm'
+        && $authenticated
+        && is_array($payload)) {
+        $valid = array_keys($payload) === [
+            'contract_version',
+            'issuer',
+            'connection_id',
+            'organization_id',
+            'installation_id',
+            'authority_generation',
+            'roster_version',
+            'response_sequence',
+            'responded_at',
+            'scalpels_id',
+        ]
+            && $payload['contract_version'] === 'managed-auth-v1'
+            && $payload['issuer'] === 'https://live-issuer.example.test'
+            && $payload['connection_id'] === 'live-connection'
+            && $payload['organization_id'] === 'live-organization'
+            && $payload['installation_id'] === 'live-installation'
+            && $payload['authority_generation'] === 7
+            && is_int($payload['roster_version'])
+            && is_int($payload['response_sequence'])
+            && is_string($payload['responded_at'])
+            && is_string($payload['scalpels_id'])
+            && $payload['scalpels_id'] !== '';
+
+        if ($valid) {
+            $confirmationCount++;
+            $confirmationInFlight = true;
+            writeStatus($statusPath, $exchangeCount, $confirmationCount, $confirmationInFlight);
+
+            if ($confirmationDelay > 0) {
+                usleep($confirmationDelay);
+            }
+
+            if ($confirmationStatus === 200) {
+                respond($connection, 200, [
+                    'contract_version' => 'managed-auth-v1',
+                    'issuer' => 'https://live-issuer.example.test',
+                    'connection_id' => 'live-connection',
+                    'organization_id' => 'live-organization',
+                    'installation_id' => 'live-installation',
+                    'authority_generation' => 7,
+                    'roster_version' => $payload['roster_version'] + 1,
+                    'response_sequence' => $payload['response_sequence'] + 1,
+                    'responded_at' => gmdate('Y-m-d\TH:i:s+00:00'),
+                    'scalpels_id' => $payload['scalpels_id'],
+                    'membership_status' => 'active',
+                    'connection_status' => 'active',
+                    'role' => 'member',
+                ]);
+            } else {
+                respond($connection, $confirmationStatus, [
+                    'contract_version' => 'managed-auth-v1',
+                    'error' => 'server_error',
+                ]);
+            }
+
+            $confirmationInFlight = false;
+            writeStatus($statusPath, $exchangeCount, $confirmationCount, $confirmationInFlight);
 
             continue;
         }
@@ -231,4 +302,13 @@ function redirectTo($connection, string $location): void
 {
     fwrite($connection, "HTTP/1.1 302 Found\r\nLocation: {$location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
     fclose($connection);
+}
+
+function writeStatus(string $path, int $exchangeCount, int $confirmationCount, bool $confirmationInFlight): void
+{
+    file_put_contents($path, json_encode([
+        'exchange_count' => $exchangeCount,
+        'confirmation_count' => $confirmationCount,
+        'confirmation_in_flight' => $confirmationInFlight,
+    ], JSON_THROW_ON_ERROR));
 }

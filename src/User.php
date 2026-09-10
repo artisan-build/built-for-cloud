@@ -33,6 +33,12 @@ use Illuminate\Notifications\Notifiable;
  * @property CarbonInterface|null $membership_confirmed_at
  * @property CarbonInterface|null $membership_checked_at
  * @property CarbonInterface|null $membership_response_at
+ * @property string|null $managed_membership_status
+ * @property string|null $managed_membership_role
+ * @property int|null $managed_membership_generation
+ * @property int|null $managed_membership_roster_version
+ * @property int|null $managed_membership_response_sequence
+ * @property string|null $managed_membership_responded_at
  * @property CarbonInterface|null $deactivated_at
  * @property int $auth_session_version
  */
@@ -71,6 +77,9 @@ class User extends Model implements AuthenticatableContract, MustVerifyEmail
             'membership_confirmed_at' => 'datetime',
             'membership_checked_at' => 'datetime',
             'membership_response_at' => 'datetime',
+            'managed_membership_generation' => 'integer',
+            'managed_membership_roster_version' => 'integer',
+            'managed_membership_response_sequence' => 'integer',
             'deactivated_at' => 'datetime',
             'auth_session_version' => 'integer',
         ];
