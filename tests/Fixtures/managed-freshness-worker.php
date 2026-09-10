@@ -65,6 +65,7 @@ $container->instance('config', new Repository([
 $capsule = new Capsule($container);
 $capsule->addConnection($database, 'pgsql_testing');
 $container->instance('db', $capsule->getDatabaseManager());
+$container->bind('db.schema', static fn (Container $app): mixed => $app['db']->connection()->getSchemaBuilder());
 $capsule->getDatabaseManager()->setDefaultConnection('pgsql_testing');
 $capsule->setAsGlobal();
 $capsule->bootEloquent();

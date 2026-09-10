@@ -191,15 +191,15 @@ while (true) {
         if ($valid) {
             $exchangeCount++;
             writeStatus($statusPath, $exchangeCount, $confirmationCount, $confirmationInFlight);
-            respond($connection, 200, [
+            $response = [
                 'contract_version' => 'managed-auth-v1',
                 'issuer' => 'https://live-issuer.example.test',
                 'connection_id' => 'live-connection',
                 'organization_id' => 'live-organization',
                 'installation_id' => 'live-installation',
                 'authority_generation' => 7,
-                'roster_version' => 8,
-                'response_sequence' => 13,
+                'roster_version' => 7 + $exchangeCount,
+                'response_sequence' => 12 + $exchangeCount,
                 'responded_at' => gmdate('Y-m-d\TH:i:s+00:00'),
                 'scalpels_id' => 'live-subject',
                 'membership_id' => 'live-membership',
@@ -209,7 +209,8 @@ while (true) {
                 'display_name' => 'Live Fixture Member',
                 'contact_email' => 'live-fixture@example.test',
                 'contact_email_verified' => true,
-            ]);
+            ];
+            respond($connection, 200, array_merge($response, responseOverrides($statusPath)));
 
             continue;
         }
@@ -311,4 +312,21 @@ function writeStatus(string $path, int $exchangeCount, int $confirmationCount, b
         'confirmation_count' => $confirmationCount,
         'confirmation_in_flight' => $confirmationInFlight,
     ], JSON_THROW_ON_ERROR));
+}
+
+/** @return array{membership_status?: string, connection_status?: string, role?: string} */
+function responseOverrides(string $statusPath): array
+{
+    $contents = @file_get_contents($statusPath.'.response');
+    $decoded = is_string($contents) ? json_decode($contents, true) : null;
+
+    if (! is_array($decoded)) {
+        return [];
+    }
+
+    return array_intersect_key($decoded, array_flip([
+        'membership_status',
+        'connection_status',
+        'role',
+    ]));
 }

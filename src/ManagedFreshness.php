@@ -28,6 +28,15 @@ final class ManagedFreshness
 
     public function allows(User $subject): bool
     {
+        try {
+            return $this->allowsBoundSubject($subject);
+        } catch (ManagedAuthRefused) {
+            return false;
+        }
+    }
+
+    private function allowsBoundSubject(User $subject): bool
+    {
         $connection = ManagedAuthConnection::current();
         $this->assertSubjectBinding($connection, $subject);
         $subject->refresh();

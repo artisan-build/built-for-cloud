@@ -7,6 +7,8 @@ namespace ArtisanBuild\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Throwable;
 
 final class ManagedMembershipResponses
 {
@@ -46,12 +48,15 @@ final class ManagedMembershipResponses
                 $response->responseSequence,
             );
 
+            $this->assertRecognizedRole($response->role);
+            $this->refuseOwnerTransition($user, $response, $membershipAccepted);
+
             if ($connectionAccepted) {
                 $this->storeConnectionDimension($response, $connection);
             }
 
             if ($membershipAccepted) {
-                $this->fillMembershipDimension($user, $response, $connection);
+                $this->fillMembershipDimension($user, $response, $connection, $receipt);
             }
 
             $active = ($membershipAccepted
@@ -70,6 +75,12 @@ final class ManagedMembershipResponses
             }
 
             $user->forceFill($timestamps)->save();
+            $this->applyDenial(
+                $connection,
+                $user,
+                $membershipAccepted && $response->membershipStatus !== 'active',
+                $connectionAccepted && $response->connectionStatus === 'inactive',
+            );
 
             return $active;
         });
@@ -108,6 +119,10 @@ final class ManagedMembershipResponses
                 $response->responseSequence,
             );
 
+            $this->assertRecognizedRole($response->role);
+            $this->refuseOwnerTransition($user, $response, $membershipAccepted);
+            $receipt = CarbonImmutable::now();
+
             if ($connectionAccepted) {
                 $this->storeConnectionDimension($response, $connection);
             }
@@ -123,15 +138,21 @@ final class ManagedMembershipResponses
                 // P3c-2 attaches AC10's subject-local and installation-wide blast radii here.
                 if ($user instanceof User) {
                     if ($membershipAccepted) {
-                        $this->fillMembershipDimension($user, $response, $connection);
+                        $this->fillMembershipDimension($user, $response, $connection, $receipt);
                     }
 
-                    $receipt = CarbonImmutable::now();
                     $user->forceFill([
                         'membership_checked_at' => $receipt,
                         'membership_response_at' => $receipt,
                     ])->save();
                 }
+
+                $this->applyDenial(
+                    $connection,
+                    $user,
+                    $membershipAccepted && $response->membershipStatus !== 'active',
+                    $connectionAccepted && $response->connectionStatus === 'inactive',
+                );
 
                 return null;
             }
@@ -141,7 +162,7 @@ final class ManagedMembershipResponses
             }
 
             $user = $this->identities->upsert($connection, $response);
-            $this->fillMembershipDimension($user, $response, $connection);
+            $this->fillMembershipDimension($user, $response, $connection, $receipt);
             $user->save();
 
             return $user->refresh();
@@ -203,8 +224,13 @@ final class ManagedMembershipResponses
         User $user,
         ManagedAuthConfirmation|ManagedAuthExchange $response,
         ManagedAuthConnection $connection,
+        CarbonImmutable $receipt,
     ): void {
+        $active = $response->membershipStatus === 'active';
         $user->forceFill([
+            'role' => $response->role,
+            'status' => $active ? 'active' : 'inactive',
+            'deactivated_at' => $active ? null : $receipt,
             'managed_membership_status' => $response->membershipStatus,
             'managed_membership_role' => $response->role,
             'managed_membership_generation' => $connection->authorityGeneration,
@@ -212,6 +238,70 @@ final class ManagedMembershipResponses
             'managed_membership_response_sequence' => $response->responseSequence,
             'managed_membership_responded_at' => $response->respondedAt->format(DATE_RFC3339_EXTENDED),
         ]);
+    }
+
+    private function applyDenial(
+        ManagedAuthConnection $connection,
+        ?User $subject,
+        bool $membershipDenied,
+        bool $connectionDenied,
+    ): void {
+        if ($connectionDenied) {
+            $subjects = User::query()
+                ->where('scalpels_issuer', $connection->issuer)
+                ->where('scalpels_connection_id', $connection->connectionId)
+                ->lockForUpdate()
+                ->get();
+
+            foreach ($subjects as $user) {
+                StandaloneAccess::invalidateAccountBoundState($user);
+            }
+
+            return;
+        }
+
+        if ($membershipDenied && $subject instanceof User) {
+            StandaloneAccess::invalidateAccountBoundState($subject);
+        }
+    }
+
+    private function assertRecognizedRole(string $role): void
+    {
+        if (UserRole::tryFrom($role) === null) {
+            throw new ManagedAuthRefused('managed_role_refused');
+        }
+    }
+
+    private function refuseOwnerTransition(
+        ?User $subject,
+        ManagedAuthConfirmation|ManagedAuthExchange $response,
+        bool $membershipAccepted,
+    ): void {
+        if (! $membershipAccepted) {
+            return;
+        }
+
+        $existingOwner = $subject?->role === 'owner';
+        $createsOwner = ! $existingOwner
+            && $response->role === 'owner';
+        $removesOwner = $existingOwner
+            && ($response->membershipStatus !== 'active' || $response->role !== 'owner');
+
+        if (! $createsOwner && ! $removesOwner) {
+            return;
+        }
+
+        try {
+            Log::warning('Built for Cloud refused a managed response that would change the Owner.', [
+                'reason_code' => 'managed_owner_transition_refused',
+                'user_id' => $subject?->getKey(),
+                'scalpels_id' => $response->scalpelsId,
+            ]);
+        } catch (Throwable) {
+            // The typed refusal below remains observable even if the logger is unavailable.
+        }
+
+        throw new ManagedAuthRefused('managed_owner_transition_refused');
     }
 
     private function newer(
