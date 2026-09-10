@@ -265,8 +265,9 @@ it('enforces every invariant and subject response binding before user or session
     ['organization_id', 'other-organization'],
     ['installation_id', 'other-installation'],
     ['authority_generation', 8],
-    ['scalpels_id', 'other-subject'],
 ]);
+
+// Confirmation-leg subject binding remains P3c's responsibility.
 
 it('treats every callback correlation refusal as one response without exchange', function (string $case): void {
     ['baseUrl' => $baseUrl, 'secret' => $secret] = managedConnection();

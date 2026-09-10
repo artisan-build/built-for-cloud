@@ -7,8 +7,8 @@ namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;
 use ArtisanBuild\BuiltForCloud\ManagedHandoff;
+use ArtisanBuild\BuiltForCloud\ManagedIdentityUpsert;
 use ArtisanBuild\BuiltForCloud\StandaloneAccess;
-use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -25,8 +25,11 @@ final class ManagedAuthentication
         }
     }
 
-    public function callback(Request $request, ManagedHandoff $handoff): RedirectResponse|Response
-    {
+    public function callback(
+        Request $request,
+        ManagedHandoff $handoff,
+        ManagedIdentityUpsert $identities,
+    ): RedirectResponse|Response {
         try {
             $exchange = $handoff->exchange($request);
 
@@ -37,14 +40,9 @@ final class ManagedAuthentication
             }
 
             $connection = ManagedAuthConnection::current();
-            $user = User::query()
-                ->where('scalpels_issuer', $connection->issuer)
-                ->where('scalpels_connection_id', $connection->connectionId)
-                ->where('scalpels_id', $exchange->scalpelsId)
-                ->first();
+            $user = $identities->upsert($connection, $exchange);
 
-            if (! $user instanceof User
-                || $user->status !== 'active'
+            if ($user->status !== 'active'
                 || $user->role !== $exchange->role) {
                 throw new ManagedAuthRefused;
             }
