@@ -14,6 +14,7 @@ use ArtisanBuild\BuiltForCloud\Scope;
 use Closure;
 use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Database\Events\QueryExecuted;
+use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Route;
@@ -23,7 +24,18 @@ use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Notification;
 use Symfony\Component\HttpFoundation\Response;
 
-uses(RefreshDatabase::class);
+trait EnablesLegacyCredentialApi
+{
+    /** @param Application $app */
+    protected function getEnvironmentSetUp($app): void
+    {
+        parent::getEnvironmentSetUp($app);
+
+        $app['config']->set('built-for-cloud.credential_api.enabled', true);
+    }
+}
+
+uses(EnablesLegacyCredentialApi::class, RefreshDatabase::class);
 
 final class HostilePackageGateMiddleware
 {
@@ -128,6 +140,7 @@ it('keeps every declared package route gate effective through hostile host alias
     $scan = packageGateProtectionScan($router, $packageRoutes);
 
     expect($scan['checked'])->not->toBe([])
+        ->and($scan['checked'])->toHaveKey('GET /api/credentials')
         ->and(array_values(array_unique(array_merge(...array_values($scan['checked'])))))->toContain(
             EnsureAdminToken::class,
             EnsureConsoleSession::class,
