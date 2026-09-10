@@ -16,6 +16,7 @@ use Illuminate\Notifications\Notifiable;
  * @property int $id
  * @property string $name
  * @property string $email
+ * @property string $normalized_email
  * @property CarbonInterface|null $email_verified_at
  * @property string|null $password
  * @property string $role
@@ -26,6 +27,8 @@ use Illuminate\Notifications\Notifiable;
  * @property string|null $scalpels_id
  * @property string|null $original_contact_email
  * @property bool $email_is_generated
+ * @property CarbonInterface|null $email_conflict_at
+ * @property string|null $email_conflict_source
  * @property CarbonInterface|null $last_authenticated_at
  * @property CarbonInterface|null $membership_confirmed_at
  * @property CarbonInterface|null $membership_checked_at
@@ -63,6 +66,7 @@ class User extends Model implements AuthenticatableContract, MustVerifyEmail
         return [
             'email_verified_at' => 'datetime',
             'email_is_generated' => 'boolean',
+            'email_conflict_at' => 'datetime',
             'last_authenticated_at' => 'datetime',
             'membership_confirmed_at' => 'datetime',
             'membership_checked_at' => 'datetime',
