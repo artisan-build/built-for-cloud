@@ -267,7 +267,7 @@ final class ManagedMembershipResponses
 
     private function assertRecognizedRole(string $role): void
     {
-        if (! in_array($role, ['owner', 'admin', 'member'], true)) {
+        if (UserRole::tryFrom($role) === null) {
             throw new ManagedAuthRefused('managed_role_refused');
         }
     }
@@ -283,7 +283,6 @@ final class ManagedMembershipResponses
 
         $existingOwner = $subject?->role === 'owner';
         $createsOwner = ! $existingOwner
-            && $response->membershipStatus === 'active'
             && $response->role === 'owner';
         $removesOwner = $existingOwner
             && ($response->membershipStatus !== 'active' || $response->role !== 'owner');
