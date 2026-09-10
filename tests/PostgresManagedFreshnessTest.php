@@ -193,7 +193,7 @@ function p3cPgRunSuppressedProbe(
         ->and(array_unique(array_column($results, 'allowed')))->toBe([true]);
 }
 
-it('accounts attempts at start and keeps repeated multi-process waves within the half-open bound on a shared database cache', function (): void {
+it('accounts attempts at start and suppresses concurrent and killed-holder retries on a shared database cache', function (): void {
     $schema = $this->postgresLaneConnection()->getSchemaBuilder();
 
     if (! $schema->hasTable('cache')) {
@@ -246,8 +246,6 @@ it('accounts attempts at start and keeps repeated multi-process waves within the
             'managed_connection_roster_version' => 10,
             'managed_connection_response_sequence' => 10,
         ]);
-        $starts = [];
-
         foreach (range(0, 10) as $wave) {
             $second = $wave * 30;
             p3cPgRunWave(
@@ -258,8 +256,6 @@ it('accounts attempts at start and keeps repeated multi-process waves within the
                 $certificate,
                 in_array($wave, [1, 2, 3], true),
             );
-            $starts[] = $second;
-
             if (in_array($wave, [1, 2, 3], true)) {
                 p3cPgRunSuppressedProbe(
                     $wave + 1,
@@ -272,15 +268,9 @@ it('accounts attempts at start and keeps repeated multi-process waves within the
         }
 
         $status = p3cPgWaitForStatus($statusPath, static fn (array $status): bool => true);
-        expect($status['confirmation_count'])->toBe(11)
-            ->and(count(array_filter($starts, static fn (int $start): bool => $start >= 0 && $start < 300)))->toBe(10);
-
-        foreach ($starts as $windowStart) {
-            expect(count(array_filter(
-                $starts,
-                static fn (int $start): bool => $start >= $windowStart && $start < $windowStart + 300,
-            )))->toBeLessThanOrEqual(10);
-        }
+        // This observes one call per scheduled wave and, through the helper assertions, none from
+        // suppressed probes. The fixture does not independently measure arbitrary sliding windows.
+        expect($status['confirmation_count'])->toBe(11);
     } finally {
         if ($authority->isRunning()) {
             $authority->stop();

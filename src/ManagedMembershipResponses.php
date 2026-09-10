@@ -120,6 +120,7 @@ final class ManagedMembershipResponses
                     : ($authority->managed_connection_status ?? 'active')) === 'active';
 
             if (! $active) {
+                // P3c-2 attaches AC10's subject-local and installation-wide blast radii here.
                 if ($user instanceof User) {
                     if ($membershipAccepted) {
                         $this->fillMembershipDimension($user, $response, $connection);
