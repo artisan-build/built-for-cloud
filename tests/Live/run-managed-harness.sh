@@ -49,6 +49,40 @@ set_confirmation_status() {
     php -r 'file_put_contents($argv[1], $argv[2]);' "${STATUS}.confirmation-status" "$1"
 }
 
+confirmation_count() {
+    php -r '$status = json_decode(file_get_contents($argv[1]), true, flags: JSON_THROW_ON_ERROR); echo $status["confirmation_count"];' "${STATUS}"
+}
+
+assert_standalone_refusal_matrix() {
+    local state="$1"
+    local surface
+    local route
+    local method
+    local path
+    local body="${RUN_DIR}/standalone-refusal.txt"
+    local result
+    local status
+    local redirect
+    local cells=0
+    local mode
+
+    mode="$("${HARNESS_ENV[@]}" php tests/Live/managed-user-state.php mode)"
+    [[ "${mode}" == managed ]] || fail "${state} standalone sweep did not run in managed mode"
+
+    while IFS=$'\t' read -r surface route method path; do
+        result="$(curl --silent --show-error --request "${method}" --output "${body}" --write-out '%{http_code}|%{redirect_url}' "${APP_BASE}${path}")"
+        status="${result%%|*}"
+        redirect="${result#*|}"
+        [[ "${status}" == 404 ]] || fail "${state} reached ${method} ${path} (${route}) with status ${status}"
+        [[ -z "${redirect}" ]] || fail "${state} was redirected from ${method} ${path} (${route}) to ${redirect}"
+        printf 'matrix: state=%s surface=%s route=%s method=%s status=404 authority=managed gate=EnsureStandaloneAuthority\n' \
+            "${state}" "${surface}" "${route}" "${method}"
+        cells=$((cells + 1))
+    done <"${STANDALONE_ROUTES}"
+
+    [[ "${cells}" -gt 0 ]] || fail "${state} standalone sweep derived no browser routes"
+}
+
 cleanup() {
     if [[ -n "${SERVER_PID:-}" ]]; then
         kill "${SERVER_PID}" 2>/dev/null || true
@@ -100,6 +134,8 @@ HARNESS_ENV=(
 )
 "${HARNESS_ENV[@]}" vendor/bin/testbench migrate:fresh --force --no-interaction >"${RUN_DIR}/migrate.log"
 "${HARNESS_ENV[@]}" php tests/Live/seed-managed-harness.php
+STANDALONE_ROUTES="${RUN_DIR}/standalone-routes.tsv"
+"${HARNESS_ENV[@]}" php tests/Live/managed-standalone-routes.php >"${STANDALONE_ROUTES}"
 "${HARNESS_ENV[@]}" vendor/bin/testbench serve --host=127.0.0.1 --port="${APP_PORT}" >"${SERVER_LOG}" 2>&1 &
 SERVER_PID=$!
 
@@ -134,11 +170,28 @@ ROTATED_COOKIE="$(cookie_of "${CALLBACK_HEADERS}")"
 DOMAIN_STATUS="$(curl --silent --show-error --header "Cookie: ${ROTATED_COOKIE}" --output /dev/null --write-out '%{http_code}' "${APP_BASE}/domain")"
 [[ "${DOMAIN_STATUS}" == 200 ]] || fail "managed session did not reach a protected route"
 
-USER_ID_BEFORE="$("${HARNESS_ENV[@]}" php tests/Live/managed-user-state.php expire)"
+USER_ID_BEFORE="$("${HARNESS_ENV[@]}" php tests/Live/managed-user-state.php age 300)"
 set_confirmation_status 503
+CONFIRMATIONS_BEFORE="$(confirmation_count)"
+REFRESH_FAILURE_STATUS="$(curl --silent --show-error --header "Cookie: ${ROTATED_COOKIE}" --output /dev/null --write-out '%{http_code}' "${APP_BASE}/domain")"
+[[ "${REFRESH_FAILURE_STATUS}" == 200 ]] || fail "managed refresh failure did not remain available inside grace"
+CONFIRMATIONS_AFTER="$(confirmation_count)"
+[[ "${CONFIRMATIONS_AFTER}" == $((CONFIRMATIONS_BEFORE + 1)) ]] || fail "refresh-failure state did not execute exactly one live authority confirmation"
+assert_standalone_refusal_matrix refresh-failure
+
+"${HARNESS_ENV[@]}" php tests/Live/managed-user-state.php age 900 >/dev/null
+CONFIRMATIONS_BEFORE="$(confirmation_count)"
+GRACE_STATUS="$(curl --silent --show-error --header "Cookie: ${ROTATED_COOKIE}" --output /dev/null --write-out '%{http_code}' "${APP_BASE}/domain")"
+[[ "${GRACE_STATUS}" == 200 ]] || fail "managed grace did not retain browser access before the deadline"
+CONFIRMATIONS_AFTER="$(confirmation_count)"
+[[ "${CONFIRMATIONS_AFTER}" == $((CONFIRMATIONS_BEFORE + 1)) ]] || fail "managed grace did not execute exactly one live failed confirmation"
+assert_standalone_refusal_matrix grace
+
+"${HARNESS_ENV[@]}" php tests/Live/managed-user-state.php age 1800 >/dev/null
 OUTAGE_HEADERS="$(curl --silent --show-error --header "Cookie: ${ROTATED_COOKIE}" --dump-header - --output /dev/null "${APP_BASE}/domain")"
 [[ "$(status_of "${OUTAGE_HEADERS}")" == 302 ]] || fail "expired managed session was not denied during an authority outage"
 [[ "$(header_of Location "${OUTAGE_HEADERS}")" == "${APP_BASE}/bfc/login" ]] || fail "outage denial did not use the package unauthenticated path"
+assert_standalone_refusal_matrix outage-expiry
 
 set_confirmation_status 200
 RESTORE_HEADERS="$(curl --silent --show-error --dump-header - --output /dev/null "${APP_BASE}/bfc/managed/login")"
@@ -164,6 +217,7 @@ REFUSAL_HEADERS="$(curl --silent --show-error --dump-header - --output "${RUN_DI
 [[ "$(status_of "${REFUSAL_HEADERS}")" == 404 ]] || fail "wrong-browser callback did not refuse"
 [[ -z "$(header_of Location "${REFUSAL_HEADERS}")" ]] || fail "wrong-browser refusal redirected"
 [[ "$(<"${RUN_DIR}/refusal.txt")" == 'Not Found' ]] || fail "wrong-browser refusal disclosed a different body"
+assert_standalone_refusal_matrix failed-managed-entry
 
 SECOND_SUCCESS_HEADERS="$(curl --silent --show-error --header "Cookie: ${SECOND_COOKIE}" --dump-header - --output /dev/null "${SECOND_CALLBACK}")"
 [[ "$(status_of "${SECOND_SUCCESS_HEADERS}")" == 302 ]] || fail "initiating browser could not complete after wrong-browser refusal"
@@ -192,6 +246,7 @@ FOURTH_AUTH_HEADERS="$(curl --silent --show-error --cacert "${CERT}" --dump-head
 FOURTH_CALLBACK="$(header_of Location "${FOURTH_AUTH_HEADERS}")"
 DENIAL_STATUS="$(curl --silent --show-error --header "Cookie: ${FOURTH_COOKIE}" --output /dev/null --write-out '%{http_code}' "${FOURTH_CALLBACK}")"
 [[ "${DENIAL_STATUS}" == 404 ]] || fail "authoritative membership denial did not refuse immediately"
+assert_standalone_refusal_matrix explicit-denial
 ENDED_SESSION_HEADERS="$(curl --silent --show-error --header "Cookie: ${DEMOTED_COOKIE}" --dump-header - --output /dev/null "${APP_BASE}/domain")"
 [[ "$(status_of "${ENDED_SESSION_HEADERS}")" == 302 ]] || fail "authoritative membership denial did not end the existing browser session"
 [[ "$(header_of Location "${ENDED_SESSION_HEADERS}")" == "${APP_BASE}/bfc/login" ]] || fail "ended managed session did not follow the package unauthenticated path"
@@ -201,10 +256,12 @@ ENDED_SESSION_DESTINATION="$(curl --silent --show-error --output /dev/null --wri
 MANAGED_STANDALONE_STATUS="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "${APP_BASE}/bfc/login")"
 [[ "${MANAGED_STANDALONE_STATUS}" == 404 ]] || fail "standalone route did not refuse managed mode"
 "${HARNESS_ENV[@]}" php tests/Live/set-standalone-authority.php
+STANDALONE_LOGIN_STATUS="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "${APP_BASE}/bfc/login")"
+[[ "${STANDALONE_LOGIN_STATUS}" == 200 ]] || fail "the standalone login control did not reopen when authority became standalone"
 STANDALONE_MANAGED_STATUS="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "${APP_BASE}/bfc/managed/login")"
 [[ "${STANDALONE_MANAGED_STATUS}" == 404 ]] || fail "managed route did not refuse standalone mode"
 
 EXCHANGE_COUNT="$(php -r '$status = json_decode(file_get_contents($argv[1]), true, flags: JSON_THROW_ON_ERROR); echo $status["exchange_count"];' "${STATUS}")"
 [[ "${EXCHANGE_COUNT}" == 5 ]] || fail "fixture observed an unexpected exchange count"
 
-printf 'managed live harness passed\nstamp: %s\nchecks: authenticated TLS handoff/exchange, exact authority redirect origin/path, browser-session binding refusal and success, session rotation/protected access, 1800-second outage denial and session ending, same-user restoration after authority recovery, role promotion and demotion on the next authorization decision, immediate authoritative browser denial and session ending, mode exclusivity\n' "${STAMP}"
+printf 'managed live harness passed\nstamp: %s\nchecks: authenticated TLS handoff/exchange, exact authority redirect origin/path, browser-session binding refusal and success, session rotation/protected access, structurally derived standalone refusal matrix after refresh failure/grace/outage expiry/explicit denial/failed managed entry, 1800-second outage denial and session ending, same-user restoration after authority recovery, role promotion and demotion on the next authorization decision, immediate authoritative browser denial and session ending, mode exclusivity\n' "${STAMP}"
