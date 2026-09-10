@@ -225,6 +225,14 @@ it('checks every alias candidate including real plus addresses and respects emai
         ->and(filter_var($created->email, FILTER_VALIDATE_EMAIL))->not->toBeFalse()
         ->and($created->original_contact_email)->toBe($source)
         ->and($created->email_is_generated)->toBeTrue();
+
+    User::query()->create(['name' => 'Tagged Source Holder', 'email' => 'person+real@example.test']);
+    $tagged = app(ManagedIdentityUpsert::class)->upsert(
+        p3bConnection(),
+        p3bExchange(subject: 'tagged-subject', email: 'person+real@example.test'),
+    );
+    expect($tagged->email)->toBe('person+real+bfc@example.test')
+        ->and($tagged->original_contact_email)->toBe('person+real@example.test');
 });
 
 it('preserves identity and assigned email across all source-email changes and persists conflict state', function (): void {
