@@ -106,8 +106,8 @@ final class StandaloneRouteOwnership
                 $candidate = $byMethod[$method][$domainAndUri] ?? null;
 
                 if (! $candidate instanceof Route
-                    || ! self::occupiesRouteShape($candidate, $ownedRoute)
-                    || ! self::resolvesMiddleware($router, $candidate, $gate)) {
+                    || ! self::occupiesOperatorShape($candidate, $ownedRoute)
+                    || ! self::resolvesGate($router, $candidate, $gate)) {
                     throw new RuntimeException("The route [{$method} {$ownedRoute->uri()}] must retain its built-for-cloud operator gate [{$gate}].");
                 }
             }
@@ -124,8 +124,8 @@ final class StandaloneRouteOwnership
                 continue;
             }
 
-            if (! self::occupiesRouteShape($matchedRoute, $ownedRoute)
-                || ! self::resolvesMiddleware($router, $matchedRoute, $gate)) {
+            if (! self::occupiesOperatorShape($matchedRoute, $ownedRoute)
+                || ! self::resolvesGate($router, $matchedRoute, $gate)) {
                 $method = $matchedRoute->methods()[0] ?? 'UNKNOWN';
 
                 throw new RuntimeException("The route [{$method} {$ownedRoute->uri()}] must retain its built-for-cloud operator gate [{$gate}].");
@@ -171,12 +171,12 @@ final class StandaloneRouteOwnership
             foreach ($ownedRoute->methods() as $method) {
                 $candidate = $byMethod[$method][$domainAndUri] ?? null;
 
-                if (! $candidate instanceof Route || ! self::occupiesRouteShape($candidate, $ownedRoute)) {
+                if (! $candidate instanceof Route || ! self::occupiesOperatorShape($candidate, $ownedRoute)) {
                     throw new RuntimeException("The route [{$method} {$ownedRoute->uri()}] must retain its built-for-cloud package middleware.");
                 }
 
                 foreach ($middleware as $expected) {
-                    if (! self::resolvesMiddleware($router, $candidate, $expected)) {
+                    if (! self::resolvesGate($router, $candidate, $expected)) {
                         throw new RuntimeException("The route [{$method} {$ownedRoute->uri()}] must retain its built-for-cloud package middleware [{$expected}].");
                     }
                 }
@@ -288,10 +288,14 @@ final class StandaloneRouteOwnership
     private static function occupiesReservedShape(Route $candidate, Route $ownedRoute): bool
     {
         return $candidate->getName() === $ownedRoute->getName()
-            && self::occupiesRouteShape($candidate, $ownedRoute);
+            && $candidate->getDomain() === $ownedRoute->getDomain()
+            && $candidate->uri() === $ownedRoute->uri()
+            && array_diff($candidate->methods(), $ownedRoute->methods()) === []
+            && array_diff($ownedRoute->methods(), $candidate->methods()) === []
+            && $candidate->getActionName() === $ownedRoute->getActionName();
     }
 
-    private static function occupiesRouteShape(Route $candidate, Route $ownedRoute): bool
+    private static function occupiesOperatorShape(Route $candidate, Route $ownedRoute): bool
     {
         return $candidate->getDomain() === $ownedRoute->getDomain()
             && $candidate->uri() === $ownedRoute->uri()
@@ -320,10 +324,10 @@ final class StandaloneRouteOwnership
         return array_values(array_unique($packageMiddleware));
     }
 
-    private static function resolvesMiddleware(Router $router, Route $route, string $middleware): bool
+    private static function resolvesGate(Router $router, Route $route, string $gate): bool
     {
         return in_array(
-            $middleware,
+            $gate,
             $router->resolveMiddleware($route->middleware(), $route->excludedMiddleware()),
             true,
         );
