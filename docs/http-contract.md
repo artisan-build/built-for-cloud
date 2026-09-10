@@ -1047,11 +1047,10 @@ browser redirect appends the one exact `state` field.
 Accepts the authority-provided `state` and `code`. The correlation can be claimed once and only by
 the initiating browser session; concurrent or replayed claims refuse before exchange. After the
 claim, the package exchanges the code with the configured authority over authenticated HTTPS,
-enforces its invariant response bindings, and requires the returned issuer, connection and subject
-to resolve an already-linked local user. It also enforces the wire types of the roster and response
-sequence values. This P3a entry slice does not persist either required high-water mark, so it does
-not enforce order regression; P3c adds the durable per-subject and per-connection marks and their
-per-dimension apply decisions.
+enforces its invariant response bindings, and accepts the authority-provided subject. It also
+enforces the wire types of the roster and response sequence values. This P3a entry slice does not
+persist either required high-water mark, so it does not enforce order regression; P3c adds the
+durable per-subject and per-connection marks and their per-dimension apply decisions.
 
 An active, verified response upserts a canonical user by the exact issuer, connection and subject
 tuple. A new tuple never adopts an existing row by email; a case-insensitive collision instead uses

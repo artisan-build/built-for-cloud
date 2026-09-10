@@ -14,6 +14,14 @@ final class ManagedIdentityUpsert
 {
     private const int MAX_INSERT_ATTEMPTS = 1000;
 
+    /**
+     * The caller must already have refused non-active membership, a non-active connection, and an
+     * unverified contact. Otherwise this method writes an active row, applies the supplied role,
+     * and advances `membership_confirmed_at`, allowing a denied subject to be served from stored
+     * state for 300 seconds with no authority call.
+     *
+     * @internal For the managed authentication callback only.
+     */
     public function upsert(ManagedAuthConnection $connection, ManagedAuthExchange $exchange): User
     {
         if (strlen($exchange->displayName) > 255
