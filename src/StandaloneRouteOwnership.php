@@ -27,6 +27,8 @@ final class StandaloneRouteOwnership
 {
     private const string EXECUTED_GATES = 'bfc.operator_gates_executed';
 
+    private const string PACKAGE_MIDDLEWARE_NAMESPACE = __NAMESPACE__.'\\Http\\Middleware\\';
+
     /**
      * Record the exact gate and ability that granted passage. The operator
      * controller checks this executed state at the point of no return, rather
@@ -104,8 +106,8 @@ final class StandaloneRouteOwnership
                 $candidate = $byMethod[$method][$domainAndUri] ?? null;
 
                 if (! $candidate instanceof Route
-                    || ! self::occupiesOperatorShape($candidate, $ownedRoute)
-                    || ! self::resolvesGate($router, $candidate, $gate)) {
+                    || ! self::occupiesRouteShape($candidate, $ownedRoute)
+                    || ! self::resolvesMiddleware($router, $candidate, $gate)) {
                     throw new RuntimeException("The route [{$method} {$ownedRoute->uri()}] must retain its built-for-cloud operator gate [{$gate}].");
                 }
             }
@@ -122,14 +124,77 @@ final class StandaloneRouteOwnership
                 continue;
             }
 
-            if (! self::occupiesOperatorShape($matchedRoute, $ownedRoute)
-                || ! self::resolvesGate($router, $matchedRoute, $gate)) {
+            if (! self::occupiesRouteShape($matchedRoute, $ownedRoute)
+                || ! self::resolvesMiddleware($router, $matchedRoute, $gate)) {
                 $method = $matchedRoute->methods()[0] ?? 'UNKNOWN';
 
                 throw new RuntimeException("The route [{$method} {$ownedRoute->uri()}] must retain its built-for-cloud operator gate [{$gate}].");
             }
 
             return;
+        }
+    }
+
+    /**
+     * Snapshot the package middleware declared when each route is registered,
+     * independently of the mutable route collection checked later.
+     *
+     * @param  list<Route>  $routes
+     * @return list<array{route: Route, middleware: list<string>}>
+     */
+    public static function packageMiddlewareInventory(array $routes): array
+    {
+        return array_map(
+            static fn (Route $route): array => [
+                'route' => $route,
+                'middleware' => self::packageMiddleware($route),
+            ],
+            $routes,
+        );
+    }
+
+    /**
+     * Resolve every package middleware declaration at boot and match time, so
+     * alias, group and exclusion changes cannot silently remove one. Standalone
+     * controllers do not issue execution receipts, so mutation after the match
+     * assertion remains outside what this check can see.
+     *
+     * @param  list<array{route: Route, middleware: list<string>}>  $ownedRoutes
+     */
+    public static function assertPackageMiddlewareOwned(Router $router, array $ownedRoutes): void
+    {
+        $byMethod = $router->getRoutes()->getRoutesByMethod();
+
+        foreach ($ownedRoutes as ['route' => $ownedRoute, 'middleware' => $middleware]) {
+            $domainAndUri = $ownedRoute->getDomain().$ownedRoute->uri();
+
+            foreach ($ownedRoute->methods() as $method) {
+                $candidate = $byMethod[$method][$domainAndUri] ?? null;
+
+                if (! $candidate instanceof Route || ! self::occupiesRouteShape($candidate, $ownedRoute)) {
+                    throw new RuntimeException("The route [{$method} {$ownedRoute->uri()}] must retain its built-for-cloud package middleware.");
+                }
+
+                foreach ($middleware as $expected) {
+                    if (! self::resolvesMiddleware($router, $candidate, $expected)) {
+                        throw new RuntimeException("The route [{$method} {$ownedRoute->uri()}] must retain its built-for-cloud package middleware [{$expected}].");
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * @param  list<array{route: Route, middleware: list<string>}>  $ownedRoutes
+     */
+    public static function assertPackageMiddlewareMatched(Router $router, Route $matchedRoute, array $ownedRoutes): void
+    {
+        foreach ($ownedRoutes as ['route' => $ownedRoute]) {
+            if (self::sharesMethodAndUri($matchedRoute, $ownedRoute)) {
+                self::assertPackageMiddlewareOwned($router, $ownedRoutes);
+
+                return;
+            }
         }
     }
 
@@ -223,14 +288,10 @@ final class StandaloneRouteOwnership
     private static function occupiesReservedShape(Route $candidate, Route $ownedRoute): bool
     {
         return $candidate->getName() === $ownedRoute->getName()
-            && $candidate->getDomain() === $ownedRoute->getDomain()
-            && $candidate->uri() === $ownedRoute->uri()
-            && array_diff($candidate->methods(), $ownedRoute->methods()) === []
-            && array_diff($ownedRoute->methods(), $candidate->methods()) === []
-            && $candidate->getActionName() === $ownedRoute->getActionName();
+            && self::occupiesRouteShape($candidate, $ownedRoute);
     }
 
-    private static function occupiesOperatorShape(Route $candidate, Route $ownedRoute): bool
+    private static function occupiesRouteShape(Route $candidate, Route $ownedRoute): bool
     {
         return $candidate->getDomain() === $ownedRoute->getDomain()
             && $candidate->uri() === $ownedRoute->uri()
@@ -239,10 +300,30 @@ final class StandaloneRouteOwnership
             && $candidate->getActionName() === $ownedRoute->getActionName();
     }
 
-    private static function resolvesGate(Router $router, Route $route, string $gate): bool
+    /** @return list<string> */
+    private static function packageMiddleware(Route $route): array
+    {
+        $packageMiddleware = [];
+
+        foreach ($route->middleware() as $middleware) {
+            if (! is_string($middleware)) {
+                continue;
+            }
+
+            $class = explode(':', $middleware, 2)[0];
+
+            if (str_starts_with($class, self::PACKAGE_MIDDLEWARE_NAMESPACE)) {
+                $packageMiddleware[] = $middleware;
+            }
+        }
+
+        return array_values(array_unique($packageMiddleware));
+    }
+
+    private static function resolvesMiddleware(Router $router, Route $route, string $middleware): bool
     {
         return in_array(
-            $gate,
+            $middleware,
             $router->resolveMiddleware($route->middleware(), $route->excludedMiddleware()),
             true,
         );
