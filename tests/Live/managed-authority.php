@@ -153,6 +153,7 @@ while (true) {
                 'authorization_url' => 'https://127.0.0.1:'.$port.'/managed-auth/v1/authorize',
                 'expires_at' => gmdate('Y-m-d\TH:i:s+00:00', time() + 90),
             ]);
+
             continue;
         }
     }
@@ -166,6 +167,7 @@ while (true) {
                 'state' => $state,
                 'code' => 'live-code-'.bin2hex(random_bytes(8)),
             ]));
+
             continue;
         }
     }
@@ -204,6 +206,7 @@ while (true) {
                 'contact_email' => 'live-fixture@example.test',
                 'contact_email_verified' => true,
             ]);
+
             continue;
         }
     }

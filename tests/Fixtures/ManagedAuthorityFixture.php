@@ -119,8 +119,8 @@ final class ManagedAuthorityFixture
     }
 
     /**
-     * @param array<string, mixed> $actual
-     * @param array<string, mixed> $expected
+     * @param  array<string, mixed>  $actual
+     * @param  array<string, mixed>  $expected
      */
     private function assertExactBody(array $actual, array $expected): void
     {

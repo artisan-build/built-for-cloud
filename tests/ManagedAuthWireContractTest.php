@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
+use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\ManagedAuthClient;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;
@@ -268,7 +269,7 @@ it('compares order fields monotonically and independently against both dimension
     if ($accepted) {
         expect($run()->responseSequence)->toBe($sequence);
     } else {
-        expect($run)->toThrow(ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused::class);
+        expect($run)->toThrow(ManagedAuthRefused::class);
     }
 })->with([
     ['subject', 8, 13, true],

@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\ManagedHandoff;
 use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ManagedAuthorityFixture;
 use ArtisanBuild\BuiltForCloud\User;
+use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Routing\Route;
@@ -158,7 +159,7 @@ it('creates an opaque hash-only handoff from stored connection facts and ignores
 });
 
 it('caps correlation expiry at 300 seconds and lets authority expiry shorten it', function (int $seconds, int $expected): void {
-    Carbon\CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
     ['baseUrl' => $baseUrl] = managedConnection();
     Http::fake(function (ClientRequest $request) use ($baseUrl, $seconds) {
         return Http::response([
@@ -170,7 +171,7 @@ it('caps correlation expiry at 300 seconds and lets authority expiry shorten it'
     });
 
     $this->get('/bfc/managed/login')->assertRedirect();
-    $expiry = new Carbon\CarbonImmutable((string) DB::table('bfc_managed_handoffs')->value('expires_at'));
+    $expiry = new CarbonImmutable((string) DB::table('bfc_managed_handoffs')->value('expires_at'));
     expect(now()->diffInSeconds($expiry))->toBe((float) $expected);
 })->with([[90, 90], [900, 300]]);
 
