@@ -136,8 +136,11 @@ final class StandaloneRouteOwnership
     }
 
     /**
-     * Snapshot the package middleware declared when each route is registered,
-     * independently of the mutable route collection checked later.
+     * Snapshot FQCN-spelled package middleware when each route is registered,
+     * independently of the mutable route collection checked later. An alias-
+     * spelled declaration such as `bfc.auth` carries no package namespace, so
+     * it is not inventoried or pinned; package routes currently spell their
+     * package gates as FQCNs.
      *
      * @param  list<Route>  $routes
      * @return list<array{route: Route, middleware: list<string>}>
@@ -154,11 +157,15 @@ final class StandaloneRouteOwnership
     }
 
     /**
-     * Resolve every package middleware declaration at boot and match time. At
-     * match, discard any earlier computed stack so uncached and compiled routes
-     * execute middleware recomputed from the declaration just asserted. A later
-     * RouteMatched listener can re-poison that memo before dispatch; standalone
-     * controllers issue no execution receipt to close that remaining seam.
+     * Resolve every inventoried package middleware declaration at boot and
+     * match time. At match, discard any earlier computed stack so uncached and
+     * compiled routes recompute from the declaration just asserted. This is
+     * still a prediction made one instruction before runRouteWithinStack()
+     * builds the pipeline: a later RouteMatched listener can mutate the memo,
+     * alias or group tables, or route exclusions in that window. A container
+     * rebind can also replace a gate without changing its resolved class name.
+     * Standalone controllers issue no execution receipt, which is the check
+     * required to close those remaining seams.
      *
      * @param  list<array{route: Route, middleware: list<string>}>  $ownedRoutes
      */
