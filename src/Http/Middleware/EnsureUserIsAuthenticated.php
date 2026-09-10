@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
 
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
+use ArtisanBuild\BuiltForCloud\ManagedAccountAccess;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
 use ArtisanBuild\BuiltForCloud\RolePolicy;
@@ -64,6 +65,8 @@ use Symfony\Component\HttpFoundation\Response;
  */
 final class EnsureUserIsAuthenticated
 {
+    public function __construct(private readonly ManagedAccountAccess $managedAccess) {}
+
     /**
      * @param  Closure(Request): Response  $next
      */
@@ -116,6 +119,15 @@ final class EnsureUserIsAuthenticated
             }
 
             abort(403);
+        }
+
+        if (! $this->managedAccess->allows($user)) {
+            StandaloneAccess::endCurrentSession(
+                $request,
+                is_string($acting->guard) ? Auth::guard($acting->guard) : null,
+            );
+
+            return $this->unauthenticated($request);
         }
 
         return $next($request);

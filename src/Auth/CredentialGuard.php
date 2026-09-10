@@ -88,6 +88,7 @@ final class CredentialGuard implements Guard
         private readonly Container $app,
         private readonly string $name,
         private readonly array $config,
+        private readonly CredentialResolver $resolver,
     ) {}
 
     public function check(): bool
@@ -194,10 +195,8 @@ final class CredentialGuard implements Guard
             return false;
         }
 
-        $resolver = new CredentialResolver;
-
-        return $resolver->resolve(CredentialKind::Bearer, $secret) !== null
-            || $resolver->resolve(CredentialKind::Basic, $secret) !== null;
+        return $this->resolver->resolve(CredentialKind::Bearer, $secret) !== null
+            || $this->resolver->resolve(CredentialKind::Basic, $secret) !== null;
     }
 
     public function hasUser(): bool
@@ -229,12 +228,10 @@ final class CredentialGuard implements Guard
 
     private function resolveCredential(Request $request): ?Credential
     {
-        $resolver = new CredentialResolver;
-
         /** @var list<CredentialAuthenticator> $authenticators */
         $authenticators = [
-            new BearerAuthenticator($resolver),
-            new BasicAuthenticator($resolver),
+            new BearerAuthenticator($this->resolver),
+            new BasicAuthenticator($this->resolver),
         ];
 
         foreach ($authenticators as $authenticator) {

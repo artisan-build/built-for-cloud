@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud\Auth;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier;
+use ArtisanBuild\BuiltForCloud\ManagedAccountAccess;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 
 /**
@@ -36,6 +37,8 @@ use ArtisanBuild\BuiltForCloud\OffboardedSubject;
  */
 final class CredentialResolver
 {
+    public function __construct(private readonly ManagedAccountAccess $managedAccess) {}
+
     public function resolve(CredentialKind $kind, ?string $secret): ?Credential
     {
         if ($secret === null || $secret === '') {
@@ -49,7 +52,9 @@ final class CredentialResolver
             ->active()
             ->first();
 
-        if ($credential === null || OffboardedSubject::rejects($credential)) {
+        if ($credential === null
+            || OffboardedSubject::rejects($credential)
+            || ! $this->managedAccess->allowsCredential($credential)) {
             return null;
         }
 
