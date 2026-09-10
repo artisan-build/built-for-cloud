@@ -50,6 +50,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManagedAuthentication;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\PersonalCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneAuthentication;
@@ -63,6 +64,7 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureManagedAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
@@ -423,6 +425,13 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // it a session-riding forgery on a logged-in user's browser
         // could mint or revoke their credentials.
         $personal = $this->browserSessionMiddleware($router);
+
+        $router->get('/bfc/managed/login', [ManagedAuthentication::class, 'create'])
+            ->middleware([EnsureManagedAuthority::class, ...$personal])
+            ->name('bfc.managed.login');
+        $router->get('/bfc/managed/callback', [ManagedAuthentication::class, 'callback'])
+            ->middleware([EnsureManagedAuthority::class, ...$personal])
+            ->name('bfc.managed.callback');
 
         $handoffMiddleware = [
             EncryptCookies::class,
