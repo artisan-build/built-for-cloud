@@ -2,8 +2,9 @@
 
 declare(strict_types=1);
 
-// The production namespace exercises discovery; this test-only path is outside its PSR-4 autoload mapping.
 namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
+
+// The production namespace exercises discovery; this test-only path is outside its PSR-4 autoload mapping.
 
 use Closure;
 use Illuminate\Http\Request;
