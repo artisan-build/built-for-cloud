@@ -5,6 +5,7 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use Symfony\Component\Process\Process;
 
 it('derives the complete operator route inventory across optional surface combinations', function (bool $console, bool $legacyApi, int $expected): void {
@@ -22,7 +23,7 @@ it('derives the complete operator route inventory across optional surface combin
     $process->mustRun();
 
     $routes = json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
-    $gates = [EnsureAdminToken::class, EnsureCredentialAdmin::class, EnsureConsoleSession::class];
+    $gates = [EnsureAdminToken::class, EnsureCredentialAdmin::class, EnsureConsoleSession::class, EnsureDashboardCredential::class];
     $operatorRoutes = array_values(array_filter($routes, static function (array $route) use ($gates): bool {
         foreach ($route['middleware'] as $middleware) {
             foreach ($gates as $gate) {
@@ -37,8 +38,8 @@ it('derives the complete operator route inventory across optional surface combin
 
     expect($operatorRoutes)->toHaveCount($expected);
 })->with([
-    'console and legacy API enabled' => [true, true, 18],
-    'console only' => [true, false, 12],
-    'legacy API only' => [false, true, 17],
-    'both optional surfaces disabled' => [false, false, 11],
+    'console and legacy API enabled' => [true, true, 19],
+    'console only' => [true, false, 13],
+    'legacy API only' => [false, true, 18],
+    'both optional surfaces disabled' => [false, false, 12],
 ]);

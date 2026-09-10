@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
@@ -18,6 +19,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\OperatorRouteController;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\Scope;
@@ -29,9 +31,11 @@ use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
+use Illuminate\Routing\CompiledRouteCollection;
 use Illuminate\Routing\Events\RouteMatched;
 use Illuminate\Routing\Events\Routing;
 use Illuminate\Routing\Route;
+use Illuminate\Routing\RouteCollection;
 use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
@@ -75,6 +79,17 @@ final class UninventoriedOperatorController extends OperatorRouteController
     }
 }
 
+final class RequestSwappingPackageGateMiddleware
+{
+    /** @param Closure(Request): Response $next */
+    public function handle(Request $request, Closure $next): Response
+    {
+        app()->instance('request', Request::create('/_bfc-test/routeless-container-request', 'POST'));
+
+        return $next($request);
+    }
+}
+
 beforeEach(function (): void {
     /** @var Router $router */
     $router = app('router');
@@ -97,9 +112,6 @@ beforeEach(function (): void {
     }
 
     HostilePackageGateMiddleware::$paths = [];
-
-    $router->get('/_bfc-test/package-gate-alias-control', static fn (): string => 'host-control')
-        ->middleware('bfc.token.admin');
 });
 
 /** @return array<string, array{uri: string, methods: list<string>, action: string, gate: string}> */
@@ -116,6 +128,7 @@ function packageOperatorGateInventory(): array
         'POST /bfc/credentials/{id}/activate' => ['uri' => 'bfc/credentials/{id}/activate', 'methods' => ['POST'], 'action' => ManageCredentials::class.'@activate', 'gate' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRotate->value],
         'POST /bfc/console/re-key' => ['uri' => 'bfc/console/re-key', 'methods' => ['POST'], 'action' => ManageConsoleKeys::class.'@reKey', 'gate' => EnsureCredentialAdmin::class.':'.OperatorAbility::ConsoleKeyWrite->value],
         'POST /bfc/console/keys/{key_id}/retire' => ['uri' => 'bfc/console/keys/{key_id}/retire', 'methods' => ['POST'], 'action' => ManageConsoleKeys::class.'@retire', 'gate' => EnsureCredentialAdmin::class.':'.OperatorAbility::ConsoleKeyWrite->value],
+        'GET /bfc/console/vitals' => ['uri' => 'bfc/console/vitals', 'methods' => ['GET', 'HEAD'], 'action' => ConsoleVitals::class, 'gate' => EnsureDashboardCredential::class],
         'GET /bfc/console/chrome.js' => ['uri' => 'bfc/console/chrome.js', 'methods' => ['GET', 'HEAD'], 'action' => ConsoleChromeScript::class, 'gate' => EnsureConsoleSession::class],
         'POST /bfc/subjects/offboard' => ['uri' => 'bfc/subjects/offboard', 'methods' => ['POST'], 'action' => ManageSubjects::class.'@offboard', 'gate' => EnsureCredentialAdmin::class.':'.OperatorAbility::SubjectOffboard->value],
         'GET /api/credentials' => ['uri' => 'api/credentials', 'methods' => ['GET', 'HEAD'], 'action' => ManageTokens::class.'@index', 'gate' => EnsureAdminToken::class],
@@ -182,7 +195,7 @@ function applyOperatorGateAttack(Router $router, array $ownedRoutes, string $vec
         $router->middlewareGroup('bfc.credential.admin', [EnsureCredentialAdmin::class]);
         $router->middlewareGroup('bfc.console', [EnsureConsoleSession::class]);
 
-        foreach ([EnsureAdminToken::class, EnsureCredentialAdmin::class, EnsureConsoleSession::class] as $gate) {
+        foreach ([EnsureAdminToken::class, EnsureCredentialAdmin::class, EnsureConsoleSession::class, EnsureDashboardCredential::class] as $gate) {
             $router->aliasMiddleware($gate, $gate);
         }
 
@@ -194,7 +207,7 @@ function applyOperatorGateAttack(Router $router, array $ownedRoutes, string $vec
     }
 
     if ($vector === 'fqcn-alias') {
-        foreach ([EnsureAdminToken::class, EnsureCredentialAdmin::class, EnsureConsoleSession::class] as $gate) {
+        foreach ([EnsureAdminToken::class, EnsureCredentialAdmin::class, EnsureConsoleSession::class, EnsureDashboardCredential::class] as $gate) {
             $router->aliasMiddleware($gate, HostilePackageGateMiddleware::class);
         }
 
@@ -202,7 +215,7 @@ function applyOperatorGateAttack(Router $router, array $ownedRoutes, string $vec
     }
 
     if ($vector === 'fqcn-group') {
-        foreach ([EnsureAdminToken::class, EnsureCredentialAdmin::class, EnsureConsoleSession::class] as $gate) {
+        foreach ([EnsureAdminToken::class, EnsureCredentialAdmin::class, EnsureConsoleSession::class, EnsureDashboardCredential::class] as $gate) {
             $router->middlewareGroup($gate, [HostilePackageGateMiddleware::class]);
         }
 
@@ -223,11 +236,16 @@ function applyOperatorGateAttack(Router $router, array $ownedRoutes, string $vec
         $restoreAliases();
 
         foreach ($ownedRoutes as ['route' => $route, 'gate' => $gate]) {
-            $route->withoutMiddleware(match (true) {
+            $alias = match (true) {
                 $gate === EnsureAdminToken::class => 'bfc.token.admin',
                 $gate === EnsureConsoleSession::class => 'bfc.console',
-                default => 'bfc.credential.admin:'.explode(':', $gate, 2)[1],
-            });
+                str_starts_with($gate, EnsureCredentialAdmin::class.':') => 'bfc.credential.admin:'.explode(':', $gate, 2)[1],
+                default => null,
+            };
+
+            if ($alias !== null) {
+                $route->withoutMiddleware($alias);
+            }
         }
 
         return;
@@ -244,7 +262,7 @@ function applyOperatorGateAttack(Router $router, array $ownedRoutes, string $vec
     if ($vector === 'later-wildcard-alias') {
         Event::listen(Routing::class, $restoreAliases);
         Event::listen(RouteMatched::class.'*', static function () use ($router): void {
-            foreach ([EnsureAdminToken::class, EnsureCredentialAdmin::class, EnsureConsoleSession::class] as $gate) {
+            foreach ([EnsureAdminToken::class, EnsureCredentialAdmin::class, EnsureConsoleSession::class, EnsureDashboardCredential::class] as $gate) {
                 $router->aliasMiddleware($gate, HostilePackageGateMiddleware::class);
             }
 
@@ -257,7 +275,7 @@ function applyOperatorGateAttack(Router $router, array $ownedRoutes, string $vec
     throw new RuntimeException('Unknown operator gate attack vector: '.$vector);
 }
 
-it('keeps the inventoried token-admin, credential-admin and console-session gates effective through package-alias collisions', function (): void {
+it('keeps every inventoried operator gate effective through package-alias collisions', function (): void {
     /** @var Router $router */
     $router = app('router');
     $inventory = packageOperatorGateInventory();
@@ -270,6 +288,7 @@ it('keeps the inventoried token-admin, credential-admin and console-session gate
             EnsureAdminToken::class,
             EnsureConsoleSession::class,
             EnsureCredentialAdmin::class.':credential:read',
+            EnsureDashboardCredential::class,
         )
         ->and($scan['breaks'])->toBe([]);
 
@@ -286,6 +305,81 @@ it('fails closed when an operator controller action is absent from the inventory
 
     expect(fn () => $this->get('/_bfc-test/uninventoried-operator'))
         ->toThrow(RuntimeException::class, 'is missing from the operator route inventory');
+});
+
+it('derives the required gate from the executing action when setAction diverges from uses', function (): void {
+    /** @var Router $router */
+    $router = app('router');
+    $route = $router->post('/_bfc-test/action-divergence', [ManageOwnership::class, 'release']);
+    $action = $route->getAction();
+    $action['controller'] = ManageOwnership::class.'@claim';
+    $route->setAction($action);
+
+    expect($route->getAction('uses'))->toBe(ManageOwnership::class.'@release')
+        ->and($route->getActionName())->toBe(ManageOwnership::class.'@claim');
+
+    $owner = ApiToken::factory()->create(['abilities' => [Scope::Admin->value]]);
+    $ownership = Ownership::query()->create(['owner_token_id' => $owner->getKey()]);
+    $this->withoutExceptionHandling();
+
+    expect(fn () => $this->post('/_bfc-test/action-divergence'))
+        ->toThrow(RuntimeException::class, 'did not execute its built-for-cloud operator gate');
+    expect($ownership->refresh()->pending_claim_id)->toBeNull();
+});
+
+it('derives the required gate from the executing action after compiled route reconstruction', function (): void {
+    /** @var Router $router */
+    $router = app('router');
+    $routes = new RouteCollection;
+    $routes->add($router->newRoute(['POST'], '_bfc-test/compiled-action-divergence', [
+        'uses' => ManageOwnership::class.'@release',
+        'controller' => ManageOwnership::class.'@claim',
+    ]));
+    $router->setCompiledRoutes($routes->compile());
+
+    expect($router->getRoutes())->toBeInstanceOf(CompiledRouteCollection::class);
+
+    $owner = ApiToken::factory()->create(['abilities' => [Scope::Admin->value]]);
+    $ownership = Ownership::query()->create(['owner_token_id' => $owner->getKey()]);
+    $this->withoutExceptionHandling();
+
+    expect(fn () => $this->post('/_bfc-test/compiled-action-divergence'))
+        ->toThrow(RuntimeException::class, 'did not execute its built-for-cloud operator gate');
+    expect($ownership->refresh()->pending_claim_id)->toBeNull();
+});
+
+it('fails closed when a matched request loses its route resolver before controller dispatch', function (): void {
+    Event::listen(RouteMatched::class.'*', static function (string $event, array $payload): void {
+        $matched = $payload[0] ?? null;
+
+        if ($event === RouteMatched::class && $matched instanceof RouteMatched) {
+            $matched->request->setRouteResolver(static fn (): null => null);
+        }
+    });
+
+    $bearer = 'routeless-resolver-fixture';
+    $owner = ApiToken::factory()->create([
+        'token_hash' => hash('sha256', $bearer),
+        'abilities' => [Scope::Admin->value],
+    ]);
+    $ownership = Ownership::query()->create(['owner_token_id' => $owner->getKey()]);
+    $this->withoutExceptionHandling();
+
+    expect(fn () => $this->withHeader('Authorization', 'Bearer '.$bearer)->post('/bfc/ownership/release'))
+        ->toThrow(RuntimeException::class, 'has no resolved route');
+    expect($ownership->refresh()->pending_claim_id)->toBeNull();
+});
+
+it('fails closed when a rebound gate swaps the container request for a routeless request', function (): void {
+    app()->bind(EnsureAdminToken::class, RequestSwappingPackageGateMiddleware::class);
+
+    $owner = ApiToken::factory()->create(['abilities' => [Scope::Admin->value]]);
+    $ownership = Ownership::query()->create(['owner_token_id' => $owner->getKey()]);
+    $this->withoutExceptionHandling();
+
+    expect(fn () => $this->post('/bfc/ownership/release'))
+        ->toThrow(RuntimeException::class, 'has no resolved route');
+    expect($ownership->refresh()->pending_claim_id)->toBeNull();
 });
 
 it('reports an explicitly inventoried route whose gate is missing entirely', function (): void {
@@ -335,7 +429,7 @@ it('asserts the operator inventory without populating the route middleware cache
     }
 });
 
-it('refuses every inventoried operator route before domain effects across middleware resolution attacks', function (string $vector): void {
+it('refuses every token-admin, credential-admin and console-session route before domain effects across middleware resolution attacks', function (string $vector): void {
     Mail::fake();
     Notification::fake();
 
@@ -343,6 +437,10 @@ it('refuses every inventoried operator route before domain effects across middle
     $router = app('router');
     $inventory = packageOperatorGateInventory();
     $scan = packageGateProtectionScan($router, $inventory);
+    $routesToDrive = array_filter(
+        $inventory,
+        static fn (array $expected): bool => $expected['gate'] !== EnsureDashboardCredential::class,
+    );
 
     expect($scan['breaks'])->toBe([])
         ->and($scan['routes'])->toHaveCount(count($inventory));
@@ -369,7 +467,7 @@ it('refuses every inventoried operator route before domain effects across middle
         $this->withoutExceptionHandling();
     }
 
-    foreach (array_values($inventory) as $index => $expected) {
+    foreach (array_values($routesToDrive) as $index => $expected) {
         $path = '/'.preg_replace('/\{[^}]+\}/', 'missing', $expected['uri']);
 
         try {
@@ -393,8 +491,8 @@ it('refuses every inventoried operator route before domain effects across middle
         ->and(Credential::query()->count())->toBe(0);
 
     if ($vector === 'later-wildcard-alias') {
-        expect($tripwireRefusals)->toBe(count($inventory))
-            ->and(HostilePackageGateMiddleware::$paths)->toHaveCount(count($inventory) + 1);
+        expect($tripwireRefusals)->toBe(count($routesToDrive))
+            ->and(HostilePackageGateMiddleware::$paths)->toHaveCount(count($routesToDrive) + 1);
     }
 
     Mail::assertNothingSent();
@@ -407,6 +505,29 @@ it('refuses every inventoried operator route before domain effects across middle
     'alias-spelled exclusion' => 'alias-exclusion',
     'FQCN-spelled exclusion' => 'fqcn-exclusion',
     'later wildcard RouteMatched alias' => 'later-wildcard-alias',
+]);
+
+it('refuses console vitals without disclosing its body across dashboard gate collisions', function (string $vector): void {
+    /** @var Router $router */
+    $router = app('router');
+    $scan = packageGateProtectionScan($router, packageOperatorGateInventory());
+    applyOperatorGateAttack($router, $scan['routes'], $vector);
+    $this->withoutExceptionHandling();
+
+    $message = $vector === 'later-wildcard-alias'
+        ? 'did not execute its built-for-cloud operator gate'
+        : 'must retain its built-for-cloud operator gate';
+
+    expect(fn () => $this->get('/bfc/console/vitals'))
+        ->toThrow(RuntimeException::class, $message);
+    expect(HostilePackageGateMiddleware::$paths)->toBe(
+        $vector === 'later-wildcard-alias' ? ['bfc/console/vitals'] : [],
+    );
+})->with([
+    'dashboard FQCN alias' => 'fqcn-alias',
+    'dashboard FQCN group' => 'fqcn-group',
+    'dashboard FQCN exclusion' => 'fqcn-exclusion',
+    'dashboard later wildcard alias' => 'later-wildcard-alias',
 ]);
 
 it('uses executed gate state to stop a mutation ordered after the resolved-stack assertion', function (): void {

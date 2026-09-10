@@ -270,15 +270,10 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router->aliasMiddleware('bfc.mcp', AuthenticateMcp::class);
             $router->aliasMiddleware('bfc.standalone', EnsureStandaloneAuthority::class);
 
-            // These convenience aliases remain public, while the package's
-            // token-admin, credential-admin and console-session routes bind
-            // their gates by class and verify the resolved gate at dispatch.
-            // That refuses alias/group replacement and exclusions before the
-            // controller; each action also requires proof that its real gate
-            // executed, so later listener mutation, container rebinding and
-            // globally disabling middleware still fail closed. Host code that
-            // forges that request proof or bypasses controller dispatch remains
-            // outside the package's boundary.
+            // These convenience aliases remain public. Package operator routes
+            // verify their resolved gate on match, and each final operator
+            // controller derives its required gate from the action it is about
+            // to execute and requires that gate's receipt before invocation.
 
             // Livewire remains optional; its provider is what supplies this binding.
             if ($this->app->bound(LivewireManager::class)) {
@@ -650,8 +645,11 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // Rate-limited like every other credentialed surface, per
         // credential AND per IP, and the throttle sits OUTSIDE the gate
         // so refused attempts are bounded too.
-        $router->get('/bfc/console/vitals', ConsoleVitals::class)
-            ->middleware(['throttle:bfc-vitals', EnsureDashboardCredential::class]);
+        $this->protectOperatorRoute(
+            $router->get('/bfc/console/vitals', ConsoleVitals::class)
+                ->middleware('throttle:bfc-vitals'),
+            $operatorRoutes,
+        );
 
         // THE CHROME'S ONE ROUTE (Console PRD D7/D11): the re-entry
         // interceptor, served from the app's own origin so a consuming

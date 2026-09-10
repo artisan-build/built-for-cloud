@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\User;
@@ -101,6 +102,7 @@ if ($mode === 'generate') {
                     'copied' => copy($cachePath, $destination),
                     'contains' => is_string($contents)
                         && str_contains($contents, 'bfc/ownership/release')
+                        && str_contains($contents, 'bfc/console/vitals')
                         && str_contains($contents, 'bfc/console/chrome.js')
                         && str_contains($contents, 'api/credentials'),
                 ];
@@ -183,7 +185,7 @@ $case = new class('testProbe') extends TestCase
             return false;
         }
 
-        foreach ([EnsureAdminToken::class, EnsureCredentialAdmin::class, EnsureConsoleSession::class] as $gate) {
+        foreach ([EnsureAdminToken::class, EnsureCredentialAdmin::class, EnsureConsoleSession::class, EnsureDashboardCredential::class] as $gate) {
             $router->aliasMiddleware($gate, CachedHostileOperatorGate::class);
         }
 
@@ -213,6 +215,7 @@ $case = new class('testProbe') extends TestCase
             ['POST', '/bfc/credentials/missing/activate'],
             ['POST', '/bfc/console/re-key'],
             ['POST', '/bfc/console/keys/missing/retire'],
+            ['GET', '/bfc/console/vitals'],
             ['GET', '/bfc/console/chrome.js'],
             ['POST', '/bfc/subjects/offboard'],
             ['GET', '/api/credentials'],
