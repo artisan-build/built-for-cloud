@@ -68,7 +68,7 @@ final class PersonalSurfaceWebGroupTest extends TestCase
     }
 
     /**
-     * The other package surfaces are token APIs and must NOT be dragged
+     * Package routes not enumerated below are token APIs and must NOT be dragged
      * onto the session stack by this change — a bearer-only route that
      * starts a session and validates CSRF would break every machine
      * caller.
@@ -97,8 +97,10 @@ final class PersonalSurfaceWebGroupTest extends TestCase
      *
      * So the assertion below is a SET, not an emptiness: adding a third
      * session-riding route means saying so in this diff.
+     * The managed login and callback are browser routes that require the
+     * initiating session's nonce to prevent login CSRF.
      */
-    public function test_only_the_personal_surface_and_the_console_browser_routes_ride_the_session_stack(): void
+    public function test_only_package_browser_routes_ride_the_session_stack(): void
     {
         $sessioned = collect(Route::getRoutes()->getRoutes())
             ->filter(fn (RoutingRoute $route): bool => str_starts_with($route->getActionName(), 'ArtisanBuild\\BuiltForCloud\\'))
@@ -118,6 +120,8 @@ final class PersonalSurfaceWebGroupTest extends TestCase
             'GET /bfc/forgot-password',
             'GET /bfc/invitations/accept',
             'GET /bfc/login',
+            'GET /bfc/managed/callback',
+            'GET /bfc/managed/login',
             'GET /bfc/members',
             'GET /bfc/reset-password',
             'POST /bfc/console/enter',

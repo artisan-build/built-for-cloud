@@ -334,6 +334,10 @@ Route::middleware('bfc.admin')->group(function () {
 });
 ```
 
+Consuming applications must not redefine the package's `bfc.*` middleware aliases or groups,
+attach or exclude package gates on package routes, re-register package routes, or reshape them from
+a route listener. The package fails closed where it can; behaviour is undefined where it cannot.
+
 ### Thin-host conformance
 
 `ContractAssertions::assertBuiltForCloudContract()` verifies the package model configuration and

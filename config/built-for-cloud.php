@@ -520,6 +520,11 @@ return [
         'handoff_minutes' => env('BUILT_FOR_CLOUD_HANDOFF_MINUTES', 10),
     ],
 
+    'managed' => [
+        'client_secret' => env('BUILT_FOR_CLOUD_MANAGED_CLIENT_SECRET'),
+        'ca_bundle' => env('BUILT_FOR_CLOUD_MANAGED_CA_BUNDLE'),
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | Cloud CLI
