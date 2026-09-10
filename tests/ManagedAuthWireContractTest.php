@@ -3,11 +3,9 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
-use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\ManagedAuthClient;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;
-use ArtisanBuild\BuiltForCloud\ManagedAuthHighWater;
 use ArtisanBuild\BuiltForCloud\ManagedHandoff;
 use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ManagedAuthorityFixture;
@@ -205,6 +203,76 @@ it('refuses every missing, null, and mistyped required exchange response field b
     return $cases;
 })());
 
+it('accepts RFC 3339 timestamps with Z, explicit offsets, and fractional seconds on both legs', function (string $timestamp): void {
+    ['fixture' => $fixture] = wireConnection();
+    $fixture->handoffTransform = static fn (array $payload): array => array_merge(
+        $payload,
+        ['expires_at' => $timestamp],
+    );
+    $fixture->exchangeOverrides = ['responded_at' => $timestamp];
+    Http::fake(fn (ClientRequest $request) => $fixture->respond($request));
+    $connection = ManagedAuthConnection::current();
+
+    expect(app(ManagedAuthClient::class)->createHandoff($connection, str_repeat('A', 43))->expiresAt)
+        ->toBeInstanceOf(DateTimeImmutable::class)
+        ->and(app(ManagedAuthClient::class)->exchange(
+            $connection,
+            str_repeat('A', 43),
+            'fixture-code',
+        )->respondedAt)->toBeInstanceOf(DateTimeImmutable::class);
+})->with([
+    'UTC Z' => '2099-12-31T23:59:59Z',
+    'offset and fraction' => '2099-12-31T23:59:59.123456789+05:30',
+]);
+
+it('refuses syntactically or calendrically invalid RFC 3339 timestamps on both legs', function (string $leg, string $timestamp): void {
+    ['fixture' => $fixture] = wireConnection();
+
+    if ($leg === 'handoff') {
+        $fixture->handoffTransform = static fn (array $payload): array => array_merge(
+            $payload,
+            ['expires_at' => $timestamp],
+        );
+        Http::fake(fn (ClientRequest $request) => $fixture->respond($request));
+
+        $this->get('/bfc/managed/login')->assertStatus(404)->assertSeeText('Not Found');
+        expect(DB::table('bfc_managed_handoffs')->count())->toBe(0);
+
+        return;
+    }
+
+    wireUser();
+    $handoff = wireBegin($fixture);
+    $fixture->exchangeOverrides = ['responded_at' => $timestamp];
+
+    $this->withSession([ManagedHandoff::SESSION_NONCE_KEY => $handoff['nonce']])
+        ->get('/bfc/managed/callback?'.http_build_query([
+            'state' => $handoff['state'],
+            'code' => 'fixture-code',
+        ]))
+        ->assertStatus(404)
+        ->assertSeeText('Not Found');
+    expect(auth('web')->check())->toBeFalse()
+        ->and(session(StandaloneAccess::SESSION_VERSION_KEY))->toBeNull();
+})->with((static function (): array {
+    $timestamps = [
+        'impossible date' => '2026-02-31T12:00:00+00:00',
+        'relative phrase' => 'tomorrow +00:00',
+        'space separator' => '2026-09-10 12:00:00+00:00',
+        'missing offset' => '2026-09-10T12:00:00',
+        'invalid offset' => '2026-09-10T12:00:00+24:00',
+    ];
+    $cases = [];
+
+    foreach (['handoff', 'exchange'] as $leg) {
+        foreach ($timestamps as $case => $timestamp) {
+            $cases[$leg.' '.$case] = [$leg, $timestamp];
+        }
+    }
+
+    return $cases;
+})());
+
 it('refuses unknown contract versions on both successful legs', function (string $leg): void {
     ['fixture' => $fixture] = wireConnection();
 
@@ -246,36 +314,4 @@ it('refuses every frozen failure mapping, unlisted error, absent version, and ma
     'unlisted error' => [418, ['contract_version' => ManagedAuthClient::CONTRACT_VERSION, 'error' => 'unlisted']],
     'failure without version' => [500, ['error' => 'server_error']],
     'malformed body' => [500, 'not-json'],
-]);
-
-it('compares order fields monotonically and independently against both dimensions', function (string $dimension, int $roster, int $sequence, bool $accepted): void {
-    ['fixture' => $fixture] = wireConnection();
-    Http::fake(fn (ClientRequest $request) => $fixture->respond($request));
-    $subject = $dimension === 'subject' ? new ManagedAuthHighWater(8, 13) : null;
-    $connection = $dimension === 'connection' ? new ManagedAuthHighWater(8, 13) : null;
-    $fixture->exchangeOverrides = [
-        'roster_version' => $roster,
-        'response_sequence' => $sequence,
-    ];
-
-    $run = fn () => app(ManagedAuthClient::class)->exchange(
-        ManagedAuthConnection::current(),
-        str_repeat('A', 43),
-        'fixture-code',
-        $subject,
-        $connection,
-    );
-
-    if ($accepted) {
-        expect($run()->responseSequence)->toBe($sequence);
-    } else {
-        expect($run)->toThrow(ManagedAuthRefused::class);
-    }
-})->with([
-    ['subject', 8, 13, true],
-    ['subject', 7, 13, false],
-    ['subject', 8, 12, false],
-    ['connection', 8, 13, true],
-    ['connection', 7, 13, false],
-    ['connection', 8, 12, false],
 ]);

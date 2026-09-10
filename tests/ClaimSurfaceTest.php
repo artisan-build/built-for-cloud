@@ -587,8 +587,8 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     ))->toBe([
         'blocks' => 1335,
         'absolute' => 424,
-        'paired' => 113,
-        'unpaired' => 311,
+        'paired' => 114,
+        'unpaired' => 310,
     ]);
 
     // The surfaces the restatement map runs over are wider than the

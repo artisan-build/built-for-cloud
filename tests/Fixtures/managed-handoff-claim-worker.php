@@ -2,12 +2,17 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;
+use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
+use ArtisanBuild\BuiltForCloud\ManagedAuthClient;
+use ArtisanBuild\BuiltForCloud\ManagedHandoff;
 use ArtisanBuild\BuiltForCloud\ManagedHandoffClaim;
-use Carbon\CarbonImmutable;
 use Illuminate\Config\Repository;
 use Illuminate\Container\Container;
 use Illuminate\Database\Capsule\Manager as Capsule;
+use Illuminate\Http\Client\Factory;
+use Illuminate\Http\Request;
+use Illuminate\Session\ArraySessionHandler;
+use Illuminate\Session\Store;
 use Illuminate\Support\Facades\Facade;
 
 require dirname(__DIR__, 2).'/vendor/autoload.php';
@@ -29,6 +34,12 @@ $database = [
 ];
 $container = new Container;
 $container->instance('config', new Repository([
+    'built-for-cloud' => [
+        'managed' => [
+            'client_secret' => $input['client_secret'],
+            'ca_bundle' => $input['ca_bundle'],
+        ],
+    ],
     'database' => [
         'default' => 'pgsql_testing',
         'connections' => ['pgsql_testing' => $database],
@@ -37,30 +48,37 @@ $container->instance('config', new Repository([
 $capsule = new Capsule($container);
 $capsule->addConnection($database, 'pgsql_testing');
 $container->instance('db', $capsule->getDatabaseManager());
+$capsule->getDatabaseManager()->setDefaultConnection('pgsql_testing');
 $capsule->setAsGlobal();
+Container::setInstance($container);
 Facade::setFacadeApplication($container);
 $connection = $capsule->getConnection('pgsql_testing');
-$connection->statement("set application_name = 'bfc-p3a-claim-worker-".(int) $input['worker']."'");
-$claimed = (new ManagedHandoffClaim)->consume(
-    new ManagedAuthConnection(
-        $input['issuer'],
-        $input['connection_id'],
-        $input['organization_id'],
-        $input['installation_id'],
-        $input['authority_generation'],
-        $input['base_url'],
-        '',
-        null,
-    ),
-    $input['state'],
-    $input['session_nonce'],
-    CarbonImmutable::now(),
-    'pgsql_testing',
+$connection->statement("set application_name = 'bfc-p3a-callback-worker-".(int) $input['worker']."'");
+$request = Request::create('/bfc/managed/callback', 'GET', [
+    'state' => $input['state'],
+    'code' => $input['code'],
+]);
+$session = new Store(
+    'bfc-p3a-callback-worker-'.(int) $input['worker'],
+    new ArraySessionHandler(300),
 );
+$session->start();
+$session->put(ManagedHandoff::SESSION_NONCE_KEY, $input['session_nonce']);
+$request->setLaravelSession($session);
+$exchangeReached = false;
+
+try {
+    (new ManagedHandoff(
+        new ManagedAuthClient(new Factory),
+        new ManagedHandoffClaim,
+    ))->exchange($request);
+    $exchangeReached = true;
+} catch (ManagedAuthRefused) {
+    // Losing callbacks must stop at the package claim and never reach exchange.
+}
 
 fwrite(STDOUT, json_encode([
-    'claimed' => $claimed,
-    'exchange_reached' => $claimed,
+    'exchange_reached' => $exchangeReached,
     'code_index' => $input['worker'],
     'code_hash' => hash('sha256', $input['code']),
 ], JSON_THROW_ON_ERROR));

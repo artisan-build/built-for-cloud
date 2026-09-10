@@ -51,8 +51,6 @@ final class ManagedAuthClient
         ManagedAuthConnection $connection,
         string $requestId,
         string $code,
-        ?ManagedAuthHighWater $subjectHighWater = null,
-        ?ManagedAuthHighWater $connectionHighWater = null,
     ): ManagedAuthExchange {
         $response = $this->post(
             $this->request($connection),
@@ -89,9 +87,7 @@ final class ManagedAuthClient
         $responseSequence = $this->unsignedInteger($payload, 'response_sequence');
 
         if (! is_string($displayName)
-            || ! is_bool($contactEmailVerified)
-            || ! $this->isMonotonic($rosterVersion, $responseSequence, $subjectHighWater)
-            || ! $this->isMonotonic($rosterVersion, $responseSequence, $connectionHighWater)) {
+            || ! is_bool($contactEmailVerified)) {
             throw new ManagedAuthRefused;
         }
 
@@ -144,18 +140,6 @@ final class ManagedAuthClient
         }
 
         if ($response->status() !== 200) {
-            $accepted = match ($response->status()) {
-                400 => ['invalid_grant', 'unsupported_contract_version'],
-                401 => ['invalid_client'],
-                429 => ['rate_limited'],
-                500, 503 => ['server_error'],
-                default => [],
-            };
-
-            if (! in_array($payload['error'] ?? null, $accepted, true)) {
-                throw new ManagedAuthRefused;
-            }
-
             throw new ManagedAuthRefused;
         }
 
@@ -203,7 +187,11 @@ final class ManagedAuthClient
 
     private function date(string $value): DateTimeImmutable
     {
-        if (preg_match('/(?:Z|[+-]\d{2}:\d{2})$/', $value) !== 1) {
+        if (preg_match(
+            '/\A(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])[Tt](?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:[Zz]|[+-](?:[01]\d|2[0-3]):[0-5]\d)\z/D',
+            $value,
+            $parts,
+        ) !== 1 || ! checkdate((int) $parts[2], (int) $parts[3], (int) $parts[1])) {
             throw new ManagedAuthRefused;
         }
 
@@ -212,15 +200,5 @@ final class ManagedAuthClient
         } catch (Throwable) {
             throw new ManagedAuthRefused;
         }
-    }
-
-    private function isMonotonic(
-        int $rosterVersion,
-        int $responseSequence,
-        ?ManagedAuthHighWater $highWater,
-    ): bool {
-        return $highWater === null
-            || ($rosterVersion >= $highWater->rosterVersion
-                && $responseSequence >= $highWater->responseSequence);
     }
 }

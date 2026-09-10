@@ -1048,7 +1048,9 @@ Accepts the authority-provided `state` and `code`. The correlation can be claime
 the initiating browser session; concurrent or replayed claims refuse before exchange. After the
 claim, the package exchanges the code with the configured authority over authenticated HTTPS and
 enforces invariant installation, connection, generation, issuer and audience bindings, exact
-subject identity, and non-decreasing subject and response sequence values.
+subject identity, and the wire types of the roster and response sequence values. This P3a entry
+slice does not persist either required high-water mark, so it does not enforce order regression;
+P3c adds the durable per-subject and per-connection marks and their per-dimension apply decisions.
 
 This entry slice authenticates only an active canonical user already linked to the returned
 subject. It does not allocate users or refresh membership data. On success it regenerates the

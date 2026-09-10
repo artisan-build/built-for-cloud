@@ -243,7 +243,7 @@ it('refuses foreign authorization origins, insecure bases, and missing client cr
     }
 })->with(['foreign-origin', 'insecure', 'missing-credential']);
 
-it('enforces every invariant response binding before user or session effects', function (string $field, mixed $value): void {
+it('enforces every invariant and subject response binding before user or session effects', function (string $field, mixed $value): void {
     ['baseUrl' => $baseUrl, 'secret' => $secret] = managedConnection();
     $fixture = managedFixture($baseUrl, $secret);
     $user = managedUser();
@@ -265,6 +265,7 @@ it('enforces every invariant response binding before user or session effects', f
     ['organization_id', 'other-organization'],
     ['installation_id', 'other-installation'],
     ['authority_generation', 8],
+    ['scalpels_id', 'other-subject'],
 ]);
 
 it('treats every callback correlation refusal as one response without exchange', function (string $case): void {
