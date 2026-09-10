@@ -501,11 +501,28 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 ->middleware(['throttle:bfc-session-confirm', EnsureUserIsAuthenticated::class])
                 ->name('bfc.sessions.destroy');
         });
-        $this->app->booted(function () use ($router, $standaloneRoutes): void {
+        $personalCredentialRoutes = [];
+        $personalCredentialRoutes[] = $router->get('/bfc/me/credentials', [PersonalCredentials::class, 'index'])
+            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
+
+        $personalCredentialRoutes[] = $router->post('/bfc/me/credentials', [PersonalCredentials::class, 'store'])
+            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
+
+        $personalCredentialRoutes[] = $router->delete('/bfc/me/credentials/{id}', [PersonalCredentials::class, 'destroy'])
+            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
+
+        $packageMiddlewareRoutes = StandaloneRouteOwnership::packageMiddlewareInventory([
+            ...$standaloneRoutes,
+            ...$personalCredentialRoutes,
+        ]);
+
+        $this->app->booted(function () use ($packageMiddlewareRoutes, $router, $standaloneRoutes): void {
             StandaloneRouteOwnership::assertOwned($router, $standaloneRoutes);
+            StandaloneRouteOwnership::assertPackageMiddlewareOwned($router, $packageMiddlewareRoutes);
         });
-        Event::listen(RouteMatched::class, static function (RouteMatched $event) use ($bearerRoutes, $router, $standaloneRoutes): void {
+        Event::listen(RouteMatched::class, static function (RouteMatched $event) use ($bearerRoutes, $packageMiddlewareRoutes, $router, $standaloneRoutes): void {
             StandaloneRouteOwnership::assertMatched($router, $event->route, $standaloneRoutes);
+            StandaloneRouteOwnership::assertPackageMiddlewareMatched($router, $event->route, $packageMiddlewareRoutes);
 
             if (in_array($event->route, $bearerRoutes, true)) {
                 // Include normal host middleware attached after an earlier
@@ -519,15 +536,6 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 $event->route->flushController();
             }
         });
-
-        $router->get('/bfc/me/credentials', [PersonalCredentials::class, 'index'])
-            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
-
-        $router->post('/bfc/me/credentials', [PersonalCredentials::class, 'store'])
-            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
-
-        $router->delete('/bfc/me/credentials/{id}', [PersonalCredentials::class, 'destroy'])
-            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
 
         // The console re-key verb (Console PRD D12): the retrofit path
         // that files a countersigning key onto an ALREADY-CLAIMED

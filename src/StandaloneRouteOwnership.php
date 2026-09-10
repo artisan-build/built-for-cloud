@@ -27,6 +27,8 @@ final class StandaloneRouteOwnership
 {
     private const string EXECUTED_GATES = 'bfc.operator_gates_executed';
 
+    private const string PACKAGE_MIDDLEWARE_NAMESPACE = __NAMESPACE__.'\\Http\\Middleware\\';
+
     /**
      * Record the exact gate and ability that granted passage. The operator
      * controller checks this executed state at the point of no return, rather
@@ -134,6 +136,78 @@ final class StandaloneRouteOwnership
     }
 
     /**
+     * Snapshot FQCN-spelled package middleware when each route is registered,
+     * independently of the mutable route collection checked later. An alias-
+     * spelled declaration such as `bfc.auth` carries no package namespace, so
+     * it is not inventoried or pinned; package routes currently spell their
+     * package gates as FQCNs.
+     *
+     * @param  list<Route>  $routes
+     * @return list<array{route: Route, middleware: list<string>}>
+     */
+    public static function packageMiddlewareInventory(array $routes): array
+    {
+        return array_map(
+            static fn (Route $route): array => [
+                'route' => $route,
+                'middleware' => self::packageMiddleware($route),
+            ],
+            $routes,
+        );
+    }
+
+    /**
+     * Resolve every inventoried package middleware declaration at boot and
+     * match time. At match, discard any earlier computed stack so uncached and
+     * compiled routes recompute from the declaration just asserted. This is
+     * still a prediction made one instruction before runRouteWithinStack()
+     * builds the pipeline: a later RouteMatched listener can mutate the memo,
+     * alias or group tables, or route exclusions in that window. A container
+     * rebind can also replace a gate without changing its resolved class name.
+     * Standalone controllers issue no execution receipt, which is the check
+     * required to close those remaining seams.
+     *
+     * @param  list<array{route: Route, middleware: list<string>}>  $ownedRoutes
+     */
+    public static function assertPackageMiddlewareOwned(Router $router, array $ownedRoutes): void
+    {
+        $byMethod = $router->getRoutes()->getRoutesByMethod();
+
+        foreach ($ownedRoutes as ['route' => $ownedRoute, 'middleware' => $middleware]) {
+            $domainAndUri = $ownedRoute->getDomain().$ownedRoute->uri();
+
+            foreach ($ownedRoute->methods() as $method) {
+                $candidate = $byMethod[$method][$domainAndUri] ?? null;
+
+                if (! $candidate instanceof Route || ! self::occupiesOperatorShape($candidate, $ownedRoute)) {
+                    throw new RuntimeException("The route [{$method} {$ownedRoute->uri()}] must retain its built-for-cloud package middleware.");
+                }
+
+                foreach ($middleware as $expected) {
+                    if (! self::resolvesGate($router, $candidate, $expected)) {
+                        throw new RuntimeException("The route [{$method} {$ownedRoute->uri()}] must retain its built-for-cloud package middleware [{$expected}].");
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * @param  list<array{route: Route, middleware: list<string>}>  $ownedRoutes
+     */
+    public static function assertPackageMiddlewareMatched(Router $router, Route $matchedRoute, array $ownedRoutes): void
+    {
+        foreach ($ownedRoutes as ['route' => $ownedRoute]) {
+            if (self::sharesMethodAndUri($matchedRoute, $ownedRoute)) {
+                $matchedRoute->flushController();
+                self::assertPackageMiddlewareOwned($router, $ownedRoutes);
+
+                return;
+            }
+        }
+    }
+
+    /**
      * Ownership is asserted through stable structural facts — reserved name,
      * domain, URI, methods and package action — because a compiled route
      * collection reconstructs Route instances from cached attributes on
@@ -237,6 +311,26 @@ final class StandaloneRouteOwnership
             && array_diff($candidate->methods(), $ownedRoute->methods()) === []
             && array_diff($ownedRoute->methods(), $candidate->methods()) === []
             && $candidate->getActionName() === $ownedRoute->getActionName();
+    }
+
+    /** @return list<string> */
+    private static function packageMiddleware(Route $route): array
+    {
+        $packageMiddleware = [];
+
+        foreach ($route->middleware() as $middleware) {
+            if (! is_string($middleware)) {
+                continue;
+            }
+
+            $class = explode(':', $middleware, 2)[0];
+
+            if (str_starts_with($class, self::PACKAGE_MIDDLEWARE_NAMESPACE)) {
+                $packageMiddleware[] = $middleware;
+            }
+        }
+
+        return array_values(array_unique($packageMiddleware));
     }
 
     private static function resolvesGate(Router $router, Route $route, string $gate): bool
