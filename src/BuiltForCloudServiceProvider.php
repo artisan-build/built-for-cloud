@@ -94,6 +94,7 @@ use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 use Livewire\LivewireManager;
+use RuntimeException;
 use Throwable;
 
 final class BuiltForCloudServiceProvider extends ServiceProvider
@@ -269,10 +270,15 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router->aliasMiddleware('bfc.mcp', AuthenticateMcp::class);
             $router->aliasMiddleware('bfc.standalone', EnsureStandaloneAuthority::class);
 
-            // The token, credential and console routes bind their gates by
-            // class below, so collisions on these convenience aliases do not
-            // replace those gates. A host group named as the full class could
-            // still shadow one.
+            // These convenience aliases remain public, while the package's
+            // token-admin, credential-admin and console-session routes bind
+            // their gates by class and verify the resolved gate at dispatch.
+            // That refuses alias/group replacement and exclusions before the
+            // controller; each action also requires proof that its real gate
+            // executed, so later listener mutation, container rebinding and
+            // globally disabling middleware still fail closed. Host code that
+            // forges that request proof or bypasses controller dispatch remains
+            // outside the package's boundary.
 
             // Livewire remains optional; its provider is what supplies this binding.
             if ($this->app->bound(LivewireManager::class)) {
@@ -317,17 +323,24 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
      */
     private function mountRoutes(Router $router): void
     {
+        /** @var list<array{route: Route, gate: string}> $operatorRoutes */
+        $operatorRoutes = [];
+
         $router->get('/bfc/meta', MetaController::class)
             ->middleware('throttle:bfc-public');
 
         $router->post('/bfc/ownership/claim', [ManageOwnership::class, 'claim'])
             ->middleware('throttle:bfc-claim');
 
-        $router->post('/bfc/ownership/release', [ManageOwnership::class, 'release'])
-            ->middleware(EnsureAdminToken::class);
+        $this->protectOperatorRoute(
+            $router->post('/bfc/ownership/release', [ManageOwnership::class, 'release']),
+            $operatorRoutes,
+        );
 
-        $router->post('/bfc/ownership/cancel-transfer', [ManageOwnership::class, 'cancelTransfer'])
-            ->middleware(EnsureAdminToken::class);
+        $this->protectOperatorRoute(
+            $router->post('/bfc/ownership/cancel-transfer', [ManageOwnership::class, 'cancelTransfer']),
+            $operatorRoutes,
+        );
 
         // The hitch claim-contract route (PRD 1.12 / OSS-8): the wire
         // face of hitch/docs/claim-contract.md over the same claim
@@ -337,8 +350,10 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $router->post('/bfc/claim', [ManageOnboarding::class, 'claim'])
             ->middleware('throttle:bfc-claim');
 
-        $router->post('/bfc/onboarding/issue', [ManageOnboarding::class, 'issue'])
-            ->middleware(EnsureAdminToken::class);
+        $this->protectOperatorRoute(
+            $router->post('/bfc/onboarding/issue', [ManageOnboarding::class, 'issue']),
+            $operatorRoutes,
+        );
 
         $router->post('/bfc/onboarding/exchange', [ManageOnboarding::class, 'exchange'])
             ->middleware('throttle:bfc-claim');
@@ -359,17 +374,28 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // expensive verbs additionally carry the per-operator-
         // credential + per-IP rate limiter (throttle FIRST, so even
         // failing auth attempts are bounded).
-        $router->get('/bfc/credentials', [ManageCredentials::class, 'index'])
-            ->middleware(EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRead->value);
+        $this->protectOperatorRoute(
+            $router->get('/bfc/credentials', [ManageCredentials::class, 'index']),
+            $operatorRoutes,
+        );
 
-        $router->post('/bfc/credentials', [ManageCredentials::class, 'store'])
-            ->middleware(['throttle:bfc-operator-write', EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialMint->value]);
+        $this->protectOperatorRoute(
+            $router->post('/bfc/credentials', [ManageCredentials::class, 'store'])
+                ->middleware('throttle:bfc-operator-write'),
+            $operatorRoutes,
+        );
 
-        $router->delete('/bfc/credentials/{id}', [ManageCredentials::class, 'destroy'])
-            ->middleware(['throttle:bfc-operator-write', EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRevoke->value]);
+        $this->protectOperatorRoute(
+            $router->delete('/bfc/credentials/{id}', [ManageCredentials::class, 'destroy'])
+                ->middleware('throttle:bfc-operator-write'),
+            $operatorRoutes,
+        );
 
-        $router->post('/bfc/credentials/{id}/rotate', [ManageCredentials::class, 'rotate'])
-            ->middleware(['throttle:bfc-operator-write', EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRotate->value]);
+        $this->protectOperatorRoute(
+            $router->post('/bfc/credentials/{id}/rotate', [ManageCredentials::class, 'rotate'])
+                ->middleware('throttle:bfc-operator-write'),
+            $operatorRoutes,
+        );
 
         // The hmac signing cutover (PRD 1.21, SEC-V3-01): a separate
         // operator-authorized verb — the claim exchange delivers and
@@ -377,8 +403,11 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // operator ability is the rotate FAMILY (activation completes
         // rotation's dance); the declaration matrix's own `activate`
         // verb stays the finer split.
-        $router->post('/bfc/credentials/{id}/activate', [ManageCredentials::class, 'activate'])
-            ->middleware(['throttle:bfc-operator-write', EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRotate->value]);
+        $this->protectOperatorRoute(
+            $router->post('/bfc/credentials/{id}/activate', [ManageCredentials::class, 'activate'])
+                ->middleware('throttle:bfc-operator-write'),
+            $operatorRoutes,
+        );
 
         // The personal-credentials surface (PRD 1.17): the SAME verbs
         // above, session-authenticated and scoped to the caller's OWN
@@ -526,12 +555,14 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         //     rotate-scoped credential already in the field, silently,
         //     on upgrade. `credential:admin` still satisfies it, because
         //     the break-glass is a marking someone chose.
-        $router->post('/bfc/console/re-key', [ManageConsoleKeys::class, 'reKey'])
-            ->middleware([
-                'throttle:bfc-operator-write',
-                UniformConsoleKeyRefusal::class,
-                EnsureCredentialAdmin::class.':'.OperatorAbility::ConsoleKeyWrite->value,
-            ]);
+        $this->protectOperatorRoute(
+            $router->post('/bfc/console/re-key', [ManageConsoleKeys::class, 'reKey'])
+                ->middleware([
+                    'throttle:bfc-operator-write',
+                    UniformConsoleKeyRefusal::class,
+                ]),
+            $operatorRoutes,
+        );
 
         // The retirement verb (Console PRD D12): the other half of
         // make-before-break, and until this release the half with no
@@ -552,12 +583,14 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // admin, which is more than denying entry. A separate ability
         // would have meant no credential already in the field could
         // finish a rotation without being reissued first.
-        $router->post('/bfc/console/keys/{key_id}/retire', [ManageConsoleKeys::class, 'retire'])
-            ->middleware([
-                'throttle:bfc-operator-write',
-                UniformConsoleKeyRefusal::class,
-                EnsureCredentialAdmin::class.':'.OperatorAbility::ConsoleKeyWrite->value,
-            ]);
+        $this->protectOperatorRoute(
+            $router->post('/bfc/console/keys/{key_id}/retire', [ManageConsoleKeys::class, 'retire'])
+                ->middleware([
+                    'throttle:bfc-operator-write',
+                    UniformConsoleKeyRefusal::class,
+                ]),
+            $operatorRoutes,
+        );
 
         // THE DOOR (Console PRD D12/D13): `POST /bfc/console/enter`,
         // at a fixed `/bfc/console/*` path like every other package
@@ -666,11 +699,11 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // nothing this route does amplifies it — and the throttle still
         // bounds a runaway client that IS entitled to the script.
         if (ConsoleGuardConfiguration::servesDelegatedEntry()) {
-            $router->get('/bfc/console/chrome.js', ConsoleChromeScript::class)
+            $chrome = $router->get('/bfc/console/chrome.js', ConsoleChromeScript::class)
                 ->name(ConsoleChrome::SCRIPT_ROUTE)
+                ->middleware($this->browserSessionMiddleware($router));
+            $this->protectOperatorRoute($chrome, $operatorRoutes)
                 ->middleware([
-                    ...$this->browserSessionMiddleware($router),
-                    EnsureConsoleSession::class,
                     'auth:'.ConsoleGuardConfiguration::GUARD,
                     'throttle:bfc-console-chrome',
                 ]);
@@ -680,27 +713,60 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // containment behind its OWN verb-family ability — the widest
         // verb, so a stolen mint- or revoke-scoped credential cannot
         // reach it.
-        $router->post('/bfc/subjects/offboard', [ManageSubjects::class, 'offboard'])
-            ->middleware(['throttle:bfc-operator-write', EnsureCredentialAdmin::class.':'.OperatorAbility::SubjectOffboard->value]);
+        $this->protectOperatorRoute(
+            $router->post('/bfc/subjects/offboard', [ManageSubjects::class, 'offboard'])
+                ->middleware('throttle:bfc-operator-write'),
+            $operatorRoutes,
+        );
 
         if ((bool) config('built-for-cloud.credential_api.enabled', false)) {
             $router->prefix(trim((string) config('built-for-cloud.credential_api.prefix', 'api/credentials'), '/'))
-                ->middleware(EnsureAdminToken::class)
-                ->group(function (Router $router): void {
-                    $router->get('/', [ManageTokens::class, 'index']);
-                    $router->get('/client-observations', ClientObservations::class);
-                    $router->post('/', [ManageTokens::class, 'store']);
+                ->group(function (Router $router) use (&$operatorRoutes): void {
+                    $this->protectOperatorRoute($router->get('/', [ManageTokens::class, 'index']), $operatorRoutes);
+                    $this->protectOperatorRoute($router->get('/client-observations', ClientObservations::class), $operatorRoutes);
+                    $this->protectOperatorRoute($router->post('/', [ManageTokens::class, 'store']), $operatorRoutes);
                     // The precise verb rides its own two-segment path, so
                     // it can never collide with the one-segment name route
                     // below — a token literally named "id" still deletes
                     // by name.
-                    $router->delete('/id/{id}', [ManageTokens::class, 'destroyById']);
+                    $this->protectOperatorRoute($router->delete('/id/{id}', [ManageTokens::class, 'destroyById']), $operatorRoutes);
                     // Rotation's primary verb on this store too (PRD
                     // 1.7): by id, on the same collision-proof path.
-                    $router->post('/id/{id}/rotate', [ManageTokens::class, 'rotateById']);
-                    $router->delete('/{name}', [ManageTokens::class, 'destroy']);
+                    $this->protectOperatorRoute($router->post('/id/{id}/rotate', [ManageTokens::class, 'rotateById']), $operatorRoutes);
+                    $this->protectOperatorRoute($router->delete('/{name}', [ManageTokens::class, 'destroy']), $operatorRoutes);
                 });
         }
+
+        $this->app->booted(function () use ($operatorRoutes, $router): void {
+            StandaloneRouteOwnership::assertOperatorOwned($router, $operatorRoutes);
+        });
+
+        // Wildcard listeners run after every ordinary RouteMatched listener,
+        // including host listeners registered later than this provider.
+        Event::listen(RouteMatched::class.'*', static function (string $event, array $payload) use ($operatorRoutes, $router): void {
+            $matched = $payload[0] ?? null;
+
+            if ($event === RouteMatched::class && $matched instanceof RouteMatched) {
+                StandaloneRouteOwnership::assertOperatorMatched($router, $matched->route, $operatorRoutes);
+            }
+        });
+    }
+
+    /**
+     * @param  list<array{route: Route, gate: string}>  $operatorRoutes
+     */
+    private function protectOperatorRoute(Route $route, array &$operatorRoutes): Route
+    {
+        $gate = StandaloneRouteOwnership::operatorGateForAction($route->getActionName());
+
+        if ($gate === null) {
+            throw new RuntimeException("The route [{$route->uri()}] does not declare an operator-gated action.");
+        }
+
+        $route->middleware($gate);
+        $operatorRoutes[] = ['route' => $route, 'gate' => $gate];
+
+        return $route;
     }
 
     /**

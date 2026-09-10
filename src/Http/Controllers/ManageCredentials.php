@@ -43,7 +43,7 @@ use Symfony\Component\HttpFoundation\Response;
  * (docs/http-contract.md); the legacy `api_tokens` credential API
  * (`/api/credentials`) is a separate, unchanged surface.
  */
-final class ManageCredentials
+final class ManageCredentials extends OperatorRouteController
 {
     use RevealsDelivery;
 

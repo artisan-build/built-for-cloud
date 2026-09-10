@@ -23,7 +23,7 @@ use Illuminate\Http\Request;
  * integration path answers the uniform `202 {"accepted": true}` whatever
  * the version gate decided.
  */
-final class ManageSubjects
+final class ManageSubjects extends OperatorRouteController
 {
     public function offboard(Request $request, OffboardSubject $offboardSubject): JsonResponse
     {

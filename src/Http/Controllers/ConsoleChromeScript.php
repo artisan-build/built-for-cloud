@@ -50,7 +50,7 @@ use RuntimeException;
  * event per script fetch would be one row per page load, attributed to
  * an operator who clicked nothing.
  */
-final class ConsoleChromeScript implements ServesConsoleChrome
+final class ConsoleChromeScript extends OperatorRouteController implements ServesConsoleChrome
 {
     /**
      * The interceptor's source, which is a file in this package rather

@@ -662,7 +662,10 @@ it('mounts the personal routes on the routes surface family, at fixed paths, beh
         expect($declared)->toContain(EnsureUserIsAuthenticated::class)
             ->and($declared)->toContain('throttle:bfc-personal')
             // No operator gate, ever: this surface is the session's.
-            ->and(collect($declared)->filter(fn (mixed $one): bool => is_string($one) && str_starts_with($one, EnsureCredentialAdmin::class))->all())
+            ->and(collect($declared)->filter(fn (mixed $one): bool => is_string($one) && (
+                str_starts_with($one, EnsureCredentialAdmin::class)
+                || str_starts_with($one, 'bfc.credential.admin')
+            ))->all())
             ->toBe([])
             // Rework Fix 1: these are BROWSER routes. Without StartSession
             // a cookie session never starts (every request 401s), and

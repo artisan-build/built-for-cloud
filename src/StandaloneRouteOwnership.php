@@ -4,13 +4,130 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
+use Illuminate\Http\Request;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
 use RuntimeException;
 
 final class StandaloneRouteOwnership
 {
+    private const string EXECUTED_GATES = 'bfc.operator_gates_executed';
+
+    /**
+     * Record the exact gate and ability that granted passage. The operator
+     * controller checks this executed state at the point of no return, rather
+     * than relying only on a listener-time prediction of the eventual stack.
+     */
+    public static function markOperatorGateExecuted(Request $request, string $gate): void
+    {
+        $executed = $request->attributes->get(self::EXECUTED_GATES, []);
+        $executed = is_array($executed) ? $executed : [];
+        $executed[] = $gate;
+
+        $request->attributes->set(self::EXECUTED_GATES, $executed);
+    }
+
+    public static function assertOperatorGateExecuted(Request $request, Route $route, string $gate): void
+    {
+        $executed = $request->attributes->get(self::EXECUTED_GATES, []);
+
+        if (! is_array($executed) || ! in_array($gate, $executed, true)) {
+            $method = $route->methods()[0] ?? 'UNKNOWN';
+
+            throw new RuntimeException("The route [{$method} {$route->uri()}] did not execute its built-for-cloud operator gate [{$gate}].");
+        }
+    }
+
+    public static function operatorGateForAction(string $action): ?string
+    {
+        return match ($action) {
+            ManageOwnership::class.'@claim',
+            ManageOnboarding::class.'@claim',
+            ManageOnboarding::class.'@exchange',
+            ManageOnboarding::class.'@verify' => null,
+            ManageOwnership::class.'@release',
+            ManageOwnership::class.'@cancelTransfer',
+            ManageOnboarding::class.'@issue',
+            ManageTokens::class.'@index',
+            ManageTokens::class.'@store',
+            ManageTokens::class.'@destroy',
+            ManageTokens::class.'@destroyById',
+            ManageTokens::class.'@rotateById',
+            ClientObservations::class => EnsureAdminToken::class,
+            ManageCredentials::class.'@index' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRead->value,
+            ManageCredentials::class.'@store' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialMint->value,
+            ManageCredentials::class.'@destroy' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRevoke->value,
+            ManageCredentials::class.'@rotate',
+            ManageCredentials::class.'@activate' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRotate->value,
+            ManageConsoleKeys::class.'@reKey',
+            ManageConsoleKeys::class.'@retire' => EnsureCredentialAdmin::class.':'.OperatorAbility::ConsoleKeyWrite->value,
+            ManageSubjects::class.'@offboard' => EnsureCredentialAdmin::class.':'.OperatorAbility::SubjectOffboard->value,
+            ConsoleChromeScript::class => EnsureConsoleSession::class,
+            default => throw new RuntimeException("The package controller action [{$action}] is missing from the operator route inventory."),
+        };
+    }
+
+    /**
+     * Operator routes have no reserved names, so ownership is the exact
+     * domain, URI, method set and package action captured when each route is
+     * mounted. The expected gate is supplied independently of the candidate's
+     * declaration, making a missing or misspelled declaration a refusal rather
+     * than a route that silently falls out of the inventory.
+     *
+     * @param  list<array{route: Route, gate: string}>  $ownedRoutes
+     */
+    public static function assertOperatorOwned(Router $router, array $ownedRoutes): void
+    {
+        $byMethod = $router->getRoutes()->getRoutesByMethod();
+
+        foreach ($ownedRoutes as ['route' => $ownedRoute, 'gate' => $gate]) {
+            $domainAndUri = $ownedRoute->getDomain().$ownedRoute->uri();
+
+            foreach ($ownedRoute->methods() as $method) {
+                $candidate = $byMethod[$method][$domainAndUri] ?? null;
+
+                if (! $candidate instanceof Route
+                    || ! self::occupiesOperatorShape($candidate, $ownedRoute)
+                    || ! self::resolvesGate($router, $candidate, $gate)) {
+                    throw new RuntimeException("The route [{$method} {$ownedRoute->uri()}] must retain its built-for-cloud operator gate [{$gate}].");
+                }
+            }
+        }
+    }
+
+    /**
+     * @param  list<array{route: Route, gate: string}>  $ownedRoutes
+     */
+    public static function assertOperatorMatched(Router $router, Route $matchedRoute, array $ownedRoutes): void
+    {
+        foreach ($ownedRoutes as ['route' => $ownedRoute, 'gate' => $gate]) {
+            if (! self::sharesMethodAndUri($matchedRoute, $ownedRoute)) {
+                continue;
+            }
+
+            if (! self::occupiesOperatorShape($matchedRoute, $ownedRoute)
+                || ! self::resolvesGate($router, $matchedRoute, $gate)) {
+                $method = $matchedRoute->methods()[0] ?? 'UNKNOWN';
+
+                throw new RuntimeException("The route [{$method} {$ownedRoute->uri()}] must retain its built-for-cloud operator gate [{$gate}].");
+            }
+
+            return;
+        }
+    }
+
     /**
      * Ownership is asserted through stable structural facts — reserved name,
      * domain, URI, methods and package action — because a compiled route
@@ -106,5 +223,23 @@ final class StandaloneRouteOwnership
             && array_diff($candidate->methods(), $ownedRoute->methods()) === []
             && array_diff($ownedRoute->methods(), $candidate->methods()) === []
             && $candidate->getActionName() === $ownedRoute->getActionName();
+    }
+
+    private static function occupiesOperatorShape(Route $candidate, Route $ownedRoute): bool
+    {
+        return $candidate->getDomain() === $ownedRoute->getDomain()
+            && $candidate->uri() === $ownedRoute->uri()
+            && array_diff($candidate->methods(), $ownedRoute->methods()) === []
+            && array_diff($ownedRoute->methods(), $candidate->methods()) === []
+            && $candidate->getActionName() === $ownedRoute->getActionName();
+    }
+
+    private static function resolvesGate(Router $router, Route $route, string $gate): bool
+    {
+        return in_array(
+            $gate,
+            $router->resolveMiddleware($route->middleware(), $route->excludedMiddleware()),
+            true,
+        );
     }
 }

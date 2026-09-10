@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
 
 use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\StandaloneRouteOwnership;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Closure;
 use Illuminate\Http\Request;
@@ -39,6 +40,7 @@ final class EnsureAdminToken
                 // their mutations to this admin token (D8's actor model).
                 // The id, never the credential.
                 $request->attributes->set('bfc.actor_token_id', (string) $token->getKey());
+                StandaloneRouteOwnership::markOperatorGateExecuted($request, self::class);
 
                 return $next($request);
             }

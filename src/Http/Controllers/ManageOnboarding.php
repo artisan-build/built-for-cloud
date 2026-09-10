@@ -47,7 +47,7 @@ use Throwable;
  * durable credential, speaking the hitch claim contract's vocabulary and
  * error enum on the claim surfaces.
  */
-final class ManageOnboarding
+final class ManageOnboarding extends OperatorRouteController
 {
     /**
      * Package-enforced bounds on the CODE's lifetime only (D1b): 60 seconds

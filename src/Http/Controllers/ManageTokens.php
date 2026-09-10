@@ -34,7 +34,7 @@ use Symfony\Component\HttpFoundation\Response;
  * matrix sees is always what the ROW declares; nothing a caller supplies in
  * any input can substitute for it (SEC-V3-07: possession proves nothing).
  */
-final class ManageTokens
+final class ManageTokens extends OperatorRouteController
 {
     /**
      * The response header carrying the provider's declared presentation
