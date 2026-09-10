@@ -79,7 +79,7 @@ use Illuminate\Support\Facades\DB;
  * anything until it was reissued — leaving the rotation half-finished
  * on exactly the deployments this verb exists for.
  */
-final class ManageConsoleKeys
+final class ManageConsoleKeys extends OperatorRouteController
 {
     /**
      * The response key a retirement answers under. Deliberately NOT

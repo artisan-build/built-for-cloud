@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuard;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleReentryReason;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleReturnTo;
+use ArtisanBuild\BuiltForCloud\StandaloneRouteOwnership;
 use Closure;
 use Illuminate\Auth\Middleware\Authenticate;
 use Illuminate\Http\JsonResponse;
@@ -73,6 +74,8 @@ final class EnsureConsoleSession
         $acting = app(ActingPrincipalResolver::class)->resolve();
 
         if ($acting->delegatedActor !== null) {
+            StandaloneRouteOwnership::markOperatorGateExecuted($request, self::class);
+
             return $next($request);
         }
 

@@ -22,7 +22,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
-final class ManageOwnership
+final class ManageOwnership extends OperatorRouteController
 {
     public function __construct(
         private readonly TokenGenerator $generator,

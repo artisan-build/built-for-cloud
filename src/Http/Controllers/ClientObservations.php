@@ -7,7 +7,7 @@ namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 use ArtisanBuild\BuiltForCloud\ClientIdentityObservation;
 use Illuminate\Http\JsonResponse;
 
-final class ClientObservations
+final class ClientObservations extends OperatorRouteController
 {
     private const NOTE = 'These identities were claimed on requests that presented no valid credential; a claimed identity is unauthenticated, trivially spoofable, and proves nothing.';
 

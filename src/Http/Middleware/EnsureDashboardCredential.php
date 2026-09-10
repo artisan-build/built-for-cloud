@@ -13,6 +13,7 @@ use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
+use ArtisanBuild\BuiltForCloud\StandaloneRouteOwnership;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use Closure;
 use Illuminate\Auth\AuthManager;
@@ -212,6 +213,7 @@ final class EnsureDashboardCredential
         // to the credential the GATE authorized rather than to a second
         // resolution that could disagree with it.
         $request->attributes->set('bfc.actor_credential_id', $credential->id);
+        StandaloneRouteOwnership::markOperatorGateExecuted($request, self::class);
 
         return $next($request);
     }

@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\StandaloneRouteOwnership;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Closure;
@@ -124,6 +125,7 @@ final class EnsureCredentialAdmin
 
             if ($token->hasScope(Scope::Admin)) {
                 $request->attributes->set('bfc.actor_token_id', (string) $token->getKey());
+                StandaloneRouteOwnership::markOperatorGateExecuted($request, self::class.':'.$required);
 
                 return $next($request);
             }
@@ -158,6 +160,7 @@ final class EnsureCredentialAdmin
             if ($credential->subject_type === SubjectType::Operator
                 && ($credential->hasAbility($required) || $credential->hasAbility(self::ABILITY))) {
                 $request->attributes->set('bfc.actor_credential_id', $credential->id);
+                StandaloneRouteOwnership::markOperatorGateExecuted($request, self::class.':'.$required);
 
                 return $next($request);
             }

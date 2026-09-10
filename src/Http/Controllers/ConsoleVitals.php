@@ -80,7 +80,7 @@ use Illuminate\Support\Facades\DB;
  * — those columns are the SAME on every event in this instance-side
  * stream, and the stream is not a `metadata`-classified vendor surface.
  */
-final class ConsoleVitals
+final class ConsoleVitals extends OperatorRouteController
 {
     /**
      * The optional request header a caller uses to state which
