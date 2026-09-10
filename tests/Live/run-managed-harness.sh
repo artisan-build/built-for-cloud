@@ -83,6 +83,39 @@ assert_standalone_refusal_matrix() {
     [[ "${cells}" -gt 0 ]] || fail "${state} standalone sweep derived no browser routes"
 }
 
+assert_standalone_openness_matrix() {
+    local surface
+    local route
+    local method
+    local path
+    local body="${RUN_DIR}/standalone-openness.txt"
+    local cookies="${RUN_DIR}/standalone-openness.cookies"
+    local status
+    local cells=0
+    local mode
+
+    mode="$("${HARNESS_ENV[@]}" php tests/Live/managed-user-state.php mode)"
+    [[ "${mode}" == standalone ]] || fail "standalone openness sweep did not run in standalone mode"
+
+    touch "${cookies}"
+    while IFS=$'\t' read -r surface route method path; do
+        [[ "${method}" == GET ]] || continue
+        curl --silent --show-error --request "${method}" --cookie "${cookies}" --cookie-jar "${cookies}" \
+            --output "${body}" "${APP_BASE}${path}"
+    done <"${STANDALONE_ROUTES}"
+
+    while IFS=$'\t' read -r surface route method path; do
+        status="$(curl --silent --show-error --request "${method}" --cookie "${cookies}" --cookie-jar "${cookies}" \
+            --output "${body}" --write-out '%{http_code}' "${APP_BASE}${path}")"
+        [[ "${status}" != 404 ]] || fail "standalone mode could not reach ${method} ${path} (${route})"
+        printf 'openness: surface=%s route=%s method=%s status=%s authority=standalone\n' \
+            "${surface}" "${route}" "${method}" "${status}"
+        cells=$((cells + 1))
+    done <"${STANDALONE_ROUTES}"
+
+    [[ "${cells}" -gt 0 ]] || fail "standalone openness sweep derived no browser routes"
+}
+
 cleanup() {
     if [[ -n "${SERVER_PID:-}" ]]; then
         kill "${SERVER_PID}" 2>/dev/null || true
@@ -256,6 +289,7 @@ ENDED_SESSION_DESTINATION="$(curl --silent --show-error --output /dev/null --wri
 MANAGED_STANDALONE_STATUS="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "${APP_BASE}/bfc/login")"
 [[ "${MANAGED_STANDALONE_STATUS}" == 404 ]] || fail "standalone route did not refuse managed mode"
 "${HARNESS_ENV[@]}" php tests/Live/set-standalone-authority.php
+assert_standalone_openness_matrix
 STANDALONE_LOGIN_STATUS="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "${APP_BASE}/bfc/login")"
 [[ "${STANDALONE_LOGIN_STATUS}" == 200 ]] || fail "the standalone login control did not reopen when authority became standalone"
 STANDALONE_MANAGED_STATUS="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "${APP_BASE}/bfc/managed/login")"
@@ -264,4 +298,4 @@ STANDALONE_MANAGED_STATUS="$(curl --silent --show-error --output /dev/null --wri
 EXCHANGE_COUNT="$(php -r '$status = json_decode(file_get_contents($argv[1]), true, flags: JSON_THROW_ON_ERROR); echo $status["exchange_count"];' "${STATUS}")"
 [[ "${EXCHANGE_COUNT}" == 5 ]] || fail "fixture observed an unexpected exchange count"
 
-printf 'managed live harness passed\nstamp: %s\nchecks: authenticated TLS handoff/exchange, exact authority redirect origin/path, browser-session binding refusal and success, session rotation/protected access, structurally derived standalone refusal matrix after refresh failure/grace/outage expiry/explicit denial/failed managed entry, 1800-second outage denial and session ending, same-user restoration after authority recovery, role promotion and demotion on the next authorization decision, immediate authoritative browser denial and session ending, mode exclusivity\n' "${STAMP}"
+printf 'managed live harness passed\nstamp: %s\nchecks: authenticated TLS handoff/exchange, exact authority redirect origin/path, browser-session binding refusal and success, session rotation/protected access, structurally derived standalone refusal matrix after refresh failure/grace/outage expiry/explicit denial/failed managed entry, structurally derived standalone openness matrix, 1800-second outage denial and session ending, same-user restoration after authority recovery, role promotion and demotion on the next authorization decision, immediate authoritative browser denial and session ending, mode exclusivity\n' "${STAMP}"
