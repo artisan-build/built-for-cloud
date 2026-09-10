@@ -2,8 +2,17 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\AuditActor;
+use ArtisanBuild\BuiltForCloud\AuditActorType;
+use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
+use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
+use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
+use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConfirmation;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;
 use ArtisanBuild\BuiltForCloud\ManagedAuthExchange;
@@ -11,6 +20,7 @@ use ArtisanBuild\BuiltForCloud\ManagedFreshness;
 use ArtisanBuild\BuiltForCloud\ManagedHandoff;
 use ArtisanBuild\BuiltForCloud\ManagedMembershipResponses;
 use ArtisanBuild\BuiltForCloud\StandaloneAccess;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ManagedAuthorityFixture;
 use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
@@ -19,6 +29,7 @@ use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 
 uses(RefreshDatabase::class);
@@ -118,6 +129,48 @@ function p3cConfirmationCalls(ManagedAuthorityFixture $fixture): int
         $fixture->calls,
         static fn (array $call): bool => $call['path'] === '/managed-auth/v1/memberships/confirm',
     ));
+}
+
+function p3cAccountCredential(User $user, string $secret): Credential
+{
+    return Credential::query()->create([
+        'kind' => CredentialKind::Bearer,
+        'subject_type' => SubjectType::UserPrincipal,
+        'subject_ref' => (string) $user->scalpels_id,
+        'name' => 'account-'.$user->scalpels_id,
+        'user_id' => (string) $user->getKey(),
+        'secret_hash' => hash('sha256', $secret),
+    ]);
+}
+
+function p3cDeploymentCredential(User $creator, string $secret): Credential
+{
+    $credential = Credential::query()->create([
+        'kind' => CredentialKind::Bearer,
+        'subject_type' => SubjectType::Installation,
+        'subject_ref' => 'installation-fixture',
+        'name' => 'deployment',
+        'secret_hash' => hash('sha256', $secret),
+    ]);
+
+    DB::transaction(static fn (): CredentialAuditEvent => app(LifecycleEventRecorder::class)->record(
+        event: LifecycleEventType::Issued,
+        credentialId: $credential->id,
+        actor: AuditActor::boundUser((string) $creator->getKey()),
+        drainAfterCommit: false,
+    ));
+
+    return $credential;
+}
+
+function p3cSession(User $user, string $id): void
+{
+    DB::table('sessions')->insert([
+        'id' => $id,
+        'user_id' => $user->getKey(),
+        'payload' => 'managed freshness test',
+        'last_activity' => now()->getTimestamp(),
+    ]);
 }
 
 it('serves stored state at 299 seconds and calls the authority at exactly 300 seconds', function (): void {
@@ -410,10 +463,13 @@ it('accepts lower order counters only when the current authority generation adva
         ->and($authority->managed_connection_response_sequence)->toBe(1);
 });
 
-it('routes a non-active callback response to refusal without the active upsert', function (): void {
+it('applies a non-active callback denial without running the active upsert or revoking deployment credentials', function (): void {
     CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
     p3cConfigureAuthority();
     $user = p3cUser(sequence: 10);
+    $accountCredential = p3cAccountCredential($user, 'callback-account-secret');
+    $deploymentCredential = p3cDeploymentCredential($user, 'callback-deployment-secret');
+    p3cSession($user, 'callback-session');
     $beforeConfirmed = $user->membership_confirmed_at?->toAtomString();
     CarbonImmutable::setTestNow('2026-09-10T12:05:00+00:00');
     $result = app(ManagedMembershipResponses::class)->applyExchange(
@@ -435,14 +491,19 @@ it('routes a non-active callback response to refusal without the active upsert',
 
     $user->refresh();
     expect($result)->toBeNull()
-        ->and($user->status)->toBe('active')
-        ->and($user->role)->toBe('member')
+        ->and($user->status)->toBe('inactive')
+        ->and($user->deactivated_at)->not->toBeNull()
+        ->and($user->auth_session_version)->toBe(2)
+        ->and($user->role)->toBe('admin')
         ->and($user->name)->toBe('subject-fixture')
         ->and($user->original_contact_email)->toBeNull()
         ->and($user->managed_membership_status)->toBe('removed')
         ->and($user->membership_confirmed_at?->toAtomString())->toBe($beforeConfirmed)
         ->and($user->membership_checked_at?->toAtomString())->toBe(now()->toAtomString())
-        ->and($user->membership_response_at?->toAtomString())->toBe(now()->toAtomString());
+        ->and($user->membership_response_at?->toAtomString())->toBe(now()->toAtomString())
+        ->and($accountCredential->refresh()->revoked_at)->not->toBeNull()
+        ->and($deploymentCredential->refresh()->revoked_at)->toBeNull()
+        ->and(DB::table('sessions')->where('id', 'callback-session')->exists())->toBeFalse();
 });
 
 it('links the 299 300 and reset 1799 1800 boundaries on one clock including one managed-valid Admin operation', function (): void {
@@ -520,3 +581,260 @@ it('refuses a confirmation for another subject with zero freshness writes', func
     expect(app(ManagedFreshness::class)->allows($user))->toBeTrue()
         ->and($user->fresh()->getAttributes())->toBe($before);
 });
+
+it('keeps membership denial subject-local and connection denial installation-wide while deployment credentials survive both', function (string $membershipStatus): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    p3cConfigureAuthority();
+    $a = p3cUser('blast-a', sequence: 10);
+    $b = p3cUser('blast-b', sequence: 10);
+    $c = p3cUser('blast-c', sequence: 10);
+    $foreign = p3cUser('blast-foreign', sequence: 10);
+    $foreign->forceFill(['scalpels_connection_id' => 'another-connection'])->save();
+    $credentials = [
+        'a' => p3cAccountCredential($a, 'blast-a-secret'),
+        'b' => p3cAccountCredential($b, 'blast-b-secret'),
+        'c' => p3cAccountCredential($c, 'blast-c-secret'),
+        'foreign' => p3cAccountCredential($foreign, 'blast-foreign-secret'),
+    ];
+    $deployment = p3cDeploymentCredential($a, 'blast-deployment-secret');
+
+    foreach (['a' => $a, 'b' => $b, 'c' => $c, 'foreign' => $foreign] as $key => $user) {
+        p3cSession($user, 'blast-session-'.$key);
+    }
+
+    $resolver = app(CredentialResolver::class);
+    expect($resolver->resolve(CredentialKind::Bearer, 'blast-deployment-secret')?->is($deployment))->toBeTrue();
+
+    $responses = app(ManagedMembershipResponses::class);
+    expect($responses->applyConfirmation(
+        p3cConnection(),
+        $a,
+        p3cConfirmation($a, 20, membershipStatus: $membershipStatus, role: 'admin'),
+    ))->toBeFalse();
+
+    expect($a->fresh()->status)->toBe('inactive')
+        ->and($a->fresh()->role)->toBe('admin')
+        ->and($a->fresh()->managed_membership_status)->toBe($membershipStatus)
+        ->and($a->fresh()->auth_session_version)->toBe(2)
+        ->and($credentials['a']->refresh()->revoked_at)->not->toBeNull()
+        ->and(DB::table('sessions')->where('id', 'blast-session-a')->exists())->toBeFalse()
+        ->and($b->fresh()->status)->toBe('active')
+        ->and($b->fresh()->auth_session_version)->toBe(1)
+        ->and($credentials['b']->refresh()->revoked_at)->toBeNull()
+        ->and(DB::table('sessions')->where('id', 'blast-session-b')->exists())->toBeTrue()
+        ->and($c->fresh()->auth_session_version)->toBe(1)
+        ->and($credentials['c']->refresh()->revoked_at)->toBeNull()
+        ->and($foreign->fresh()->auth_session_version)->toBe(1)
+        ->and($credentials['foreign']->refresh()->revoked_at)->toBeNull()
+        ->and($deployment->refresh()->revoked_at)->toBeNull()
+        ->and($resolver->resolve(CredentialKind::Bearer, 'blast-deployment-secret')?->is($deployment))->toBeTrue();
+
+    $issued = CredentialAuditEvent::query()->where('credential_id', $deployment->id)->sole();
+    expect($issued->actor_type)->toBe(AuditActorType::BoundUser)
+        ->and($issued->actor_ref)->toBe((string) $a->getKey());
+
+    expect($responses->applyConfirmation(
+        p3cConnection(),
+        $b,
+        p3cConfirmation($b, 21, connectionStatus: 'inactive'),
+    ))->toBeFalse();
+
+    expect(DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->value('managed_connection_status'))->toBe('inactive')
+        ->and($a->fresh()->auth_session_version)->toBe(3)
+        ->and($b->fresh()->auth_session_version)->toBe(2)
+        ->and($c->fresh()->auth_session_version)->toBe(2)
+        ->and($credentials['b']->refresh()->revoked_at)->not->toBeNull()
+        ->and($credentials['c']->refresh()->revoked_at)->not->toBeNull()
+        ->and(DB::table('sessions')->whereIn('id', ['blast-session-b', 'blast-session-c'])->exists())->toBeFalse()
+        ->and($foreign->fresh()->auth_session_version)->toBe(1)
+        ->and($credentials['foreign']->refresh()->revoked_at)->toBeNull()
+        ->and(DB::table('sessions')->where('id', 'blast-session-foreign')->exists())->toBeTrue()
+        ->and($deployment->refresh()->revoked_at)->toBeNull()
+        ->and($resolver->resolve(CredentialKind::Bearer, 'blast-deployment-secret')?->is($deployment))->toBeTrue();
+
+    expect($responses->applyConfirmation(
+        p3cConnection(),
+        $c,
+        p3cConfirmation($c, 22),
+    ))->toBeTrue();
+    expect(DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->value('managed_connection_status'))->toBe('active')
+        ->and($a->fresh()->managed_membership_status)->toBe($membershipStatus)
+        ->and($a->fresh()->status)->toBe('inactive')
+        ->and($b->fresh()->managed_membership_status)->toBe('active')
+        ->and($credentials['b']->refresh()->revoked_at)->not->toBeNull()
+        ->and($credentials['c']->refresh()->revoked_at)->not->toBeNull()
+        ->and($deployment->refresh()->revoked_at)->toBeNull();
+})->with(['removed', 'disabled']);
+
+it('applies non-Owner promotion and demotion on the next authorization decision', function (): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    p3cConfigureAuthority();
+    $user = p3cUser('role-subject', sequence: 10);
+    $responses = app(ManagedMembershipResponses::class);
+    Route::middleware(['web', 'bfc.admin'])->get('/managed-role-decision', static fn (): string => 'authorized');
+
+    $this->actingAsVersioned($user)->get('/managed-role-decision')->assertForbidden();
+    expect($responses->applyConfirmation(
+        p3cConnection(),
+        $user,
+        p3cConfirmation($user, 20, role: 'admin'),
+    ))->toBeTrue();
+    $this->actingAsVersioned($user->fresh())->get('/managed-role-decision')->assertOk()->assertSeeText('authorized');
+
+    expect($responses->applyConfirmation(
+        p3cConnection(),
+        $user,
+        p3cConfirmation($user, 21, role: 'member'),
+    ))->toBeTrue();
+    $this->actingAsVersioned($user->fresh())->get('/managed-role-decision')->assertForbidden();
+});
+
+it('allows an unchanged Owner response and observably refuses creating or removing an Owner with no partial application', function (): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    p3cConfigureAuthority();
+    Log::spy();
+    $owner = p3cUser('owner-subject', 'owner', 10);
+    $member = p3cUser('owner-candidate', 'member', 10);
+    $responses = app(ManagedMembershipResponses::class);
+
+    expect($responses->applyConfirmation(
+        p3cConnection(),
+        $owner,
+        p3cConfirmation($owner, 20, role: 'owner'),
+    ))->toBeTrue();
+    $ownerBefore = $owner->fresh()->getAttributes();
+    $memberBefore = $member->fresh()->getAttributes();
+    $authorityBefore = (array) DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->first();
+
+    expect(fn (): bool => $responses->applyConfirmation(
+        p3cConnection(),
+        $member,
+        p3cConfirmation($member, 21, connectionStatus: 'inactive', role: 'owner'),
+    ))->toThrow(ManagedAuthRefused::class, 'managed_owner_transition_refused');
+    expect(fn (): bool => $responses->applyConfirmation(
+        p3cConnection(),
+        $owner,
+        p3cConfirmation($owner, 21, membershipStatus: 'removed', connectionStatus: 'inactive', role: 'admin'),
+    ))->toThrow(ManagedAuthRefused::class, 'managed_owner_transition_refused');
+    expect(fn (): ?User => $responses->applyExchange(
+        p3cConnection(),
+        new ManagedAuthExchange(
+            'new-owner-candidate',
+            'new-owner-membership',
+            'active',
+            'inactive',
+            'owner',
+            'New Owner Candidate',
+            'new-owner-candidate@example.test',
+            true,
+            22,
+            22,
+            new DateTimeImmutable('2026-09-10T12:00:00+00:00'),
+        ),
+    ))->toThrow(ManagedAuthRefused::class, 'managed_owner_transition_refused');
+
+    expect($member->fresh()->getAttributes())->toBe($memberBefore)
+        ->and($owner->fresh()->getAttributes())->toBe($ownerBefore)
+        ->and(User::query()->where('scalpels_id', 'new-owner-candidate')->exists())->toBeFalse()
+        ->and((array) DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->first())->toBe($authorityBefore);
+    Log::shouldHaveReceived('warning')
+        ->times(3)
+        ->withArgs(static fn (string $message, array $context): bool => $message === 'Built for Cloud refused a managed response that would change the Owner.'
+            && $context['reason_code'] === 'managed_owner_transition_refused');
+});
+
+it('refuses unknown or absent roles without defaulting to member or treating malformed input as revocation', function (string $shape): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    $fixture = p3cConfigureAuthority();
+    $user = p3cUser('unknown-role-subject', 'admin', 10);
+    $credential = p3cAccountCredential($user, 'unknown-role-secret');
+    p3cSession($user, 'unknown-role-session');
+    $confirmedAt = $user->membership_confirmed_at?->toAtomString();
+    $responseAt = $user->membership_response_at?->toAtomString();
+
+    if ($shape === 'unknown') {
+        $before = $user->getAttributes();
+        expect(fn (): bool => app(ManagedMembershipResponses::class)->applyConfirmation(
+            p3cConnection(),
+            $user,
+            p3cConfirmation($user, 11, role: 'super-admin'),
+        ))->toThrow(ManagedAuthRefused::class, 'managed_role_refused');
+        expect($user->fresh()->getAttributes())->toBe($before);
+    }
+
+    $fixture->confirmationResponder = static function (array $request, array $payload) use ($shape): mixed {
+        if ($shape === 'unknown') {
+            return Http::response(array_merge($payload, ['role' => 'super-admin']));
+        }
+
+        unset($payload['role']);
+
+        return Http::response($payload);
+    };
+
+    CarbonImmutable::setTestNow('2026-09-10T12:05:00+00:00');
+    expect(app(ManagedFreshness::class)->allows($user))->toBeTrue();
+    $user->refresh();
+    expect($user->role)->toBe('admin')
+        ->and($user->managed_membership_role)->toBe('admin')
+        ->and($user->status)->toBe('active')
+        ->and($user->membership_confirmed_at?->toAtomString())->toBe($confirmedAt)
+        ->and($user->membership_response_at?->toAtomString())->toBe($responseAt)
+        ->and($user->membership_checked_at?->toAtomString())->toBe(now()->toAtomString())
+        ->and($credential->refresh()->revoked_at)->toBeNull()
+        ->and(DB::table('sessions')->where('id', 'unknown-role-session')->exists())->toBeTrue();
+})->with(['unknown', 'absent']);
+
+it('returns false instead of throwing when a managed subject is not bound to the current connection', function (): void {
+    p3cConfigureAuthority();
+    $user = p3cUser();
+    $user->forceFill(['scalpels_connection_id' => 'another-connection'])->save();
+
+    expect(app(ManagedFreshness::class)->allows($user))->toBeFalse();
+});
+
+it('treats every authority failure class as infrastructure without revoking account state', function (string $failure): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    $fixture = p3cConfigureAuthority();
+    $user = p3cUser('infrastructure-subject', sequence: 10);
+    $credential = p3cAccountCredential($user, 'infrastructure-secret');
+    p3cSession($user, 'infrastructure-session');
+    $confirmedAt = $user->membership_confirmed_at?->toAtomString();
+    $responseAt = $user->membership_response_at?->toAtomString();
+    $fixture->confirmationResponder = static function () use ($failure): mixed {
+        if ($failure === 'transport') {
+            throw new RuntimeException('fixture transport failure');
+        }
+
+        if ($failure === 'malformed') {
+            return Http::response('not-json');
+        }
+
+        $status = (int) $failure;
+
+        return Http::response([
+            'contract_version' => 'managed-auth-v1',
+            'error' => 'fixture_failure',
+        ], $status);
+    };
+
+    CarbonImmutable::setTestNow('2026-09-10T12:05:00+00:00');
+    expect(app(ManagedFreshness::class)->allows($user))->toBeTrue();
+    $user->refresh();
+    expect($user->status)->toBe('active')
+        ->and($user->membership_confirmed_at?->toAtomString())->toBe($confirmedAt)
+        ->and($user->membership_response_at?->toAtomString())->toBe($responseAt)
+        ->and($user->membership_checked_at?->toAtomString())->toBe(now()->toAtomString())
+        ->and($credential->refresh()->revoked_at)->toBeNull()
+        ->and(DB::table('sessions')->where('id', 'infrastructure-session')->exists())->toBeTrue();
+})->with([
+    'success-like unlisted code' => '201',
+    'invalid grant' => '400',
+    'invalid client' => '401',
+    'unlisted client failure' => '418',
+    'rate limit' => '429',
+    'server error' => '500',
+    'unavailable' => '503',
+    'transport failure' => 'transport',
+    'malformed 200 body' => 'malformed',
+]);

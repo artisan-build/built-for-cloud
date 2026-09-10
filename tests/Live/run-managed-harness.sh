@@ -41,6 +41,10 @@ cookie_of() {
     printf '%s' "$1" | perl -ne 'if (/^Set-Cookie:\s*(laravel_session=[^;]+)/i) { print $1; exit }'
 }
 
+set_authority_response() {
+    php -r 'file_put_contents($argv[1], json_encode(["membership_status" => $argv[2], "connection_status" => "active", "role" => $argv[3]], JSON_THROW_ON_ERROR));' "${STATUS}.response" "$1" "$2"
+}
+
 cleanup() {
     if [[ -n "${SERVER_PID:-}" ]]; then
         kill "${SERVER_PID}" 2>/dev/null || true
@@ -126,6 +130,7 @@ ROTATED_COOKIE="$(cookie_of "${CALLBACK_HEADERS}")"
 DOMAIN_STATUS="$(curl --silent --show-error --header "Cookie: ${ROTATED_COOKIE}" --output /dev/null --write-out '%{http_code}' "${APP_BASE}/domain")"
 [[ "${DOMAIN_STATUS}" == 200 ]] || fail "managed session did not reach a protected route"
 
+set_authority_response active admin
 SECOND_HEADERS="$(curl --silent --show-error --dump-header - --output /dev/null "${APP_BASE}/bfc/managed/login")"
 SECOND_URL="$(header_of Location "${SECOND_HEADERS}")"
 SECOND_COOKIE="$(cookie_of "${SECOND_HEADERS}")"
@@ -136,8 +141,38 @@ REFUSAL_HEADERS="$(curl --silent --show-error --dump-header - --output "${RUN_DI
 [[ -z "$(header_of Location "${REFUSAL_HEADERS}")" ]] || fail "wrong-browser refusal redirected"
 [[ "$(<"${RUN_DIR}/refusal.txt")" == 'Not Found' ]] || fail "wrong-browser refusal disclosed a different body"
 
-SECOND_SUCCESS="$(curl --silent --show-error --header "Cookie: ${SECOND_COOKIE}" --output /dev/null --write-out '%{http_code}' "${SECOND_CALLBACK}")"
-[[ "${SECOND_SUCCESS}" == 302 ]] || fail "initiating browser could not complete after wrong-browser refusal"
+SECOND_SUCCESS_HEADERS="$(curl --silent --show-error --header "Cookie: ${SECOND_COOKIE}" --dump-header - --output /dev/null "${SECOND_CALLBACK}")"
+[[ "$(status_of "${SECOND_SUCCESS_HEADERS}")" == 302 ]] || fail "initiating browser could not complete after wrong-browser refusal"
+PROMOTED_COOKIE="$(cookie_of "${SECOND_SUCCESS_HEADERS}")"
+[[ -n "${PROMOTED_COOKIE}" ]] || fail "promoted callback omitted its rotated session cookie"
+PROMOTED_STATUS="$(curl --silent --show-error --header "Cookie: ${PROMOTED_COOKIE}" --output /dev/null --write-out '%{http_code}' "${APP_BASE}/managed-admin")"
+[[ "${PROMOTED_STATUS}" == 200 ]] || fail "managed role promotion was not visible on the next authorization decision"
+
+set_authority_response active member
+THIRD_HEADERS="$(curl --silent --show-error --dump-header - --output /dev/null "${APP_BASE}/bfc/managed/login")"
+THIRD_URL="$(header_of Location "${THIRD_HEADERS}")"
+THIRD_COOKIE="$(cookie_of "${THIRD_HEADERS}")"
+THIRD_AUTH_HEADERS="$(curl --silent --show-error --cacert "${CERT}" --dump-header - --output /dev/null "${THIRD_URL}")"
+THIRD_CALLBACK="$(header_of Location "${THIRD_AUTH_HEADERS}")"
+THIRD_CALLBACK_HEADERS="$(curl --silent --show-error --header "Cookie: ${THIRD_COOKIE}" --dump-header - --output /dev/null "${THIRD_CALLBACK}")"
+[[ "$(status_of "${THIRD_CALLBACK_HEADERS}")" == 302 ]] || fail "managed demotion callback did not complete"
+DEMOTED_COOKIE="$(cookie_of "${THIRD_CALLBACK_HEADERS}")"
+DEMOTED_STATUS="$(curl --silent --show-error --header "Cookie: ${DEMOTED_COOKIE}" --output /dev/null --write-out '%{http_code}' "${APP_BASE}/managed-admin")"
+[[ "${DEMOTED_STATUS}" == 403 ]] || fail "managed role demotion was not visible on the next authorization decision"
+
+set_authority_response removed member
+FOURTH_HEADERS="$(curl --silent --show-error --dump-header - --output /dev/null "${APP_BASE}/bfc/managed/login")"
+FOURTH_URL="$(header_of Location "${FOURTH_HEADERS}")"
+FOURTH_COOKIE="$(cookie_of "${FOURTH_HEADERS}")"
+FOURTH_AUTH_HEADERS="$(curl --silent --show-error --cacert "${CERT}" --dump-header - --output /dev/null "${FOURTH_URL}")"
+FOURTH_CALLBACK="$(header_of Location "${FOURTH_AUTH_HEADERS}")"
+DENIAL_STATUS="$(curl --silent --show-error --header "Cookie: ${FOURTH_COOKIE}" --output /dev/null --write-out '%{http_code}' "${FOURTH_CALLBACK}")"
+[[ "${DENIAL_STATUS}" == 404 ]] || fail "authoritative membership denial did not refuse immediately"
+ENDED_SESSION_HEADERS="$(curl --silent --show-error --header "Cookie: ${DEMOTED_COOKIE}" --dump-header - --output /dev/null "${APP_BASE}/domain")"
+[[ "$(status_of "${ENDED_SESSION_HEADERS}")" == 302 ]] || fail "authoritative membership denial did not end the existing browser session"
+[[ "$(header_of Location "${ENDED_SESSION_HEADERS}")" == "${APP_BASE}/bfc/login" ]] || fail "ended managed session did not follow the package unauthenticated path"
+ENDED_SESSION_DESTINATION="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "${APP_BASE}/bfc/login")"
+[[ "${ENDED_SESSION_DESTINATION}" == 404 ]] || fail "ended managed session reached a standalone login in managed mode"
 
 MANAGED_STANDALONE_STATUS="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "${APP_BASE}/bfc/login")"
 [[ "${MANAGED_STANDALONE_STATUS}" == 404 ]] || fail "standalone route did not refuse managed mode"
@@ -146,6 +181,6 @@ STANDALONE_MANAGED_STATUS="$(curl --silent --show-error --output /dev/null --wri
 [[ "${STANDALONE_MANAGED_STATUS}" == 404 ]] || fail "managed route did not refuse standalone mode"
 
 EXCHANGE_COUNT="$(php -r '$status = json_decode(file_get_contents($argv[1]), true, flags: JSON_THROW_ON_ERROR); echo $status["exchange_count"];' "${STATUS}")"
-[[ "${EXCHANGE_COUNT}" == 2 ]] || fail "fixture observed an unexpected exchange count"
+[[ "${EXCHANGE_COUNT}" == 4 ]] || fail "fixture observed an unexpected exchange count"
 
-printf 'managed live harness passed\nstamp: %s\nchecks: authenticated TLS handoff/exchange, exact authority redirect origin/path, browser-session binding refusal and success, session rotation/protected access, mode exclusivity\n' "${STAMP}"
+printf 'managed live harness passed\nstamp: %s\nchecks: authenticated TLS handoff/exchange, exact authority redirect origin/path, browser-session binding refusal and success, session rotation/protected access, role promotion and demotion on the next authorization decision, immediate authoritative browser denial and session ending, mode exclusivity\n' "${STAMP}"

@@ -2,7 +2,10 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\Support\PostgresLane;
 use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
@@ -74,6 +77,27 @@ function p3cPgUser(string $subject, int $sequence = 10): User
     return $user->refresh();
 }
 
+function p3cPgCredential(User $user, string $secret): Credential
+{
+    return Credential::query()->create([
+        'kind' => CredentialKind::Bearer,
+        'subject_type' => SubjectType::UserPrincipal,
+        'subject_ref' => (string) $user->scalpels_id,
+        'user_id' => (string) $user->getKey(),
+        'secret_hash' => hash('sha256', $secret),
+    ]);
+}
+
+function p3cPgSession(User $user, string $id): void
+{
+    DB::table('sessions')->insert([
+        'id' => $id,
+        'user_id' => $user->getKey(),
+        'payload' => 'postgres managed freshness',
+        'last_activity' => now()->timestamp,
+    ]);
+}
+
 /** @param array<string, mixed> $overrides */
 function p3cPgStartWorker(int $worker, array $overrides): Process
 {
@@ -95,7 +119,7 @@ function p3cPgStartWorker(int $worker, array $overrides): Process
 function p3cPgFinishWorker(Process $process): array
 {
     $process->wait();
-    expect($process->isSuccessful())->toBeTrue($process->getErrorOutput());
+    expect($process->isSuccessful())->toBeTrue($process->getOutput().$process->getErrorOutput());
 
     return json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
 }
@@ -286,8 +310,12 @@ it('accounts attempts at start and suppresses concurrent and killed-holder retri
 it('serializes real concurrent cross-subject responses while preserving both independent dimensions', function (array $order, string $case): void {
     CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
     p3cPgConfigureAuthority('https://authority.example.test');
-    p3cPgUser('subject-a');
-    p3cPgUser('subject-b');
+    $a = p3cPgUser('subject-a');
+    $b = p3cPgUser('subject-b');
+    $credentialA = p3cPgCredential($a, 'postgres-subject-a');
+    $credentialB = p3cPgCredential($b, 'postgres-subject-b');
+    p3cPgSession($a, 'postgres-subject-a');
+    p3cPgSession($b, 'postgres-subject-b');
     DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
         'managed_connection_status' => 'active',
         'managed_connection_generation' => 7,
@@ -340,12 +368,21 @@ it('serializes real concurrent cross-subject responses while preserving both ind
         $main->commit();
         array_map(p3cPgFinishWorker(...), $workers);
         $authority = DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->first();
-        expect(User::query()->where('scalpels_id', 'subject-a')->sole()->managed_membership_status)
+        $a = User::query()->where('scalpels_id', 'subject-a')->sole();
+        $b = User::query()->where('scalpels_id', 'subject-b')->sole();
+        $connectionDenialApplied = $case === 'connection' && $order === ['a', 'b'];
+        expect($a->managed_membership_status)
             ->toBe($case === 'membership' ? 'removed' : 'active')
-            ->and(User::query()->where('scalpels_id', 'subject-a')->sole()->managed_membership_response_sequence)->toBe(20)
-            ->and(User::query()->where('scalpels_id', 'subject-b')->sole()->managed_membership_response_sequence)->toBe(21)
+            ->and($a->managed_membership_response_sequence)->toBe(20)
+            ->and($b->managed_membership_response_sequence)->toBe(21)
             ->and($authority->managed_connection_status)->toBe('active')
-            ->and($authority->managed_connection_response_sequence)->toBe(21);
+            ->and($authority->managed_connection_response_sequence)->toBe(21)
+            ->and($a->auth_session_version)->toBe($case === 'membership' || $connectionDenialApplied ? 2 : 1)
+            ->and($b->auth_session_version)->toBe($connectionDenialApplied ? 2 : 1)
+            ->and($credentialA->fresh()->revoked_at !== null)->toBe($case === 'membership' || $connectionDenialApplied)
+            ->and($credentialB->fresh()->revoked_at !== null)->toBe($connectionDenialApplied)
+            ->and(DB::table('sessions')->where('id', 'postgres-subject-a')->exists())->toBe(! ($case === 'membership' || $connectionDenialApplied))
+            ->and(DB::table('sessions')->where('id', 'postgres-subject-b')->exists())->toBe(! $connectionDenialApplied);
     } finally {
         foreach ($workers as $worker) {
             if ($worker->isRunning()) {
