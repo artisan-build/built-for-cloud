@@ -28,6 +28,8 @@ final class ManagedTransitionAuthorityFixture
 
     public ?string $crashAfterExecution = null;
 
+    public ?string $crashBeforeExecution = null;
+
     public bool $stageRosterChanged = false;
 
     /** @var array<string, array{digest: string, response: array<string, mixed>, status: int}> */
@@ -136,6 +138,12 @@ final class ManagedTransitionAuthorityFixture
             }
 
             $this->assertRequest($leg, $data, $path);
+            if ($this->crashBeforeExecution === $leg) {
+                $this->crashBeforeExecution = null;
+
+                throw new RuntimeException('Simulated pre-execution '.$leg.' crash.');
+            }
+
             if (in_array($leg, ['T3', 'T4'], true)
                 && $this->transitions[$this->transitionFromPath($path)]['status'] === 'abandoned') {
                 $response = [

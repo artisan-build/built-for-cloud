@@ -204,11 +204,12 @@ try {
             ];
 
             if (str_contains($path, '/transition-requests/')) {
+                $prepared = $input['authority_status'] === 'prepared';
                 $payload = [
                     ...$binding,
                     'transition_request_id' => $transition->transition_request_id,
-                    'transition_id' => null,
-                    'status' => null,
+                    'transition_id' => $prepared ? 'authority-transition-recovered' : null,
+                    'status' => $prepared ? 'prepared' : null,
                 ];
             } elseif ($path === '/managed-transition/v1/transitions') {
                 $payload = [

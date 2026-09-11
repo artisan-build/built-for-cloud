@@ -448,32 +448,36 @@ it('runs competing second-commit calls through production with one exact typed l
 
 it('allows only one of two staged attempts validated at the same generation to commit', function (): void {
     p4bPgSeedAuthority();
-    DB::statement('ALTER TABLE bfc_managed_transitions DROP CONSTRAINT bfc_transition_active_slot_unique');
-    $first = p4bPgInsertTransition([
-        'status' => ManagedTransitionStatus::Staged,
-        'transition_id' => 'authority-transition-generation-a',
-        'roster_version' => 41,
-        'roster_cutoff_at' => '2026-09-11T12:00:00+00:00',
-        'roster_total' => 1,
-    ]);
-    $second = p4bPgInsertTransition([
-        'id' => (string) Str::uuid(),
-        'status' => ManagedTransitionStatus::Staged,
-        'transition_request_id' => str_repeat('q', 43),
-        'transition_id' => 'authority-transition-generation-b',
-        'roster_version' => 41,
-        'roster_cutoff_at' => '2026-09-11T12:00:00+00:00',
-        'roster_total' => 1,
-    ]);
-    $main = $this->postgresLaneConnection();
-    $main->beginTransaction();
-    $main->table('bfc_authority')->where('key', InstallationAuthority::KEY)->lockForUpdate()->first();
-    $workers = [
-        p4bPgStartWorker(['mode' => 'production-commit', 'application_name' => 'bfc-p4b-generation-a', 'transition_id' => $first->id]),
-        p4bPgStartWorker(['mode' => 'production-commit', 'application_name' => 'bfc-p4b-generation-b', 'transition_id' => $second->id]),
-    ];
+    $main = null;
+    $workers = [];
+    $constraintDropped = false;
 
     try {
+        DB::statement('ALTER TABLE bfc_managed_transitions DROP CONSTRAINT bfc_transition_active_slot_unique');
+        $constraintDropped = true;
+        $first = p4bPgInsertTransition([
+            'status' => ManagedTransitionStatus::Staged,
+            'transition_id' => 'authority-transition-generation-a',
+            'roster_version' => 41,
+            'roster_cutoff_at' => '2026-09-11T12:00:00+00:00',
+            'roster_total' => 1,
+        ]);
+        $second = p4bPgInsertTransition([
+            'id' => (string) Str::uuid(),
+            'status' => ManagedTransitionStatus::Staged,
+            'transition_request_id' => str_repeat('q', 43),
+            'transition_id' => 'authority-transition-generation-b',
+            'roster_version' => 41,
+            'roster_cutoff_at' => '2026-09-11T12:00:00+00:00',
+            'roster_total' => 1,
+        ]);
+        $main = $this->postgresLaneConnection();
+        $main->beginTransaction();
+        $main->table('bfc_authority')->where('key', InstallationAuthority::KEY)->lockForUpdate()->first();
+        $workers = [
+            p4bPgStartWorker(['mode' => 'production-commit', 'application_name' => 'bfc-p4b-generation-a', 'transition_id' => $first->id]),
+            p4bPgStartWorker(['mode' => 'production-commit', 'application_name' => 'bfc-p4b-generation-b', 'transition_id' => $second->id]),
+        ];
         p4bPgWaitForBlocked($workers, fn (): int => (int) $this->postgresLaneProbe()->scalar(<<<'SQL'
             select count(*) from pg_stat_activity
             where datname = current_database()
@@ -499,11 +503,13 @@ it('allows only one of two staged attempts validated at the same generation to c
                 $worker->stop();
             }
         }
-        if ($main->transactionLevel() > 0) {
+        if ($main !== null && $main->transactionLevel() > 0) {
             $main->rollBack();
         }
-        DB::table('bfc_managed_transitions')->delete();
-        DB::statement('ALTER TABLE bfc_managed_transitions ADD CONSTRAINT bfc_transition_active_slot_unique UNIQUE (active_installation_slot)');
+        if ($constraintDropped) {
+            DB::table('bfc_managed_transitions')->delete();
+            DB::statement('ALTER TABLE bfc_managed_transitions ADD CONSTRAINT bfc_transition_active_slot_unique UNIQUE (active_installation_slot)');
+        }
     }
 });
 

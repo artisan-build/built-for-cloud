@@ -34,31 +34,43 @@ final class ManagedTransitionClient
     public function prepare(): ManagedTransitionAuthorityState
     {
         $transition = $this->record(allowed: [ManagedTransitionStatus::Preparing]);
-        $payload = $this->payload($this->keyedPost(
+        $response = $this->keyedPost(
             $transition,
             '/managed-transition/v1/transitions',
             $transition->prepare_request_body,
             $transition->prepare_body_digest,
-        ));
-        $this->binding($payload, $transition, $transition->generation_before);
-
-        $state = new ManagedTransitionAuthorityState(
-            $this->requiredString($payload, 'transition_request_id', 255),
-            $this->requiredString($payload, 'transition_id', 255),
-            ManagedTransitionDirection::from($this->requiredEnum($payload, 'direction', ['adopt', 'exit'])),
-            $this->requiredEnum($payload, 'status', ['prepared']),
-            $this->unsignedInteger($payload, 'roster_version'),
-            $this->dateString($payload, 'roster_cutoff_at'),
-            $this->unsignedInteger($payload, 'roster_total'),
-            $transition->generation_before,
-            null,
-            null,
         );
 
-        if ($state->transitionRequestId !== $transition->transition_request_id
-            || $state->direction !== $transition->direction
-            || $state->rosterTotal > 50_000) {
-            throw new ManagedAuthRefused;
+        try {
+            $payload = $this->payload($response);
+            $this->binding($payload, $transition, $transition->generation_before);
+
+            $state = new ManagedTransitionAuthorityState(
+                $this->requiredString($payload, 'transition_request_id', 255),
+                $this->requiredString($payload, 'transition_id', 255),
+                ManagedTransitionDirection::from($this->requiredEnum($payload, 'direction', ['adopt', 'exit'])),
+                $this->requiredEnum($payload, 'status', ['prepared']),
+                $this->unsignedInteger($payload, 'roster_version'),
+                $this->dateString($payload, 'roster_cutoff_at'),
+                $this->unsignedInteger($payload, 'roster_total'),
+                $transition->generation_before,
+                null,
+                null,
+            );
+
+            if ($state->transitionRequestId !== $transition->transition_request_id
+                || $state->direction !== $transition->direction
+                || $state->rosterTotal > 50_000) {
+                throw new ManagedAuthRefused;
+            }
+        } catch (ManagedAuthRefused $exception) {
+            throw new ManagedAuthRefused(
+                $exception->getMessage(),
+                previous: $exception,
+                retryAfterSeconds: $exception->retryAfterSeconds,
+                recordsFailedAttempt: $exception->recordsFailedAttempt,
+                authorityResponseReceived: true,
+            );
         }
 
         return $state;

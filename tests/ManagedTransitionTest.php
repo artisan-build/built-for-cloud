@@ -166,13 +166,19 @@ it('recovers an outcome-unknown T1 through T6 and replays one authority executio
         ->toThrow(ManagedAuthRefused::class);
     $attempt = ManagedTransition::query()->sole();
     $firstBody = collect($fixture->calls)->firstWhere('leg', 'T1')['body'];
+    $requestId = $attempt->transition_request_id;
 
     $recovered = app(ManagedTransitions::class)->recover($attempt);
     $t1Bodies = collect($fixture->calls)->where('leg', 'T1')->pluck('body')->all();
+    $t1Keys = collect($t1Bodies)->map(
+        static fn (string $body): string => json_decode($body, true, flags: JSON_THROW_ON_ERROR)['transition_request_id'],
+    )->all();
 
     expect($recovered->status)->toBe(ManagedTransitionStatus::Prepared)
         ->and(collect($fixture->calls)->pluck('leg')->all())->toBe(['T1', 'T6', 'T1'])
         ->and($t1Bodies)->toBe([$firstBody, $firstBody])
+        ->and($t1Keys)->toBe([$requestId, $requestId])
+        ->and($recovered->transition_request_id)->toBe($requestId)
         ->and($fixture->executionCounts['T1'])->toBe(1)
         ->and($recovered->transition_id)->toBe('authority-transition-1');
 });
@@ -191,6 +197,8 @@ it('uses T6 status and transition identity before accepting a T1 recovery replay
         if ($case === 'terminal status') {
             $payload['status'] = 'acknowledged';
             $payload['authority_generation'] = 8;
+        } elseif ($case === 'invalid status') {
+            $payload['status'] = 'unknown';
         } else {
             $payload['transition_id'] = 'crossed-transition';
         }
@@ -202,8 +210,56 @@ it('uses T6 status and transition identity before accepting a T1 recovery replay
         ->toThrow(ManagedAuthRefused::class)
         ->and($attempt->fresh()->status)->toBe(ManagedTransitionStatus::Preparing)
         ->and(collect($fixture->calls)->pluck('leg')->all())
-        ->toBe($case === 'terminal status' ? ['T1', 'T6'] : ['T1', 'T6', 'T1']);
-})->with(['terminal status', 'crossed transition']);
+        ->toBe(in_array($case, ['terminal status', 'invalid status'], true) ? ['T1', 'T6'] : ['T1', 'T6', 'T1']);
+})->with(['terminal status', 'invalid status', 'crossed transition']);
+
+it('locally discards a preparing attempt when its recorded T1 response is durably refused', function (): void {
+    [$owner, $fixture] = p4bConfigure();
+    $fixture->transform = static function (string $leg, array $payload): array {
+        if ($leg === 'T1') {
+            $payload['status'] = 'invalid';
+        }
+
+        return $payload;
+    };
+
+    expect(fn () => app(ManagedTransitions::class)->prepare($owner, ManagedTransitionDirection::Adopt))
+        ->toThrow(ManagedAuthRefused::class);
+    $attempt = ManagedTransition::query()->sole();
+    $discarded = app(ManagedTransitions::class)->recover($attempt);
+    $fixture->transform = null;
+    $replacement = app(ManagedTransitions::class)->prepare($owner->refresh(), ManagedTransitionDirection::Adopt);
+
+    expect($discarded->status)->toBe(ManagedTransitionStatus::Abandoned)
+        ->and($discarded->transition_id)->toBeNull()
+        ->and($replacement->id)->not->toBe($discarded->id)
+        ->and($replacement->status)->toBe(ManagedTransitionStatus::Prepared)
+        ->and(collect($fixture->calls)->pluck('leg')->all())->toBe(['T1', 'T6', 'T1', 'T1'])
+        ->and(collect($fixture->calls)->where('leg', 'T7'))->toHaveCount(0);
+});
+
+it('locally discards a preparing attempt when T6 reports no transition', function (): void {
+    [$owner, $fixture] = p4bConfigure();
+    $fixture->crashBeforeExecution = 'T1';
+
+    expect(fn () => app(ManagedTransitions::class)->prepare($owner, ManagedTransitionDirection::Adopt))
+        ->toThrow(ManagedAuthRefused::class);
+    $attempt = ManagedTransition::query()->sole();
+    $discarded = app(ManagedTransitions::class)->recover($attempt);
+    expect($discarded->status)->toBe(ManagedTransitionStatus::Abandoned)
+        ->and(ManagedTransition::query()->whereNotIn('status', [
+            ManagedTransitionStatus::Acknowledged->value,
+            ManagedTransitionStatus::Abandoned->value,
+        ])->count())->toBe(0);
+    $replacement = app(ManagedTransitions::class)->prepare($owner->refresh(), ManagedTransitionDirection::Adopt);
+
+    expect($discarded->status)->toBe(ManagedTransitionStatus::Abandoned)
+        ->and($discarded->transition_id)->toBeNull()
+        ->and($replacement->id)->not->toBe($discarded->id)
+        ->and($replacement->status)->toBe(ManagedTransitionStatus::Prepared)
+        ->and(collect($fixture->calls)->pluck('leg')->all())->toBe(['T1', 'T6', 'T1'])
+        ->and(collect($fixture->calls)->where('leg', 'T7'))->toHaveCount(0);
+});
 
 it('recovers outcome-unknown stage and ack from T5 without blind mutation replay', function (string $leg): void {
     $transition = p4bProposed($fixture);
@@ -315,6 +371,9 @@ it('refuses incomplete or malformed roster snapshots as a whole and preserves an
         ->and($missing->fresh()->status)->toBe('active')
         ->and($missing->fresh()->role)->toBe('admin')
         ->and($transition->fresh()->status)->toBe(ManagedTransitionStatus::Prepared);
+    if ($case === 'cyclic cursor') {
+        expect(collect($fixture->calls)->where('leg', 'T2'))->toHaveCount(2);
+    }
 })->with([
     'version shift',
     'cutoff mismatch',
