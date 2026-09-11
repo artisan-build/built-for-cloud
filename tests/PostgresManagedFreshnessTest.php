@@ -124,10 +124,34 @@ function p3cPgFinishWorker(Process $process): array
     return json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
 }
 
-/** @return array<string, mixed> */
-function p3cPgWaitForStatus(string $path, callable $accept, ?Process $process = null): array
-{
-    foreach (range(1, 20000) as $attempt) {
+/**
+ * Wait for the worker's readiness signal on a WALL-CLOCK deadline, yielding between polls.
+ *
+ * This was a bare `foreach (range(1, 20000))` hot spin with no sleep and no clock, and it was the cause of
+ * a recurring CI failure ("Timed out waiting for managed freshness fixture status", this file). Two defects,
+ * both measured rather than inferred:
+ *
+ *  1. **The bound was iterations, not time.** 20,000 iterations is whatever wall clock the machine happens
+ *     to give it — measured at **298 ms** on a developer Mac. The thing it waits for is a freshly forked PHP
+ *     process booting the framework and connecting to PostgreSQL, which routinely takes longer than that. The
+ *     "timeout" was therefore a function of CPU speed, not of how long the work legitimately needs.
+ *  2. **It never yielded.** A tight spin calling `file_get_contents()` and `Process::isRunning()` burns a
+ *     core, and on a 2-4 core CI runner already hosting five workers and PostgreSQL it starves the very
+ *     child process it is waiting for. The busier the machine, the less CPU the worker gets — so the wait
+ *     failed hardest exactly when the work was slowest.
+ *
+ * The deadline is generous on purpose: it exists to stop a hung worker wedging the suite, not to police how
+ * fast a worker ought to be. `usleep()` between polls is what makes the CPU available to the worker.
+ */
+function p3cPgWaitForStatus(
+    string $path,
+    callable $accept,
+    ?Process $process = null,
+    float $deadlineSeconds = 30.0,
+): array {
+    $deadline = microtime(true) + $deadlineSeconds;
+
+    while (true) {
         $contents = @file_get_contents($path);
         $status = is_string($contents) ? json_decode($contents, true) : null;
 
@@ -138,10 +162,46 @@ function p3cPgWaitForStatus(string $path, callable $accept, ?Process $process = 
         if ($process instanceof Process && ! $process->isRunning()) {
             throw new RuntimeException('Worker exited before fixture observation: '.$process->getOutput().$process->getErrorOutput());
         }
-    }
 
-    throw new RuntimeException('Timed out waiting for managed freshness fixture status.');
+        if (microtime(true) >= $deadline) {
+            throw new RuntimeException('Timed out waiting for managed freshness fixture status.');
+        }
+
+        // Yield the core to the worker. Without this the parent starves the process it is waiting for.
+        usleep(2000);
+    }
 }
+
+// REPRODUCTION for the flake this file kept hitting in CI. The producer below takes ~1s to publish its
+// readiness signal -- far less than a real worker needs, and far MORE than the old iteration-bounded spin
+// allowed (measured: 20,000 iterations = 298 ms on a developer Mac, and less on a busier machine). Reverting
+// p3cPgWaitForStatus() to that spin turns this red with the exact production failure message.
+it('waits for a readiness signal on a wall clock rather than an iteration count', function (): void {
+    $path = sys_get_temp_dir().'/bfc-readiness-'.bin2hex(random_bytes(8)).'.json';
+    $producer = new Process([
+        PHP_BINARY,
+        '-r',
+        'usleep(1000000); file_put_contents($argv[1], json_encode(["ready" => true]));',
+        $path,
+    ]);
+    $producer->start();
+
+    try {
+        $started = microtime(true);
+        $status = p3cPgWaitForStatus($path, static fn (array $status): bool => ($status['ready'] ?? false) === true, $producer);
+        $elapsed = microtime(true) - $started;
+
+        // It waited for the signal rather than giving up on an iteration budget...
+        expect($status['ready'])->toBeTrue()
+            // ...it genuinely waited out the producer rather than finding the file already there...
+            ->and($elapsed)->toBeGreaterThan(0.5)
+            // ...and it yielded instead of spinning, so the wait cost far fewer polls than 20,000.
+            ->and($elapsed)->toBeLessThan(25.0);
+    } finally {
+        $producer->wait();
+        @unlink($path);
+    }
+});
 
 /** @return list<array<string, mixed>> */
 function p3cPgRunWave(
