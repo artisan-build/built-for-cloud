@@ -20,6 +20,9 @@ final class ManagedTransitionAuthorityFixture
     /** @var array<string, list<array<string, mixed>>> */
     public array $rosterPages = [];
 
+    /** @var list<array{source: string, member: array<string, mixed>}> */
+    public array $rosterSources = [];
+
     /** @var null|callable(string, array<string, mixed>): array<string, mixed> */
     public mixed $transform = null;
 
@@ -45,15 +48,38 @@ final class ManagedTransitionAuthorityFixture
         private readonly string $installationId = 'transition-installation',
         private readonly int $generation = 7,
     ) {
+        $this->rosterSources = [
+            [
+                'source' => 'direct_team_account',
+                'member' => [
+                    'scalpels_id' => 'direct-member',
+                    'membership_status' => 'active',
+                    'role' => 'member',
+                    'display_name' => 'Direct Member',
+                    'contact_email' => 'direct-member@example.test',
+                    'contact_email_verified' => true,
+                ],
+            ],
+            [
+                'source' => 'on_behalf_of',
+                'member' => [
+                    'scalpels_id' => 'agency-only-member',
+                    'membership_status' => 'active',
+                    'role' => 'admin',
+                    'display_name' => 'Agency Only Member',
+                    'contact_email' => 'agency-only@example.test',
+                    'contact_email_verified' => true,
+                ],
+            ],
+        ];
         $this->rosterPages = [
-            'NULL' => [[
-                'scalpels_id' => 'direct-member',
-                'membership_status' => 'active',
-                'role' => 'member',
-                'display_name' => 'Direct Member',
-                'contact_email' => 'direct-member@example.test',
-                'contact_email_verified' => true,
-            ]],
+            'NULL' => array_values(array_map(
+                static fn (array $source): array => $source['member'],
+                array_filter(
+                    $this->rosterSources,
+                    static fn (array $source): bool => $source['source'] === 'direct_team_account',
+                ),
+            )),
         ];
     }
 
@@ -110,6 +136,17 @@ final class ManagedTransitionAuthorityFixture
             }
 
             $this->assertRequest($leg, $data, $path);
+            if (in_array($leg, ['T3', 'T4'], true)
+                && $this->transitions[$this->transitionFromPath($path)]['status'] === 'abandoned') {
+                $response = [
+                    'contract_version' => ManagedTransitionClient::CONTRACT_VERSION,
+                    'error' => 'invalid_transition',
+                ];
+                $this->recorded[$scope] = ['digest' => $digest, 'response' => $response, 'status' => 400];
+
+                return Http::response($response, 400);
+            }
+
             $response = $this->execute($leg, $data, $path);
             $response = $this->transform($leg, $response);
             $status = $leg === 'T3' && $this->stageRosterChanged ? 409 : 200;

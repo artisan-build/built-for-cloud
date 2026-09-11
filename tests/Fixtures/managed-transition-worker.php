@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
+use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\ManagedTransition;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionClient;
@@ -63,12 +64,37 @@ try {
     if ($input['mode'] === 'active-slot') {
         $installationId = $input['installation_id'] ?? 'race-installation';
         $organizationId = $input['organization_id'] ?? 'race-organization';
-        if ($input['application_check']
-            && ManagedTransition::query()
-                ->where('installation_id', $installationId)
-                ->whereNotIn('status', ['acknowledged', 'abandoned'])
-                ->exists()) {
-            $result = ['result' => 'application-refused'];
+        if ($input['application_check']) {
+            $owner = User::query()->findOrFail($input['owner_id']);
+            $calls = 0;
+            $http = new Factory;
+            $http->fake(function (ClientRequest $request) use ($http, $input, $installationId, $organizationId, &$calls): mixed {
+                $calls++;
+                $requestBody = json_decode($request->body(), true, flags: JSON_THROW_ON_ERROR);
+
+                return $http->response([
+                    'contract_version' => ManagedTransitionClient::CONTRACT_VERSION,
+                    'issuer' => 'https://issuer.example.test',
+                    'connection_id' => 'race-connection',
+                    'organization_id' => $organizationId,
+                    'installation_id' => $installationId,
+                    'authority_generation' => 7,
+                    'roster_version' => 41,
+                    'response_sequence' => 73,
+                    'responded_at' => '2026-09-11T12:00:01+00:00',
+                    'transition_request_id' => $requestBody['transition_request_id'],
+                    'transition_id' => 'authority-'.$input['application_name'],
+                    'direction' => $requestBody['direction'],
+                    'status' => 'prepared',
+                    'roster_cutoff_at' => '2026-09-11T12:00:00+00:00',
+                    'roster_total' => 1,
+                ]);
+            });
+            $transition = (new ManagedTransitions($http))->prepare(
+                $owner,
+                ManagedTransitionDirection::from($input['direction']),
+            );
+            $result = ['result' => 'inserted', 'status' => $transition->status->value, 'calls' => $calls];
         } else {
             $body = json_encode([
                 'connection_id' => 'race-connection',
@@ -76,7 +102,7 @@ try {
                 'direction' => $input['direction'],
                 'transition_request_id' => $input['request_id'],
             ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
-            ManagedTransition::query()->create([
+            ManagedTransition::createActive([
                 'id' => (string) Str::uuid(),
                 'initiated_by_user_id' => '1',
                 'direction' => ManagedTransitionDirection::from($input['direction']),
@@ -96,12 +122,14 @@ try {
                 'prepare_request_body' => $body,
                 'prepare_body_digest' => hash('sha256', $body),
             ]);
-            $result = ['result' => 'inserted'];
+            $result = ['result' => 'inserted', 'status' => 'preparing', 'calls' => 0];
         }
-    } elseif (in_array($input['mode'], ['production-commit', 'production-abandon'], true)) {
+    } elseif (in_array($input['mode'], ['production-stage', 'production-commit', 'production-abandon'], true)) {
         $transition = ManagedTransition::query()->findOrFail($input['transition_id']);
+        $calls = 0;
         $http = new Factory;
-        $http->fake(function (ClientRequest $request) use ($http, $transition): mixed {
+        $http->fake(function (ClientRequest $request) use ($http, $transition, &$calls): mixed {
+            $calls++;
             $path = (string) parse_url($request->url(), PHP_URL_PATH);
             $status = str_ends_with($path, '/abandon') ? 'abandoned' : 'staged';
             $payload = [
@@ -129,10 +157,14 @@ try {
 
             return $http->response($payload);
         });
-        $service = new ManagedTransitions(new ManagedTransitionClient($http));
+        $service = new ManagedTransitions($http);
 
-        if ($input['mode'] === 'production-commit') {
-            $completed = $service->commit($transition, static function (): void {
+        if ($input['mode'] === 'production-stage') {
+            $completed = $service->stage($transition);
+        } elseif ($input['mode'] === 'production-commit') {
+            $effects = 0;
+            $completed = $service->commit($transition, static function () use (&$effects): void {
+                $effects++;
                 if (InstallationAuthority::change(InstallationAuthority::current(), AuthorityMode::Managed) === null) {
                     throw new RuntimeException('Production commit worker could not switch mode.');
                 }
@@ -148,7 +180,7 @@ try {
             $completed = $service->abandon($request, $transition);
         }
 
-        $result = ['result' => $completed->status->value];
+        $result = ['result' => $completed->status->value, 'calls' => $calls, 'effects' => $effects ?? 0];
     } elseif ($input['mode'] === 'production-recover') {
         $transition = ManagedTransition::query()->findOrFail($input['transition_id']);
         $calls = [];
@@ -220,7 +252,7 @@ try {
 
             return $http->response($payload);
         });
-        $recovered = (new ManagedTransitions(new ManagedTransitionClient($http)))->recover($transition);
+        $recovered = (new ManagedTransitions($http))->recover($transition);
         $result = [
             'result' => $recovered->status->value,
             'calls' => $calls,
@@ -257,7 +289,7 @@ try {
 
             return $http->response($payload, 200, ['Content-Type' => 'application/json']);
         });
-        (new ManagedTransitionClient($http))->prepare($transition);
+        (new ManagedTransitionClient($http, $transition))->prepare();
         $result = [
             'result' => 'sent',
             'persisted' => $transition->prepare_request_body,
@@ -265,12 +297,25 @@ try {
             'rebuilt' => $rebuilt,
         ];
     }
+} catch (ManagedAuthRefused $exception) {
+    $causes = [];
+    for ($cause = $exception; $cause instanceof Throwable; $cause = $cause->getPrevious()) {
+        $causes[] = ['class' => $cause::class, 'message' => $cause->getMessage()];
+    }
+    $result = [
+        'result' => 'refused',
+        'class' => $exception::class,
+        'message' => $exception->getMessage(),
+        'calls' => $calls ?? null,
+        'effects' => $effects ?? 0,
+        'causes' => $causes,
+    ];
 } catch (Throwable $exception) {
     $causes = [];
     for ($cause = $exception; $cause instanceof Throwable; $cause = $cause->getPrevious()) {
         $causes[] = ['class' => $cause::class, 'message' => $cause->getMessage()];
     }
-    $result = ['result' => 'refused', 'causes' => $causes];
+    $result = ['result' => 'database-refused', 'class' => $exception::class, 'causes' => $causes];
 }
 
 fwrite(STDOUT, json_encode($result, JSON_THROW_ON_ERROR));

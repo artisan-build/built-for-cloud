@@ -24,11 +24,16 @@ final class ManagedTransitionClient
 
     private const int MAX_ROSTER_RESPONSE_BYTES = 1_048_576;
 
-    public function __construct(private readonly Factory $http) {}
+    private readonly ManagedTransition $transition;
 
-    public function prepare(ManagedTransition $transition): ManagedTransitionAuthorityState
+    public function __construct(private readonly Factory $http, ManagedTransition $transition)
     {
-        $transition = $this->record($transition, [ManagedTransitionStatus::Preparing]);
+        $this->transition = $this->record($transition);
+    }
+
+    public function prepare(): ManagedTransitionAuthorityState
+    {
+        $transition = $this->record(allowed: [ManagedTransitionStatus::Preparing]);
         $payload = $this->payload($this->keyedPost(
             $transition,
             '/managed-transition/v1/transitions',
@@ -59,9 +64,9 @@ final class ManagedTransitionClient
         return $state;
     }
 
-    public function roster(ManagedTransition $transition, ?string $cursor): ManagedTransitionRosterPage
+    public function roster(?string $cursor): ManagedTransitionRosterPage
     {
-        $transition = $this->record($transition, [ManagedTransitionStatus::Prepared]);
+        $transition = $this->record(allowed: [ManagedTransitionStatus::Prepared]);
         $this->requiredTransitionSnapshot($transition);
         $body = $this->serialize([
             'connection_id' => $transition->connection_id,
@@ -125,9 +130,9 @@ final class ManagedTransitionClient
         );
     }
 
-    public function stage(ManagedTransition $transition): ManagedTransitionAuthorityState
+    public function stage(): ManagedTransitionAuthorityState
     {
-        $transition = $this->record($transition, [ManagedTransitionStatus::Staging]);
+        $transition = $this->record(allowed: [ManagedTransitionStatus::Staging]);
         $this->requiredTransitionSnapshot($transition);
         $body = $this->requiredRecordedRequest($transition->stage_request_body, $transition->stage_body_digest);
         $payload = $this->payload($this->keyedPost(
@@ -141,9 +146,9 @@ final class ManagedTransitionClient
         return $this->boundSnapshotState($payload, $transition, 'staged');
     }
 
-    public function acknowledge(ManagedTransition $transition): ManagedTransitionAuthorityState
+    public function acknowledge(): ManagedTransitionAuthorityState
     {
-        $transition = $this->record($transition, [ManagedTransitionStatus::Acknowledging]);
+        $transition = $this->record(allowed: [ManagedTransitionStatus::Acknowledging]);
         $this->requiredTransitionSnapshot($transition);
         $body = $this->requiredRecordedRequest($transition->ack_request_body, $transition->ack_body_digest);
         $payload = $this->payload($this->keyedPost(
@@ -180,9 +185,9 @@ final class ManagedTransitionClient
         );
     }
 
-    public function state(ManagedTransition $transition): ManagedTransitionAuthorityState
+    public function state(): ManagedTransitionAuthorityState
     {
-        $transition = $this->record($transition, [
+        $transition = $this->record(allowed: [
             ManagedTransitionStatus::Prepared,
             ManagedTransitionStatus::Rostered,
             ManagedTransitionStatus::Proposed,
@@ -210,11 +215,16 @@ final class ManagedTransitionClient
             throw new ManagedAuthRefused;
         }
         $state = $this->boundSnapshotState($payload, $transition, $status);
-        $receipt = $this->nullableString($payload, 'local_commit_receipt', 255);
+        $receipt = $status === 'acknowledged'
+            ? $this->requiredString($payload, 'local_commit_receipt', 255)
+            : $this->nullableString($payload, 'local_commit_receipt', 255);
         $acknowledgedAt = $this->nullableDateString($payload, 'acknowledged_at');
 
         if (($status === 'acknowledged'
-                && ($receipt !== $transition->local_commit_receipt || $acknowledgedAt === null))
+                && (! is_string($transition->local_commit_receipt)
+                    || $transition->local_commit_receipt === ''
+                    || ! hash_equals($transition->local_commit_receipt, $receipt)
+                    || $acknowledgedAt === null))
             || ($status !== 'acknowledged' && ($receipt !== null || $acknowledgedAt !== null))) {
             throw new ManagedAuthRefused;
         }
@@ -233,9 +243,9 @@ final class ManagedTransitionClient
         );
     }
 
-    public function recoverRequest(ManagedTransition $transition): ManagedTransitionAuthorityState
+    public function recoverRequest(): ManagedTransitionAuthorityState
     {
-        $transition = $this->record($transition, [ManagedTransitionStatus::Preparing]);
+        $transition = $this->record(allowed: [ManagedTransitionStatus::Preparing]);
         $body = $this->serialize([
             'connection_id' => $transition->connection_id,
             'installation_id' => $transition->installation_id,
@@ -273,12 +283,13 @@ final class ManagedTransitionClient
         );
     }
 
-    public function abandon(ManagedTransition $transition): ManagedTransitionAuthorityState
+    public function abandon(): ManagedTransitionAuthorityState
     {
-        $transition = $this->record($transition, [
+        $transition = $this->record(allowed: [
             ManagedTransitionStatus::Prepared,
             ManagedTransitionStatus::Rostered,
             ManagedTransitionStatus::Proposed,
+            ManagedTransitionStatus::Staging,
             ManagedTransitionStatus::Staged,
         ]);
         $this->requiredTransitionSnapshot($transition);
@@ -312,9 +323,10 @@ final class ManagedTransitionClient
         );
     }
 
-    /** @param list<ManagedTransitionStatus> $allowed */
-    private function record(ManagedTransition $supplied, array $allowed): ManagedTransition
+    /** @param list<ManagedTransitionStatus>|null $allowed */
+    private function record(?ManagedTransition $supplied = null, ?array $allowed = null): ManagedTransition
     {
+        $supplied ??= $this->transition;
         if (! $supplied->exists) {
             throw new ManagedAuthRefused;
         }
@@ -322,7 +334,7 @@ final class ManagedTransitionClient
         $persisted = ManagedTransition::query()->find($supplied->getKey());
         if (! $persisted instanceof ManagedTransition
             || $persisted->status !== $supplied->status
-            || ! in_array($persisted->status, $allowed, true)) {
+            || ($allowed !== null && ! in_array($persisted->status, $allowed, true))) {
             throw new ManagedAuthRefused;
         }
 

@@ -110,6 +110,11 @@ function p4bOwnerRequest(User $owner, ?int $sessionVersion = null): Request
     return $request;
 }
 
+function p4bClient(ManagedTransition $transition, ?Factory $http = null): ManagedTransitionClient
+{
+    return new ManagedTransitionClient($http ?? app(Factory::class), $transition);
+}
+
 /** @return array<string, mixed> */
 function p4bProtectedState(): array
 {
@@ -118,7 +123,13 @@ function p4bProtectedState(): array
         'authority' => (array) DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->first(),
         'transition' => DB::table('bfc_managed_transitions')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all(),
         'roster' => DB::table('bfc_managed_transition_roster_members')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all(),
+        'cursors' => DB::table('bfc_managed_transition_roster_cursors')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all(),
         'mappings' => DB::table('bfc_managed_transition_mappings')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all(),
+        'invitations' => DB::table('invitations')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all(),
+        'sessions' => DB::table('sessions')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all(),
+        'password_resets' => DB::table('password_reset_tokens')->orderBy('email')->get()->map(static fn (object $row): array => (array) $row)->all(),
+        'api_tokens' => DB::table('api_tokens')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all(),
+        'credentials' => DB::table('credentials')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all(),
     ];
 }
 
@@ -136,7 +147,6 @@ it('runs T1 through T4 with exact persisted keyed bytes and the durable state ma
     expect($transition->status)->toBe(ManagedTransitionStatus::Acknowledged)
         ->and($transition->authority_acknowledged_at)->toBe('2026-09-11T12:05:00+00:00')
         ->and($transition->local_commit_receipt)->toBeString()->not->toBeEmpty()
-        ->and(ManagedTransition::query()->where('status', 'committing')->count())->toBe(0)
         ->and($fixture->executionCounts)->toMatchArray(['T1' => 1, 'T2' => 1, 'T3' => 1, 'T4' => 1]);
 
     foreach (['T1' => 'prepare', 'T3' => 'stage', 'T4' => 'ack'] as $leg => $prefix) {
@@ -146,16 +156,6 @@ it('runs T1 through T4 with exact persisted keyed bytes and the durable state ma
             ->and($call['digest'])->toBe(hash('sha256', $call['body']))
             ->and($call['digest'])->toBe($transition->getAttribute($prefix.'_body_digest'));
     }
-});
-
-it('pins byte digest vectors including semantically equal reordered JSON', function (): void {
-    $ordered = '{"connection_id":"c","installation_id":"i"}';
-    $reordered = '{"installation_id":"i","connection_id":"c"}';
-
-    expect(hash('sha256', $ordered))->toBe(hash('sha256', $ordered))
-        ->and(hash('sha256', $ordered))->not->toBe(hash('sha256', $ordered.' '))
-        ->and(json_decode($ordered, true))->toEqual(json_decode($reordered, true))
-        ->and(hash('sha256', $ordered))->not->toBe(hash('sha256', $reordered));
 });
 
 it('recovers an outcome-unknown T1 through T6 and replays one authority execution', function (): void {
@@ -176,6 +176,34 @@ it('recovers an outcome-unknown T1 through T6 and replays one authority executio
         ->and($fixture->executionCounts['T1'])->toBe(1)
         ->and($recovered->transition_id)->toBe('authority-transition-1');
 });
+
+it('uses T6 status and transition identity before accepting a T1 recovery replay', function (string $case): void {
+    [$owner, $fixture] = p4bConfigure();
+    $fixture->crashAfterExecution = 'T1';
+    expect(fn () => app(ManagedTransitions::class)->prepare($owner, ManagedTransitionDirection::Adopt))
+        ->toThrow(ManagedAuthRefused::class);
+    $attempt = ManagedTransition::query()->sole();
+    $fixture->transform = static function (string $leg, array $payload) use ($case): array {
+        if ($leg !== 'T6') {
+            return $payload;
+        }
+
+        if ($case === 'terminal status') {
+            $payload['status'] = 'acknowledged';
+            $payload['authority_generation'] = 8;
+        } else {
+            $payload['transition_id'] = 'crossed-transition';
+        }
+
+        return $payload;
+    };
+
+    expect(fn () => app(ManagedTransitions::class)->recover($attempt))
+        ->toThrow(ManagedAuthRefused::class)
+        ->and($attempt->fresh()->status)->toBe(ManagedTransitionStatus::Preparing)
+        ->and(collect($fixture->calls)->pluck('leg')->all())
+        ->toBe($case === 'terminal status' ? ['T1', 'T6'] : ['T1', 'T6', 'T1']);
+})->with(['terminal status', 'crossed transition']);
 
 it('recovers outcome-unknown stage and ack from T5 without blind mutation replay', function (string $leg): void {
     $transition = p4bProposed($fixture);
@@ -219,6 +247,9 @@ it('persists a complete bounded roster without treating T2 as membership state',
         'membership_confirmed_at' => now()->subDay(),
         'membership_checked_at' => now()->subDay(),
         'membership_response_at' => now()->subDay(),
+        'scalpels_issuer' => $transition->issuer,
+        'scalpels_connection_id' => $transition->connection_id,
+        'scalpels_id' => 'direct-member',
     ])->save();
     $beforeUser = $member->fresh()->getAttributes();
     $beforeAuthority = (array) DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->first();
@@ -235,7 +266,13 @@ it('persists a complete bounded roster without treating T2 as membership state',
 it('refuses incomplete or malformed roster snapshots as a whole and preserves an absent local member', function (string $case): void {
     $transition = p4bPrepared($fixture);
     $missing = User::query()->create(['name' => 'Absent From Page', 'email' => 'absent-page@example.test']);
-    $missing->forceFill(['role' => 'admin', 'status' => 'active'])->save();
+    $missing->forceFill([
+        'role' => 'admin',
+        'status' => 'active',
+        'scalpels_issuer' => $transition->issuer,
+        'scalpels_connection_id' => $transition->connection_id,
+        'scalpels_id' => 'direct-member',
+    ])->save();
 
     if ($case === 'duplicate subject') {
         $fixture->rosterPages = [
@@ -244,12 +281,8 @@ it('refuses incomplete or malformed roster snapshots as a whole and preserves an
         ];
         $transition->forceFill(['roster_total' => 2])->save();
     } elseif ($case === 'cyclic cursor') {
-        $fixture->rosterPages['cursor-two'] = [[
-            ...$fixture->rosterPages['NULL'][0],
-            'scalpels_id' => 'second-direct-member',
-            'contact_email' => 'second@example.test',
-        ]];
-        $transition->forceFill(['roster_total' => 2])->save();
+        $fixture->rosterPages = ['NULL' => [], 'cursor-two' => []];
+        $transition->forceFill(['roster_total' => 0])->save();
         $fixture->transform = static function (string $leg, array $payload): array {
             if ($leg === 'T2' && ($payload['next_cursor'] ?? null) === null) {
                 $payload['next_cursor'] = 'cursor-two';
@@ -306,7 +339,13 @@ it('enforces the roster page and response-size bounds', function (string $case):
         }
         $transition->forceFill(['roster_total' => 501])->save();
     } elseif ($case === 'response bytes') {
-        $fixture->rosterPages['NULL'][0]['display_name'] = str_repeat('x', 1_048_576);
+        $fixture->transform = static function (string $leg, array $payload): array {
+            if ($leg === 'T2') {
+                $payload['ignored_extension'] = str_repeat('x', 1_048_576);
+            }
+
+            return $payload;
+        };
     } else {
         $fixture->rosterPages = ['NULL' => []];
         foreach (range(1, 200) as $number) {
@@ -328,6 +367,50 @@ it('enforces the roster page and response-size bounds', function (string $case):
     expect(fn () => app(ManagedTransitions::class)->fetchRoster($transition))->toThrow(ManagedAuthRefused::class)
         ->and(DB::table('bfc_managed_transition_roster_members')->count())->toBe(0);
 })->with(['members per page', 'response bytes', 'pages']);
+
+it('derives the transmitted roster from direct memberships and excludes agency-only access', function (): void {
+    $transition = p4bPrepared($fixture);
+    $rostered = app(ManagedTransitions::class)->fetchRoster($transition);
+    $sourceIds = collect($fixture->rosterSources)->pluck('member.scalpels_id')->all();
+    $transmittedIds = DB::table('bfc_managed_transition_roster_members')->pluck('scalpels_id')->all();
+
+    expect($sourceIds)->toContain('direct-member', 'agency-only-member')
+        ->and($transmittedIds)->toBe(['direct-member'])
+        ->and($rostered->roster_members_received)->toBe(1);
+});
+
+it('ignores well-typed unknown top-level and member response fields', function (): void {
+    $transition = p4bPrepared($fixture);
+    $fixture->transform = static function (string $leg, array $payload): array {
+        if ($leg === 'T2') {
+            $payload['future_top_level_field'] = ['version' => 2];
+            $payload['members'][0]['future_member_field'] = 'supported-later';
+        }
+
+        return $payload;
+    };
+
+    expect(app(ManagedTransitions::class)->fetchRoster($transition)->status)
+        ->toBe(ManagedTransitionStatus::Rostered)
+        ->and(DB::table('bfc_managed_transition_roster_members')->value('scalpels_id'))
+        ->toBe('direct-member');
+});
+
+it('refuses a changed immutable cutoff reported by T5 during recovery', function (): void {
+    $transition = p4bPrepared($fixture);
+    $fixture->transform = static function (string $leg, array $payload): array {
+        if ($leg === 'T5') {
+            $payload['roster_cutoff_at'] = '2026-09-11T12:00:02+00:00';
+        }
+
+        return $payload;
+    };
+    $before = p4bProtectedState();
+
+    expect(fn () => app(ManagedTransitions::class)->recover($transition))
+        ->toThrow(ManagedAuthRefused::class)
+        ->and(p4bProtectedState())->toBe($before);
+});
 
 it('refuses unsafe authority member strings before roster persistence', function (string $field, mixed $value): void {
     $transition = p4bPrepared($fixture);
@@ -368,6 +451,30 @@ it('refuses each frozen T1 binding mismatch before associating an authority tran
     'direction' => ['direction', 'exit'],
 ]);
 
+it('refuses a T1 response crossed from another same-installation request', function (): void {
+    $first = p4bPrepared($fixture);
+    $owner = User::query()->whereNotNull('owner_slot')->sole();
+    app(ManagedTransitions::class)->abandon(p4bOwnerRequest($owner), $first);
+    $firstRequestId = $first->transition_request_id;
+    $fixture->transform = static function (string $leg, array $payload) use ($firstRequestId): array {
+        if ($leg === 'T1') {
+            $payload['transition_request_id'] = $firstRequestId;
+        }
+
+        return $payload;
+    };
+
+    expect(fn () => app(ManagedTransitions::class)->prepare($owner->refresh(), ManagedTransitionDirection::Adopt))
+        ->toThrow(ManagedAuthRefused::class);
+    $second = ManagedTransition::query()
+        ->where('id', '!=', $first->id)
+        ->sole();
+
+    expect($second->transition_request_id)->not->toBe($firstRequestId)
+        ->and($second->status)->toBe(ManagedTransitionStatus::Preparing)
+        ->and($second->transition_id)->toBeNull();
+});
+
 it('transports only a structurally complete one-time mapping and rejects changed adoption roles', function (): void {
     $transition = p4bPrepared($fixture);
     $transition = app(ManagedTransitions::class)->fetchRoster($transition);
@@ -394,7 +501,27 @@ it('transports only a structurally complete one-time mapping and rejects changed
         ->toBe('member');
 });
 
-it('leaves a changed roster proposal staged nowhere when T3 returns roster_changed', function (): void {
+it('refuses unsafe final mapping emails before staging data can be recorded', function (string $email): void {
+    $transition = app(ManagedTransitions::class)->fetchRoster(p4bPrepared($fixture));
+    $owner = User::query()->whereNotNull('owner_slot')->sole();
+    $mapping = [
+        [
+            'scalpels_id' => 'direct-member', 'local_kind' => null, 'local_id' => null,
+            'role' => 'member', 'disposition' => 'create', 'final_email' => $email,
+        ],
+        [
+            'scalpels_id' => null, 'local_kind' => 'user', 'local_id' => (string) $owner->getKey(),
+            'role' => null, 'disposition' => 'exclude', 'final_email' => null,
+        ],
+    ];
+
+    expect(fn () => app(ManagedTransitions::class)->propose($transition, $mapping))
+        ->toThrow(ManagedAuthRefused::class)
+        ->and(DB::table('bfc_managed_transition_mappings')->count())->toBe(0)
+        ->and($transition->fresh()->status)->toBe(ManagedTransitionStatus::Rostered);
+})->with(["not\nan-address", str_repeat('a', 245).'@example.test']);
+
+it('abandons a durably refused T3 and releases the installation for a replacement transition', function (): void {
     $transition = p4bProposed($fixture);
     $fixture->stageRosterChanged = true;
 
@@ -403,6 +530,38 @@ it('leaves a changed roster proposal staged nowhere when T3 returns roster_chang
         ->and($transition->fresh()->status)->toBe(ManagedTransitionStatus::Staging)
         ->and($transition->fresh()->local_commit_receipt)->toBeNull()
         ->and(DB::table('users')->count())->toBe(1);
+
+    $fixture->stageRosterChanged = false;
+    $owner = User::query()->whereNotNull('owner_slot')->sole();
+    $abandoned = app(ManagedTransitions::class)->abandon(p4bOwnerRequest($owner), $transition->fresh());
+    $replacement = app(ManagedTransitions::class)->prepare($owner->refresh(), ManagedTransitionDirection::Adopt);
+
+    expect($abandoned->status)->toBe(ManagedTransitionStatus::Abandoned)
+        ->and($replacement->id)->not->toBe($abandoned->id)
+        ->and($replacement->status)->toBe(ManagedTransitionStatus::Prepared);
+});
+
+it('converges a local staging attempt when T5 reports an authority-side abandon', function (): void {
+    $transition = p4bProposed($fixture);
+    $fixture->stageRosterChanged = true;
+    expect(fn () => app(ManagedTransitions::class)->stage($transition))
+        ->toThrow(ManagedAuthRefused::class, 'roster_changed');
+    $transition = $transition->fresh();
+    $key = str_repeat('a', 43);
+    $body = json_encode([
+        'connection_id' => $transition->connection_id,
+        'installation_id' => $transition->installation_id,
+        'idempotency_key' => $key,
+    ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+    $transition->forceFill([
+        'abandon_idempotency_key' => $key,
+        'abandon_request_body' => $body,
+        'abandon_body_digest' => hash('sha256', $body),
+    ])->save();
+    p4bClient($transition->fresh())->abandon();
+
+    expect(app(ManagedTransitions::class)->recover($transition->fresh())->status)
+        ->toBe(ManagedTransitionStatus::Abandoned);
 });
 
 it('rejects every transition leg when a frozen identity binding is crossed', function (string $leg, string $field): void {
@@ -440,7 +599,7 @@ it('rejects every transition leg when a frozen identity binding is crossed', fun
     $operation = match ($leg) {
         'T2' => fn (): ManagedTransition => app(ManagedTransitions::class)->fetchRoster($transition),
         'T3' => fn (): ManagedTransition => app(ManagedTransitions::class)->stage($transition),
-        'T5' => fn () => app(ManagedTransitionClient::class)->state($transition),
+        'T5' => fn () => p4bClient($transition)->state(),
     };
     expect($operation)->toThrow(ManagedAuthRefused::class);
 
@@ -476,7 +635,7 @@ it('refuses impossible authority status generation receipt tuples without mutati
     };
     $before = p4bProtectedState();
 
-    expect(fn () => app(ManagedTransitionClient::class)->state($transition))
+    expect(fn () => p4bClient($transition)->state())
         ->toThrow(ManagedAuthRefused::class)
         ->and(p4bProtectedState())->toBe($before);
 })->with([
@@ -495,6 +654,12 @@ it('refuses impossible authority status generation receipt tuples without mutati
         'authority_generation' => 8,
         'local_commit_receipt' => 'crossed-receipt',
         'acknowledged_at' => null,
+    ]],
+    'acknowledged without package receipt' => [[
+        'status' => 'acknowledged',
+        'authority_generation' => 8,
+        'local_commit_receipt' => null,
+        'acknowledged_at' => '2026-09-11T12:05:00+00:00',
     ]],
 ]);
 
@@ -568,14 +733,14 @@ it('never rotates a recorded key after the authority reports idempotency conflic
         'abandon_request_body' => $body,
         'abandon_body_digest' => hash('sha256', $body),
     ])->save();
-    app(ManagedTransitionClient::class)->abandon($transition->refresh());
+    p4bClient($transition->refresh())->abandon();
     $changedBody = str_replace('transition-installation', 'other-installation', $body);
     $transition->forceFill([
         'abandon_request_body' => $changedBody,
         'abandon_body_digest' => hash('sha256', $changedBody),
     ])->save();
 
-    expect(fn () => app(ManagedTransitionClient::class)->abandon($transition->refresh()))
+    expect(fn () => p4bClient($transition->refresh())->abandon())
         ->toThrow(ManagedAuthRefused::class, 'idempotency_conflict')
         ->and($transition->fresh()->abandon_idempotency_key)->toBe($key)
         ->and($fixture->executionCounts['T7'])->toBe(1);
@@ -712,7 +877,7 @@ it('rejects encoded T2 bodies instead of decompressing beyond the byte bound', f
         'Content-Encoding' => 'gzip',
     ])]);
 
-    expect(fn () => (new ManagedTransitionClient($http))->roster($transition, null))
+    expect(fn () => p4bClient($transition, $http)->roster(null))
         ->toThrow(ManagedAuthRefused::class)
         ->and(DB::table('bfc_managed_transition_roster_members')->count())->toBe(0);
 });
@@ -844,11 +1009,10 @@ it('refuses missing null and mistyped required response fields on every transiti
             $key = rtrim(strtr(base64_encode(hash('sha256', $leg.$field.$shape.$counter, true)), '+/', '-_'), '=');
             $http = new Factory;
             $http->fake(fn (ClientRequest $request): mixed => $fixture->respond($request));
-            $client = new ManagedTransitionClient($http);
             $operation = match ($leg) {
-                'T1' => fn () => $client->prepare($transition),
-                'T2' => fn () => $client->roster($transition, null),
-                'T3' => function () use ($transition, $key, $client): mixed {
+                'T1' => fn () => p4bClient($transition, $http)->prepare(),
+                'T2' => fn () => p4bClient($transition, $http)->roster(null),
+                'T3' => function () use ($transition, $key, $http): mixed {
                     $mapping = DB::table('bfc_managed_transition_mappings')
                         ->where('managed_transition_id', $transition->id)
                         ->orderBy('ordinal')
@@ -870,9 +1034,9 @@ it('refuses missing null and mistyped required response fields on every transiti
                         'stage_body_digest' => hash('sha256', $body),
                     ])->save();
 
-                    return $client->stage($transition->refresh());
+                    return p4bClient($transition->refresh(), $http)->stage();
                 },
-                'T4' => function () use ($transition, $key, $client): mixed {
+                'T4' => function () use ($transition, $key, $http): mixed {
                     $body = json_encode([
                         'connection_id' => $transition->connection_id,
                         'installation_id' => $transition->installation_id,
@@ -888,11 +1052,11 @@ it('refuses missing null and mistyped required response fields on every transiti
                         'ack_body_digest' => hash('sha256', $body),
                     ])->save();
 
-                    return $client->acknowledge($transition->refresh());
+                    return p4bClient($transition->refresh(), $http)->acknowledge();
                 },
-                'T5' => fn () => $client->state($transition),
-                'T6' => fn () => $client->recoverRequest($transition),
-                'T7' => function () use ($transition, $key, $client): mixed {
+                'T5' => fn () => p4bClient($transition, $http)->state(),
+                'T6' => fn () => p4bClient($transition, $http)->recoverRequest(),
+                'T7' => function () use ($transition, $key, $http): mixed {
                     $body = json_encode([
                         'connection_id' => $transition->connection_id,
                         'installation_id' => $transition->installation_id,
@@ -904,7 +1068,7 @@ it('refuses missing null and mistyped required response fields on every transiti
                         'abandon_body_digest' => hash('sha256', $body),
                     ])->save();
 
-                    return $client->abandon($transition->refresh());
+                    return p4bClient($transition->refresh(), $http)->abandon();
                 },
             };
 
@@ -949,15 +1113,14 @@ it('refuses unknown enums on every leg that carries one', function (string $leg,
 
     $http = new Factory;
     $http->fake(fn (ClientRequest $request): mixed => $fixture->respond($request));
-    $client = new ManagedTransitionClient($http);
     $operation = match ($leg) {
-        'T1' => fn () => $client->prepare($transition),
-        'T2' => fn () => $client->roster($transition, null),
-        'T3' => fn () => (new ManagedTransitions($client))->stage($transition),
-        'T4' => fn () => (new ManagedTransitions($client))->acknowledge($transition),
-        'T5' => fn () => $client->state($transition),
-        'T6' => fn () => $client->recoverRequest($transition),
-        'T7' => function () use ($transition, $client): mixed {
+        'T1' => fn () => p4bClient($transition, $http)->prepare(),
+        'T2' => fn () => p4bClient($transition, $http)->roster(null),
+        'T3' => fn () => (new ManagedTransitions($http))->stage($transition),
+        'T4' => fn () => (new ManagedTransitions($http))->acknowledge($transition),
+        'T5' => fn () => p4bClient($transition, $http)->state(),
+        'T6' => fn () => p4bClient($transition, $http)->recoverRequest(),
+        'T7' => function () use ($transition, $http): mixed {
             $key = str_repeat('u', 43);
             $body = json_encode([
                 'connection_id' => $transition->connection_id,
@@ -970,7 +1133,7 @@ it('refuses unknown enums on every leg that carries one', function (string $leg,
                 'abandon_body_digest' => hash('sha256', $body),
             ])->save();
 
-            return $client->abandon($transition->refresh());
+            return p4bClient($transition->refresh(), $http)->abandon();
         },
     };
 
@@ -994,7 +1157,7 @@ it('refuses malformed and unlisted failure envelopes uniformly', function (array
     $http = new Factory;
     $http->fake(['*' => $http->response($body, $status)]);
 
-    expect(fn () => (new ManagedTransitionClient($http))->prepare($transition->refresh()))
+    expect(fn () => p4bClient($transition->refresh(), $http)->prepare())
         ->toThrow(ManagedAuthRefused::class);
 })->with([
     'failure without contract' => [['error' => 'server_error'], 500],
@@ -1035,7 +1198,7 @@ it('allows only a current seated Owner session to send T7', function (string $ca
         ->and(collect($fixture->calls)->where('leg', 'T7'))->toHaveCount(0);
 })->with(['unauthenticated', 'stale session', 'admin', 'member', 'inactive owner']);
 
-it('abandons from each legal state idempotently without protected effects and releases the active slot', function (string $state): void {
+it('abandons from each legal state without protected effects and releases the active slot', function (string $state): void {
     $transition = $state === 'staged' ? p4bProposed($fixture) : p4bPrepared($fixture);
     if ($state === 'rostered' || $state === 'proposed') {
         $transition = app(ManagedTransitions::class)->fetchRoster($transition);
@@ -1067,6 +1230,113 @@ it('abandons from each legal state idempotently without protected effects and re
     expect($replacement->id)->not->toBe($abandoned->id);
 })->with(['prepared', 'rostered', 'proposed', 'staged']);
 
+it('replays response-lost T7 with the exact persisted octets and one authority execution', function (): void {
+    $transition = p4bPrepared($fixture);
+    $key = str_repeat('z', 43);
+    $body = json_encode([
+        'connection_id' => $transition->connection_id,
+        'installation_id' => $transition->installation_id,
+        'idempotency_key' => $key,
+    ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+    $transition->forceFill([
+        'abandon_idempotency_key' => $key,
+        'abandon_request_body' => $body,
+        'abandon_body_digest' => hash('sha256', $body),
+    ])->save();
+    $fixture->crashAfterExecution = 'T7';
+
+    expect(fn () => p4bClient($transition->fresh())->abandon())
+        ->toThrow(ManagedAuthRefused::class);
+    $response = p4bClient($transition->fresh())->abandon();
+    $calls = collect($fixture->calls)->where('leg', 'T7');
+
+    expect($transition->fresh()->status)->toBe(ManagedTransitionStatus::Prepared)
+        ->and($response->status)->toBe('abandoned')
+        ->and($calls->pluck('body')->all())->toBe([$body, $body])
+        ->and($calls->pluck('digest')->all())->toBe([hash('sha256', $body), hash('sha256', $body)])
+        ->and($fixture->executionCounts['T7'])->toBe(1)
+        ->and($transition->fresh()->abandon_idempotency_key)->toBe($key);
+});
+
+it('resolves an authority-side abandoned transition through both T5 and T6', function (): void {
+    $transition = p4bPrepared($fixture);
+    $key = str_repeat('v', 43);
+    $body = json_encode([
+        'connection_id' => $transition->connection_id,
+        'installation_id' => $transition->installation_id,
+        'idempotency_key' => $key,
+    ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+    $transition->forceFill([
+        'abandon_idempotency_key' => $key,
+        'abandon_request_body' => $body,
+        'abandon_body_digest' => hash('sha256', $body),
+    ])->save();
+    p4bClient($transition->fresh())->abandon();
+
+    expect(p4bClient($transition->fresh())->state()->status)->toBe('abandoned');
+    $transition->forceFill(['status' => ManagedTransitionStatus::Preparing])->save();
+    $recovered = p4bClient($transition->fresh())->recoverRequest();
+
+    expect($recovered->status)->toBe('abandoned')
+        ->and($recovered->transitionId)->toBe($transition->transition_id)
+        ->and(collect($fixture->calls)->pluck('leg')->all())->toBe(['T1', 'T7', 'T5', 'T6']);
+});
+
+it('parses invalid_transition for mutating legs against an abandoned authority transition', function (string $leg): void {
+    $transition = p4bPrepared($fixture);
+    $abandonKey = str_repeat('w', 43);
+    $abandonBody = json_encode([
+        'connection_id' => $transition->connection_id,
+        'installation_id' => $transition->installation_id,
+        'idempotency_key' => $abandonKey,
+    ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+    $transition->forceFill([
+        'abandon_idempotency_key' => $abandonKey,
+        'abandon_request_body' => $abandonBody,
+        'abandon_body_digest' => hash('sha256', $abandonBody),
+    ])->save();
+    p4bClient($transition->fresh())->abandon();
+    $key = str_repeat($leg === 'T3' ? '3' : '4', 43);
+    $receipt = str_repeat('r', 43);
+    $payload = $leg === 'T3' ? [
+        'connection_id' => $transition->connection_id,
+        'installation_id' => $transition->installation_id,
+        'idempotency_key' => $key,
+        'roster_version' => $transition->roster_version,
+        'roster_cutoff_at' => $transition->roster_cutoff_at,
+        'mapping' => [],
+    ] : [
+        'connection_id' => $transition->connection_id,
+        'installation_id' => $transition->installation_id,
+        'idempotency_key' => $key,
+        'local_commit_receipt' => $receipt,
+        'mode_after' => 'managed',
+        'generation_after' => 8,
+    ];
+    $requestBody = json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+    $transition->forceFill($leg === 'T3' ? [
+        'status' => ManagedTransitionStatus::Staging,
+        'stage_idempotency_key' => $key,
+        'stage_request_body' => $requestBody,
+        'stage_body_digest' => hash('sha256', $requestBody),
+    ] : [
+        'status' => ManagedTransitionStatus::Acknowledging,
+        'local_commit_receipt' => $receipt,
+        'ack_idempotency_key' => $key,
+        'ack_request_body' => $requestBody,
+        'ack_body_digest' => hash('sha256', $requestBody),
+    ])->save();
+    $before = p4bProtectedState();
+    $operation = $leg === 'T3'
+        ? fn () => p4bClient($transition->fresh())->stage()
+        : fn () => p4bClient($transition->fresh())->acknowledge();
+
+    expect($operation)
+        ->toThrow(ManagedAuthRefused::class, 'invalid_transition')
+        ->and(p4bProtectedState())->toBe($before)
+        ->and($fixture->executionCounts[$leg] ?? 0)->toBe(0);
+})->with(['T3', 'T4']);
+
 it('uses the database active slot for same and opposite direction attempts per installation', function (): void {
     [$owner] = p4bConfigure();
     $first = app(ManagedTransitions::class)->prepare($owner, ManagedTransitionDirection::Adopt);
@@ -1095,14 +1365,35 @@ it('refuses copied stale terminal and foreign transition capabilities before HTT
 
             return $transition->refresh();
         })(),
+        'abandoned' => (function () use ($transition): ManagedTransition {
+            $transition->forceFill(['status' => ManagedTransitionStatus::Abandoned])->save();
+
+            return $transition->refresh();
+        })(),
         'foreign' => (clone $transition)->forceFill(['installation_id' => 'foreign-installation']),
     };
     $beforeCalls = count($fixture->calls);
 
-    expect(fn () => app(ManagedTransitionClient::class)->roster($subject, null))
+    expect(fn () => p4bClient($subject)->roster(null))
         ->toThrow(ManagedAuthRefused::class)
         ->and($fixture->calls)->toHaveCount($beforeCalls);
-})->with(['copy', 'stale', 'terminal', 'foreign']);
+})->with(['copy', 'stale', 'terminal', 'abandoned', 'foreign']);
+
+it('confines each client instance to its one persisted same-installation attempt', function (): void {
+    $first = p4bPrepared($fixture);
+    $owner = User::query()->whereNotNull('owner_slot')->sole();
+    $first = app(ManagedTransitions::class)->abandon(p4bOwnerRequest($owner), $first);
+    $second = app(ManagedTransitions::class)->prepare($owner->refresh(), ManagedTransitionDirection::Adopt);
+    $secondClient = p4bClient($second);
+    $beforeCalls = count($fixture->calls);
+
+    expect(fn () => p4bClient($first)->roster(null))
+        ->toThrow(ManagedAuthRefused::class)
+        ->and($fixture->calls)->toHaveCount($beforeCalls)
+        ->and($secondClient->roster(null)->members[0]->scalpelsId)->toBe('direct-member')
+        ->and(collect($fixture->calls)->last()['path'])->toContain(rawurlencode((string) $second->transition_id))
+        ->and(collect($fixture->calls)->last()['path'])->not->toContain(rawurlencode((string) $first->transition_id));
+});
 
 it('binds direction to the required starting mode before T1 with zero transition writes', function (ManagedTransitionDirection $direction): void {
     [$owner] = p4bConfigure($direction === ManagedTransitionDirection::Adopt

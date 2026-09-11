@@ -6,10 +6,10 @@ namespace ArtisanBuild\BuiltForCloud;
 
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use Illuminate\Database\QueryException;
+use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
-use Throwable;
 
 final class ManagedTransitions
 {
@@ -17,7 +17,7 @@ final class ManagedTransitions
 
     private const int MAX_SAFE_INTEGER = 9_007_199_254_740_991;
 
-    public function __construct(private readonly ManagedTransitionClient $client) {}
+    public function __construct(private readonly Factory $http) {}
 
     public function prepare(User $actor, ManagedTransitionDirection $direction): ManagedTransition
     {
@@ -30,8 +30,7 @@ final class ManagedTransitions
             'transition_request_id' => $transitionRequestId,
         ]);
 
-        try {
-            $transition = DB::transaction(function () use (
+        $transition = DB::transaction(function () use (
                 $actor,
                 $direction,
                 $snapshot,
@@ -54,7 +53,7 @@ final class ManagedTransitions
                     throw new ManagedAuthRefused;
                 }
 
-                return ManagedTransition::query()->create([
+                return ManagedTransition::createActive([
                     'id' => (string) Str::uuid(),
                     'initiated_by_user_id' => (string) $actor->getKey(),
                     'direction' => $direction,
@@ -75,15 +74,8 @@ final class ManagedTransitions
                     'prepare_body_digest' => hash('sha256', $body),
                 ]);
             });
-        } catch (QueryException $exception) {
-            if ($this->isActiveSlotConflict($exception)) {
-                throw new ManagedAuthRefused('transition_in_progress', previous: $exception);
-            }
 
-            throw $exception;
-        }
-
-        return $this->applyPrepared($transition, $this->client->prepare($transition));
+        return $this->applyPrepared($transition, $this->client($transition)->prepare());
     }
 
     public function fetchRoster(ManagedTransition $transition): ManagedTransition
@@ -112,7 +104,7 @@ final class ManagedTransitions
             }
 
             $pageNumber++;
-            $page = $this->client->roster($transition, $cursor);
+            $page = $this->client($transition)->roster($cursor);
 
             foreach ($page->members as $position => $member) {
                 if (isset($seenSubjects[$member->scalpelsId])) {
@@ -152,6 +144,7 @@ final class ManagedTransitions
             }
 
             foreach ($cursors as $cursor) {
+                // These rows preserve pagination evidence; the in-memory seen set enforces this completed pull.
                 DB::table('bfc_managed_transition_roster_cursors')->insert([
                     'id' => (string) Str::uuid(),
                     'managed_transition_id' => $locked->id,
@@ -237,7 +230,7 @@ final class ManagedTransitions
             return $locked->refresh();
         });
 
-        $this->client->stage($transition);
+        $this->client($transition)->stage();
 
         return $this->advance($transition, ManagedTransitionStatus::Staging, ManagedTransitionStatus::Staged);
     }
@@ -305,7 +298,7 @@ final class ManagedTransitions
             return $locked->refresh();
         });
 
-        return $this->applyAcknowledged($transition, $this->client->acknowledge($transition));
+        return $this->applyAcknowledged($transition, $this->client($transition)->acknowledge());
     }
 
     public function recover(ManagedTransition $transition): ManagedTransition
@@ -340,13 +333,20 @@ final class ManagedTransitions
         );
 
         if ($transition->status === ManagedTransitionStatus::Preparing) {
-            $this->client->recoverRequest($transition);
+            $recovered = $this->client($transition)->recoverRequest();
+            if ($recovered->status !== null && $recovered->status !== 'prepared') {
+                throw new ManagedAuthRefused;
+            }
 
-            // T6 establishes whether T1 executed; replaying T1 then recovers its complete recorded result.
-            return $this->applyPrepared($transition, $this->client->prepare($transition));
+            $prepared = $this->client($transition)->prepare();
+            if ($recovered->status === 'prepared' && $recovered->transitionId !== $prepared->transitionId) {
+                throw new ManagedAuthRefused;
+            }
+
+            return $this->applyPrepared($transition, $prepared);
         }
 
-        $authority = $this->client->state($transition);
+        $authority = $this->client($transition)->state();
 
         if ($authority->status === 'abandoned') {
             return $this->advanceFromAnyPreCommit($transition, ManagedTransitionStatus::Abandoned);
@@ -373,7 +373,7 @@ final class ManagedTransitions
             }
 
             if ($transition->status === ManagedTransitionStatus::Acknowledging) {
-                return $this->applyAcknowledged($transition, $this->client->acknowledge($transition));
+                return $this->applyAcknowledged($transition, $this->client($transition)->acknowledge());
             }
 
             if ($transition->status !== ManagedTransitionStatus::Staged) {
@@ -388,7 +388,7 @@ final class ManagedTransitions
         }
 
         if ($transition->status === ManagedTransitionStatus::Staging) {
-            $this->client->stage($transition);
+            $this->client($transition)->stage();
 
             return $this->advance($transition, ManagedTransitionStatus::Staging, ManagedTransitionStatus::Staged);
         }
@@ -411,17 +411,22 @@ final class ManagedTransitions
             ManagedTransitionStatus::Prepared,
             ManagedTransitionStatus::Rostered,
             ManagedTransitionStatus::Proposed,
+            ManagedTransitionStatus::Staging,
             ManagedTransitionStatus::Staged,
         ]);
         $this->assertLocalAuthority($transition, false, false);
-        $authority = $this->client->state($transition);
+        $authority = $this->client($transition)->state();
 
         if ($authority->status === 'abandoned') {
             return $this->advanceFromAnyPreCommit($transition, ManagedTransitionStatus::Abandoned);
         }
 
-        $expectedAuthorityStatus = $transition->status === ManagedTransitionStatus::Staged ? 'staged' : 'prepared';
-        if ($authority->status !== $expectedAuthorityStatus) {
+        $expectedAuthorityStatuses = match ($transition->status) {
+            ManagedTransitionStatus::Staging => ['prepared', 'staged'],
+            ManagedTransitionStatus::Staged => ['staged'],
+            default => ['prepared'],
+        };
+        if (! in_array($authority->status, $expectedAuthorityStatuses, true)) {
             throw new ManagedAuthRefused('transition_state_conflict');
         }
 
@@ -431,6 +436,7 @@ final class ManagedTransitions
                 ManagedTransitionStatus::Prepared,
                 ManagedTransitionStatus::Rostered,
                 ManagedTransitionStatus::Proposed,
+                ManagedTransitionStatus::Staging,
                 ManagedTransitionStatus::Staged,
             ]);
 
@@ -451,7 +457,7 @@ final class ManagedTransitions
             return $locked->refresh();
         });
 
-        $this->client->abandon($transition);
+        $this->client($transition)->abandon();
 
         return $this->advanceFromAnyPreCommit($transition, ManagedTransitionStatus::Abandoned);
     }
@@ -490,7 +496,10 @@ final class ManagedTransitions
         ManagedTransitionAuthorityState $authority,
     ): ManagedTransition {
         if ($authority->status !== 'acknowledged'
-            || $authority->localCommitReceipt !== $transition->local_commit_receipt
+            || ! is_string($transition->local_commit_receipt)
+            || $transition->local_commit_receipt === ''
+            || ! is_string($authority->localCommitReceipt)
+            || ! hash_equals($transition->local_commit_receipt, $authority->localCommitReceipt)
             || $authority->acknowledgedAt === null) {
             throw new ManagedAuthRefused;
         }
@@ -531,6 +540,7 @@ final class ManagedTransitions
                 ManagedTransitionStatus::Prepared,
                 ManagedTransitionStatus::Rostered,
                 ManagedTransitionStatus::Proposed,
+                ManagedTransitionStatus::Staging,
                 ManagedTransitionStatus::Staged,
             ]);
             $locked->forceFill(['status' => $to])->save();
@@ -891,15 +901,8 @@ final class ManagedTransitions
             && in_array($parts['path'] ?? '', ['', '/'], true);
     }
 
-    private function isActiveSlotConflict(QueryException $exception): bool
+    private function client(ManagedTransition $transition): ManagedTransitionClient
     {
-        for ($current = $exception; $current instanceof Throwable; $current = $current->getPrevious()) {
-            if (str_contains($current->getMessage(), 'bfc_transition_active_slot_unique')
-                || str_contains($current->getMessage(), 'active_installation_slot')) {
-                return true;
-            }
-        }
-
-        return false;
+        return new ManagedTransitionClient($this->http, $transition);
     }
 }

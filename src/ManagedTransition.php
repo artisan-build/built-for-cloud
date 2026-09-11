@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
+use Illuminate\Database\QueryException;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
+use Throwable;
 
 /**
  * @property string $id
@@ -87,5 +90,22 @@ final class ManagedTransition extends Model
             'roster_pages_received' => 'integer',
             'roster_members_received' => 'integer',
         ];
+    }
+
+    /** @param array<string, mixed> $attributes */
+    public static function createActive(array $attributes): self
+    {
+        try {
+            return self::query()->create($attributes);
+        } catch (QueryException $exception) {
+            for ($current = $exception; $current instanceof Throwable; $current = $current->getPrevious()) {
+                if (str_contains($current->getMessage(), 'bfc_transition_active_slot_unique')
+                    || str_contains($current->getMessage(), 'active_installation_slot')) {
+                    throw new ManagedAuthRefused('transition_in_progress', previous: $exception);
+                }
+            }
+
+            throw $exception;
+        }
     }
 }
