@@ -82,9 +82,18 @@ not strictly related to the work at hand.**
 - branch naming: `feat/<slug>`.
 - PR target repo: `artisan-build/built-for-cloud` (branch `main`).
 - release: **manual** — after merge, bump `BuiltForCloud::VERSION` (`src/BuiltForCloud.php`) to the
-  version being tagged, then `git tag vX.Y.Z && git push --tags`; Packagist auto-updates.
+  version being tagged, **update `docs/http-contract.md` to the same version in the same commit**, then
+  `composer test -- tests/HttpContractDocTest.php` **before tagging**, then
+  `git tag vX.Y.Z && git push --tags`; Packagist auto-updates.
   **Every tag gets a VERSION bump** — `/bfc/meta` reports the constant, so a stale VERSION lies to
   every control plane that reads it (it sat at 0.3.0 through the v0.3.1 tag).
+  ⚠️ **The bump is TWO files, and `HttpContractDocTest` is the gate that proves it.** `docs/http-contract.md`
+  carries the version in its `api_version` paragraph and in every `bfc_version` example, and
+  `HttpContractDocTest::"the documented release and the constant differ only where the document declares it"`
+  fails the moment the constant and the document disagree without a declaration. **On 2026-09-11 the v0.8.0
+  bump changed only `src/BuiltForCloud.php`, turned `main` red, and the tag was pushed onto that red commit**
+  — published tags are never moved, so it was fixed forward. Run that test before you tag, not after.
+  Do not touch the `app_version` example (`1.4.2`); it is a *foreign* version the same test pins separately.
   Bump additively within 0.1.x (new optional features → patch). Consumers then `composer update
   artisan-build/built-for-cloud`.
 
