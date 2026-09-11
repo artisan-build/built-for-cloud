@@ -456,7 +456,7 @@ it('does not let duplicate older or lower-roster answers advance or revive membe
 
     expect($allowed)->toBeFalse()
         ->and($user->fresh()->managed_membership_status)->toBe('removed')
-        ->and($user->fresh()->managed_membership_role)->toBe('member')
+        ->and($user->fresh()->managed_membership_role)->toBe('admin')
         ->and($user->fresh()->managed_membership_roster_version)->toBe(21)
         ->and($user->fresh()->managed_membership_response_sequence)->toBe(21)
         ->and($user->fresh()->membership_confirmed_at?->toAtomString())->toBe($confirmedAt);
@@ -619,7 +619,7 @@ it('applies a non-active callback denial without running the active upsert or re
         ->and($user->status)->toBe('inactive')
         ->and($user->deactivated_at)->not->toBeNull()
         ->and($user->auth_session_version)->toBe(2)
-        ->and($user->role)->toBe('admin')
+        ->and($user->role)->toBe('member')
         ->and($user->name)->toBe('subject-fixture')
         ->and($user->original_contact_email)->toBeNull()
         ->and($user->managed_membership_status)->toBe('removed')
@@ -738,7 +738,7 @@ it('keeps membership denial subject-local and connection denial installation-wid
     ))->toBeFalse();
 
     expect($a->fresh()->status)->toBe('inactive')
-        ->and($a->fresh()->role)->toBe('admin')
+        ->and($a->fresh()->role)->toBe('member')
         ->and($a->fresh()->managed_membership_status)->toBe($membershipStatus)
         ->and($a->fresh()->auth_session_version)->toBe(2)
         ->and($credentials['a']->refresh()->revoked_at)->not->toBeNull()
@@ -935,7 +935,7 @@ it('preserves the Owner slot across every membership status and role on both res
     $result = $apply();
     $active = $membershipStatus === 'active';
     expect($leg === 'confirmation' ? $result : $result instanceof User)->toBe($active)
-        ->and($subject->fresh()->role)->toBe($role)
+        ->and($subject->fresh()->role)->toBe($active ? $role : $subjectBefore['role'])
         ->and($subject->fresh()->status)->toBe($active ? 'active' : 'inactive')
         ->and(DB::table('users')->whereNotNull('owner_slot')->count())->toBe($ownerContext === 'none' ? 0 : 1);
     Log::shouldNotHaveReceived('warning');

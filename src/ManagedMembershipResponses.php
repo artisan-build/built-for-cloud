@@ -227,12 +227,15 @@ final class ManagedMembershipResponses
         CarbonImmutable $receipt,
     ): void {
         $active = $response->membershipStatus === 'active';
-        $user->forceFill([
+        $roleDimension = $active ? [
             'role' => $response->role,
+            'managed_membership_role' => $response->role,
+        ] : [];
+        $user->forceFill([
+            ...$roleDimension,
             'status' => $active ? 'active' : 'inactive',
             'deactivated_at' => $active ? null : $receipt,
             'managed_membership_status' => $response->membershipStatus,
-            'managed_membership_role' => $response->role,
             'managed_membership_generation' => $connection->authorityGeneration,
             'managed_membership_roster_version' => $response->rosterVersion,
             'managed_membership_response_sequence' => $response->responseSequence,
