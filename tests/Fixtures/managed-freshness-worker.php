@@ -78,7 +78,8 @@ $connection = $capsule->getConnection('pgsql_testing');
 $connection->statement("set application_name = '".str_replace("'", "''", $input['application_name'])."'");
 CarbonImmutable::setTestNow($input['now']);
 $user = User::query()->where('scalpels_id', $input['subject'])->sole();
-$responses = new ManagedMembershipResponses(new ManagedIdentityUpsert);
+$client = new ManagedAuthClient(new Factory);
+$responses = new ManagedMembershipResponses(new ManagedIdentityUpsert, $client);
 
 if (($input['mode'] ?? 'decision') === 'apply') {
     $result = $responses->applyConfirmation(
@@ -105,7 +106,7 @@ if (($input['mode'] ?? 'decision') === 'apply') {
     );
 } else {
     $result = (new ManagedFreshness(
-        new ManagedAuthClient(new Factory),
+        $client,
         $responses,
     ))->allows($user);
 }

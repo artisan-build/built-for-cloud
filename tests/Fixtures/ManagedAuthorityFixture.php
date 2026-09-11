@@ -20,6 +20,9 @@ final class ManagedAuthorityFixture
     /** @var array<string, mixed> */
     public array $confirmationOverrides = [];
 
+    /** @var array<string, mixed> */
+    public array $ownershipOverrides = [];
+
     /** @var null|callable(array<string, mixed>): array<string, mixed> */
     public mixed $handoffTransform = null;
 
@@ -28,6 +31,9 @@ final class ManagedAuthorityFixture
 
     /** @var null|callable(array<string, mixed>, array<string, mixed>): mixed */
     public mixed $confirmationResponder = null;
+
+    /** @var null|callable(array<string, mixed>, array<string, mixed>): mixed */
+    public mixed $ownershipResponder = null;
 
     public function __construct(
         private readonly string $baseUrl,
@@ -44,12 +50,15 @@ final class ManagedAuthorityFixture
         $path = (string) parse_url($request->url(), PHP_URL_PATH);
         $body = $request->data();
         $this->calls[] = ['method' => $request->method(), 'path' => $path, 'body' => $body];
+        $contractVersion = $path === '/managed-transition/v1/ownership'
+            ? ManagedAuthClient::TRANSITION_CONTRACT_VERSION
+            : ManagedAuthClient::CONTRACT_VERSION;
 
         if ($request->method() !== 'POST'
-            || ($request->header('Bfc-Contract-Version')[0] ?? null) !== ManagedAuthClient::CONTRACT_VERSION
+            || ($request->header('Bfc-Contract-Version')[0] ?? null) !== $contractVersion
             || ($request->header('Authorization')[0] ?? null) !== 'Bearer '.$this->clientSecret) {
             return Http::response([
-                'contract_version' => ManagedAuthClient::CONTRACT_VERSION,
+                'contract_version' => $contractVersion,
                 'error' => 'invalid_client',
             ], 401);
         }
@@ -116,6 +125,45 @@ final class ManagedAuthorityFixture
 
             if (is_callable($this->confirmationResponder)) {
                 return ($this->confirmationResponder)($body, $payload);
+            }
+
+            return Http::response($payload);
+        }
+
+        if ($path === '/managed-transition/v1/ownership') {
+            if (array_keys($body) !== [
+                'connection_id',
+                'installation_id',
+                'seated_owner_scalpels_id',
+            ]
+                || $body['connection_id'] !== $this->connectionId
+                || $body['installation_id'] !== $this->installationId
+                || ($body['seated_owner_scalpels_id'] !== null
+                    && (! is_string($body['seated_owner_scalpels_id'])
+                        || $body['seated_owner_scalpels_id'] === ''))) {
+                throw new RuntimeException('Fixture received a request outside managed-transition-v1 O1.');
+            }
+
+            $payload = array_merge($this->binding(), [
+                'contract_version' => ManagedAuthClient::TRANSITION_CONTRACT_VERSION,
+                'owner' => [
+                    'scalpels_id' => 'subject-fixture',
+                    'membership_status' => 'active',
+                    'role' => 'owner',
+                ],
+                'seated_owner' => is_string($body['seated_owner_scalpels_id'])
+                    ? [
+                        'scalpels_id' => $body['seated_owner_scalpels_id'],
+                        'membership_status' => 'active',
+                        'role' => 'admin',
+                    ]
+                    : null,
+                'roster_version' => 9,
+                'response_sequence' => 14,
+            ], $this->ownershipOverrides);
+
+            if (is_callable($this->ownershipResponder)) {
+                return ($this->ownershipResponder)($body, $payload);
             }
 
             return Http::response($payload);
