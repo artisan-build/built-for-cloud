@@ -227,6 +227,8 @@ final class ManagedMembershipResponses
         CarbonImmutable $receipt,
     ): void {
         $active = $response->membershipStatus === 'active';
+        // managed-auth-v1 requires role on every response, and the authority sends a mandated filler on denials.
+        // Only active membership answers write it; see the P3-AC4 errata (2026-09-11) in unified-auth-build-plan.md.
         $roleDimension = $active ? [
             'role' => $response->role,
             'managed_membership_role' => $response->role,

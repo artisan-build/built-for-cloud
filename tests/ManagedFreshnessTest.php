@@ -532,6 +532,20 @@ it('preserves the stored role dimension while applying an accepted membership de
     'exchange / disabled' => ['exchange', 'disabled'],
 ]);
 
+it('preserves managed_membership_role independently of users.role on an accepted denial', function (): void {
+    p3cConfigureAuthority();
+    $user = p3cUser('managed-role-discriminator', 'admin', 10);
+
+    app(ManagedMembershipResponses::class)->applyConfirmation(
+        p3cConnection(),
+        $user,
+        p3cConfirmation($user, 20, membershipStatus: 'removed', role: 'member'),
+    );
+
+    // This separate test prevents a users.role failure from masking this column.
+    expect($user->fresh()->managed_membership_role)->toBe('admin');
+});
+
 it('writes an active answer role into both role columns and the next authorization decision', function (): void {
     CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
     p3cConfigureAuthority();
