@@ -456,10 +456,111 @@ it('does not let duplicate older or lower-roster answers advance or revive membe
 
     expect($allowed)->toBeFalse()
         ->and($user->fresh()->managed_membership_status)->toBe('removed')
-        ->and($user->fresh()->managed_membership_role)->toBe('member')
+        ->and($user->fresh()->managed_membership_role)->toBe('admin')
         ->and($user->fresh()->managed_membership_roster_version)->toBe(21)
         ->and($user->fresh()->managed_membership_response_sequence)->toBe(21)
         ->and($user->fresh()->membership_confirmed_at?->toAtomString())->toBe($confirmedAt);
+});
+
+it('preserves the stored role dimension while applying an accepted membership denial', function (
+    string $leg,
+    string $membershipStatus,
+): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:05:00+00:00');
+    p3cConfigureAuthority();
+    $user = p3cUser('denied-role-subject', 'admin', 10);
+    $accountCredential = p3cAccountCredential($user, 'denied-role-account-secret');
+    $deploymentCredential = p3cDeploymentCredential($user, 'denied-role-deployment-secret');
+    p3cSession($user, 'denied-role-session');
+    $responses = app(ManagedMembershipResponses::class);
+    $apply = static function (int $sequence, string $status) use ($leg, $responses, $user): bool|User|null {
+        $respondedAt = $sequence === 20
+            ? '2026-09-10T12:04:00+00:00'
+            : '2026-09-10T12:03:00+00:00';
+
+        if ($leg === 'confirmation') {
+            return $responses->applyConfirmation(
+                p3cConnection(),
+                $user,
+                p3cConfirmation($user, $sequence, membershipStatus: $status, respondedAt: $respondedAt),
+            );
+        }
+
+        return $responses->applyExchange(p3cConnection(), new ManagedAuthExchange(
+            'denied-role-subject',
+            'denied-role-membership',
+            $status,
+            'active',
+            'member',
+            'Denied Role Subject',
+            'denied-role-subject@example.test',
+            true,
+            $sequence,
+            $sequence,
+            new DateTimeImmutable($respondedAt),
+        ));
+    };
+
+    $result = $apply(20, $membershipStatus);
+    $denied = $user->fresh();
+
+    expect($result)->toBe($leg === 'confirmation' ? false : null)
+        ->and($denied->role)->toBe('admin')
+        ->and($denied->managed_membership_role)->toBe('admin')
+        ->and($denied->status)->toBe('inactive')
+        ->and($denied->deactivated_at?->toAtomString())->toBe('2026-09-10T12:05:00+00:00')
+        ->and($denied->managed_membership_status)->toBe($membershipStatus)
+        ->and($denied->managed_membership_generation)->toBe(7)
+        ->and($denied->managed_membership_roster_version)->toBe(20)
+        ->and($denied->managed_membership_response_sequence)->toBe(20)
+        ->and($denied->managed_membership_responded_at)->toBe('2026-09-10T12:04:00.000+00:00')
+        ->and($denied->auth_session_version)->toBe(2)
+        ->and($accountCredential->refresh()->revoked_at)->not->toBeNull()
+        ->and($deploymentCredential->refresh()->revoked_at)->toBeNull()
+        ->and(DB::table('sessions')->where('id', 'denied-role-session')->exists())->toBeFalse();
+
+    $olderResult = $apply(19, 'active');
+
+    expect($olderResult)->toBe($leg === 'confirmation' ? false : null)
+        ->and($user->fresh()->status)->toBe('inactive')
+        ->and($user->fresh()->managed_membership_status)->toBe($membershipStatus)
+        ->and($user->fresh()->managed_membership_response_sequence)->toBe(20);
+})->with([
+    'confirmation / removed' => ['confirmation', 'removed'],
+    'confirmation / disabled' => ['confirmation', 'disabled'],
+    'exchange / removed' => ['exchange', 'removed'],
+    'exchange / disabled' => ['exchange', 'disabled'],
+]);
+
+it('preserves managed_membership_role independently of users.role on an accepted denial', function (): void {
+    p3cConfigureAuthority();
+    $user = p3cUser('managed-role-discriminator', 'admin', 10);
+
+    app(ManagedMembershipResponses::class)->applyConfirmation(
+        p3cConnection(),
+        $user,
+        p3cConfirmation($user, 20, membershipStatus: 'removed', role: 'member'),
+    );
+
+    // This separate test prevents a users.role failure from masking this column.
+    expect($user->fresh()->managed_membership_role)->toBe('admin');
+});
+
+it('writes an active answer role into both role columns and the next authorization decision', function (): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    p3cConfigureAuthority();
+    $user = p3cUser('active-role-subject', 'admin', 10);
+    Route::middleware(['web', 'bfc.admin'])->get('/active-role-decision', static fn (): string => 'authorized');
+
+    $this->actingAsVersioned($user)->get('/active-role-decision')->assertOk();
+    expect(app(ManagedMembershipResponses::class)->applyConfirmation(
+        p3cConnection(),
+        $user,
+        p3cConfirmation($user, 20, role: 'member'),
+    ))->toBeTrue()
+        ->and($user->fresh()->role)->toBe('member')
+        ->and($user->fresh()->managed_membership_role)->toBe('member');
+    $this->actingAsVersioned($user->fresh())->get('/active-role-decision')->assertForbidden();
 });
 
 it('accepts lower order counters only when the current authority generation advances', function (): void {
@@ -532,7 +633,7 @@ it('applies a non-active callback denial without running the active upsert or re
         ->and($user->status)->toBe('inactive')
         ->and($user->deactivated_at)->not->toBeNull()
         ->and($user->auth_session_version)->toBe(2)
-        ->and($user->role)->toBe('admin')
+        ->and($user->role)->toBe('member')
         ->and($user->name)->toBe('subject-fixture')
         ->and($user->original_contact_email)->toBeNull()
         ->and($user->managed_membership_status)->toBe('removed')
@@ -651,7 +752,7 @@ it('keeps membership denial subject-local and connection denial installation-wid
     ))->toBeFalse();
 
     expect($a->fresh()->status)->toBe('inactive')
-        ->and($a->fresh()->role)->toBe('admin')
+        ->and($a->fresh()->role)->toBe('member')
         ->and($a->fresh()->managed_membership_status)->toBe($membershipStatus)
         ->and($a->fresh()->auth_session_version)->toBe(2)
         ->and($credentials['a']->refresh()->revoked_at)->not->toBeNull()
@@ -848,7 +949,7 @@ it('preserves the Owner slot across every membership status and role on both res
     $result = $apply();
     $active = $membershipStatus === 'active';
     expect($leg === 'confirmation' ? $result : $result instanceof User)->toBe($active)
-        ->and($subject->fresh()->role)->toBe($role)
+        ->and($subject->fresh()->role)->toBe($active ? $role : $subjectBefore['role'])
         ->and($subject->fresh()->status)->toBe($active ? 'active' : 'inactive')
         ->and(DB::table('users')->whereNotNull('owner_slot')->count())->toBe($ownerContext === 'none' ? 0 : 1);
     Log::shouldNotHaveReceived('warning');
