@@ -23,6 +23,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
@@ -794,3 +795,26 @@ it('does not pull O1 from confirmation, non-Owner answers, or non-active answers
     expect($fixture->calls)->toBe([])
         ->and($owner->fresh()->role)->toBe('owner');
 })->with(['confirmation', 'non-Owner', 'non-active']);
+
+// The frozen contract says owner_contested is "REFUSED ... logged". Zero-writes was enforced; the audit half
+// was not, so deleting the Log::warning call left the whole ownership suite green. Both P4a independents
+// found that independently.
+it('emits the audit warning when it refuses an owner_contested answer', function (): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    p4aConfigureAuthority();
+    Log::spy();
+    $seated = p4aUser('seated-owner', 'owner');
+    $subject = p4aUser('contesting-subject', 'member');
+
+    expect(fn (): bool => app(ManagedMembershipResponses::class)->applyConfirmation(
+        p4aConnection(),
+        $subject,
+        p4aConfirmation('contesting-subject', 'active', 'owner', 20),
+    ))->toThrow(ManagedAuthRefused::class);
+
+    Log::shouldHaveReceived('warning')
+        ->once()
+        ->withArgs(static fn (string $message, array $context): bool => $message === 'Built for Cloud refused a managed response that would change the Owner.'
+            && $context['reason_code'] === 'managed_owner_transition_refused'
+            && $context['scalpels_id'] === 'contesting-subject');
+});

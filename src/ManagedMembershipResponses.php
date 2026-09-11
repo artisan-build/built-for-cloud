@@ -338,6 +338,11 @@ final class ManagedMembershipResponses
         ManagedOwnershipStatement $statement,
     ): void {
         $active = $subject->membershipStatus === 'active';
+        // Unlike fillMembershipDimension(), this writes the role dimension on a NON-active subject too, and
+        // that asymmetry is deliberate: an O1 statement is an explicit two-sided assertion in which the
+        // authority names the incumbent's new role, and writing it is what vacates the Owner slot. It is not
+        // a managed-auth-v1 denial filler. Do not harmonise these two methods; see the P4 frozen contract
+        // section 2.3 and the P3-AC4 errata in unified-auth-build-plan.md.
         $user->forceFill([
             'role' => $subject->role,
             'status' => $active ? 'active' : 'inactive',
@@ -397,6 +402,13 @@ final class ManagedMembershipResponses
         }
 
         if ($statement->owner->scalpelsId === $statement->seatedOwner->scalpelsId) {
+            // `!=` is deliberate and `!==` is WRONG here. These are two distinct value objects parsed from
+            // two separate members of the O1 body, so `!==` compares instance identity and is ALWAYS true --
+            // it would make step 4c-ii's reaffirmation unreachable and refuse every valid reaffirmation.
+            // `!=` compares the properties, which is what the frozen contract's "identical in scalpels_id,
+            // role and membership_status" requires. Both members are drawn from non-numeric allow-lists, so
+            // loose comparison cannot coerce. (Proposed as a cosmetic tightening in P4a review and measured:
+            // it reddens the 'reaffirmation' cell.)
             if ($statement->owner != $statement->seatedOwner) {
                 throw new ManagedAuthRefused;
             }
