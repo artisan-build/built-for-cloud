@@ -213,7 +213,7 @@ it('uses T6 status and transition identity before accepting a T1 recovery replay
         ->toBe(in_array($case, ['terminal status', 'invalid status'], true) ? ['T1', 'T6'] : ['T1', 'T6', 'T1']);
 })->with(['terminal status', 'invalid status', 'crossed transition']);
 
-it('locally discards a preparing attempt when its recorded T1 response is durably refused', function (): void {
+it('preserves a preparing attempt when its recorded T1 response is durably refused', function (): void {
     [$owner, $fixture] = p4bConfigure();
     $fixture->transform = static function (string $leg, array $payload): array {
         if ($leg === 'T1') {
@@ -226,17 +226,75 @@ it('locally discards a preparing attempt when its recorded T1 response is durabl
     expect(fn () => app(ManagedTransitions::class)->prepare($owner, ManagedTransitionDirection::Adopt))
         ->toThrow(ManagedAuthRefused::class);
     $attempt = ManagedTransition::query()->sole();
-    $discarded = app(ManagedTransitions::class)->recover($attempt);
-    $fixture->transform = null;
-    $replacement = app(ManagedTransitions::class)->prepare($owner->refresh(), ManagedTransitionDirection::Adopt);
 
-    expect($discarded->status)->toBe(ManagedTransitionStatus::Abandoned)
-        ->and($discarded->transition_id)->toBeNull()
-        ->and($replacement->id)->not->toBe($discarded->id)
-        ->and($replacement->status)->toBe(ManagedTransitionStatus::Prepared)
-        ->and(collect($fixture->calls)->pluck('leg')->all())->toBe(['T1', 'T6', 'T1', 'T1'])
+    expect(fn () => app(ManagedTransitions::class)->recover($attempt))
+        ->toThrow(ManagedAuthRefused::class)
+        ->and($attempt->fresh()->status)->toBe(ManagedTransitionStatus::Preparing)
+        ->and(fn () => app(ManagedTransitions::class)->prepare($owner->refresh(), ManagedTransitionDirection::Adopt))
+        ->toThrow(ManagedAuthRefused::class, 'transition_in_progress')
+        ->and(collect($fixture->calls)->pluck('leg')->all())->toBe(['T1', 'T6', 'T1'])
         ->and(collect($fixture->calls)->where('leg', 'T7'))->toHaveCount(0);
 });
+
+it('preserves a preparing attempt when a prepared T1 replay has a retryable or invalid response', function (
+    string $case,
+    ?int $retryAfter,
+): void {
+    [$owner, $fixture] = p4bConfigure();
+    $fixture->crashAfterExecution = 'T1';
+
+    expect(fn () => app(ManagedTransitions::class)->prepare($owner, ManagedTransitionDirection::Adopt))
+        ->toThrow(ManagedAuthRefused::class);
+    $attempt = ManagedTransition::query()->sole();
+    $http = new Factory;
+    $http->fake(static function (ClientRequest $request) use ($case, $fixture): mixed {
+        $response = $fixture->respond($request);
+        $path = (string) parse_url($request->url(), PHP_URL_PATH);
+        if ($path !== '/managed-transition/v1/transitions') {
+            return $response;
+        }
+
+        return match ($case) {
+            '503' => Http::response([
+                'contract_version' => ManagedTransitionClient::CONTRACT_VERSION,
+                'error' => 'server_error',
+            ], 503, ['Retry-After' => '120']),
+            '429' => Http::response([
+                'contract_version' => ManagedTransitionClient::CONTRACT_VERSION,
+                'error' => 'rate_limited',
+            ], 429, ['Retry-After' => '30']),
+            'malformed body' => Http::response('not json'),
+            'binding failure' => Http::response([
+                ...$response->json(),
+                'installation_id' => 'crossed-installation',
+            ]),
+        };
+    });
+
+    $refusal = null;
+    try {
+        (new ManagedTransitions($http))->recover($attempt);
+    } catch (ManagedAuthRefused $exception) {
+        $refusal = $exception;
+    }
+
+    expect($refusal)->toBeInstanceOf(ManagedAuthRefused::class)
+        ->and($refusal?->retryAfterSeconds)->toBe($retryAfter)
+        ->and($attempt->fresh()->status)->toBe(ManagedTransitionStatus::Preparing)
+        ->and(ManagedTransition::query()->whereNotIn('status', [
+            ManagedTransitionStatus::Acknowledged->value,
+            ManagedTransitionStatus::Abandoned->value,
+        ])->count())->toBe(1)
+        ->and(fn () => app(ManagedTransitions::class)->prepare($owner->refresh(), ManagedTransitionDirection::Adopt))
+        ->toThrow(ManagedAuthRefused::class, 'transition_in_progress')
+        ->and(collect($fixture->calls)->pluck('leg')->all())->toBe(['T1', 'T6', 'T1'])
+        ->and(collect($fixture->calls)->where('leg', 'T7'))->toHaveCount(0);
+})->with([
+    '503 with Retry-After' => ['503', 120],
+    '429 with Retry-After' => ['429', 30],
+    'malformed body' => ['malformed body', null],
+    'binding failure' => ['binding failure', null],
+]);
 
 it('locally discards a preparing attempt when T6 reports no transition', function (): void {
     [$owner, $fixture] = p4bConfigure();
@@ -259,6 +317,33 @@ it('locally discards a preparing attempt when T6 reports no transition', functio
         ->and($replacement->status)->toBe(ManagedTransitionStatus::Prepared)
         ->and(collect($fixture->calls)->pluck('leg')->all())->toBe(['T1', 'T6', 'T1'])
         ->and(collect($fixture->calls)->where('leg', 'T7'))->toHaveCount(0);
+});
+
+it('locally converges a preparing attempt when T6 reports an abandoned transition', function (): void {
+    $transition = p4bPrepared($fixture);
+    $owner = User::query()->whereNotNull('owner_slot')->sole();
+    $key = str_repeat('a', 43);
+    $body = json_encode([
+        'connection_id' => $transition->connection_id,
+        'installation_id' => $transition->installation_id,
+        'idempotency_key' => $key,
+    ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+    $transition->forceFill([
+        'abandon_idempotency_key' => $key,
+        'abandon_request_body' => $body,
+        'abandon_body_digest' => hash('sha256', $body),
+    ])->save();
+    p4bClient($transition->fresh())->abandon();
+    $transition->forceFill(['status' => ManagedTransitionStatus::Preparing])->save();
+
+    $discarded = app(ManagedTransitions::class)->recover($transition->fresh());
+    $replacement = app(ManagedTransitions::class)->prepare($owner->refresh(), ManagedTransitionDirection::Adopt);
+
+    expect($discarded->status)->toBe(ManagedTransitionStatus::Abandoned)
+        ->and($replacement->id)->not->toBe($discarded->id)
+        ->and($replacement->status)->toBe(ManagedTransitionStatus::Prepared)
+        ->and(collect($fixture->calls)->pluck('leg')->all())->toBe(['T1', 'T7', 'T6', 'T1'])
+        ->and(collect($fixture->calls)->where('leg', 'T7'))->toHaveCount(1);
 });
 
 it('recovers outcome-unknown stage and ack from T5 without blind mutation replay', function (string $leg): void {

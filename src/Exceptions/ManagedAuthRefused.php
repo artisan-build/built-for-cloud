@@ -15,7 +15,6 @@ final class ManagedAuthRefused extends RuntimeException
         ?Throwable $previous = null,
         public readonly ?int $retryAfterSeconds = null,
         public readonly bool $recordsFailedAttempt = false,
-        public readonly bool $authorityResponseReceived = false,
     ) {
         parent::__construct($message, $code, $previous);
     }

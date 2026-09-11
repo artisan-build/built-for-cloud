@@ -334,7 +334,7 @@ final class ManagedTransitions
 
         if ($transition->status === ManagedTransitionStatus::Preparing) {
             $recovered = $this->client($transition)->recoverRequest();
-            if ($recovered->status === null) {
+            if ($recovered->status === null || $recovered->status === 'abandoned') {
                 return $this->advance($transition, ManagedTransitionStatus::Preparing, ManagedTransitionStatus::Abandoned);
             }
 
@@ -342,15 +342,7 @@ final class ManagedTransitions
                 throw new ManagedAuthRefused;
             }
 
-            try {
-                $prepared = $this->client($transition)->prepare();
-            } catch (ManagedAuthRefused $exception) {
-                if (! $exception->authorityResponseReceived) {
-                    throw $exception;
-                }
-
-                return $this->advance($transition, ManagedTransitionStatus::Preparing, ManagedTransitionStatus::Abandoned);
-            }
+            $prepared = $this->client($transition)->prepare();
 
             if ($recovered->transitionId !== $prepared->transitionId) {
                 throw new ManagedAuthRefused;
