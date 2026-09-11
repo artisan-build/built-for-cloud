@@ -9,7 +9,6 @@ use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
-use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
@@ -31,7 +30,6 @@ use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 
 uses(RefreshDatabase::class);
@@ -190,25 +188,6 @@ function p3cSession(User $user, string $id): void
         'payload' => 'managed freshness test',
         'last_activity' => now()->getTimestamp(),
     ]);
-}
-
-/** @return array<string, array{string, string, string, string}> */
-function p3cOwnerTransitionCases(): array
-{
-    $cases = [];
-
-    foreach (['confirmation', 'exchange'] as $leg) {
-        foreach (['none', 'subject', 'other'] as $ownerContext) {
-            foreach (['active', 'removed', 'disabled'] as $membershipStatus) {
-                foreach (['owner', 'admin', 'member'] as $role) {
-                    $name = implode(' / ', [$leg, $ownerContext, $membershipStatus, $role]);
-                    $cases[$name] = [$leg, $ownerContext, $membershipStatus, $role];
-                }
-            }
-        }
-    }
-
-    return $cases;
 }
 
 it('serves stored state at 299 seconds and calls the authority at exactly 300 seconds', function (): void {
@@ -823,137 +802,6 @@ it('applies non-Owner promotion and demotion on the next authorization decision'
     ))->toBeTrue();
     $this->actingAsVersioned($user->fresh())->get('/managed-role-decision')->assertForbidden();
 });
-
-it('allows an unchanged Owner response and observably refuses creating or removing an Owner with no partial application', function (): void {
-    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
-    p3cConfigureAuthority();
-    Log::spy();
-    $owner = p3cUser('owner-subject', 'owner', 10);
-    $member = p3cUser('owner-candidate', 'member', 10);
-    $responses = app(ManagedMembershipResponses::class);
-
-    expect($responses->applyConfirmation(
-        p3cConnection(),
-        $owner,
-        p3cConfirmation($owner, 20, role: 'owner'),
-    ))->toBeTrue();
-    $ownerBefore = $owner->fresh()->getAttributes();
-    $memberBefore = $member->fresh()->getAttributes();
-    $authorityBefore = (array) DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->first();
-
-    expect(fn (): bool => $responses->applyConfirmation(
-        p3cConnection(),
-        $member,
-        p3cConfirmation($member, 21, connectionStatus: 'inactive', role: 'owner'),
-    ))->toThrow(ManagedAuthRefused::class, 'managed_owner_transition_refused');
-    expect(fn (): bool => $responses->applyConfirmation(
-        p3cConnection(),
-        $owner,
-        p3cConfirmation($owner, 21, membershipStatus: 'removed', connectionStatus: 'inactive', role: 'admin'),
-    ))->toThrow(ManagedAuthRefused::class, 'managed_owner_transition_refused');
-    expect(fn (): ?User => $responses->applyExchange(
-        p3cConnection(),
-        new ManagedAuthExchange(
-            'new-owner-candidate',
-            'new-owner-membership',
-            'active',
-            'inactive',
-            'owner',
-            'New Owner Candidate',
-            'new-owner-candidate@example.test',
-            true,
-            22,
-            22,
-            new DateTimeImmutable('2026-09-10T12:00:00+00:00'),
-        ),
-    ))->toThrow(ManagedAuthRefused::class, 'managed_owner_transition_refused');
-
-    expect($member->fresh()->getAttributes())->toBe($memberBefore)
-        ->and($owner->fresh()->getAttributes())->toBe($ownerBefore)
-        ->and(User::query()->where('scalpels_id', 'new-owner-candidate')->exists())->toBeFalse()
-        ->and((array) DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->first())->toBe($authorityBefore);
-    Log::shouldHaveReceived('warning')
-        ->times(3)
-        ->withArgs(static fn (string $message, array $context): bool => $message === 'Built for Cloud refused a managed response that would change the Owner.'
-            && $context['reason_code'] === 'managed_owner_transition_refused');
-});
-
-it('preserves the Owner slot across every membership status and role on both response legs', function (
-    string $leg,
-    string $ownerContext,
-    string $membershipStatus,
-    string $role,
-): void {
-    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
-    p3cConfigureAuthority();
-
-    if ($ownerContext === 'other') {
-        p3cUser('seated-owner', 'owner', 10);
-    }
-
-    $subject = p3cUser(
-        'owner-matrix-subject',
-        $ownerContext === 'subject' ? 'owner' : 'member',
-        10,
-    );
-    $subjectBefore = $subject->getAttributes();
-    $authorityBefore = (array) DB::table('bfc_authority')
-        ->where('key', InstallationAuthority::KEY)
-        ->first();
-    $ownerSlotsBefore = DB::table('users')->orderBy('id')->pluck('owner_slot', 'id')->all();
-    Log::spy();
-    $responses = app(ManagedMembershipResponses::class);
-    $apply = static function () use ($leg, $membershipStatus, $responses, $role, $subject): bool|User|null {
-        if ($leg === 'confirmation') {
-            return $responses->applyConfirmation(
-                p3cConnection(),
-                $subject,
-                p3cConfirmation($subject, 20, membershipStatus: $membershipStatus, role: $role),
-            );
-        }
-
-        return $responses->applyExchange(
-            p3cConnection(),
-            new ManagedAuthExchange(
-                (string) $subject->scalpels_id,
-                'owner-matrix-membership',
-                $membershipStatus,
-                'active',
-                $role,
-                'Owner Matrix Subject',
-                'owner-matrix-subject@example.test',
-                true,
-                20,
-                20,
-                new DateTimeImmutable('2026-09-10T12:00:00+00:00'),
-            ),
-        );
-    };
-    $subjectIsOwner = $ownerContext === 'subject';
-    $refused = (! $subjectIsOwner && $role === 'owner')
-        || ($subjectIsOwner && ($membershipStatus !== 'active' || $role !== 'owner'));
-
-    if ($refused) {
-        expect($apply)->toThrow(ManagedAuthRefused::class, 'managed_owner_transition_refused')
-            ->and($subject->fresh()->getAttributes())->toBe($subjectBefore)
-            ->and((array) DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->first())->toBe($authorityBefore)
-            ->and(DB::table('users')->orderBy('id')->pluck('owner_slot', 'id')->all())->toBe($ownerSlotsBefore);
-        Log::shouldHaveReceived('warning')
-            ->once()
-            ->withArgs(static fn (string $message, array $context): bool => $message === 'Built for Cloud refused a managed response that would change the Owner.'
-                && $context['reason_code'] === 'managed_owner_transition_refused');
-
-        return;
-    }
-
-    $result = $apply();
-    $active = $membershipStatus === 'active';
-    expect($leg === 'confirmation' ? $result : $result instanceof User)->toBe($active)
-        ->and($subject->fresh()->role)->toBe($active ? $role : $subjectBefore['role'])
-        ->and($subject->fresh()->status)->toBe($active ? 'active' : 'inactive')
-        ->and(DB::table('users')->whereNotNull('owner_slot')->count())->toBe($ownerContext === 'none' ? 0 : 1);
-    Log::shouldNotHaveReceived('warning');
-})->with(p3cOwnerTransitionCases());
 
 it('refuses unknown or absent roles without defaulting to member or treating malformed input as revocation', function (string $shape): void {
     CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');

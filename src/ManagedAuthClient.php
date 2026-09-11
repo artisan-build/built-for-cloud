@@ -15,6 +15,8 @@ final class ManagedAuthClient
 {
     public const string CONTRACT_VERSION = 'managed-auth-v1';
 
+    public const string TRANSITION_CONTRACT_VERSION = 'managed-transition-v1';
+
     public const string AUTHORIZE_PATH = '/managed-auth/v1/authorize';
 
     private const string CONTRACT_HEADER = 'Bfc-Contract-Version';
@@ -32,7 +34,7 @@ final class ManagedAuthClient
                 'request_id' => $requestId,
             ],
         );
-        $payload = $this->successfulPayload($response);
+        $payload = $this->successfulPayload($response, self::CONTRACT_VERSION);
 
         if (($payload['request_id'] ?? null) !== $requestId
             || ! is_string($payload['authorization_url'] ?? null)
@@ -61,7 +63,7 @@ final class ManagedAuthClient
                 'code' => $code,
             ],
         );
-        $payload = $this->successfulPayload($response);
+        $payload = $this->successfulPayload($response, self::CONTRACT_VERSION);
 
         foreach ([
             'issuer' => $connection->issuer,
@@ -124,7 +126,7 @@ final class ManagedAuthClient
                 'scalpels_id' => $user->scalpels_id,
             ],
         );
-        $payload = $this->successfulPayload($response);
+        $payload = $this->successfulPayload($response, self::CONTRACT_VERSION);
 
         foreach ([
             'issuer' => $connection->issuer,
@@ -154,13 +156,61 @@ final class ManagedAuthClient
         }
     }
 
-    private function request(ManagedAuthConnection $connection): PendingRequest
-    {
+    public function ownership(
+        ManagedAuthConnection $connection,
+        ?string $seatedOwnerScalpelsId,
+    ): ManagedOwnershipStatement {
+        $response = $this->post(
+            $this->request($connection, self::TRANSITION_CONTRACT_VERSION),
+            $connection->baseUrl.'/managed-transition/v1/ownership',
+            [
+                'connection_id' => $connection->connectionId,
+                'installation_id' => $connection->installationId,
+                'seated_owner_scalpels_id' => $seatedOwnerScalpelsId,
+            ],
+        );
+        $payload = $this->successfulPayload($response, self::TRANSITION_CONTRACT_VERSION);
+
+        foreach ([
+            'issuer' => $connection->issuer,
+            'connection_id' => $connection->connectionId,
+            'organization_id' => $connection->organizationId,
+            'installation_id' => $connection->installationId,
+            'authority_generation' => $connection->authorityGeneration,
+        ] as $field => $expected) {
+            if (($payload[$field] ?? null) !== $expected) {
+                throw new ManagedAuthRefused;
+            }
+        }
+
+        if (! array_key_exists('owner', $payload)
+            || ! array_key_exists('seated_owner', $payload)
+            || ! is_array($payload['owner'])
+            || ($payload['seated_owner'] !== null && ! is_array($payload['seated_owner']))) {
+            throw new ManagedAuthRefused;
+        }
+
+        return new ManagedOwnershipStatement(
+            $seatedOwnerScalpelsId,
+            $this->ownershipSubject($payload['owner']),
+            is_array($payload['seated_owner'])
+                ? $this->ownershipSubject($payload['seated_owner'])
+                : null,
+            $this->unsignedInteger($payload, 'roster_version'),
+            $this->unsignedInteger($payload, 'response_sequence'),
+            $this->date($this->requiredString($payload, 'responded_at')),
+        );
+    }
+
+    private function request(
+        ManagedAuthConnection $connection,
+        string $contractVersion = self::CONTRACT_VERSION,
+    ): PendingRequest {
         $request = $this->http
             ->acceptJson()
             ->asJson()
             ->withToken($connection->clientSecret)
-            ->withHeaders([self::CONTRACT_HEADER => self::CONTRACT_VERSION])
+            ->withHeaders([self::CONTRACT_HEADER => $contractVersion])
             ->timeout(8);
 
         return $connection->caBundle === null
@@ -183,12 +233,12 @@ final class ManagedAuthClient
     }
 
     /** @return array<string, mixed> */
-    private function successfulPayload(Response $response): array
+    private function successfulPayload(Response $response, string $contractVersion): array
     {
         $payload = $response->json();
         $retryAfter = $this->retryAfter($response);
 
-        if (! is_array($payload) || ($payload['contract_version'] ?? null) !== self::CONTRACT_VERSION) {
+        if (! is_array($payload) || ($payload['contract_version'] ?? null) !== $contractVersion) {
             throw new ManagedAuthRefused(
                 retryAfterSeconds: $retryAfter,
                 recordsFailedAttempt: true,
@@ -203,6 +253,22 @@ final class ManagedAuthClient
         }
 
         return $payload;
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function ownershipSubject(array $payload): ManagedOwnershipSubject
+    {
+        $scalpelsId = $this->requiredString($payload, 'scalpels_id');
+
+        if (strlen($scalpelsId) > 255) {
+            throw new ManagedAuthRefused;
+        }
+
+        return new ManagedOwnershipSubject(
+            $scalpelsId,
+            $this->requiredEnum($payload, 'membership_status', ['active', 'removed', 'disabled']),
+            $this->requiredEnum($payload, 'role', ['owner', 'admin', 'member']),
+        );
     }
 
     /** @param array<string, mixed> $payload */

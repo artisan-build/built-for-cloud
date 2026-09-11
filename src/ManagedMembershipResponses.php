@@ -5,85 +5,90 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud;
 
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\ManagedOwnerAcquisitionNotApplicable;
+use ArtisanBuild\BuiltForCloud\Exceptions\ManagedOwnerContested;
 use Carbon\CarbonImmutable;
+use Closure;
+use Illuminate\Database\QueryException;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
 final class ManagedMembershipResponses
 {
-    public function __construct(private readonly ManagedIdentityUpsert $identities) {}
+    public function __construct(
+        private readonly ManagedIdentityUpsert $identities,
+        private readonly ManagedAuthClient $client,
+    ) {}
 
     public function applyConfirmation(
         ManagedAuthConnection $connection,
         User $subject,
         ManagedAuthConfirmation $response,
     ): bool {
-        return DB::transaction(function () use ($connection, $subject, $response): bool {
-            $authority = $this->lockedAuthority($connection);
-            $user = User::query()->lockForUpdate()->find($subject->getKey());
+        try {
+            return $this->transaction(function () use ($connection, $subject, $response): bool {
+                $authority = $this->lockedAuthority($connection);
+                $user = User::query()->lockForUpdate()->find($subject->getKey());
 
-            if (! ($user instanceof User)
-                || $user->scalpels_issuer !== $connection->issuer
-                || $user->scalpels_connection_id !== $connection->connectionId
-                || $user->scalpels_id !== $response->scalpelsId) {
-                throw new ManagedAuthRefused;
-            }
+                if (! ($user instanceof User)
+                    || $user->scalpels_issuer !== $connection->issuer
+                    || $user->scalpels_connection_id !== $connection->connectionId
+                    || $user->scalpels_id !== $response->scalpelsId) {
+                    throw new ManagedAuthRefused;
+                }
 
-            $receipt = CarbonImmutable::now();
-            $membershipAccepted = $this->newer(
-                $user->managed_membership_generation,
-                $user->managed_membership_roster_version,
-                $user->managed_membership_response_sequence,
-                $connection->authorityGeneration,
-                $response->rosterVersion,
-                $response->responseSequence,
-            );
-            $connectionAccepted = $this->newer(
-                $this->nullableInt($authority->managed_connection_generation),
-                $this->nullableInt($authority->managed_connection_roster_version),
-                $this->nullableInt($authority->managed_connection_response_sequence),
-                $connection->authorityGeneration,
-                $response->rosterVersion,
-                $response->responseSequence,
-            );
+                $receipt = CarbonImmutable::now();
+                $membershipAccepted = $this->newer(
+                    $user->managed_membership_generation,
+                    $user->managed_membership_roster_version,
+                    $user->managed_membership_response_sequence,
+                    $connection->authorityGeneration,
+                    $response->rosterVersion,
+                    $response->responseSequence,
+                );
+                $connectionAccepted = $this->connectionAccepted($authority, $connection, $response);
 
-            $this->assertRecognizedRole($response->role);
-            $this->refuseOwnerTransition($user, $response, $membershipAccepted);
+                $this->assertRecognizedRole($response->role);
+                $this->ownershipOutcome($user, $response, $membershipAccepted, false);
 
-            if ($connectionAccepted) {
-                $this->storeConnectionDimension($response, $connection);
-            }
+                if ($connectionAccepted) {
+                    $this->storeConnectionDimension($response, $connection);
+                }
 
-            if ($membershipAccepted) {
-                $this->fillMembershipDimension($user, $response, $connection, $receipt);
-            }
+                if ($membershipAccepted) {
+                    $this->fillMembershipDimension($user, $response, $connection, $receipt);
+                }
 
-            $active = ($membershipAccepted
-                ? $response->membershipStatus
-                : $user->managed_membership_status) === 'active'
-                && ($connectionAccepted
-                    ? $response->connectionStatus
-                    : ($authority->managed_connection_status ?? 'active')) === 'active';
-            $timestamps = [
-                'membership_checked_at' => $receipt,
-                'membership_response_at' => $receipt,
-            ];
+                $active = ($membershipAccepted
+                    ? $response->membershipStatus
+                    : $user->managed_membership_status) === 'active'
+                    && $this->connectionStatus($authority, $response, $connectionAccepted) === 'active';
+                $timestamps = [
+                    'membership_checked_at' => $receipt,
+                    'membership_response_at' => $receipt,
+                ];
 
-            if ($membershipAccepted && $active) {
-                $timestamps['membership_confirmed_at'] = $receipt;
-            }
+                if ($membershipAccepted && $active) {
+                    $timestamps['membership_confirmed_at'] = $receipt;
+                }
 
-            $user->forceFill($timestamps)->save();
-            $this->applyDenial(
-                $connection,
-                $user,
-                $membershipAccepted && $response->membershipStatus !== 'active',
-                $connectionAccepted && $response->connectionStatus === 'inactive',
-            );
+                $user->forceFill($timestamps)->save();
+                $this->applyDenial(
+                    $connection,
+                    $user,
+                    $membershipAccepted && $response->membershipStatus !== 'active',
+                    $connectionAccepted && $response->connectionStatus === 'inactive',
+                );
 
-            return $active;
-        });
+                return $active;
+            });
+        } catch (QueryException $exception) {
+            $this->refuseOwnerSlotViolation($exception, $subject->getKey(), $response->scalpelsId);
+
+            throw $exception;
+        }
     }
 
     public function applyExchange(
@@ -94,7 +99,41 @@ final class ManagedMembershipResponses
             return null;
         }
 
-        return DB::transaction(function () use ($connection, $response): ?User {
+        if ($this->shouldAttemptOwnerAcquisition($connection, $response)) {
+            try {
+                return $this->applyOwnerAcquisition($connection, $response);
+            } catch (ManagedOwnerAcquisitionNotApplicable) {
+                // The ordinary authority-first path re-evaluates the response from current state.
+            } catch (ManagedAuthRefused $exception) {
+                $this->refuseOwnerSlotViolation($exception, null, $response->scalpelsId);
+
+                throw $exception;
+            }
+        }
+
+        try {
+            return $this->applyExchangeOnce($connection, $response, true);
+        } catch (ManagedOwnerContested) {
+            try {
+                $statement = $this->client->ownership($connection, $this->seatedOwnerScalpelsId());
+
+                if (! $this->applyOwnershipStatement($connection, $statement)) {
+                    throw new ManagedAuthRefused;
+                }
+
+                return $this->applyExchangeOnce($connection, $response, false);
+            } catch (ManagedAuthRefused $exception) {
+                throw new ManagedAuthRefused('managed_owner_transition_refused', previous: $exception);
+            }
+        }
+    }
+
+    private function applyExchangeOnce(
+        ManagedAuthConnection $connection,
+        ManagedAuthExchange $response,
+        bool $mayPullOwnership,
+    ): ?User {
+        return $this->transaction(function () use ($connection, $response, $mayPullOwnership): ?User {
             $authority = $this->lockedAuthority($connection);
             $user = User::query()
                 ->where('scalpels_issuer', $connection->issuer)
@@ -110,17 +149,10 @@ final class ManagedMembershipResponses
                 $response->rosterVersion,
                 $response->responseSequence,
             );
-            $connectionAccepted = $this->newer(
-                $this->nullableInt($authority->managed_connection_generation),
-                $this->nullableInt($authority->managed_connection_roster_version),
-                $this->nullableInt($authority->managed_connection_response_sequence),
-                $connection->authorityGeneration,
-                $response->rosterVersion,
-                $response->responseSequence,
-            );
+            $connectionAccepted = $this->connectionAccepted($authority, $connection, $response);
 
             $this->assertRecognizedRole($response->role);
-            $this->refuseOwnerTransition($user, $response, $membershipAccepted);
+            $this->ownershipOutcome($user, $response, $membershipAccepted, $mayPullOwnership);
             $receipt = CarbonImmutable::now();
 
             if ($connectionAccepted) {
@@ -130,9 +162,7 @@ final class ManagedMembershipResponses
             $active = ($membershipAccepted
                 ? $response->membershipStatus
                 : $user?->managed_membership_status) === 'active'
-                && ($connectionAccepted
-                    ? $response->connectionStatus
-                    : ($authority->managed_connection_status ?? 'active')) === 'active';
+                && $this->connectionStatus($authority, $response, $connectionAccepted) === 'active';
 
             if (! $active) {
                 // P3c-2 attaches AC10's subject-local and installation-wide blast radii here.
@@ -169,9 +199,243 @@ final class ManagedMembershipResponses
         });
     }
 
+    private function shouldAttemptOwnerAcquisition(
+        ManagedAuthConnection $connection,
+        ManagedAuthExchange $response,
+    ): bool {
+        return $response->membershipStatus === 'active'
+            && $response->connectionStatus === 'active'
+            && $response->role === UserRole::Owner->value
+            && ! User::query()
+                ->where('scalpels_issuer', $connection->issuer)
+                ->where('scalpels_connection_id', $connection->connectionId)
+                ->where('scalpels_id', $response->scalpelsId)
+                ->exists()
+            && ! User::query()->whereNotNull('owner_slot')->exists();
+    }
+
+    private function applyOwnerAcquisition(
+        ManagedAuthConnection $connection,
+        ManagedAuthExchange $response,
+    ): User {
+        return $this->transaction(function () use ($connection, $response): User {
+            $authority = $this->authority($connection, false);
+            $user = User::query()
+                ->where('scalpels_issuer', $connection->issuer)
+                ->where('scalpels_connection_id', $connection->connectionId)
+                ->where('scalpels_id', $response->scalpelsId)
+                ->lockForUpdate()
+                ->first();
+            $membershipAccepted = ! ($user instanceof User) || $this->newer(
+                $user->managed_membership_generation,
+                $user->managed_membership_roster_version,
+                $user->managed_membership_response_sequence,
+                $connection->authorityGeneration,
+                $response->rosterVersion,
+                $response->responseSequence,
+            );
+            $connectionAccepted = $this->connectionAccepted($authority, $connection, $response);
+
+            if (! $membershipAccepted
+                || $this->connectionStatus($authority, $response, $connectionAccepted) !== 'active') {
+                throw new ManagedOwnerAcquisitionNotApplicable;
+            }
+
+            $this->assertRecognizedRole($response->role);
+
+            if (User::query()->whereNotNull('owner_slot')->lockForUpdate()->first() instanceof User) {
+                throw new ManagedOwnerAcquisitionNotApplicable;
+            }
+
+            $receipt = CarbonImmutable::now();
+            $user = $this->identities->upsert($connection, $response);
+            $this->fillMembershipDimension($user, $response, $connection, $receipt);
+            $user->save();
+
+            // Acquisition writes the unique Owner slot before taking the authority lock, so a
+            // concurrent first login is arbitrated by the database rather than this process.
+            $authority = $this->lockedAuthority($connection);
+            $connectionAccepted = $this->connectionAccepted($authority, $connection, $response);
+
+            if ($this->connectionStatus($authority, $response, $connectionAccepted) !== 'active') {
+                throw new ManagedOwnerAcquisitionNotApplicable;
+            }
+
+            if ($connectionAccepted) {
+                $this->storeConnectionDimension($response, $connection);
+            }
+
+            return $user->refresh();
+        });
+    }
+
+    public function applyOwnershipStatement(
+        ManagedAuthConnection $connection,
+        ManagedOwnershipStatement $statement,
+    ): bool {
+        $disposition = $this->ownershipStatementDisposition($statement);
+
+        try {
+            return $this->transaction(function () use ($connection, $statement, $disposition): bool {
+                $authority = $this->lockedAuthority($connection);
+
+                if (! $this->newer(
+                    $this->nullableInt($authority->managed_ownership_generation),
+                    $this->nullableInt($authority->managed_ownership_roster_version),
+                    $this->nullableInt($authority->managed_ownership_response_sequence),
+                    $connection->authorityGeneration,
+                    $statement->rosterVersion,
+                    $statement->responseSequence,
+                )) {
+                    return false;
+                }
+
+                $incumbent = User::query()->whereNotNull('owner_slot')->lockForUpdate()->first();
+                $expectedIncumbentId = $statement->seatedOwner?->scalpelsId;
+
+                if (! $this->incumbentMatches($incumbent, $connection, $expectedIncumbentId)) {
+                    throw new ManagedAuthRefused;
+                }
+
+                $incoming = $incumbent instanceof User
+                    && $incumbent->scalpels_id === $statement->owner->scalpelsId
+                    ? $incumbent
+                    : User::query()
+                        ->where('scalpels_issuer', $connection->issuer)
+                        ->where('scalpels_connection_id', $connection->connectionId)
+                        ->where('scalpels_id', $statement->owner->scalpelsId)
+                        ->lockForUpdate()
+                        ->first();
+
+                if ($statement->seatedOwner !== null && $incumbent instanceof User) {
+                    $this->applyOwnershipSubject($incumbent, $statement->seatedOwner, $connection, $statement);
+                }
+
+                if ($incoming instanceof User) {
+                    $this->applyOwnershipSubject($incoming, $statement->owner, $connection, $statement);
+                }
+
+                DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
+                    'managed_ownership_generation' => $connection->authorityGeneration,
+                    'managed_ownership_roster_version' => $statement->rosterVersion,
+                    'managed_ownership_response_sequence' => $statement->responseSequence,
+                    'updated_at' => CarbonImmutable::now(),
+                ]);
+
+                return in_array($disposition, ['acquisition', 'reaffirmation', 'transfer'], true);
+            });
+        } catch (QueryException $exception) {
+            $this->refuseOwnerSlotViolation($exception, null, $statement->owner->scalpelsId);
+
+            throw $exception;
+        }
+    }
+
+    private function applyOwnershipSubject(
+        User $user,
+        ManagedOwnershipSubject $subject,
+        ManagedAuthConnection $connection,
+        ManagedOwnershipStatement $statement,
+    ): void {
+        $active = $subject->membershipStatus === 'active';
+        // Unlike fillMembershipDimension(), this writes the role dimension on a NON-active subject too, and
+        // that asymmetry is deliberate: an O1 statement is an explicit two-sided assertion in which the
+        // authority names the incumbent's new role, and writing it is what vacates the Owner slot. It is not
+        // a managed-auth-v1 denial filler. Do not harmonise these two methods; see the P4 frozen contract
+        // section 2.3 and the P3-AC4 errata in unified-auth-build-plan.md.
+        $user->forceFill([
+            'role' => $subject->role,
+            'status' => $active ? 'active' : 'inactive',
+            'managed_membership_status' => $subject->membershipStatus,
+            'managed_membership_role' => $subject->role,
+            'managed_membership_generation' => $connection->authorityGeneration,
+            'managed_membership_roster_version' => $statement->rosterVersion,
+            'managed_membership_response_sequence' => $statement->responseSequence,
+            'managed_membership_responded_at' => $statement->respondedAt->format(DATE_RFC3339_EXTENDED),
+            'deactivated_at' => $active ? null : CarbonImmutable::now(),
+        ])->save();
+
+        if (! $active) {
+            StandaloneAccess::invalidateAccountBoundState($user);
+        }
+    }
+
+    private function incumbentMatches(
+        mixed $incumbent,
+        ManagedAuthConnection $connection,
+        ?string $expectedScalpelsId,
+    ): bool {
+        if ($expectedScalpelsId === null) {
+            return ! ($incumbent instanceof User);
+        }
+
+        return $incumbent instanceof User
+            && $incumbent->scalpels_issuer === $connection->issuer
+            && $incumbent->scalpels_connection_id === $connection->connectionId
+            && $incumbent->scalpels_id === $expectedScalpelsId;
+    }
+
+    private function ownershipStatementDisposition(ManagedOwnershipStatement $statement): string
+    {
+        $this->assertOwnershipSubject($statement->owner);
+
+        if ($statement->seatedOwner !== null) {
+            $this->assertOwnershipSubject($statement->seatedOwner);
+        }
+
+        if ($statement->owner->role !== UserRole::Owner->value
+            || $statement->owner->membershipStatus !== 'active') {
+            throw new ManagedAuthRefused;
+        }
+
+        if ($statement->requestedSeatedOwnerScalpelsId === null) {
+            if ($statement->seatedOwner !== null) {
+                throw new ManagedAuthRefused;
+            }
+
+            return 'acquisition';
+        }
+
+        if ($statement->seatedOwner === null
+            || $statement->seatedOwner->scalpelsId !== $statement->requestedSeatedOwnerScalpelsId) {
+            throw new ManagedAuthRefused;
+        }
+
+        if ($statement->owner->scalpelsId === $statement->seatedOwner->scalpelsId) {
+            // `!=` is deliberate and `!==` is WRONG here. These are two distinct value objects parsed from
+            // two separate members of the O1 body, so `!==` compares instance identity and is ALWAYS true --
+            // it would make step 4c-ii's reaffirmation unreachable and refuse every valid reaffirmation.
+            // `!=` compares the properties, which is what the frozen contract's "identical in scalpels_id,
+            // role and membership_status" requires. Both members are drawn from non-numeric allow-lists, so
+            // loose comparison cannot coerce. (Proposed as a cosmetic tightening in P4a review and measured:
+            // it reddens the 'reaffirmation' cell.)
+            if ($statement->owner != $statement->seatedOwner) {
+                throw new ManagedAuthRefused;
+            }
+
+            return 'reaffirmation';
+        }
+
+        if ($statement->seatedOwner->role === UserRole::Owner->value) {
+            throw new ManagedAuthRefused;
+        }
+
+        return 'transfer';
+    }
+
+    private function assertOwnershipSubject(ManagedOwnershipSubject $subject): void
+    {
+        if ($subject->scalpelsId === ''
+            || strlen($subject->scalpelsId) > 255
+            || UserRole::tryFrom($subject->role) === null
+            || ! in_array($subject->membershipStatus, ['active', 'removed', 'disabled'], true)) {
+            throw new ManagedAuthRefused;
+        }
+    }
+
     public function recordFailedAttempt(ManagedAuthConnection $connection, User $subject): void
     {
-        DB::transaction(function () use ($connection, $subject): void {
+        $this->transaction(function () use ($connection, $subject): void {
             $this->lockedAuthority($connection);
             $user = User::query()->lockForUpdate()->find($subject->getKey());
 
@@ -186,13 +450,43 @@ final class ManagedMembershipResponses
         });
     }
 
-    /** @return object{managed_connection_status: mixed, managed_connection_generation: mixed, managed_connection_roster_version: mixed, managed_connection_response_sequence: mixed} */
+    /**
+     * @template T
+     *
+     * @param  Closure(): T  $callback
+     * @return T
+     */
+    private function transaction(Closure $callback): mixed
+    {
+        for ($attempt = 1; $attempt <= 3; $attempt++) {
+            try {
+                return DB::transaction($callback);
+            } catch (QueryException $exception) {
+                if ($attempt === 3 || ($exception->errorInfo[0] ?? null) !== '40P01') {
+                    throw $exception;
+                }
+            }
+        }
+
+        throw new \LogicException('Unreachable transaction retry state.');
+    }
+
+    /** @return object{managed_connection_status: mixed, managed_connection_generation: mixed, managed_connection_roster_version: mixed, managed_connection_response_sequence: mixed, managed_ownership_generation: mixed, managed_ownership_roster_version: mixed, managed_ownership_response_sequence: mixed} */
     private function lockedAuthority(ManagedAuthConnection $connection): object
     {
-        $authority = DB::table('bfc_authority')
-            ->where('key', InstallationAuthority::KEY)
-            ->lockForUpdate()
-            ->first();
+        return $this->authority($connection, true);
+    }
+
+    /** @return object{managed_connection_status: mixed, managed_connection_generation: mixed, managed_connection_roster_version: mixed, managed_connection_response_sequence: mixed, managed_ownership_generation: mixed, managed_ownership_roster_version: mixed, managed_ownership_response_sequence: mixed} */
+    private function authority(ManagedAuthConnection $connection, bool $lock): object
+    {
+        $query = DB::table('bfc_authority')->where('key', InstallationAuthority::KEY);
+
+        if ($lock) {
+            $query->lockForUpdate();
+        }
+
+        $authority = $query->first();
 
         if (! is_object($authority)
             || $authority->mode !== AuthorityMode::Managed->value
@@ -205,6 +499,33 @@ final class ManagedMembershipResponses
         }
 
         return $authority;
+    }
+
+    private function connectionAccepted(
+        object $authority,
+        ManagedAuthConnection $connection,
+        ManagedAuthConfirmation|ManagedAuthExchange $response,
+    ): bool {
+        return $this->newer(
+            $this->nullableInt($authority->managed_connection_generation ?? null),
+            $this->nullableInt($authority->managed_connection_roster_version ?? null),
+            $this->nullableInt($authority->managed_connection_response_sequence ?? null),
+            $connection->authorityGeneration,
+            $response->rosterVersion,
+            $response->responseSequence,
+        );
+    }
+
+    private function connectionStatus(
+        object $authority,
+        ManagedAuthConfirmation|ManagedAuthExchange $response,
+        bool $connectionAccepted,
+    ): string {
+        return $connectionAccepted
+            ? $response->connectionStatus
+            : (is_string($authority->managed_connection_status ?? null)
+                ? $authority->managed_connection_status
+                : 'active');
     }
 
     private function storeConnectionDimension(
@@ -277,24 +598,56 @@ final class ManagedMembershipResponses
         }
     }
 
-    private function refuseOwnerTransition(
+    private function ownershipOutcome(
         ?User $subject,
         ManagedAuthConfirmation|ManagedAuthExchange $response,
         bool $membershipAccepted,
-    ): void {
+        bool $mayPullOwnership,
+    ): ?ManagedOwnershipOutcome {
         if (! $membershipAccepted) {
-            return;
+            return null;
         }
 
-        $existingOwner = $subject?->role === 'owner';
-        $createsOwner = ! $existingOwner
-            && $response->role === 'owner';
-        $removesOwner = $existingOwner
-            && ($response->membershipStatus !== 'active' || $response->role !== 'owner');
+        $owner = User::query()->whereNotNull('owner_slot')->lockForUpdate()->first();
+        $heldBySubject = $owner instanceof User
+            && $subject instanceof User
+            && $owner->getKey() === $subject->getKey();
+        $active = $response->membershipStatus === 'active';
 
-        if (! $createsOwner && ! $removesOwner) {
-            return;
+        if (! $active) {
+            if (! $subject instanceof User) {
+                return ManagedOwnershipOutcome::OwnershipAbsentDenial;
+            }
+
+            return $heldBySubject
+                ? ManagedOwnershipOutcome::OwnerDenied
+                : ManagedOwnershipOutcome::OwnershipNeutralDenial;
         }
+
+        if ($response->role === UserRole::Owner->value) {
+            if (! $owner instanceof User) {
+                return ManagedOwnershipOutcome::OwnerAcquire;
+            }
+
+            if ($heldBySubject) {
+                return ManagedOwnershipOutcome::OwnerReaffirm;
+            }
+
+            $this->refuseOwnerTransition($subject, $response, $mayPullOwnership);
+        }
+
+        if (! $heldBySubject) {
+            return ManagedOwnershipOutcome::OwnershipNeutral;
+        }
+
+        $this->refuseOwnerTransition($subject, $response, false);
+    }
+
+    private function refuseOwnerTransition(
+        ?User $subject,
+        ManagedAuthConfirmation|ManagedAuthExchange $response,
+        bool $pullOwnership,
+    ): never {
 
         try {
             Log::warning('Built for Cloud refused a managed response that would change the Owner.', [
@@ -306,7 +659,60 @@ final class ManagedMembershipResponses
             // The typed refusal below remains observable even if the logger is unavailable.
         }
 
+        if ($pullOwnership
+            && $response instanceof ManagedAuthExchange
+            && $response->membershipStatus === 'active'
+            && $response->role === UserRole::Owner->value) {
+            throw new ManagedOwnerContested;
+        }
+
         throw new ManagedAuthRefused('managed_owner_transition_refused');
+    }
+
+    private function seatedOwnerScalpelsId(): ?string
+    {
+        $value = User::query()->whereNotNull('owner_slot')->value('scalpels_id');
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    private function refuseOwnerSlotViolation(
+        Throwable $exception,
+        mixed $userId,
+        string $scalpelsId,
+    ): void {
+        if (! $this->violatedOwnerSlot($exception)) {
+            return;
+        }
+
+        try {
+            Log::warning('Built for Cloud refused a concurrent managed Owner acquisition.', [
+                'reason_code' => 'managed_owner_transition_refused',
+                'user_id' => $userId,
+                'scalpels_id' => $scalpelsId,
+            ]);
+        } catch (Throwable) {
+            // The typed refusal below remains observable even if the logger is unavailable.
+        }
+
+        throw new ManagedAuthRefused('managed_owner_transition_refused', previous: $exception);
+    }
+
+    private function violatedOwnerSlot(Throwable $exception): bool
+    {
+        for ($current = $exception; $current !== null; $current = $current->getPrevious()) {
+            if (! $current instanceof QueryException) {
+                continue;
+            }
+
+            if ($current instanceof UniqueConstraintViolationException
+                && ($current->index === 'users_owner_slot_unique'
+                    || $current->columns === ['owner_slot'])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function newer(
