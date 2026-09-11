@@ -308,11 +308,11 @@ final class ManagedMembershipResponses
                         ->first();
 
                 if ($statement->seatedOwner !== null && $incumbent instanceof User) {
-                    $this->applyOwnershipSubject($incumbent, $statement->seatedOwner);
+                    $this->applyOwnershipSubject($incumbent, $statement->seatedOwner, $connection, $statement);
                 }
 
                 if ($incoming instanceof User) {
-                    $this->applyOwnershipSubject($incoming, $statement->owner);
+                    $this->applyOwnershipSubject($incoming, $statement->owner, $connection, $statement);
                 }
 
                 DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
@@ -331,14 +331,22 @@ final class ManagedMembershipResponses
         }
     }
 
-    private function applyOwnershipSubject(User $user, ManagedOwnershipSubject $subject): void
-    {
+    private function applyOwnershipSubject(
+        User $user,
+        ManagedOwnershipSubject $subject,
+        ManagedAuthConnection $connection,
+        ManagedOwnershipStatement $statement,
+    ): void {
         $active = $subject->membershipStatus === 'active';
         $user->forceFill([
             'role' => $subject->role,
             'status' => $active ? 'active' : 'inactive',
             'managed_membership_status' => $subject->membershipStatus,
             'managed_membership_role' => $subject->role,
+            'managed_membership_generation' => $connection->authorityGeneration,
+            'managed_membership_roster_version' => $statement->rosterVersion,
+            'managed_membership_response_sequence' => $statement->responseSequence,
+            'managed_membership_responded_at' => $statement->respondedAt->format(DATE_RFC3339_EXTENDED),
             'deactivated_at' => $active ? null : CarbonImmutable::now(),
         ])->save();
 

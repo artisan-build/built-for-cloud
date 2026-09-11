@@ -543,12 +543,14 @@ it('does not let a stale membership answer undo O1 denial or reactivation state'
     expect($responses->applyOwnershipStatement(p4aConnection(), $statement))->toBeTrue()
         ->and($responses->applyExchange(
             p4aConnection(),
-            p4aExchange('o1-projection-incumbent', 'active', 'member', 9),
+            p4aExchange('o1-projection-incumbent', 'active', 'member', 20),
         ))->toBeNull()
         ->and($incumbent->refresh()->status)->toBe('inactive')
         ->and($incumbent->managed_membership_status)->toBe('removed')
+        ->and($incumbent->managed_membership_response_sequence)->toBe(30)
         ->and($incoming->refresh()->status)->toBe('active')
-        ->and($incoming->managed_membership_status)->toBe('active');
+        ->and($incoming->managed_membership_status)->toBe('active')
+        ->and($incoming->managed_membership_response_sequence)->toBe(30);
 });
 
 it('handles valid O1 acquisition, reaffirmation, and an absent incoming row without inference', function (string $case): void {
