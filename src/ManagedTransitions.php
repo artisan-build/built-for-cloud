@@ -245,7 +245,7 @@ final class ManagedTransitions
     /**
      * P4d supplies the local effects callback. The transition checkpoint commits in that same transaction.
      *
-     * @param callable(ManagedTransition): void $effects
+     * @param  callable(ManagedTransition): void  $effects
      */
     public function commit(ManagedTransition $transition, callable $effects): ManagedTransition
     {
@@ -570,7 +570,7 @@ final class ManagedTransitions
     }
 
     /**
-     * @param list<array<string, mixed>> $mapping
+     * @param  list<array<string, mixed>>  $mapping
      * @return list<array{scalpels_id: ?string, local_kind: ?string, local_id: ?string, role: ?string, disposition: string, final_email: ?string}>
      */
     private function validateMapping(ManagedTransition $transition, array $mapping): array
@@ -779,7 +779,7 @@ final class ManagedTransitions
     }
 
     /**
-     * @param array{issuer: string, connection_id: string, organization_id: string, installation_id: string, authority_base_url: string, authority_ca_bundle: ?string, client_credential_reference: string, authority_generation: int, authority_mode: string} $snapshot
+     * @param  array{issuer: string, connection_id: string, organization_id: string, installation_id: string, authority_base_url: string, authority_ca_bundle: ?string, client_credential_reference: string, authority_generation: int, authority_mode: string}  $snapshot
      */
     private function assertSnapshotCurrent(array $snapshot): void
     {

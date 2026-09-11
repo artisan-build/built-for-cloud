@@ -8,17 +8,19 @@ use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\ManagedTransition;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionClient;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionDirection;
-use ArtisanBuild\BuiltForCloud\ManagedTransitionStatus;
 use ArtisanBuild\BuiltForCloud\ManagedTransitions;
+use ArtisanBuild\BuiltForCloud\ManagedTransitionStatus;
 use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ManagedTransitionAuthorityFixture;
 use ArtisanBuild\BuiltForCloud\User;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class);
 
@@ -1071,17 +1073,17 @@ it('uses the database active slot for same and opposite direction attempts per i
 
     expect(fn () => ManagedTransition::query()->create([
         ...$first->getAttributes(),
-        'id' => (string) Illuminate\Support\Str::uuid(),
+        'id' => (string) Str::uuid(),
         'transition_request_id' => str_repeat('x', 43),
         'direction' => ManagedTransitionDirection::Exit,
-    ]))->toThrow(Illuminate\Database\QueryException::class)
+    ]))->toThrow(QueryException::class)
         ->and(ManagedTransition::query()->count())->toBe(1);
 });
 
 it('refuses copied stale terminal and foreign transition capabilities before HTTP', function (string $case): void {
     $transition = p4bPrepared($fixture);
     $subject = match ($case) {
-        'copy' => $transition->replicate()->forceFill(['id' => (string) Illuminate\Support\Str::uuid()]),
+        'copy' => $transition->replicate()->forceFill(['id' => (string) Str::uuid()]),
         'stale' => (function () use ($transition): ManagedTransition {
             $stale = clone $transition;
             $transition->forceFill(['status' => ManagedTransitionStatus::Rostered])->save();

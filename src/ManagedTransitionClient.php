@@ -545,8 +545,8 @@ final class ManagedTransitionClient
     }
 
     /**
-     * @param array<string, mixed> $payload
-     * @param list<string> $allowed
+     * @param  array<string, mixed>  $payload
+     * @param  list<string>  $allowed
      */
     private function requiredEnum(array $payload, string $field, array $allowed): string
     {
@@ -559,8 +559,8 @@ final class ManagedTransitionClient
     }
 
     /**
-     * @param array<string, mixed> $payload
-     * @param list<string> $allowed
+     * @param  array<string, mixed>  $payload
+     * @param  list<string>  $allowed
      */
     private function nullableEnum(array $payload, string $field, array $allowed): ?string
     {
