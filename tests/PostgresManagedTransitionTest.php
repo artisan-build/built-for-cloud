@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\ManagedTransition;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
+use ArtisanBuild\BuiltForCloud\ManagedTransition;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionStatus;
 use ArtisanBuild\BuiltForCloud\Tests\Support\PostgresLane;
 use ArtisanBuild\BuiltForCloud\User;
@@ -138,13 +138,13 @@ it('lets the PostgreSQL active-slot index arbitrate concurrent prepares', functi
     $main->beginTransaction();
     $main->statement('LOCK TABLE bfc_managed_transitions IN SHARE MODE');
     $firstWorker = p4bPgStartWorker([
-            'mode' => 'active-slot',
-            'application_name' => 'bfc-p4b-active-a',
-            'application_check' => $applicationCheck,
-            'direction' => 'adopt',
-            'request_id' => str_repeat('a', 43),
-            'owner_id' => $owner->getKey(),
-        ]);
+        'mode' => 'active-slot',
+        'application_name' => 'bfc-p4b-active-a',
+        'application_check' => $applicationCheck,
+        'direction' => 'adopt',
+        'request_id' => str_repeat('a', 43),
+        'owner_id' => $owner->getKey(),
+    ]);
     if ($applicationCheck && $secondDirection === 'exit') {
         p4bPgWaitForBlocked([$firstWorker], fn (): int => (int) $this->postgresLaneProbe()->scalar(<<<'SQL'
             select count(*) from pg_stat_activity

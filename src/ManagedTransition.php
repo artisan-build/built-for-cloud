@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud;
 
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
-use Illuminate\Database\QueryException;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\QueryException;
 use Throwable;
 
 /**

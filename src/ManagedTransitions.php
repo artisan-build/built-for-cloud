@@ -31,49 +31,49 @@ final class ManagedTransitions
         ]);
 
         $transition = DB::transaction(function () use (
-                $actor,
-                $direction,
-                $snapshot,
-                $transitionRequestId,
-                $body,
-            ): ManagedTransition {
-                $this->assertSnapshotCurrent($snapshot);
-                $this->assertOwnerUser($actor, true);
+            $actor,
+            $direction,
+            $snapshot,
+            $transitionRequestId,
+            $body,
+        ): ManagedTransition {
+            $this->assertSnapshotCurrent($snapshot);
+            $this->assertOwnerUser($actor, true);
 
-                if (ManagedTransition::query()
-                    ->where('installation_id', $snapshot['installation_id'])
-                    ->whereNotIn('status', [
-                        ManagedTransitionStatus::Acknowledged->value,
-                        ManagedTransitionStatus::Abandoned->value,
-                    ])->exists()) {
-                    throw new ManagedAuthRefused('transition_in_progress');
-                }
+            if (ManagedTransition::query()
+                ->where('installation_id', $snapshot['installation_id'])
+                ->whereNotIn('status', [
+                    ManagedTransitionStatus::Acknowledged->value,
+                    ManagedTransitionStatus::Abandoned->value,
+                ])->exists()) {
+                throw new ManagedAuthRefused('transition_in_progress');
+            }
 
-                if ($snapshot['authority_mode'] !== $direction->modeBefore()->value) {
-                    throw new ManagedAuthRefused;
-                }
+            if ($snapshot['authority_mode'] !== $direction->modeBefore()->value) {
+                throw new ManagedAuthRefused;
+            }
 
-                return ManagedTransition::createActive([
-                    'id' => (string) Str::uuid(),
-                    'initiated_by_user_id' => (string) $actor->getKey(),
-                    'direction' => $direction,
-                    'status' => ManagedTransitionStatus::Preparing,
-                    'issuer' => $snapshot['issuer'],
-                    'connection_id' => $snapshot['connection_id'],
-                    'organization_id' => $snapshot['organization_id'],
-                    'installation_id' => $snapshot['installation_id'],
-                    'authority_base_url' => $snapshot['authority_base_url'],
-                    'authority_ca_bundle' => $snapshot['authority_ca_bundle'],
-                    'client_credential_reference' => $snapshot['client_credential_reference'],
-                    'mode_before' => $direction->modeBefore()->value,
-                    'mode_after' => $direction->modeAfter()->value,
-                    'generation_before' => $snapshot['authority_generation'],
-                    'generation_after' => $snapshot['authority_generation'] + 1,
-                    'transition_request_id' => $transitionRequestId,
-                    'prepare_request_body' => $body,
-                    'prepare_body_digest' => hash('sha256', $body),
-                ]);
-            });
+            return ManagedTransition::createActive([
+                'id' => (string) Str::uuid(),
+                'initiated_by_user_id' => (string) $actor->getKey(),
+                'direction' => $direction,
+                'status' => ManagedTransitionStatus::Preparing,
+                'issuer' => $snapshot['issuer'],
+                'connection_id' => $snapshot['connection_id'],
+                'organization_id' => $snapshot['organization_id'],
+                'installation_id' => $snapshot['installation_id'],
+                'authority_base_url' => $snapshot['authority_base_url'],
+                'authority_ca_bundle' => $snapshot['authority_ca_bundle'],
+                'client_credential_reference' => $snapshot['client_credential_reference'],
+                'mode_before' => $direction->modeBefore()->value,
+                'mode_after' => $direction->modeAfter()->value,
+                'generation_before' => $snapshot['authority_generation'],
+                'generation_after' => $snapshot['authority_generation'] + 1,
+                'transition_request_id' => $transitionRequestId,
+                'prepare_request_body' => $body,
+                'prepare_body_digest' => hash('sha256', $body),
+            ]);
+        });
 
         return $this->applyPrepared($transition, $this->client($transition)->prepare());
     }
