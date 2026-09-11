@@ -205,8 +205,7 @@ final class ManagedAuthClient
     private function request(
         ManagedAuthConnection $connection,
         string $contractVersion = self::CONTRACT_VERSION,
-    ): PendingRequest
-    {
+    ): PendingRequest {
         $request = $this->http
             ->acceptJson()
             ->asJson()

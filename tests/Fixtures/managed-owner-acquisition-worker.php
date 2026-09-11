@@ -9,11 +9,13 @@ use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;
 use ArtisanBuild\BuiltForCloud\ManagedAuthExchange;
 use ArtisanBuild\BuiltForCloud\ManagedIdentityUpsert;
 use ArtisanBuild\BuiltForCloud\ManagedMembershipResponses;
+use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Config\Repository;
 use Illuminate\Container\Container;
 use Illuminate\Database\Capsule\Manager as Capsule;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Support\Facades\Facade;
+
 require dirname(__DIR__, 2).'/vendor/autoload.php';
 
 $input = json_decode(stream_get_contents(STDIN), true, flags: JSON_THROW_ON_ERROR);
@@ -83,7 +85,7 @@ try {
         $user = (new ManagedIdentityUpsert)->upsert($managedConnection, $exchange);
         $result = ['result' => 'seated', 'id' => $user->getKey()];
     } elseif ($input['mode'] === 'confirmation') {
-        $user = ArtisanBuild\BuiltForCloud\User::query()->where('scalpels_id', $input['subject'])->sole();
+        $user = User::query()->where('scalpels_id', $input['subject'])->sole();
         $allowed = $responses->applyConfirmation(
             $managedConnection,
             $user,

@@ -202,8 +202,7 @@ final class ManagedMembershipResponses
     private function shouldAttemptOwnerAcquisition(
         ManagedAuthConnection $connection,
         ManagedAuthExchange $response,
-    ): bool
-    {
+    ): bool {
         return $response->membershipStatus === 'active'
             && $response->connectionStatus === 'active'
             && $response->role === UserRole::Owner->value
