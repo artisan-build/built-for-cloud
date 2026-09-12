@@ -17,6 +17,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresBurnMode;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
@@ -1379,6 +1380,7 @@ it('lets the deployment OWNER re-key with the token its own claim minted (AC14)'
     // `api_tokens` row can mint itself an operator credential carrying
     // the ability, in one request, with no further authority.
     $minted = $this->postJson('/bfc/credentials', [
+        'purpose' => CredentialPurpose::OperatorManagement->value,
         'subject_type' => 'operator',
         'subject_ref' => 'self-granted',
         'abilities' => [OperatorAbility::ConsoleKeyWrite->value],

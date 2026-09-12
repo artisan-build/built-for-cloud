@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
@@ -149,8 +150,15 @@ function p3cAccountCredential(
     SubjectType $subjectType = SubjectType::UserPrincipal,
     ?array $abilities = null,
 ): Credential {
+    $purpose = match (true) {
+        $abilities === [OperatorAbility::MetadataRead->value] => CredentialPurpose::DashboardMetadata,
+        $subjectType === SubjectType::Operator => CredentialPurpose::OperatorManagement,
+        default => CredentialPurpose::Consumption,
+    };
+
     return Credential::query()->create([
         'kind' => $kind,
+        'purpose' => $purpose,
         'subject_type' => $subjectType,
         'subject_ref' => (string) $user->scalpels_id,
         'name' => 'account-'.$user->scalpels_id,
@@ -164,6 +172,7 @@ function p3cDeploymentCredential(User $creator, string $secret): Credential
 {
     $credential = Credential::query()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::SystemDeployment,
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'installation-fixture',
         'name' => 'deployment',

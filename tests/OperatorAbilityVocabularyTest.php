@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -45,7 +46,7 @@ function operatorCredential(?array $abilities): MintedTestCredential
 function operatorMutations(string $targetId): array
 {
     return [
-        'mint' => ['postJson', '/bfc/credentials', ['subject_type' => 'external_consumer', 'subject_ref' => 'acme']],
+        'mint' => ['postJson', '/bfc/credentials', ['purpose' => CredentialPurpose::Consumption->value, 'subject_type' => 'external_consumer', 'subject_ref' => 'acme']],
         'rotate' => ['postJson', '/bfc/credentials/'.$targetId.'/rotate', []],
         'revoke' => ['deleteJson', '/bfc/credentials/'.$targetId, []],
         'activate' => ['postJson', '/bfc/credentials/'.$targetId.'/activate', ['delivery_fingerprint' => 'fp']],
@@ -129,6 +130,7 @@ it('scopes each verb family to its own ability', function (): void {
 
     // Mint may mint but not read, rotate, or revoke.
     $minted = $this->postJson('/bfc/credentials', [
+        'purpose' => CredentialPurpose::Consumption->value,
         'subject_type' => 'external_consumer',
         'subject_ref' => 'acme',
     ], ['Authorization' => $minter->bearerHeader()])->assertCreated();
@@ -145,12 +147,12 @@ it('scopes each verb family to its own ability', function (): void {
         ->assertCreated();
     $this->postJson('/bfc/credentials/'.$mintedId.'/activate', ['delivery_fingerprint' => 'fp'], ['Authorization' => $rotator->bearerHeader()])
         ->assertStatus(409);
-    $this->postJson('/bfc/credentials', ['subject_type' => 'external_consumer', 'subject_ref' => 'other'], ['Authorization' => $rotator->bearerHeader()])
+    $this->postJson('/bfc/credentials', ['purpose' => CredentialPurpose::Consumption->value, 'subject_type' => 'external_consumer', 'subject_ref' => 'other'], ['Authorization' => $rotator->bearerHeader()])
         ->assertForbidden();
 
     // Revoke may revoke and nothing else.
     $this->deleteJson('/bfc/credentials/'.$mintedId, [], ['Authorization' => $revoker->bearerHeader()])->assertNoContent();
-    $this->postJson('/bfc/credentials', ['subject_type' => 'external_consumer', 'subject_ref' => 'more'], ['Authorization' => $revoker->bearerHeader()])
+    $this->postJson('/bfc/credentials', ['purpose' => CredentialPurpose::Consumption->value, 'subject_type' => 'external_consumer', 'subject_ref' => 'more'], ['Authorization' => $revoker->bearerHeader()])
         ->assertForbidden();
 });
 
@@ -160,6 +162,7 @@ it('honors the explicit break-glass credential on every verb', function (): void
     $this->getJson('/bfc/credentials', ['Authorization' => $breakGlass->bearerHeader()])->assertOk();
 
     $minted = $this->postJson('/bfc/credentials', [
+        'purpose' => CredentialPurpose::Consumption->value,
         'subject_type' => 'external_consumer',
         'subject_ref' => 'acme',
     ], ['Authorization' => $breakGlass->bearerHeader()])->assertCreated();
@@ -189,6 +192,7 @@ it('audits a denied operator action with the acting principal', function (): voi
     $stolen = operatorCredential([OperatorAbility::CredentialRead->value]);
 
     $this->postJson('/bfc/credentials', [
+        'purpose' => CredentialPurpose::Consumption->value,
         'subject_type' => 'external_consumer',
         'subject_ref' => 'acme',
     ], ['Authorization' => $stolen->bearerHeader()])->assertForbidden();
@@ -223,6 +227,7 @@ it('rate-limits operator writes per credential AND per IP independently (Fix 5)'
 
     for ($i = 1; $i <= 60; $i++) {
         $this->postJson('/bfc/credentials', [
+            'purpose' => CredentialPurpose::Consumption->value,
             'subject_type' => 'external_consumer',
             'subject_ref' => 'burst-'.$i,
         ], ['Authorization' => $minter->bearerHeader()])->assertCreated();
@@ -231,6 +236,7 @@ it('rate-limits operator writes per credential AND per IP independently (Fix 5)'
     // The 61st write from the same credential is throttled — from the
     // SAME IP…
     $this->postJson('/bfc/credentials', [
+        'purpose' => CredentialPurpose::Consumption->value,
         'subject_type' => 'external_consumer',
         'subject_ref' => 'burst-61',
     ], ['Authorization' => $minter->bearerHeader()])->assertStatus(429);
@@ -239,6 +245,7 @@ it('rate-limits operator writes per credential AND per IP independently (Fix 5)'
     // every address it is replayed from (the per-credential bucket).
     $this->withServerVariables(['REMOTE_ADDR' => '10.1.1.1'])
         ->postJson('/bfc/credentials', [
+            'purpose' => CredentialPurpose::Consumption->value,
             'subject_type' => 'external_consumer',
             'subject_ref' => 'burst-ip-hop',
         ], ['Authorization' => $minter->bearerHeader()])->assertStatus(429);
@@ -249,6 +256,7 @@ it('rate-limits operator writes per credential AND per IP independently (Fix 5)'
 
     $this->withServerVariables(['REMOTE_ADDR' => '127.0.0.1'])
         ->postJson('/bfc/credentials', [
+            'purpose' => CredentialPurpose::Consumption->value,
             'subject_type' => 'external_consumer',
             'subject_ref' => 'other-cred-same-ip',
         ], ['Authorization' => $other->bearerHeader()])->assertStatus(429);
@@ -257,6 +265,7 @@ it('rate-limits operator writes per credential AND per IP independently (Fix 5)'
     // two bounds are independent, not one compound bucket.
     $this->withServerVariables(['REMOTE_ADDR' => '10.2.2.2'])
         ->postJson('/bfc/credentials', [
+            'purpose' => CredentialPurpose::Consumption->value,
             'subject_type' => 'external_consumer',
             'subject_ref' => 'other-cred-fresh-ip',
         ], ['Authorization' => $other->bearerHeader()])->assertCreated();
@@ -272,6 +281,7 @@ it('bounds invalid-bearer rotation from one IP by the per-IP bucket (Fix 5)', fu
     for ($i = 1; $i <= 60; $i++) {
         $this->withServerVariables(['REMOTE_ADDR' => '10.3.3.3'])
             ->postJson('/bfc/credentials', [
+                'purpose' => CredentialPurpose::Consumption->value,
                 'subject_type' => 'external_consumer',
                 'subject_ref' => 'x',
             ], ['Authorization' => 'Bearer invalid-'.$i.'-'.bin2hex(random_bytes(8))])
@@ -282,6 +292,7 @@ it('bounds invalid-bearer rotation from one IP by the per-IP bucket (Fix 5)', fu
     // the auth gate.
     $this->withServerVariables(['REMOTE_ADDR' => '10.3.3.3'])
         ->postJson('/bfc/credentials', [
+            'purpose' => CredentialPurpose::Consumption->value,
             'subject_type' => 'external_consumer',
             'subject_ref' => 'x',
         ], ['Authorization' => 'Bearer invalid-61-'.bin2hex(random_bytes(8))])
