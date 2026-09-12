@@ -431,7 +431,6 @@ it('refuses a console key delivered on a code with no key-custody authority (AC1
     // and before the mint, so an unauthorized attempt costs nothing.
     expect(ConsoleKey::query()->count())->toBe(0)
         ->and($row->consumed_at)->toBeNull()
-        ->and($row->durable_token_id)->toBeNull()
         ->and($row->durable_credential_id)->toBeNull()
         ->and($row->console_key_filed_at)->toBeNull()
         ->and(Credential::query()->count())->toBe($credentialCount);
@@ -652,11 +651,10 @@ it('rolls an at-exchange onboarding exchange back when the key id is already on 
     $row = OnboardingToken::query()->where('token_hash', OnboardingToken::hashToken($code))->sole();
 
     expect($row->consumed_at)->toBeNull()
-        ->and($row->durable_token_id)->toBeNull()
+        ->and($row->durable_credential_id)->toBeNull()
         ->and($row->console_key_filed_at)->toBeNull()
         ->and(ConsoleKey::query()->count())->toBe(1)
         // No durable survived the rollback either.
-        ->and(ApiToken::query()->where('name', 'rollback@example.test')->count())->toBe(0)
         ->and(Credential::query()->where('name', 'rollback@example.test')->count())->toBe(0);
 
     $denied = CredentialAuditEvent::query()

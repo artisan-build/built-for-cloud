@@ -82,21 +82,12 @@ final class TokenRegistry
      * usage write fails here, so a re-claimed-under-us credential never
      * completes a request.
      *
-     * Subsequent uses take today's cheap unconditional update; a FIRST use
-     * runs the atomic first-use transition (SEC-2, PRD 1.2): first-use
-     * detection and claim-code consumption are ONE transaction, entered by
-     * a conditional update gated on affected rows. This is the burn point
-     * for `first_use` providers, and it fires for WHATEVER presented the
-     * secret and resolved the row — bearer and Crate's HTTP Basic path
-     * alike.
+     * The legacy store no longer receives claim-code links, so every use
+     * takes the same conditional usage update.
      */
     private function recordUsage(ApiToken $row): bool
     {
-        if ($row->last_used_at !== null) {
-            return $this->recordSubsequentUse($row);
-        }
-
-        return $this->burnFirstUse($row);
+        return $this->recordSubsequentUse($row);
     }
 
     /**
@@ -114,113 +105,6 @@ final class TokenRegistry
                 'request_count' => DB::raw('request_count + 1'),
                 'last_used_at' => now(),
             ]) === 1;
-    }
-
-    private function burnFirstUse(ApiToken $row): bool
-    {
-        return (bool) DB::transaction(function () use ($row): bool {
-            // Lock the linked code rows FIRST. Exchange acquires code (its
-            // lockForUpdate lookup) then durable (revocations, mint); the
-            // burn must acquire in the SAME code-then-durable order, or the
-            // two transactions deadlock against each other. Holding the lock
-            // also freezes the linkage: no re-claim can relink the code
-            // while this burn is in flight.
-            // Only codes RECORDED into this store (null = the api_tokens
-            // backfill): a linkage into the unified store is burned by the
-            // unified recorder, never here.
-            /** @var list<OnboardingToken> $pendingCodes */
-            $pendingCodes = OnboardingToken::query()
-                ->where('durable_token_id', $row->getKey())
-                ->where(function ($query): void {
-                    $query->whereNull('durable_store')
-                        ->orWhere('durable_store', DurableStore::ApiTokens->value);
-                })
-                ->whereNull('consumed_at')
-                ->lockForUpdate()
-                ->get(['id', 'email'])
-                ->all();
-
-            $codeIds = array_map(static fn (OnboardingToken $code): string => $code->id, $pendingCodes);
-
-            // The gate re-asserts the FULL resolvability predicate, not just
-            // last_used_at: between the resolving read and this write a
-            // re-claim may have revoked the row (or its expiry passed), and
-            // `last_used_at IS NULL` alone would let a revoked credential
-            // authenticate.
-            $wasFirst = ApiToken::query()
-                ->whereKey($row->getKey())
-                ->whereNull('last_used_at')
-                ->resolvable()
-                ->update([
-                    'request_count' => DB::raw('request_count + 1'),
-                    'last_used_at' => now(),
-                ]) === 1;
-
-            if (! $wasFirst) {
-                // Zero affected rows means EITHER someone else's first use
-                // won OR the row changed under us. The recovery bump itself
-                // decides: it carries the resolvability predicate and is
-                // gated on affected rows, so a row revoked or expired at any
-                // point up to THIS write fails authentication with no bump —
-                // and if it succeeds, the row was live and merely already
-                // used. The code is left to its current linkage either way —
-                // if a re-claim relinked it, the new durable governs it now.
-                return $this->recordSubsequentUse($row);
-            }
-
-            // We were first: consume the code in the SAME transaction as the
-            // usage write, so a process dying between the two rolls back
-            // both. The write stays gated on the linkage and pending state
-            // we locked above; zero affected rows would mean the code was
-            // relinked or consumed before we locked it — the authentication
-            // stands (this row just proved live) but the burn is not ours to
-            // complete, and the code stays governed by its current linkage.
-            // Nothing is logged: there is no actionable detail that is also
-            // secret-free. Under `at_exchange` the code is already consumed
-            // and $codeIds is empty. Empty either way is not a failure.
-            $burned = 0;
-
-            if ($codeIds !== []) {
-                $burned = OnboardingToken::query()
-                    ->whereIn('id', $codeIds)
-                    ->where('durable_token_id', $row->getKey())
-                    ->whereNull('consumed_at')
-                    ->update(['consumed_at' => now()]);
-            }
-
-            // The audit `first_used` event, in the SAME transaction as the
-            // burn (SEC-V3-09). The code linkage names the code this
-            // credential came from: the one burned here, or — under
-            // `at_exchange`, where redemption already consumed it — the
-            // consumed code still pointing at this durable. The intended
-            // recipient rides along where the code was addressed, so the
-            // first-use notice (SEC-6) can reach them.
-            $linkedCode = $burned > 0 ? $pendingCodes[0] : $this->consumedCodeFor($row);
-
-            $this->recorder()->record(
-                event: LifecycleEventType::FirstUsed,
-                credentialId: (string) $row->getKey(),
-                codeId: $linkedCode?->id,
-                actor: AuditActor::credentialHolder((string) $row->getKey()),
-                recipient: $linkedCode?->email,
-            );
-
-            return true;
-        });
-    }
-
-    private function consumedCodeFor(ApiToken $row): ?OnboardingToken
-    {
-        /** @var OnboardingToken|null */
-        return OnboardingToken::query()
-            ->where('durable_token_id', $row->getKey())
-            ->where(function ($query): void {
-                $query->whereNull('durable_store')
-                    ->orWhere('durable_store', DurableStore::ApiTokens->value);
-            })
-            ->whereNotNull('consumed_at')
-            ->orderByDesc('consumed_at')
-            ->first(['id', 'email']);
     }
 
     /**

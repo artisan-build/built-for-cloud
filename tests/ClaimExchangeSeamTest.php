@@ -2,14 +2,11 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
-use ArtisanBuild\BuiltForCloud\Contracts\DeclaresDurableStore;
 use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
-use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\Scope;
@@ -35,40 +32,28 @@ function issueScopedClaimCode(Scope $scope, string $email): string
     return (string) $response->json('claim_code');
 }
 
-it('always resolves the unified minter and a hostile declaration cannot select api_tokens', function (bool $hostile): void {
-    if ($hostile) {
-        app()->instance(CredentialDeclaration::class, new class implements CredentialDeclaration, DeclaresDurableStore
+it('always resolves the unified minter independently of the declaration', function (): void {
+    app()->instance(CredentialDeclaration::class, new class implements CredentialDeclaration
+    {
+        public function resolveSubject(Request $request): ?Subject
         {
-            public function durableCredentialStore(): DurableStore
-            {
-                return DurableStore::ApiTokens;
-            }
+            return null;
+        }
 
-            public function resolveSubject(Request $request): ?Subject
-            {
-                return null;
-            }
-
-            public function authorize(Credential $credential, ?string $ability, Request $request): bool
-            {
-                return true;
-            }
-        });
-    }
+        public function authorize(Credential $credential, ?string $ability, Request $request): bool
+        {
+            return true;
+        }
+    });
 
     expect(app(DurableCredentialMinter::class))->toBeInstanceOf(UnifiedStoreCredentialMinter::class);
 
-    $code = auditIssueCode(($hostile ? 'hostile' : 'default').'@example.test');
-    $apiTokenCount = ApiToken::query()->count();
+    $code = auditIssueCode('declaration@example.test');
 
     $this->postJson('/bfc/onboarding/exchange', ['token' => $code])->assertCreated();
 
-    expect(Credential::query()->where('subject_ref', ($hostile ? 'hostile' : 'default').'@example.test')->count())->toBe(1)
-        ->and(ApiToken::query()->count())->toBe($apiTokenCount);
-})->with([
-    'default declaration' => [false],
-    'declaration selecting api_tokens' => [true],
-]);
+    expect(Credential::query()->where('subject_ref', 'declaration@example.test')->count())->toBe(1);
+});
 
 it('mints and verifies every accepted scope as an exactly linked unified bearer', function (Scope $scope): void {
     $email = $scope->value.'@example.test';
@@ -87,10 +72,7 @@ it('mints and verifies every accepted scope as an exactly linked unified bearer'
         ->and($credential->abilities)->toBe([$scope->value])
         ->and($credential->secret_hash)->toBe(hash('sha256', $secret))
         ->and($code->durable_credential_id)->toBe($credential->id)
-        ->and($code->durable_token_id)->toBeNull()
-        ->and($code->durable_store)->toBeNull()
-        ->and($code->consumed_at)->toBeNull()
-        ->and(ApiToken::query()->where('name', $email)->exists())->toBeFalse();
+        ->and($code->consumed_at)->toBeNull();
 
     $this->postJson('/bfc/onboarding/verify', [], ['Authorization' => 'Bearer '.$secret])
         ->assertOk()
@@ -123,9 +105,7 @@ it('refuses a malformed persisted scope before burning or minting', function ():
     ]);
     $before = $code->only([
         'scope',
-        'durable_token_id',
         'durable_credential_id',
-        'durable_store',
         'consumed_at',
     ]);
 
@@ -134,8 +114,7 @@ it('refuses a malformed persisted scope before burning or minting', function ():
         ->assertJsonPath('error', 'invalid_code');
 
     expect($code->refresh()->only(array_keys($before)))->toBe($before)
-        ->and(Credential::query()->count())->toBe(0)
-        ->and(ApiToken::query()->count())->toBe(0);
+        ->and(Credential::query()->count())->toBe(0);
 });
 
 it('re-exchanges make-before-break through the unified link', function (): void {
@@ -158,28 +137,27 @@ it('re-exchanges make-before-break through the unified link', function (): void 
         ->assertJsonPath('error', 'code_not_found');
 });
 
-it('revokes a genuinely legacy linked api token before relinking the code to credentials', function (): void {
+it('replaces an already revoked linked credential with a live credential', function (): void {
     $plain = bin2hex(random_bytes(32));
-    $legacy = ApiToken::factory()->create([
-        'name' => 'legacy-link@example.test',
+    $previous = Credential::factory()->revoked()->create([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'relink@example.test',
+        'name' => 'relink@example.test',
         'abilities' => [Scope::Consume->value],
     ]);
     $code = OnboardingToken::query()->create([
         'id' => (string) Str::uuid(),
-        'email' => 'legacy-link@example.test',
+        'email' => 'relink@example.test',
         'scope' => Scope::Consume->value,
         'token_hash' => OnboardingToken::hashToken($plain),
-        'durable_token_id' => $legacy->id,
-        'durable_store' => DurableStore::ApiTokens,
+        'durable_credential_id' => $previous->id,
         'expires_at' => now()->addHour(),
     ]);
 
     $this->postJson('/bfc/onboarding/exchange', ['token' => $plain])->assertCreated();
 
-    expect($legacy->refresh()->revoked_at)->not->toBeNull()
-        ->and($code->refresh()->durable_token_id)->toBe($legacy->id)
-        ->and($code->durable_store)->toBe(DurableStore::ApiTokens)
-        ->and($code->durable_credential_id)->not->toBeNull()
+    expect($previous->refresh()->revoked_at)->not->toBeNull()
+        ->and($code->refresh()->durable_credential_id)->not->toBe($previous->id)
         ->and(Credential::query()->whereKey($code->durable_credential_id)->exists())->toBeTrue();
 });
 
@@ -272,9 +250,7 @@ it('persists exchange and verification across fresh processes for every accepted
                     ->and($inspection['scope'])->toBe($scopeValue)
                     ->and($inspection['consumed'])->toBeFalse()
                     ->and($inspection['durable_credential_id'])->toBeNull()
-                    ->and($inspection['durable_token_id'])->toBeNull()
-                    ->and($inspection['credentials'])->toBe(0)
-                    ->and($inspection['api_tokens'])->toBe(0);
+                    ->and($inspection['credentials'])->toBe(0);
 
                 continue;
             }
@@ -283,11 +259,8 @@ it('persists exchange and verification across fresh processes for every accepted
             $credential = $inspection['credential'];
 
             expect($exchange['status'])->toBe(201)
-                ->and($inspection['durable_token_id'])->toBeNull()
-                ->and($inspection['durable_store'])->toBeNull()
                 ->and($inspection['durable_credential_id'])->toBe($credential['id'])
                 ->and($inspection['credentials'])->toBe(1)
-                ->and($inspection['api_tokens'])->toBe(0)
                 ->and($credential['kind'])->toBe(CredentialKind::Bearer->value)
                 ->and($credential['subject_type'])->toBe(SubjectType::ExternalConsumer->value)
                 ->and($credential['subject_ref'])->toBe($scopeValue.'@fresh-process.test')

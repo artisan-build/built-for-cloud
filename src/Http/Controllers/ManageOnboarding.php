@@ -6,7 +6,6 @@ namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\Actions\FileConsoleKey;
 use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
@@ -22,7 +21,6 @@ use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
-use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
@@ -440,11 +438,7 @@ final class ManageOnboarding extends OperatorRouteController
             $revokedIds = [];
 
             if ($code->durable_credential_id !== null) {
-                $revokedIds[] = $this->revokeDurableById($code->durable_credential_id, DurableStore::Credentials);
-            }
-
-            if ($code->durable_token_id !== null && $code->durableStore() === DurableStore::ApiTokens) {
-                $revokedIds[] = $this->revokeDurableById($code->durable_token_id, DurableStore::ApiTokens);
+                $revokedIds[] = $this->revokeDurableById($code->durable_credential_id);
             }
 
             $name = $code->email ?? 'claim-'.$code->id;
@@ -791,16 +785,11 @@ final class ManageOnboarding extends OperatorRouteController
 
         foreach ($tokens as $token) {
             // A pending code's durable link is a never-used make-before-break
-            // token; superseding the code invalidates it — in the store it
-            // was RECORDED into. A durable that has been USED belongs to a
+            // credential; superseding the code invalidates it. A durable that has been USED belongs to a
             // consumed code and is never touched here.
             if ($token->durable_credential_id !== null
-                && $this->revokeDurableById($token->durable_credential_id, DurableStore::Credentials) !== null) {
+                && $this->revokeDurableById($token->durable_credential_id) !== null) {
                 $revoked[] = [$token->durable_credential_id, $token->id];
-            } elseif ($token->durable_token_id !== null
-                && $token->durableStore() === DurableStore::ApiTokens
-                && $this->revokeDurableById($token->durable_token_id, DurableStore::ApiTokens) !== null) {
-                $revoked[] = [$token->durable_token_id, $token->id];
             }
 
             $token->forceFill(['consumed_at' => now()])->save();
@@ -904,52 +893,23 @@ final class ManageOnboarding extends OperatorRouteController
     }
 
     /**
-     * Revoke a linked durable in the store it was RECORDED into (never the
-     * currently declared store — the linkage outlives declaration changes).
-     *
      * @return string|null the revoked durable's id, or null when no row matched
      */
-    private function revokeDurableById(string $tokenId, DurableStore $store): ?string
+    private function revokeDurableById(string $credentialId): ?string
     {
-        if ($store === DurableStore::Credentials) {
-            /** @var Credential|null $credential */
-            $credential = Credential::query()
-                ->whereKey($tokenId)
-                ->lockForUpdate()
-                ->first();
-
-            if ($credential === null) {
-                return null;
-            }
-
-            $credential->forceFill(['revoked_at' => $credential->revoked_at ?? now()])->save();
-
-            return (string) $credential->getKey();
-        }
-
-        /** @var ApiToken|null $token */
-        $token = ApiToken::query()
-            ->whereKey($tokenId)
+        /** @var Credential|null $credential */
+        $credential = Credential::query()
+            ->whereKey($credentialId)
             ->lockForUpdate()
             ->first();
 
-        if ($token === null) {
+        if ($credential === null) {
             return null;
         }
 
-        $this->revokeLockedDurable($token);
+        $credential->forceFill(['revoked_at' => $credential->revoked_at ?? now()])->save();
 
-        return (string) $token->getKey();
-    }
-
-    private function revokeLockedDurable(ApiToken $token): void
-    {
-        $now = now();
-
-        $token->forceFill([
-            'expires_at' => $now,
-            'revoked_at' => $now,
-        ])->save();
+        return (string) $credential->getKey();
     }
 
     /**

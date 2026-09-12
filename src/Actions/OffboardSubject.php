@@ -10,7 +10,6 @@ use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
-use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\IntegrationEventContention;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
@@ -300,7 +299,7 @@ final class OffboardSubject
             ->lockForUpdate()
             ->exists();
 
-        // 1 — every bound credential, every lifecycle state, both stores.
+        // 1 — every bound credential, in every lifecycle state.
         /** @var list<Credential> $credentials */
         $credentials = Credential::query()
             ->where('subject_type', $subject->type->value)
@@ -323,7 +322,7 @@ final class OffboardSubject
             // Outstanding codes die with the SUBJECT, not with the write
             // (rework Fix 7): a code linked to a row someone already
             // revoked is still a live code until it is consumed here.
-            $this->consumeLinkedCodes((string) $credential->getKey(), DurableStore::Credentials);
+            $this->consumeLinkedCodes((string) $credential->getKey());
 
             if ($credential->revoked_at !== null) {
                 continue;
@@ -343,8 +342,6 @@ final class OffboardSubject
             ->all();
 
         foreach ($legacyTokens as $token) {
-            $this->consumeLinkedCodes((string) $token->getKey(), DurableStore::ApiTokens);
-
             if ($token->revoked_at !== null) {
                 continue;
             }
@@ -373,7 +370,7 @@ final class OffboardSubject
                 ->all();
 
             foreach ($userCredentials as $credential) {
-                $this->consumeLinkedCodes((string) $credential->getKey(), DurableStore::Credentials);
+                $this->consumeLinkedCodes((string) $credential->getKey());
 
                 if ($credential->revoked_at !== null) {
                     continue;
@@ -569,31 +566,19 @@ final class OffboardSubject
     }
 
     /**
-     * Consume every still-pending claim code linked to the given durable,
-     * in the store it was RECORDED into.
+     * Consume every still-pending claim code linked to the given credential.
      */
-    private function consumeLinkedCodes(string $durableId, DurableStore $store): void
+    private function consumeLinkedCodes(string $credentialId): void
     {
-        $codes = OnboardingToken::query()->whereNull('consumed_at');
-
-        if ($store === DurableStore::Credentials) {
-            $codes->where('durable_credential_id', $durableId);
-        } else {
-            $codes->where('durable_token_id', $durableId)
-                ->where(function (Builder $query): void {
-                    $query->where('durable_store', DurableStore::ApiTokens->value)
-                        // NULL backfills to api_tokens (pre-toggle linkage).
-                        ->orWhereNull('durable_store');
-                });
-        }
-
-        $codes->update(['consumed_at' => now()]);
+        OnboardingToken::query()
+            ->whereNull('consumed_at')
+            ->where('durable_credential_id', $credentialId)
+            ->update(['consumed_at' => now()]);
     }
 
     /**
      * Consume the pending claim codes ADDRESSED to the principal, and
-     * revoke each one's never-used make-before-break durable in the store
-     * it was recorded into.
+     * revoke each one's never-used make-before-break credential.
      *
      * @param  list<string>  $emails
      */
@@ -614,24 +599,17 @@ final class OffboardSubject
         foreach ($codes as $code) {
             $code->forceFill(['consumed_at' => now()])->save();
 
-            if ($code->durable_credential_id !== null) {
-                $updated = Credential::query()
-                    ->whereKey($code->durable_credential_id)
-                    ->whereNull('revoked_at')
-                    ->update(['revoked_at' => now()]);
-                $durableId = $code->durable_credential_id;
-            } elseif ($code->durable_token_id !== null && $code->durableStore() === DurableStore::ApiTokens) {
-                $updated = ApiToken::query()
-                    ->whereKey($code->durable_token_id)
-                    ->whereNull('revoked_at')
-                    ->update(['expires_at' => now(), 'revoked_at' => now()]);
-                $durableId = $code->durable_token_id;
-            } else {
+            if ($code->durable_credential_id === null) {
                 continue;
             }
 
+            $updated = Credential::query()
+                ->whereKey($code->durable_credential_id)
+                ->whereNull('revoked_at')
+                ->update(['revoked_at' => now()]);
+
             if ($updated > 0) {
-                $this->auditRevocation($durableId, $actor);
+                $this->auditRevocation($code->durable_credential_id, $actor);
             }
         }
 

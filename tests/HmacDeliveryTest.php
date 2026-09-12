@@ -99,9 +99,7 @@ it('mints a claim-code delivery when a code ttl is chosen: the key stays undeliv
     /** @var OnboardingToken $code */
     $code = OnboardingToken::query()->where('durable_credential_id', $credential->id)->firstOrFail();
 
-    expect($code->durable_token_id)->toBeNull()
-        ->and($code->durable_store)->toBeNull()
-        ->and($code->consumed_at)->toBeNull();
+    expect($code->consumed_at)->toBeNull();
 });
 
 it('bounds the hmac claim-code ttl exactly like every other claim code', function (): void {

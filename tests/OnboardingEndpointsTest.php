@@ -149,7 +149,6 @@ it('exchanges a claim code for a durable scoped token and verifies it', function
     $code = OnboardingToken::query()->where('token_hash', OnboardingToken::hashToken($claimCode))->firstOrFail();
 
     expect($code->durable_credential_id)->toBe($row->getKey())
-        ->and($code->durable_token_id)->toBeNull()
         ->and($code->consumed_at)->toBeNull();
 
     $verify = $this->assertNoSecretLeakage($durableToken, function () use ($durableToken): TestResponse {

@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\BuiltForCloudServiceProvider;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
@@ -91,10 +90,7 @@ $case = new class('testProbe') extends TestCase
         return [
             'scope' => $code->scope,
             'consumed' => $code->consumed_at !== null,
-            'durable_token_id' => $code->durable_token_id,
-            'durable_store' => $code->durable_store?->value,
             'durable_credential_id' => $code->durable_credential_id,
-            'api_tokens' => ApiToken::query()->count(),
             'credentials' => Credential::query()->count(),
             'credential' => $credential === null ? null : [
                 'id' => $credential->id,
