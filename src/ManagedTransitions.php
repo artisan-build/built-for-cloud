@@ -744,7 +744,7 @@ final class ManagedTransitions
         );
         $invitations = Invitation::query()
             ->pending()
-            ->get(['id'])
+            ->get(['id', 'email'])
             ->keyBy(static fn (Invitation $invitation): string => (string) $invitation->getKey());
         $validated = [];
         $seenSubjects = [];
@@ -879,6 +879,13 @@ final class ManagedTransitions
                 $email = in_array($element['disposition'], ['link', 'retain_local'], true)
                     ? $element['final_email']
                     : $user->email;
+            } elseif ($element['local_kind'] === 'invitation' && $element['disposition'] === 'retain_local') {
+                $invitation = $invitations->get($element['local_id']);
+                if (! $invitation instanceof Invitation) {
+                    throw new ManagedAuthRefused;
+                }
+
+                $email = $invitation->email;
             } elseif ($element['disposition'] === 'create'
                 || ($element['local_kind'] === 'invitation' && $element['disposition'] === 'link')) {
                 $email = $element['final_email'];

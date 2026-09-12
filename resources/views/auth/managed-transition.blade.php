@@ -46,7 +46,7 @@
             @endphp
 
             @if ($direction === \ArtisanBuild\BuiltForCloud\ManagedTransitionDirection::Adopt)
-                <p class="bfc-transition-fixed">Roles and membership come from the Team Account authority. You can correct local matches, commit timing, and final local emails; authority roles are not editable here.</p>
+                <p class="bfc-transition-fixed" data-testid="transition-adopt-authority-fixed">Roles and membership come from the Team Account authority. You can correct local matches, commit timing, and final local emails; authority roles are not editable here.</p>
             @else
                 <p>Standalone roles and final local emails are editable because no external authority persists after exit.</p>
             @endif
@@ -70,8 +70,15 @@
                                     : ($linkedInvitation && $mapping?->final_email === $linkedInvitation->email
                                         ? 'invitation-contact'
                                         : ($mapping?->disposition === 'create' && $mapping?->final_email === $member->contact_email
-                                            ? 'authority-contact'
-                                            : 'owner-corrected'));
+                                             ? 'authority-contact'
+                                             : 'owner-corrected'));
+                                $emailProvenanceLabel = match ($emailProvenance) {
+                                    'generated' => 'generated local address',
+                                    'local-contact' => 'current local contact',
+                                    'invitation-contact' => 'stored invitee contact',
+                                    'authority-contact' => 'authority contact',
+                                    default => 'Owner-corrected local address',
+                                };
                             @endphp
                             <article class="bfc-transition-card" data-testid="transition-roster-member">
                                 <strong>{{ $member->display_name }}</strong>
@@ -96,32 +103,21 @@
                                                 <input name="roster[{{ $index }}][final_email]" type="email" value="{{ $mapping?->final_email }}" required data-testid="transition-email-control">
                                             </label>
                                             <div class="bfc-transition-meta" data-testid="transition-email-provenance-{{ $emailProvenance }}">
-                                                Final email provenance:
-                                                @if ($linkedUser && $mapping?->final_email === $linkedUser->email)
-                                                    {{ $linkedUser->email_is_generated ? 'generated local address' : 'current local contact' }}
-                                                @elseif ($linkedInvitation && $mapping?->final_email === $linkedInvitation->email)
-                                                    stored invitee contact
-                                                @elseif ($mapping?->disposition === 'create' && $mapping?->final_email === $member->contact_email)
-                                                    authority contact
-                                                @else
-                                                    Owner-corrected local address
-                                                @endif
+                                                Final email {{ $mapping?->final_email }} provenance: {{ $emailProvenanceLabel }}
                                             </div>
-                                        @else
-                                            <input type="hidden" name="roster[{{ $index }}][final_email]" value="{{ $member->contact_email }}">
                                         @endif
                                     </div>
-                                    <p><strong>Consequence:</strong>
+                                    <p data-testid="transition-consequence-roster-{{ str_replace('_', '-', $mapping?->disposition ?? 'unknown') }}"><strong>Consequence:</strong>
                                         @if ($mapping?->disposition === 'link')
-                                            keeps {{ $mapping->local_kind }} {{ $mapping->local_id }} and its attribution.
+                                            subject {{ $member->scalpels_id }} keeps {{ $mapping->local_kind }} {{ $mapping->local_id }} and its attribution.
                                         @elseif ($mapping?->disposition === 'create')
-                                            creates a local user at commit with the displayed authority identity.
+                                            subject {{ $member->scalpels_id }} creates a local user at commit with authority contact {{ $mapping->final_email }}.
                                         @else
-                                            creates no row at commit; the next managed login may still create one through managed JIT.
+                                            subject {{ $member->scalpels_id }} creates no row at commit; the next managed login may still create one through managed JIT.
                                         @endif
                                     </p>
                                 @elseif (! $mapping)
-                                    <p class="bfc-transition-fixed" data-testid="transition-roster-informational"><strong>Not carried into standalone.</strong> This roster subject has no local identity, so no mapping element is sent to stage.</p>
+                                    <p class="bfc-transition-fixed" data-testid="transition-roster-informational"><strong>Not carried into standalone.</strong> Roster subject {{ $member->scalpels_id }} ({{ $member->contact_email }}) has no local identity, so no mapping element is sent to stage.</p>
                                 @else
                                     <p><strong>Proposed match:</strong> {{ $mapping->local_kind }} {{ $mapping->local_id }}</p>
                                 @endif
@@ -141,6 +137,11 @@
                                 $emailProvenance = $mapping?->final_email === $user->email
                                     ? ($user->email_is_generated ? 'generated' : 'local-contact')
                                     : 'owner-corrected';
+                                $emailProvenanceLabel = match ($emailProvenance) {
+                                    'generated' => 'generated local address',
+                                    'local-contact' => 'current local contact',
+                                    default => 'Owner-corrected local address',
+                                };
                             @endphp
                             <article class="bfc-transition-card" data-testid="transition-local-user">
                                 <strong>{{ $user->name }}</strong>
@@ -179,12 +180,12 @@
                                                 <input name="locals[user-{{ $index }}][final_email]" type="email" value="{{ $mapping?->final_email }}" required data-testid="transition-email-control">
                                             </label>
                                             <div class="bfc-transition-meta" data-testid="transition-email-provenance-{{ $emailProvenance }}">
-                                                Final email provenance: {{ $mapping?->final_email === $user->email ? ($user->email_is_generated ? 'generated local address' : 'current local contact') : 'Owner-corrected local address' }}
+                                                Final email {{ $mapping?->final_email }} provenance: {{ $emailProvenanceLabel }}
                                             </div>
                                         @endif
                                     </div>
                                 @endif
-                                <p><strong>Consequence:</strong>
+                                <p data-testid="transition-consequence-user-{{ str_replace('_', '-', $mapping?->disposition ?? 'unknown') }}"><strong>Consequence:</strong>
                                     @if ($mapping?->disposition === 'link')
                                         keeps local user {{ $user->getKey() }} and its product attribution for the matched subject.
                                     @elseif ($mapping?->disposition === 'retain_local')
@@ -228,21 +229,21 @@
                                             <label>Final local email
                                                 <input name="locals[invitation-{{ $index }}][final_email]" type="email" value="{{ $mapping?->final_email }}" required data-testid="transition-email-control">
                                             </label>
-                                            <div class="bfc-transition-meta" data-testid="transition-email-provenance">
-                                                Final email provenance: {{ $mapping?->final_email === $invitation->email ? 'stored invitee contact' : 'Owner-corrected local address' }}
+                                            <div class="bfc-transition-meta" data-testid="transition-email-provenance-{{ $mapping?->final_email === $invitation->email ? 'invitation-contact' : 'owner-corrected' }}">
+                                                Final email {{ $mapping?->final_email }} provenance: {{ $mapping?->final_email === $invitation->email ? 'stored invitee contact' : 'Owner-corrected local address' }}
                                             </div>
                                         @elseif ($mapping?->disposition === 'retain_local')
-                                            <p class="bfc-transition-fixed" data-testid="transition-invitation-fixed">The stored invitee email and invited role stay unchanged while this invitation remains pending.</p>
+                                            <p class="bfc-transition-fixed" data-testid="transition-invitation-fixed">Invitation {{ $invitation->getKey() }} remains pending with stored invitee email {{ $invitation->email }} and invited role {{ $invitation->role }}; neither field is editable.</p>
                                         @endif
                                     </div>
                                 @endif
-                                <p><strong>Consequence:</strong>
+                                <p data-testid="transition-consequence-invitation-{{ str_replace('_', '-', $mapping?->disposition ?? 'unknown') }}"><strong>Consequence:</strong>
                                     @if ($mapping?->disposition === 'link')
-                                        creates a user for the matched subject and burns this invitation as accepted.
+                                        invitation {{ $invitation->getKey() }} creates a user for the matched subject and is consumed as accepted.
                                     @elseif ($mapping?->disposition === 'retain_local')
-                                        keeps this invitation pending with its stored role and email unchanged.
+                                        keeps invitation {{ $invitation->getKey() }} pending with stored role {{ $invitation->role }} and email {{ $invitation->email }} unchanged.
                                     @else
-                                        cancels this invitation without creating or deleting a user row.
+                                        cancels invitation {{ $invitation->getKey() }} without creating or deleting a user row.
                                     @endif
                                 </p>
                             </article>

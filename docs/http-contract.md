@@ -1008,10 +1008,10 @@ Installation credentials are not selected by this operation.
 
 ### GET /bfc/transitions/{direction}/prepare
 
-Owner alone may review the preparation step for an `adopt` or `exit` transition. The page lists every
-current local user and pending invitation. The optional `ui.managed_transitions` flag controls only
-whether preparation and correction controls are rendered; direct requests retain all authorization
-and proposal validation.
+Owner alone may review the preparation step for an `adopt` or `exit` transition. This step explains
+and starts preparation; the resulting proposal page lists every current local user and pending
+invitation. The optional `ui.managed_transitions` flag controls only whether preparation and correction
+controls are rendered; direct requests retain all authorization and proposal validation.
 
 ### POST /bfc/transitions/{direction}/prepare
 
