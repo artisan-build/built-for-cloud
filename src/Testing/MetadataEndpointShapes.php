@@ -131,6 +131,7 @@ final class MetadataEndpointShapes
             'POST /bfc/forgot-password' => ['type' => 'empty'],
             'POST /bfc/reset-password' => ['type' => 'empty'],
             'POST /bfc/members/invitations' => ['type' => 'empty'],
+            'POST /bfc/transitions/proposals/{transition}/complete' => ['type' => 'empty'],
             'POST /bfc/transitions/{direction}/prepare' => ['type' => 'empty'],
             'PUT /bfc/members/{user}/role' => ['type' => 'empty'],
             'PUT /bfc/transitions/proposals/{transition}' => ['type' => 'empty'],

@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\ManagedTransitionStatus;
 use ArtisanBuild\BuiltForCloud\Tests\Support\PostgresLane;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 use Symfony\Component\Process\Process;
 
@@ -110,6 +111,68 @@ function p4bPgSeedAuthority(string $mode = 'standalone', int $generation = 7): v
             'updated_at' => now(),
         ],
     );
+}
+
+function p4dPgOwner(string $email): User
+{
+    $owner = User::query()->create([
+        'name' => 'Commit Race Owner',
+        'email' => $email,
+        'password' => Hash::make('commit-race-password'),
+    ]);
+    $owner->forceFill(['role' => 'owner', 'status' => 'active'])->save();
+
+    return $owner->refresh();
+}
+
+function p4dPgMakeCommitReady(ManagedTransition $transition, User $owner): ManagedTransition
+{
+    $mapping = [[
+        'scalpels_id' => 'race-owner-subject',
+        'local_kind' => 'user',
+        'local_id' => (string) $owner->getKey(),
+        'role' => 'owner',
+        'disposition' => 'link',
+        'final_email' => $owner->email,
+    ]];
+    DB::table('bfc_managed_transition_roster_members')->insert([
+        'id' => (string) Str::uuid(),
+        'managed_transition_id' => $transition->id,
+        'ordinal' => 0,
+        'page_number' => 1,
+        'page_position' => 0,
+        'scalpels_id' => 'race-owner-subject',
+        'membership_status' => 'active',
+        'role' => 'owner',
+        'display_name' => $owner->name,
+        'contact_email' => $owner->email,
+        'contact_email_verified' => true,
+        'created_at' => now(),
+    ]);
+    DB::table('bfc_managed_transition_mappings')->insert([
+        'id' => (string) Str::uuid(),
+        'managed_transition_id' => $transition->id,
+        'ordinal' => 0,
+        ...$mapping[0],
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    $key = str_repeat('s', 42).substr($transition->id, 0, 1);
+    $body = json_encode([
+        'connection_id' => $transition->connection_id,
+        'installation_id' => $transition->installation_id,
+        'idempotency_key' => $key,
+        'roster_version' => $transition->roster_version,
+        'roster_cutoff_at' => $transition->roster_cutoff_at,
+        'mapping' => $mapping,
+    ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+    $transition->forceFill([
+        'stage_idempotency_key' => $key,
+        'stage_request_body' => $body,
+        'stage_body_digest' => hash('sha256', $body),
+    ])->save();
+
+    return $transition->refresh();
 }
 
 it('lets the PostgreSQL active-slot index arbitrate concurrent prepares', function (
@@ -283,13 +346,13 @@ it('arbitrates the staged T7-versus-commit race with exactly one durable winner'
     );
     $owner = User::query()->create(['name' => 'Race Owner', 'email' => 'race-owner@example.test']);
     $owner->forceFill(['role' => 'owner', 'status' => 'active'])->save();
-    $transition = p4bPgInsertTransition([
+    $transition = p4dPgMakeCommitReady(p4bPgInsertTransition([
         'status' => ManagedTransitionStatus::Staged,
         'transition_id' => 'authority-transition-race',
         'roster_version' => 41,
         'roster_cutoff_at' => '2026-09-11T12:00:00+00:00',
         'roster_total' => 1,
-    ]);
+    ]), $owner);
     $main = $this->postgresLaneConnection();
     $main->beginTransaction();
     $main->table('bfc_managed_transitions')->where('id', $transition->id)->lockForUpdate()->first();
@@ -298,6 +361,7 @@ it('arbitrates the staged T7-versus-commit race with exactly one durable winner'
             'mode' => 'production-commit',
             'application_name' => 'bfc-p4b-cas-commit',
             'transition_id' => $transition->id,
+            'owner_id' => $owner->getKey(),
         ]),
         p4bPgStartWorker([
             'mode' => 'production-abandon',
@@ -322,11 +386,20 @@ it('arbitrates the staged T7-versus-commit race with exactly one durable winner'
         $outcomes = array_column($results, 'result');
         sort($outcomes);
         $persisted = $transition->refresh();
+        $workerPayload = json_encode($results, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR);
+        $sqlStates = collect($results)
+            ->flatMap(static fn (array $result): array => $result['causes'] ?? [])
+            ->pluck('sqlstate')
+            ->filter()
+            ->values()
+            ->all();
 
-        expect($outcomes)->toBeIn([
-            ['abandoned', 'refused'],
-            ['committed', 'refused'],
-        ]);
+        expect($sqlStates)->not->toContain('40P01', $workerPayload)
+            ->and($outcomes)->not->toContain('deadlock-aborted', $workerPayload)
+            ->and($outcomes)->toBeIn([
+                ['abandoned', 'refused'],
+                ['committed', 'refused'],
+            ], $workerPayload);
 
         if ($persisted->status === ManagedTransitionStatus::Committed) {
             expect($persisted->local_commit_receipt)->toBeString()->not->toBeEmpty()
@@ -399,19 +472,20 @@ it('runs competing second-stage calls through production with one exact typed lo
 
 it('runs competing second-commit calls through production with one exact typed loser and one effect', function (): void {
     p4bPgSeedAuthority();
-    $transition = p4bPgInsertTransition([
+    $owner = p4dPgOwner('commit-race-owner@example.test');
+    $transition = p4dPgMakeCommitReady(p4bPgInsertTransition([
         'status' => ManagedTransitionStatus::Staged,
         'transition_id' => 'authority-transition-commit-race',
         'roster_version' => 41,
         'roster_cutoff_at' => '2026-09-11T12:00:00+00:00',
         'roster_total' => 1,
-    ]);
+    ]), $owner);
     $main = $this->postgresLaneConnection();
     $main->beginTransaction();
     $main->table('bfc_managed_transitions')->where('id', $transition->id)->lockForUpdate()->first();
     $workers = [
-        p4bPgStartWorker(['mode' => 'production-commit', 'application_name' => 'bfc-p4b-commit-a', 'transition_id' => $transition->id]),
-        p4bPgStartWorker(['mode' => 'production-commit', 'application_name' => 'bfc-p4b-commit-b', 'transition_id' => $transition->id]),
+        p4bPgStartWorker(['mode' => 'production-commit', 'application_name' => 'bfc-p4b-commit-a', 'transition_id' => $transition->id, 'owner_id' => $owner->getKey()]),
+        p4bPgStartWorker(['mode' => 'production-commit', 'application_name' => 'bfc-p4b-commit-b', 'transition_id' => $transition->id, 'owner_id' => $owner->getKey()]),
     ];
 
     try {
@@ -448,6 +522,7 @@ it('runs competing second-commit calls through production with one exact typed l
 
 it('allows only one of two staged attempts validated at the same generation to commit', function (): void {
     p4bPgSeedAuthority();
+    $owner = p4dPgOwner('generation-race-owner@example.test');
     $main = null;
     $workers = [];
     $constraintDropped = false;
@@ -455,14 +530,14 @@ it('allows only one of two staged attempts validated at the same generation to c
     try {
         DB::statement('ALTER TABLE bfc_managed_transitions DROP CONSTRAINT bfc_transition_active_slot_unique');
         $constraintDropped = true;
-        $first = p4bPgInsertTransition([
+        $first = p4dPgMakeCommitReady(p4bPgInsertTransition([
             'status' => ManagedTransitionStatus::Staged,
             'transition_id' => 'authority-transition-generation-a',
             'roster_version' => 41,
             'roster_cutoff_at' => '2026-09-11T12:00:00+00:00',
             'roster_total' => 1,
-        ]);
-        $second = p4bPgInsertTransition([
+        ]), $owner);
+        $second = p4dPgMakeCommitReady(p4bPgInsertTransition([
             'id' => (string) Str::uuid(),
             'status' => ManagedTransitionStatus::Staged,
             'transition_request_id' => str_repeat('q', 43),
@@ -470,13 +545,13 @@ it('allows only one of two staged attempts validated at the same generation to c
             'roster_version' => 41,
             'roster_cutoff_at' => '2026-09-11T12:00:00+00:00',
             'roster_total' => 1,
-        ]);
+        ]), $owner);
         $main = $this->postgresLaneConnection();
         $main->beginTransaction();
         $main->table('bfc_authority')->where('key', InstallationAuthority::KEY)->lockForUpdate()->first();
         $workers = [
-            p4bPgStartWorker(['mode' => 'production-commit', 'application_name' => 'bfc-p4b-generation-a', 'transition_id' => $first->id]),
-            p4bPgStartWorker(['mode' => 'production-commit', 'application_name' => 'bfc-p4b-generation-b', 'transition_id' => $second->id]),
+            p4bPgStartWorker(['mode' => 'production-commit', 'application_name' => 'bfc-p4b-generation-a', 'transition_id' => $first->id, 'owner_id' => $owner->getKey()]),
+            p4bPgStartWorker(['mode' => 'production-commit', 'application_name' => 'bfc-p4b-generation-b', 'transition_id' => $second->id, 'owner_id' => $owner->getKey()]),
         ];
         p4bPgWaitForBlocked($workers, fn (): int => (int) $this->postgresLaneProbe()->scalar(<<<'SQL'
             select count(*) from pg_stat_activity

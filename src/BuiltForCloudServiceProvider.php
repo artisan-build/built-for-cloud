@@ -446,6 +446,8 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 ->name('bfc.transitions.edit');
             $router->put('/bfc/transitions/proposals/{transition}', [ManageTransitions::class, 'update'])
                 ->name('bfc.transitions.update');
+            $router->post('/bfc/transitions/proposals/{transition}/complete', [ManageTransitions::class, 'complete'])
+                ->name('bfc.transitions.complete');
         });
 
         $handoffMiddleware = [

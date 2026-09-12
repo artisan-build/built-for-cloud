@@ -2,9 +2,7 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
-use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\ManagedTransition;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionClient;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionDirection;
@@ -15,6 +13,7 @@ use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Config\Repository;
 use Illuminate\Container\Container;
 use Illuminate\Database\Capsule\Manager as Capsule;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Http\Request;
@@ -59,6 +58,27 @@ Container::setInstance($container);
 Facade::setFacadeApplication($container);
 $connection = $capsule->getConnection('pgsql_testing');
 $connection->statement("set application_name = '".str_replace("'", "''", $input['application_name'])."'");
+$exceptionPayload = static function (Throwable $exception): array {
+    $causes = [];
+    for ($cause = $exception; $cause instanceof Throwable; $cause = $cause->getPrevious()) {
+        $code = $cause->getCode();
+        $sqlState = $cause instanceof PDOException && is_string($cause->errorInfo[0] ?? null)
+            ? $cause->errorInfo[0]
+            : (is_string($code) && preg_match('/^[A-Z0-9]{5}$/', $code) === 1 ? $code : null);
+        $causes[] = [
+            'class' => $cause::class,
+            'sqlstate' => $sqlState,
+            'message' => $cause->getMessage(),
+        ];
+    }
+
+    return [
+        'class' => $exception::class,
+        'sqlstate' => $causes[0]['sqlstate'],
+        'message' => $exception->getMessage(),
+        'causes' => $causes,
+    ];
+};
 
 try {
     if ($input['mode'] === 'active-slot') {
@@ -162,13 +182,9 @@ try {
         if ($input['mode'] === 'production-stage') {
             $completed = $service->stage($transition);
         } elseif ($input['mode'] === 'production-commit') {
-            $effects = 0;
-            $completed = $service->commit($transition, static function () use (&$effects): void {
-                $effects++;
-                if (InstallationAuthority::change(InstallationAuthority::current(), AuthorityMode::Managed) === null) {
-                    throw new RuntimeException('Production commit worker could not switch mode.');
-                }
-            });
+            $owner = User::query()->findOrFail($input['owner_id']);
+            $completed = $service->commit($transition, $owner);
+            $effects = 1;
         } else {
             $owner = User::query()->findOrFail($input['owner_id']);
             $session = new Store('p4b-transition-worker', new ArraySessionHandler(120));
@@ -299,24 +315,27 @@ try {
         ];
     }
 } catch (ManagedAuthRefused $exception) {
-    $causes = [];
-    for ($cause = $exception; $cause instanceof Throwable; $cause = $cause->getPrevious()) {
-        $causes[] = ['class' => $cause::class, 'message' => $cause->getMessage()];
-    }
     $result = [
         'result' => 'refused',
-        'class' => $exception::class,
-        'message' => $exception->getMessage(),
+        ...$exceptionPayload($exception),
         'calls' => $calls ?? null,
         'effects' => $effects ?? 0,
-        'causes' => $causes,
+    ];
+} catch (QueryException $exception) {
+    $payload = $exceptionPayload($exception);
+    $result = [
+        'result' => $payload['sqlstate'] === '40P01' ? 'deadlock-aborted' : 'database-error',
+        ...$payload,
+        'calls' => $calls ?? null,
+        'effects' => $effects ?? 0,
     ];
 } catch (Throwable $exception) {
-    $causes = [];
-    for ($cause = $exception; $cause instanceof Throwable; $cause = $cause->getPrevious()) {
-        $causes[] = ['class' => $cause::class, 'message' => $cause->getMessage()];
-    }
-    $result = ['result' => 'database-refused', 'class' => $exception::class, 'causes' => $causes];
+    $result = [
+        'result' => 'unexpected-error',
+        ...$exceptionPayload($exception),
+        'calls' => $calls ?? null,
+        'effects' => $effects ?? 0,
+    ];
 }
 
 fwrite(STDOUT, json_encode($result, JSON_THROW_ON_ERROR));

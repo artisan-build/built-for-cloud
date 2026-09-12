@@ -9,6 +9,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -360,39 +361,104 @@ final class ManagedTransitions
         return $this->advance($transition, ManagedTransitionStatus::Staging, ManagedTransitionStatus::Staged);
     }
 
-    /**
-     * P4d supplies the local effects callback. The transition checkpoint commits in that same transaction.
-     *
-     * @param  callable(ManagedTransition): void  $effects
-     */
-    public function commit(ManagedTransition $transition, callable $effects): ManagedTransition
+    public function commit(ManagedTransition $transition, User $actor): ManagedTransition
     {
-        return DB::transaction(function () use ($transition, $effects): ManagedTransition {
-            $locked = $this->locked($transition, [ManagedTransitionStatus::Staged]);
-            if ($locked->abandon_idempotency_key !== null) {
-                throw new ManagedAuthRefused('transition_state_conflict');
-            }
+        try {
+            [$committed, $userIds] = DB::transaction(function () use ($transition, $actor): array {
+                $locked = $this->locked($transition, [ManagedTransitionStatus::Staged]);
+                if ($locked->abandon_idempotency_key !== null) {
+                    throw new ManagedAuthRefused('transition_state_conflict');
+                }
 
-            $authority = DB::table('bfc_authority')
-                ->where('key', InstallationAuthority::KEY)
-                ->lockForUpdate()
-                ->first(['mode', 'generation', 'installation_id']);
-            if (! is_object($authority)
-                || $authority->mode !== $locked->mode_before
-                || $authority->generation !== $locked->generation_before
-                || $authority->installation_id !== $locked->installation_id) {
-                throw new ManagedAuthRefused('transition_state_conflict');
-            }
+                if ($locked->mode_before !== $locked->direction->modeBefore()->value
+                    || $locked->mode_after !== $locked->direction->modeAfter()->value
+                    || $locked->generation_after !== $locked->generation_before + 1) {
+                    throw new ManagedAuthRefused('transition_state_conflict');
+                }
 
-            $effects($locked);
-            $this->assertLocalAuthority($locked, true, false);
-            $locked->forceFill([
-                'status' => ManagedTransitionStatus::Committed,
-                'local_commit_receipt' => $this->randomKey(),
-            ])->save();
+                $authority = DB::table('bfc_authority')
+                    ->where('key', InstallationAuthority::KEY)
+                    ->lockForUpdate()
+                    ->first(['mode', 'generation', 'installation_id']);
+                if (! is_object($authority)
+                    || $authority->mode !== $locked->mode_before
+                    || $authority->generation !== $locked->generation_before
+                    || $authority->installation_id !== $locked->installation_id) {
+                    throw new ManagedAuthRefused('transition_state_conflict');
+                }
 
-            return $locked->refresh();
-        });
+                $this->assertOwnerUser($actor, true);
+                $userIds = $this->applyLocalCommit($locked, $this->stagedMapping($locked));
+
+                $changed = InstallationAuthority::change(
+                    AuthorityState::fromRaw($locked->mode_before, $locked->generation_before),
+                    $locked->direction->modeAfter(),
+                );
+                if ($changed === null
+                    || $changed->mode !== $locked->direction->modeAfter()
+                    || $changed->generation !== $locked->generation_after) {
+                    throw new ManagedAuthRefused('transition_state_conflict');
+                }
+
+                $this->assertLocalAuthority($locked, true, false);
+                $locked->forceFill([
+                    'status' => ManagedTransitionStatus::Committed,
+                    'local_commit_receipt' => $this->randomKey(),
+                ])->save();
+
+                return [$locked->refresh(), $userIds];
+            }, 3);
+
+            $this->deleteConfiguredSessions($userIds);
+
+            return $committed;
+        } catch (QueryException $exception) {
+            throw new ManagedAuthRefused(previous: $exception);
+        }
+    }
+
+    public function complete(User $actor, ManagedTransition $transition): ManagedTransition
+    {
+        $transition = $this->fresh($transition, [
+            ManagedTransitionStatus::Proposed,
+            ManagedTransitionStatus::Staging,
+            ManagedTransitionStatus::Staged,
+            ManagedTransitionStatus::Committed,
+            ManagedTransitionStatus::Acknowledging,
+            ManagedTransitionStatus::Acknowledged,
+        ]);
+
+        if (in_array($transition->status, [
+            ManagedTransitionStatus::Proposed,
+            ManagedTransitionStatus::Staging,
+            ManagedTransitionStatus::Staged,
+        ], true)) {
+            DB::transaction(fn (): User => $this->assertOwnerUser($actor, true));
+        }
+
+        if ($transition->status === ManagedTransitionStatus::Proposed) {
+            $transition = $this->stage($transition);
+        } elseif ($transition->status === ManagedTransitionStatus::Staging) {
+            $transition = $this->recover($transition);
+        }
+
+        if ($transition->status === ManagedTransitionStatus::Staged) {
+            $transition = $this->commit($transition, $actor);
+        }
+
+        if ($transition->status === ManagedTransitionStatus::Committed) {
+            return $this->acknowledge($transition);
+        }
+
+        if ($transition->status === ManagedTransitionStatus::Acknowledging) {
+            return $this->recover($transition);
+        }
+
+        if ($transition->status !== ManagedTransitionStatus::Acknowledged) {
+            throw new ManagedAuthRefused('transition_state_conflict');
+        }
+
+        return $transition;
     }
 
     public function acknowledge(ManagedTransition $transition): ManagedTransition
@@ -554,6 +620,294 @@ final class ManagedTransitions
         $this->validateMapping($transition, $payload['mapping']);
     }
 
+    /** @return list<array{scalpels_id: ?string, local_kind: ?string, local_id: ?string, role: ?string, disposition: string, final_email: ?string}> */
+    private function stagedMapping(ManagedTransition $transition): array
+    {
+        if (! is_string($transition->stage_request_body)
+            || ! is_string($transition->stage_body_digest)
+            || ! hash_equals($transition->stage_body_digest, hash('sha256', $transition->stage_request_body))) {
+            throw new ManagedAuthRefused;
+        }
+
+        try {
+            $payload = json_decode($transition->stage_request_body, true, flags: JSON_THROW_ON_ERROR);
+        } catch (Throwable $exception) {
+            throw new ManagedAuthRefused(previous: $exception);
+        }
+
+        if (! is_array($payload)
+            || ($payload['connection_id'] ?? null) !== $transition->connection_id
+            || ($payload['installation_id'] ?? null) !== $transition->installation_id
+            || ($payload['idempotency_key'] ?? null) !== $transition->stage_idempotency_key
+            || ($payload['roster_version'] ?? null) !== $transition->roster_version
+            || ($payload['roster_cutoff_at'] ?? null) !== $transition->roster_cutoff_at
+            || ! is_array($payload['mapping'] ?? null)) {
+            throw new ManagedAuthRefused;
+        }
+
+        return $this->validateMapping($transition, $payload['mapping'], true);
+    }
+
+    /**
+     * @param  list<array{scalpels_id: ?string, local_kind: ?string, local_id: ?string, role: ?string, disposition: string, final_email: ?string}>  $mapping
+     * @return list<string>
+     */
+    private function applyLocalCommit(ManagedTransition $transition, array $mapping): array
+    {
+        $users = User::query()->orderBy('id')->lockForUpdate()->get()->keyBy(
+            static fn (User $user): string => (string) $user->getKey(),
+        );
+        $invitations = Invitation::query()->pending()->orderBy('id')->lockForUpdate()->get()->keyBy(
+            static fn (Invitation $invitation): string => (string) $invitation->getKey(),
+        );
+        $roster = DB::table('bfc_managed_transition_roster_members')
+            ->where('managed_transition_id', $transition->id)
+            ->lockForUpdate()
+            ->get()
+            ->keyBy('scalpels_id');
+        $now = now();
+        $userIds = $users->keys()->map(static fn (mixed $id): string => (string) $id)->all();
+
+        if ($userIds !== []) {
+            $sessionTable = (string) config('session.table', 'sessions');
+            if (Schema::hasTable($sessionTable)) {
+                DB::table($sessionTable)->whereIn('user_id', $userIds)->delete();
+            }
+            Credential::query()
+                ->whereIn('user_id', $userIds)
+                ->whereNull('revoked_at')
+                ->update(['revoked_at' => $now]);
+        }
+
+        DB::table('password_reset_tokens')->delete();
+        DB::table('bfc_managed_handoffs')->whereNull('consumed_at')->update(['consumed_at' => $now]);
+
+        DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
+            'managed_connection_status' => null,
+            'managed_connection_generation' => null,
+            'managed_connection_roster_version' => null,
+            'managed_connection_response_sequence' => null,
+            'managed_ownership_generation' => null,
+            'managed_ownership_roster_version' => null,
+            'managed_ownership_response_sequence' => null,
+            'updated_at' => $now,
+        ]);
+
+        foreach ($users as $user) {
+            $attributes = [
+                'auth_session_version' => $user->auth_session_version + 1,
+                'remember_token' => null,
+                'membership_confirmed_at' => null,
+                'membership_checked_at' => null,
+                'membership_response_at' => null,
+                'managed_membership_status' => null,
+                'managed_membership_role' => null,
+                'managed_membership_generation' => null,
+                'managed_membership_roster_version' => null,
+                'managed_membership_response_sequence' => null,
+                'managed_membership_responded_at' => null,
+            ];
+            if ($transition->direction === ManagedTransitionDirection::Adopt) {
+                $attributes['password'] = null;
+            }
+            $user->forceFill($attributes)->save();
+        }
+
+        foreach ($mapping as $element) {
+            if ($element['local_kind'] !== 'user'
+                || ! in_array($element['disposition'], ['link', 'retain_local'], true)
+                || $element['final_email'] === null) {
+                continue;
+            }
+
+            $user = $users->get($element['local_id']);
+            if ($user instanceof User
+                && StandaloneAccess::normalizeEmail($user->email) !== StandaloneAccess::normalizeEmail($element['final_email'])) {
+                $user->forceFill([
+                    'email' => 'transition-'.$transition->id.'-'.$user->getKey().'@invalid.example',
+                ])->save();
+            }
+        }
+
+        foreach ($mapping as $element) {
+            if ($element['local_kind'] !== 'user'
+                || ! in_array($element['disposition'], ['link', 'retain_local'], true)
+                || $element['role'] === UserRole::Owner->value) {
+                continue;
+            }
+
+            $user = $users->get($element['local_id']);
+            if ($user instanceof User) {
+                $user->forceFill(['role' => $element['role']])->save();
+            }
+        }
+
+        $ordered = collect($mapping)->sortBy(
+            static fn (array $element): int => $element['role'] === UserRole::Owner->value ? 1 : 0,
+        );
+        foreach ($ordered as $element) {
+            $disposition = $element['disposition'];
+            if ($disposition === 'defer_to_managed_jit') {
+                continue;
+            }
+
+            if ($element['local_kind'] === 'user') {
+                $user = $users->get($element['local_id']);
+                if (! $user instanceof User) {
+                    throw new ManagedAuthRefused;
+                }
+
+                if ($disposition === 'exclude') {
+                    $user->forceFill([
+                        'status' => 'inactive',
+                        'deactivated_at' => $now,
+                        'password' => null,
+                        'remember_token' => null,
+                    ])->save();
+
+                    continue;
+                }
+
+                $member = $element['scalpels_id'] === null ? null : $roster->get($element['scalpels_id']);
+                $sameEmail = StandaloneAccess::normalizeEmail($user->getOriginal('email'))
+                    === StandaloneAccess::normalizeEmail((string) $element['final_email']);
+                $verifiedByRoster = is_object($member)
+                    && (bool) $member->contact_email_verified
+                    && StandaloneAccess::normalizeEmail((string) $member->contact_email)
+                        === StandaloneAccess::normalizeEmail((string) $element['final_email']);
+                $user->forceFill([
+                    'email' => $element['final_email'],
+                    'role' => $element['role'],
+                    'status' => 'active',
+                    'deactivated_at' => null,
+                    'email_verified_at' => $sameEmail ? $user->email_verified_at : ($verifiedByRoster ? $now : null),
+                    'email_is_generated' => $sameEmail ? $user->email_is_generated : false,
+                    ...($member === null ? [] : [
+                        'scalpels_issuer' => $transition->issuer,
+                        'scalpels_connection_id' => $transition->connection_id,
+                        'scalpels_id' => $element['scalpels_id'],
+                        'original_contact_email' => $member->contact_email,
+                    ]),
+                ])->save();
+
+                continue;
+            }
+
+            if ($element['local_kind'] === 'invitation') {
+                $invitation = $invitations->get($element['local_id']);
+                if (! $invitation instanceof Invitation) {
+                    throw new ManagedAuthRefused;
+                }
+
+                if ($disposition === 'retain_local') {
+                    continue;
+                }
+
+                if ($disposition === 'exclude') {
+                    $cancelled = Invitation::query()
+                        ->whereKey($invitation->getKey())
+                        ->whereNull('accepted_at')
+                        ->whereNull('cancelled_at')
+                        ->update(['cancelled_at' => $now]);
+                    if ($cancelled !== 1) {
+                        throw new ManagedAuthRefused;
+                    }
+
+                    continue;
+                }
+
+                $member = $roster->get($element['scalpels_id']);
+                if (! is_object($member)) {
+                    throw new ManagedAuthRefused;
+                }
+                $user = User::query()->create([
+                    'name' => $member->display_name,
+                    'email' => $element['final_email'],
+                ]);
+                $verifiedByRoster = (bool) $member->contact_email_verified
+                    && StandaloneAccess::normalizeEmail((string) $member->contact_email)
+                        === StandaloneAccess::normalizeEmail((string) $element['final_email']);
+                $user->forceFill([
+                    'role' => $element['role'],
+                    'status' => 'active',
+                    'password' => null,
+                    'email_verified_at' => $verifiedByRoster ? $now : null,
+                    'original_contact_email' => $member->contact_email,
+                    'email_is_generated' => false,
+                    'scalpels_issuer' => $transition->issuer,
+                    'scalpels_connection_id' => $transition->connection_id,
+                    'scalpels_id' => $element['scalpels_id'],
+                ])->save();
+                $burned = Invitation::query()
+                    ->whereKey($invitation->getKey())
+                    ->whereNull('accepted_at')
+                    ->whereNull('cancelled_at')
+                    ->update(['accepted_at' => $now, 'used_by' => (string) $user->getKey()]);
+                if ($burned !== 1) {
+                    throw new ManagedAuthRefused;
+                }
+
+                continue;
+            }
+
+            if ($disposition !== 'create') {
+                throw new ManagedAuthRefused;
+            }
+
+            $member = $roster->get($element['scalpels_id']);
+            if (! is_object($member)) {
+                throw new ManagedAuthRefused;
+            }
+            $user = User::query()->create([
+                'name' => $member->display_name,
+                'email' => $element['final_email'],
+            ]);
+            $verifiedByRoster = (bool) $member->contact_email_verified
+                && StandaloneAccess::normalizeEmail((string) $member->contact_email)
+                    === StandaloneAccess::normalizeEmail((string) $element['final_email']);
+            $user->forceFill([
+                'role' => $element['role'],
+                'status' => 'active',
+                'password' => null,
+                'email_verified_at' => $verifiedByRoster ? $now : null,
+                'original_contact_email' => $member->contact_email,
+                'email_is_generated' => false,
+                'scalpels_issuer' => $transition->issuer,
+                'scalpels_connection_id' => $transition->connection_id,
+                'scalpels_id' => $element['scalpels_id'],
+            ])->save();
+        }
+
+        if ($transition->direction === ManagedTransitionDirection::Exit) {
+            $owners = User::query()->where('status', 'active')->where('role', UserRole::Owner->value)->get();
+            $owner = $owners->first();
+            if ($owners->count() !== 1
+                || ! $owner instanceof User
+                || (! StandaloneAccess::userCanAuthenticate($owner)
+                    && ! StandaloneAccess::userCanReceiveRecovery($owner))) {
+                throw new ManagedAuthRefused;
+            }
+        }
+
+        return $userIds;
+    }
+
+    /** @param list<string> $userIds */
+    private function deleteConfiguredSessions(array $userIds): void
+    {
+        $sessionStore = StandaloneAccess::sessionStore();
+        $sessionConnection = config('session.connection');
+
+        if ($sessionStore !== null
+            && is_string($sessionConnection)
+            && $sessionConnection !== ''
+            && $sessionConnection !== config('database.default')) {
+            $sessionStore->table((string) config('session.table', 'sessions'))
+                ->whereIn('user_id', $userIds)
+                ->delete();
+        }
+    }
+
     public function abandon(Request $request, ManagedTransition $transition): ManagedTransition
     {
         $this->assertOwnerRequest($request, false);
@@ -581,7 +935,6 @@ final class ManagedTransitions
         }
 
         $transition = DB::transaction(function () use ($request, $transition): ManagedTransition {
-            $this->assertOwnerRequest($request, true);
             $locked = $this->locked($transition, [
                 ManagedTransitionStatus::Prepared,
                 ManagedTransitionStatus::Rostered,
@@ -589,6 +942,7 @@ final class ManagedTransitions
                 ManagedTransitionStatus::Staging,
                 ManagedTransitionStatus::Staged,
             ]);
+            $this->assertOwnerRequest($request, true);
 
             if ($locked->abandon_idempotency_key === null) {
                 $key = $this->randomKey();
@@ -733,18 +1087,24 @@ final class ManagedTransitions
      * @param  list<array<string, mixed>>  $mapping
      * @return list<array{scalpels_id: ?string, local_kind: ?string, local_id: ?string, role: ?string, disposition: string, final_email: ?string}>
      */
-    private function validateMapping(ManagedTransition $transition, array $mapping): array
+    private function validateMapping(ManagedTransition $transition, array $mapping, bool $lock = false): array
     {
-        $roster = DB::table('bfc_managed_transition_roster_members')
+        $rosterQuery = DB::table('bfc_managed_transition_roster_members')
             ->where('managed_transition_id', $transition->id)
-            ->get(['scalpels_id', 'role'])
+            ->orderBy('scalpels_id');
+        $usersQuery = User::query()->orderBy('id');
+        $invitationsQuery = Invitation::query()->pending()->orderBy('id');
+        if ($lock) {
+            $rosterQuery->lockForUpdate();
+            $usersQuery->lockForUpdate();
+            $invitationsQuery->lockForUpdate();
+        }
+        $roster = $rosterQuery->get(['scalpels_id', 'role'])
             ->keyBy('scalpels_id');
-        $users = User::query()->get(['id', 'email', 'scalpels_issuer', 'scalpels_connection_id', 'scalpels_id'])->keyBy(
+        $users = $usersQuery->get(['id', 'email', 'scalpels_issuer', 'scalpels_connection_id', 'scalpels_id'])->keyBy(
             static fn (User $user): string => (string) $user->getKey(),
         );
-        $invitations = Invitation::query()
-            ->pending()
-            ->get(['id', 'email'])
+        $invitations = $invitationsQuery->get(['id', 'email'])
             ->keyBy(static fn (Invitation $invitation): string => (string) $invitation->getKey());
         $validated = [];
         $seenSubjects = [];

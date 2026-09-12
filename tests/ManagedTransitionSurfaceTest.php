@@ -10,6 +10,7 @@ use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\ManagedTransition;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionDirection;
 use ArtisanBuild\BuiltForCloud\ManagedTransitions;
+use ArtisanBuild\BuiltForCloud\ManagedTransitionStatus;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ManagedTransitionAuthorityFixture;
 use ArtisanBuild\BuiltForCloud\Tests\TestCase;
 use ArtisanBuild\BuiltForCloud\User;
@@ -83,7 +84,7 @@ function p4cBegin(TestCase $test, User $owner, ManagedTransitionDirection $direc
 }
 
 it('mounts the Owner proposal routes behind the package human gate', function (): void {
-    foreach (['bfc.transitions.index', 'bfc.transitions.store', 'bfc.transitions.edit', 'bfc.transitions.update'] as $name) {
+    foreach (['bfc.transitions.index', 'bfc.transitions.store', 'bfc.transitions.edit', 'bfc.transitions.update', 'bfc.transitions.complete'] as $name) {
         $route = Route::getRoutes()->getByName($name);
 
         expect($route, $name)->not->toBeNull();
@@ -402,12 +403,14 @@ it('refuses Admin, Member, and unauthenticated requests on every transition rout
     $store = route('bfc.transitions.store', ManagedTransitionDirection::Adopt->value, false);
     $edit = route('bfc.transitions.edit', $transition, false);
     $update = route('bfc.transitions.update', $transition, false);
+    $complete = route('bfc.transitions.complete', $transition, false);
 
     foreach ([$admin, $member] as $actor) {
         $this->actingAsVersioned($actor)->get($index)->assertForbidden();
         $this->actingAsVersioned($actor)->post($store)->assertForbidden();
         $this->actingAsVersioned($actor)->get($edit)->assertForbidden();
         $this->actingAsVersioned($actor)->put($update, ['roster' => [], 'locals' => []])->assertForbidden();
+        $this->actingAsVersioned($actor)->post($complete)->assertForbidden();
     }
 
     auth()->logout();
@@ -415,7 +418,39 @@ it('refuses Admin, Member, and unauthenticated requests on every transition rout
     $this->post($store)->assertRedirect(route('bfc.login'));
     $this->get($edit)->assertRedirect(route('bfc.login'));
     $this->put($update, ['roster' => [], 'locals' => []])->assertRedirect(route('bfc.login'));
+    $this->post($complete)->assertRedirect(route('bfc.login'));
 });
+
+it('executes completion through the Owner route and ends the stale standalone session', function (): void {
+    [$owner] = p4cConfigure();
+    $transition = p4cBegin($this, $owner, ManagedTransitionDirection::Adopt);
+
+    $this->actingAsVersioned($owner)
+        ->get(route('bfc.transitions.edit', $transition, false))
+        ->assertOk()
+        ->assertSeeHtml('data-testid="transition-complete-control"');
+    $this->post(route('bfc.transitions.complete', $transition, false))
+        ->assertRedirect(route('bfc.managed.login'));
+
+    $this->assertGuest();
+    expect($transition->refresh()->status)->toBe(ManagedTransitionStatus::Acknowledged);
+});
+
+it('keeps interrupted completion states available on the same retry URL', function (ManagedTransitionStatus $status): void {
+    [$owner] = p4cConfigure();
+    $transition = p4cBegin($this, $owner, ManagedTransitionDirection::Adopt);
+    $transition->forceFill(['status' => $status])->save();
+
+    $this->actingAsVersioned($owner)
+        ->get(route('bfc.transitions.edit', $transition, false))
+        ->assertOk()
+        ->assertSeeHtml('data-testid="transition-complete-control"');
+})->with([
+    ManagedTransitionStatus::Staging,
+    ManagedTransitionStatus::Staged,
+    ManagedTransitionStatus::Committed,
+    ManagedTransitionStatus::Acknowledging,
+]);
 
 it('offers adoption from members only to a standalone Owner', function (): void {
     [$owner] = p4cConfigure();
