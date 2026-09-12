@@ -147,6 +147,7 @@ $case = new class('testProbe') extends TestCase
         $router = $this->app['router'];
         $routes = array_values(array_filter(
             $router->getRoutes()->getRoutes(),
+            // Directive §1 keeps new class-gated routes outside the legacy Unit A/A2 hostile-host probes.
             static fn (Route $route): bool => in_array(EnsureUserIsAuthenticated::class, $route->middleware(), true)
                 && ! str_starts_with((string) $route->getName(), 'bfc.transitions.'),
         ));

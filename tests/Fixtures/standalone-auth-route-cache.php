@@ -89,6 +89,7 @@ $case = new class('testProbe') extends TestCase
             foreach ($router->getRoutes()->get($method) as $route) {
                 $id = spl_object_id($route);
 
+                // Directive §1 keeps new class-gated routes outside the legacy Unit A/A2 hostile-host probes.
                 if (isset($seen[$id])
                     || ! in_array(EnsureUserIsAuthenticated::class, $route->middleware(), true)
                     || str_starts_with((string) $route->getName(), 'bfc.transitions.')) {

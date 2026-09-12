@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\ManagedTransition;
@@ -80,7 +81,11 @@ function p4cBegin(TestCase $test, User $owner, ManagedTransitionDirection $direc
 
 it('mounts the Owner proposal routes behind the package human gate', function (): void {
     foreach (['bfc.transitions.index', 'bfc.transitions.store', 'bfc.transitions.edit', 'bfc.transitions.update'] as $name) {
-        expect(Route::has($name))->toBeTrue($name);
+        $route = Route::getRoutes()->getByName($name);
+
+        expect($route, $name)->not->toBeNull();
+        expect($this->app['router']->gatherRouteMiddleware($route), $name)
+            ->toContain(EnsureUserIsAuthenticated::class);
     }
 });
 
