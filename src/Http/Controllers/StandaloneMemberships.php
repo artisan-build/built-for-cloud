@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\Actions\IssueHumanInvitation;
+use ArtisanBuild\BuiltForCloud\AuthorityMode;
+use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\StandaloneAccess;
@@ -21,10 +23,14 @@ final class StandaloneMemberships
 {
     public function index(Request $request): View
     {
+        $actor = $request->user();
+
         return view()->file(__DIR__.'/../../../resources/views/auth/members.blade.php', [
-            'actor' => $request->user(),
+            'actor' => $actor,
             'members' => User::query()->orderBy('name')->orderBy('id')->get(),
             'invitations' => Invitation::query()->pending()->orderBy('created_at')->get(),
+            'canAdoptManagedAuthority' => RolePolicy::canInitiateModeTransition($actor?->role)
+                && InstallationAuthority::current()->mode === AuthorityMode::Standalone,
         ]);
     }
 

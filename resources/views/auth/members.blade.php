@@ -18,6 +18,10 @@
             <p class="bfc-error" data-testid="members-errors">{{ $errors->first() }}</p>
         @endif
 
+        @if ($canAdoptManagedAuthority && config('built-for-cloud.ui.managed_transitions', false))
+            <p><a class="bfc-button" href="{{ route('bfc.transitions.index', 'adopt') }}" data-testid="transition-adopt-entry">Adopt managed authority</a></p>
+        @endif
+
         @if (\ArtisanBuild\BuiltForCloud\RolePolicy::canManageMembers($actor?->role))
             <form method="POST" action="{{ route('bfc.members.invitations.store') }}" data-testid="members-invitation-form">
                 @csrf

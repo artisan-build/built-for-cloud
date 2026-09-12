@@ -124,6 +124,8 @@ final class PersonalSurfaceWebGroupTest extends TestCase
             'GET /bfc/managed/login',
             'GET /bfc/members',
             'GET /bfc/reset-password',
+            'GET /bfc/transitions/proposals/{transition}',
+            'GET /bfc/transitions/{direction}/prepare',
             'POST /bfc/console/enter',
             'POST /bfc/forgot-password',
             'POST /bfc/invitations/accept',
@@ -131,7 +133,9 @@ final class PersonalSurfaceWebGroupTest extends TestCase
             'POST /bfc/logout',
             'POST /bfc/members/invitations',
             'POST /bfc/reset-password',
+            'POST /bfc/transitions/{direction}/prepare',
             'PUT /bfc/members/{user}/role',
+            'PUT /bfc/transitions/proposals/{transition}',
         ], $sessioned);
     }
 

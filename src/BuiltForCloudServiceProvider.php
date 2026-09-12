@@ -52,6 +52,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTransitions;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\PersonalCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneAuthentication;
@@ -433,6 +434,19 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $router->get('/bfc/managed/callback', [ManagedAuthentication::class, 'callback'])
             ->middleware([EnsureManagedAuthority::class, ...$personal])
             ->name('bfc.managed.callback');
+
+        $router->middleware([...$personal, EnsureUserIsAuthenticated::class])->group(function (Router $router): void {
+            $router->get('/bfc/transitions/{direction}/prepare', [ManageTransitions::class, 'index'])
+                ->whereIn('direction', ManagedTransitionDirection::values())
+                ->name('bfc.transitions.index');
+            $router->post('/bfc/transitions/{direction}/prepare', [ManageTransitions::class, 'store'])
+                ->whereIn('direction', ManagedTransitionDirection::values())
+                ->name('bfc.transitions.store');
+            $router->get('/bfc/transitions/proposals/{transition}', [ManageTransitions::class, 'edit'])
+                ->name('bfc.transitions.edit');
+            $router->put('/bfc/transitions/proposals/{transition}', [ManageTransitions::class, 'update'])
+                ->name('bfc.transitions.update');
+        });
 
         $handoffMiddleware = [
             EncryptCookies::class,

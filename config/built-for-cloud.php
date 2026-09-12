@@ -527,6 +527,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Package UI Affordances
+    |--------------------------------------------------------------------------
+    |
+    | Consumer apps opt into visible controls. These flags never alter route,
+    | authority, completeness, uniqueness, or transition enforcement.
+    |
+    */
+
+    'ui' => [
+        'managed_transitions' => env('BUILT_FOR_CLOUD_UI_MANAGED_TRANSITIONS', false),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Cloud CLI
     |--------------------------------------------------------------------------
     |

@@ -477,6 +477,10 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/members/invitations` | `metadata` | redirect after package notification dispatch |
 | `PUT /bfc/members/{user}/role` | `metadata` | redirect after role update |
 | `DELETE /bfc/members/{user}` | `metadata` | redirect after account containment |
+| `GET /bfc/transitions/{direction}/prepare` | `content` | package-owned HTML describing a complete adoption or exit proposal |
+| `POST /bfc/transitions/{direction}/prepare` | `metadata` | redirect after preparing and persisting a default proposal |
+| `GET /bfc/transitions/proposals/{transition}` | `content` | package-owned HTML containing authority-roster and local-identity data |
+| `PUT /bfc/transitions/proposals/{transition}` | `metadata` | redirect after replacing the persisted proposal mapping |
 | `GET /bfc/me/sessions` | `content` | package-owned HTML containing caller-owned session metadata |
 | `DELETE /bfc/me/sessions/others` | `metadata` | redirect after caller-owned session deletion |
 | `DELETE /bfc/me/sessions/{session}` | `metadata` | redirect after one caller-owned session deletion |
@@ -1001,6 +1005,34 @@ inactive target roles refuse after the target is locked.
 Owner or Admin deactivates a Member; Owner alone deactivates an Admin. The stable user row remains,
 while reset records, sessions, pending invitations, and user-bound credentials are invalidated.
 Installation credentials are not selected by this operation.
+
+### GET /bfc/transitions/{direction}/prepare
+
+Owner alone may review the preparation step for an `adopt` or `exit` transition. This step explains
+and starts preparation; the resulting proposal page lists every current local user and pending
+invitation. The optional `ui.managed_transitions` flag controls only whether preparation and correction
+controls are rendered; direct requests retain all authorization and proposal validation.
+
+### POST /bfc/transitions/{direction}/prepare
+
+Owner alone may prepare a transition in the direction permitted by the current authority mode. The
+package records the authority snapshot, retrieves the complete authority roster, and persists a
+complete default proposal before redirecting to its review page.
+
+### GET /bfc/transitions/proposals/{transition}
+
+Owner alone may review a proposal that remains in `proposed` state. Adoption presents authority roles
+as fixed while allowing local match, commit timing, and final-email corrections. Exit presents every
+roster subject, local user, and pending invitation while allowing standalone role, match, disposition,
+and final-email corrections where those fields apply.
+
+### PUT /bfc/transitions/proposals/{transition}
+
+Owner alone may replace a proposal's complete mapping while it remains editable. The package rejects
+missing or duplicate identities, illegal direction-specific dispositions, adoption role changes, and
+duplicate projected final emails. It locks and rechecks the Owner before replacing the stored mapping;
+staging revalidates the mapping against the current local identities before sending the exact persisted
+mapping to T3.
 
 ### GET /bfc/me/sessions
 
