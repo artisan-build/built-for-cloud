@@ -21,12 +21,6 @@ use ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand;
 use ArtisanBuild\BuiltForCloud\Commands\SubjectOffboardCommand;
-use ArtisanBuild\BuiltForCloud\Commands\TokenCreateCommand;
-use ArtisanBuild\BuiltForCloud\Commands\TokenListCommand;
-use ArtisanBuild\BuiltForCloud\Commands\TokenRevokeCommand;
-use ArtisanBuild\BuiltForCloud\Commands\TokenRevokeSelfCommand;
-use ArtisanBuild\BuiltForCloud\Commands\TokenRotateCommand;
-use ArtisanBuild\BuiltForCloud\Commands\TokenUsageCommand;
 use ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
@@ -871,12 +865,6 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             OwnershipMintClaimCommand::class,
             OwnershipRemintOwnerTokenCommand::class,
             SubjectOffboardCommand::class,
-            TokenCreateCommand::class,
-            TokenListCommand::class,
-            TokenRevokeCommand::class,
-            TokenRevokeSelfCommand::class,
-            TokenRotateCommand::class,
-            TokenUsageCommand::class,
             WarnExpiringCredentialsCommand::class,
         ]);
     }
