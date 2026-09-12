@@ -151,22 +151,12 @@ final class ManageOnboarding extends OperatorRouteController
         });
     }
 
-    /**
-     * The actor an admin surface can honestly attribute: the admin token
-     * that authenticated this request, stashed by the middleware. Null when
-     * nothing was stashed — never guessed.
-     */
+    /** The unified operator credential stashed by the middleware, if any. */
     private function requestActor(Request $request): ?AuditActor
     {
         $credentialId = $request->attributes->get('bfc.actor_credential_id');
 
-        if (is_string($credentialId) && $credentialId !== '') {
-            return AuditActor::operatorIntegration($credentialId);
-        }
-
-        $tokenId = $request->attributes->get('bfc.actor_token_id');
-
-        return is_string($tokenId) && $tokenId !== '' ? AuditActor::adminToken($tokenId) : null;
+        return is_string($credentialId) && $credentialId !== '' ? AuditActor::operatorIntegration($credentialId) : null;
     }
 
     /**

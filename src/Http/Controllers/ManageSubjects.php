@@ -66,19 +66,9 @@ final class ManageSubjects extends OperatorRouteController
         ]);
     }
 
-    /**
-     * D8's actor, exactly as on the credential verb routes: the store
-     * that authenticated decides the actor type; the id, never the
-     * credential.
-     */
+    /** D8's unified operator actor: the id, never the credential. */
     private function actor(Request $request): ?AuditActor
     {
-        $tokenId = $request->attributes->get('bfc.actor_token_id');
-
-        if (is_string($tokenId) && $tokenId !== '') {
-            return AuditActor::adminToken($tokenId);
-        }
-
         $credentialId = $request->attributes->get('bfc.actor_credential_id');
 
         return is_string($credentialId) && $credentialId !== '' ? AuditActor::operatorIntegration($credentialId) : null;

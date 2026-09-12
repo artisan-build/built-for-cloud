@@ -4,14 +4,13 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Audit;
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Credential;
 
 /**
- * The four principals D17 names for an APP ACTION: a local user, a unified
- * credential, a legacy api token, and a delegated actor.
+ * The three principals D17 names for an APP ACTION: a local user, a unified
+ * credential, and a delegated actor.
  *
  * **WHY THIS IS A NEW ENUM AND NOT A REUSE OF {@see AuditActorType}** —
  * the decision is recorded here because the code is where it has to hold.
@@ -54,15 +53,10 @@ enum AppActorType: string
     /**
      * A credential acting on its own behalf — an operator or integration
      * token ({@see Credential}), identified by its opaque credential id.
+     * The historical case name and `api_token` wire value remain unchanged
+     * because renaming them would rewrite persisted audit bytes.
      */
     case ApiToken = 'api_token';
-
-    /**
-     * A token from the legacy `api_tokens` store
-     * ({@see ApiToken}), identified by its
-     * model key in that store's UUID id space.
-     */
-    case LegacyApiToken = 'legacy_api_token';
 
     /**
      * A delegated human admitted through a Console handoff, identified by

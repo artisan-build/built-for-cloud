@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Audit;
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipal;
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
@@ -15,7 +14,7 @@ use Illuminate\Contracts\Auth\Authenticatable;
 use LogicException;
 
 /**
- * WHO performed an app action: one of the four principals
+ * WHO performed an app action: one of the three principals
  * {@see AppActorType} names, their identifier, and — for a delegated
  * actor only — the agency they acted for (D4).
  *
@@ -23,7 +22,7 @@ use LogicException;
  * not the truth of it.** `on_behalf_of` belongs to a delegated handoff
  * and to nothing else: a local user acts for the deployment they log in
  * to, and a credential acts for itself. Rather than validating that
- * after the fact, the three non-delegated named constructors do not TAKE
+     * after the fact, the two non-delegated named constructors do not TAKE
  * an `on_behalf_of` at all, so a non-delegated actor cannot be constructed
  * carrying one; {@see AppActionEvent} refuses the same
  * combination at the row, for writes that never came through here.
@@ -114,17 +113,7 @@ final readonly class AppActionActor
      */
     public static function apiToken(Credential $credential): self
     {
-        return new self(AppActorType::ApiToken, self::identifierOf($credential));
-    }
-
-    /**
-     * A token from the legacy `api_tokens` store, named by that model's key.
-     *
-     * @throws LogicException when the token has no scalar identifier
-     */
-    public static function legacyApiToken(ApiToken $token): self
-    {
-        return new self(AppActorType::LegacyApiToken, self::identifier($token->getKey()));
+        return new self(AppActorType::from('api_token'), self::identifierOf($credential));
     }
 
     /**

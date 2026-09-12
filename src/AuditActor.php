@@ -16,11 +16,6 @@ final readonly class AuditActor
         public ?string $ref = null,
     ) {}
 
-    public static function adminToken(string $tokenId): self
-    {
-        return new self(AuditActorType::AdminToken, $tokenId);
-    }
-
     public static function boundUser(string $userId): self
     {
         return new self(AuditActorType::BoundUser, $userId);
