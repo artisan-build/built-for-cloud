@@ -19,6 +19,7 @@ use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 
@@ -90,12 +91,9 @@ function p4bProposed(?ManagedTransitionAuthorityFixture &$fixture = null): Manag
 function p4bCommitted(?ManagedTransitionAuthorityFixture &$fixture = null): ManagedTransition
 {
     $transition = app(ManagedTransitions::class)->stage(p4bProposed($fixture));
+    $owner = User::query()->whereNotNull('owner_slot')->sole();
 
-    return app(ManagedTransitions::class)->commit($transition, static function (): void {
-        if (InstallationAuthority::change(InstallationAuthority::current(), AuthorityMode::Managed) === null) {
-            throw new RuntimeException('Fixture failed to switch authority mode.');
-        }
-    });
+    return app(ManagedTransitions::class)->commit($transition, $owner);
 }
 
 function p4bOwnerRequest(User $owner, ?int $sessionVersion = null): Request
@@ -136,12 +134,8 @@ function p4bProtectedState(): array
 it('runs T1 through T4 with exact persisted keyed bytes and the durable state machine', function (): void {
     $transition = p4bProposed($fixture);
     $transition = app(ManagedTransitions::class)->stage($transition);
-    $transition = app(ManagedTransitions::class)->commit($transition, static function (ManagedTransition $locked): void {
-        expect($locked->status)->toBe(ManagedTransitionStatus::Staged);
-        if (InstallationAuthority::change(InstallationAuthority::current(), AuthorityMode::Managed) === null) {
-            throw new RuntimeException('Fixture failed to switch authority mode.');
-        }
-    });
+    $owner = User::query()->whereNotNull('owner_slot')->sole();
+    $transition = app(ManagedTransitions::class)->commit($transition, $owner);
     $transition = app(ManagedTransitions::class)->acknowledge($transition);
 
     expect($transition->status)->toBe(ManagedTransitionStatus::Acknowledged)
@@ -362,11 +356,8 @@ it('recovers outcome-unknown stage and ack from T5 without blind mutation replay
     }
 
     $transition = app(ManagedTransitions::class)->stage($transition);
-    $transition = app(ManagedTransitions::class)->commit($transition, static function (): void {
-        if (InstallationAuthority::change(InstallationAuthority::current(), AuthorityMode::Managed) === null) {
-            throw new RuntimeException('Fixture failed to switch authority mode.');
-        }
-    });
+    $owner = User::query()->whereNotNull('owner_slot')->sole();
+    $transition = app(ManagedTransitions::class)->commit($transition, $owner);
     expect(fn () => app(ManagedTransitions::class)->acknowledge($transition))->toThrow(ManagedAuthRefused::class);
     $attempt = ManagedTransition::query()->sole();
     expect($attempt->status)->toBe(ManagedTransitionStatus::Acknowledging);
@@ -821,20 +812,17 @@ it('binds stage commit recovery and ack to the frozen direction and generation',
     }
 
     $transition = app(ManagedTransitions::class)->stage($transition);
+    $owner = User::query()->whereNotNull('owner_slot')->sole();
     if ($point === 'commit') {
         InstallationAuthority::change(InstallationAuthority::current(), AuthorityMode::Managed);
-        expect(fn () => app(ManagedTransitions::class)->commit($transition, static function (): void {}))
+        expect(fn () => app(ManagedTransitions::class)->commit($transition, $owner))
             ->toThrow(ManagedAuthRefused::class, 'transition_state_conflict')
             ->and($transition->fresh()->status)->toBe(ManagedTransitionStatus::Staged);
 
         return;
     }
 
-    $transition = app(ManagedTransitions::class)->commit($transition, static function (): void {
-        if (InstallationAuthority::change(InstallationAuthority::current(), AuthorityMode::Managed) === null) {
-            throw new RuntimeException('Fixture failed to switch authority mode.');
-        }
-    });
+    $transition = app(ManagedTransitions::class)->commit($transition, $owner);
     DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update(['generation' => 9]);
 
     expect(fn () => $point === 'ack'
@@ -844,25 +832,22 @@ it('binds stage commit recovery and ack to the frozen direction and generation',
         ->and($transition->fresh()->status)->toBe(ManagedTransitionStatus::Committed);
 })->with(['stage', 'commit', 'recovery', 'ack']);
 
-it('rolls local effects and authority mode back when commit cannot finish', function (string $failure): void {
+it('leaves protected state untouched when the concrete commit cannot begin', function (string $failure): void {
     $transition = app(ManagedTransitions::class)->stage(p4bProposed($fixture));
     $owner = User::query()->whereNotNull('owner_slot')->sole();
+    if ($failure === 'mapping changed') {
+        User::query()->create(['name' => 'Late Commit User', 'email' => 'late-commit@example.test']);
+    } else {
+        InstallationAuthority::change(InstallationAuthority::current(), AuthorityMode::Managed);
+    }
     $before = p4bProtectedState();
 
-    $commit = function () use ($transition, $owner, $failure): void {
-        app(ManagedTransitions::class)->commit($transition, static function () use ($owner, $failure): void {
-            $owner->forceFill(['name' => 'Must Roll Back'])->save();
-            if ($failure === 'callback') {
-                throw new RuntimeException('forced local effect failure');
-            }
-        });
-    };
-
-    expect($commit)->toThrow($failure === 'callback' ? RuntimeException::class : ManagedAuthRefused::class)
+    expect(fn () => app(ManagedTransitions::class)->commit($transition, $owner))
+        ->toThrow(ManagedAuthRefused::class)
         ->and(p4bProtectedState())->toBe($before)
         ->and($transition->fresh()->status)->toBe(ManagedTransitionStatus::Staged)
         ->and($transition->fresh()->local_commit_receipt)->toBeNull();
-})->with(['callback', 'mode not switched']);
+})->with(['mapping changed', 'mode changed']);
 
 it('never rotates a recorded key after the authority reports idempotency conflict', function (): void {
     $transition = p4bPrepared($fixture);
@@ -989,6 +974,7 @@ it('binding-checks T4 T6 and T7 before terminal local mutation', function (strin
 
 it('drives a valid exit through T1 T2 T3 local commit and exact T4 acknowledgement', function (): void {
     [$owner, $fixture] = p4bConfigure(ManagedTransitionDirection::Exit);
+    $owner->forceFill(['password' => Hash::make('existing-owner-password')])->save();
     $transition = app(ManagedTransitions::class)->prepare($owner, ManagedTransitionDirection::Exit);
     $transition = app(ManagedTransitions::class)->fetchRoster($transition);
     $transition = app(ManagedTransitions::class)->propose($transition, [[
@@ -1000,11 +986,7 @@ it('drives a valid exit through T1 T2 T3 local commit and exact T4 acknowledgeme
         'final_email' => 'standalone-owner@example.test',
     ]]);
     $transition = app(ManagedTransitions::class)->stage($transition);
-    $transition = app(ManagedTransitions::class)->commit($transition, static function (): void {
-        if (InstallationAuthority::change(InstallationAuthority::current(), AuthorityMode::Standalone) === null) {
-            throw new RuntimeException('Fixture failed to exit managed mode.');
-        }
-    });
+    $transition = app(ManagedTransitions::class)->commit($transition, $owner);
     $transition = app(ManagedTransitions::class)->acknowledge($transition);
     $ackBody = json_decode(collect($fixture->calls)->firstWhere('leg', 'T4')['body'], true, flags: JSON_THROW_ON_ERROR);
 

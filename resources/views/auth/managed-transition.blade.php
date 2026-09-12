@@ -258,6 +258,12 @@
                     <p class="bfc-transition-meta">This app has not enabled proposal correction controls. Direct requests remain fully enforced.</p>
                 @endif
             </form>
+            @if ($affordanceEnabled)
+                <form method="POST" action="{{ route('bfc.transitions.complete', $transition) }}">
+                    @csrf
+                    <button type="submit" data-testid="transition-complete-control">Commit and switch authority</button>
+                </form>
+            @endif
         @endif
     </div>
 </section>

@@ -8,13 +8,12 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneAuthentication;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneInvitations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneMemberships;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\StandalonePasswordRecovery;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneSessions;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
 
 final class StandaloneSurfaceInventory
 {
-    private const string CONTROLLER_PREFIX = 'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\Standalone';
-
     /** @return list<class-string> */
     public static function requiredControllerFamilies(): array
     {
@@ -23,6 +22,7 @@ final class StandaloneSurfaceInventory
             StandalonePasswordRecovery::class,
             StandaloneInvitations::class,
             StandaloneMemberships::class,
+            StandaloneSessions::class,
         ];
     }
 
@@ -31,10 +31,7 @@ final class StandaloneSurfaceInventory
     {
         $routes = array_values(array_filter(
             iterator_to_array($router->getRoutes()),
-            static fn (Route $route): bool => str_starts_with(
-                self::controller($route),
-                self::CONTROLLER_PREFIX,
-            ),
+            static fn (Route $route): bool => ($route->getAction()['bfc_standalone_owned'] ?? false) === true,
         ));
 
         usort($routes, static fn (Route $left, Route $right): int => [

@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
+use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\ManagedTransition;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionDirection;
 use ArtisanBuild\BuiltForCloud\ManagedTransitions as TransitionService;
+use ArtisanBuild\BuiltForCloud\ManagedTransitionStatus;
 use ArtisanBuild\BuiltForCloud\RolePolicy;
+use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
@@ -46,7 +49,13 @@ final class ManageTransitions
         $this->owner($request);
         $transition = $this->transition($transition);
 
-        if ($transition->status->value !== 'proposed') {
+        if (! in_array($transition->status, [
+            ManagedTransitionStatus::Proposed,
+            ManagedTransitionStatus::Staging,
+            ManagedTransitionStatus::Staged,
+            ManagedTransitionStatus::Committed,
+            ManagedTransitionStatus::Acknowledging,
+        ], true)) {
             abort(409);
         }
 
@@ -68,6 +77,31 @@ final class ManageTransitions
         }
 
         return redirect()->route('bfc.transitions.edit', $transition)->with('status', 'proposal-saved');
+    }
+
+    public function complete(
+        Request $request,
+        string $transition,
+        TransitionService $transitions,
+    ): RedirectResponse {
+        $actor = $this->owner($request);
+        $transition = $this->transition($transition);
+
+        try {
+            $completed = $transitions->complete($actor, $transition);
+        } catch (ManagedAuthRefused) {
+            if (InstallationAuthority::current()->generation !== $transition->generation_before) {
+                StandaloneAccess::endCurrentSession($request, auth()->guard());
+            }
+
+            throw ValidationException::withMessages(['transition' => 'The transition could not be completed. Retry the same transition.']);
+        }
+
+        StandaloneAccess::endCurrentSession($request, auth()->guard());
+
+        return redirect()->route(
+            $completed->direction === ManagedTransitionDirection::Exit ? 'bfc.login' : 'bfc.managed.login',
+        );
     }
 
     private function view(

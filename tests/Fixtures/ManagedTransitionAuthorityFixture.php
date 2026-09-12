@@ -48,7 +48,7 @@ final class ManagedTransitionAuthorityFixture
         private readonly string $connectionId = 'transition-connection',
         private readonly string $organizationId = 'transition-organization',
         private readonly string $installationId = 'transition-installation',
-        private readonly int $generation = 7,
+        public int $generation = 7,
     ) {
         $this->rosterSources = [
             [
@@ -419,7 +419,7 @@ final class ManagedTransitionAuthorityFixture
             && (($data['mode_after'] ?? null) !== ($this->transitions[$this->transitionFromPath($path)]['direction'] === 'adopt'
                 ? 'managed'
                 : 'standalone')
-                || ($data['generation_after'] ?? null) !== 8
+                || ($data['generation_after'] ?? null) !== $this->generation + 1
                 || ! is_string($data['local_commit_receipt'] ?? null)
                 || $data['local_commit_receipt'] === '')) {
             throw new RuntimeException('Transition fixture received an invalid T4 commit binding.');

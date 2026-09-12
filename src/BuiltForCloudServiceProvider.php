@@ -446,6 +446,8 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 ->name('bfc.transitions.edit');
             $router->put('/bfc/transitions/proposals/{transition}', [ManageTransitions::class, 'update'])
                 ->name('bfc.transitions.update');
+            $router->post('/bfc/transitions/proposals/{transition}/complete', [ManageTransitions::class, 'complete'])
+                ->name('bfc.transitions.complete');
         });
 
         $handoffMiddleware = [
@@ -525,6 +527,9 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 ->middleware(['throttle:bfc-session-confirm', EnsureUserIsAuthenticated::class])
                 ->name('bfc.sessions.destroy');
         });
+        foreach ($standaloneRoutes as $standaloneRoute) {
+            $standaloneRoute->setAction([...$standaloneRoute->getAction(), 'bfc_standalone_owned' => true]);
+        }
         $personalCredentialRoutes = [];
         $personalCredentialRoutes[] = $router->get('/bfc/me/credentials', [PersonalCredentials::class, 'index'])
             ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);

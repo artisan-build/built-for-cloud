@@ -2,9 +2,7 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
-use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\ManagedTransition;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionClient;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionDirection;
@@ -162,13 +160,9 @@ try {
         if ($input['mode'] === 'production-stage') {
             $completed = $service->stage($transition);
         } elseif ($input['mode'] === 'production-commit') {
-            $effects = 0;
-            $completed = $service->commit($transition, static function () use (&$effects): void {
-                $effects++;
-                if (InstallationAuthority::change(InstallationAuthority::current(), AuthorityMode::Managed) === null) {
-                    throw new RuntimeException('Production commit worker could not switch mode.');
-                }
-            });
+            $owner = User::query()->findOrFail($input['owner_id']);
+            $completed = $service->commit($transition, $owner);
+            $effects = 1;
         } else {
             $owner = User::query()->findOrFail($input['owner_id']);
             $session = new Store('p4b-transition-worker', new ArraySessionHandler(120));
