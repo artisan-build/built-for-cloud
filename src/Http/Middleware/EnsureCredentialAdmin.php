@@ -12,10 +12,8 @@ use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
-use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\StandaloneRouteOwnership;
 use ArtisanBuild\BuiltForCloud\SubjectType;
-use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -24,9 +22,8 @@ use Throwable;
 
 /**
  * The gate on the unified store's own verb routes (`/bfc/credentials`):
- * accepts EITHER a legacy admin `api_tokens` row (exactly what
- * {@see EnsureAdminToken} accepts, unchanged) OR a unified-store `bearer`
- * credential with the `operator` subject holding the route's REQUIRED
+ * accepts a unified-store `bearer` credential with the `operator` subject
+ * holding the route's REQUIRED
  * ABILITY (GATE-3.7's per-verb-family authority): each route names its
  * verb-family ability as the middleware parameter
  * (`bfc.credential.admin:credential:read`), and the admin-equivalent
@@ -40,10 +37,8 @@ use Throwable;
  * the per-verb parameter a stolen read-only credential would be
  * fleet-admin (SEC-V3-06).
  *
- * Which store authenticated is visible downstream: the legacy branch
- * stashes `bfc.actor_token_id` (audited as an `admin_token` actor), the
- * unified branch `bfc.actor_credential_id` (audited as an
- * `operator_integration` actor).
+ * The accepted row is visible downstream as `bfc.actor_credential_id` and
+ * audited as an `operator_integration` actor.
  *
  * Observability (GATE-3.7): every token-auth FAILURE (401) and every
  * DENIED action (403) on this gate appends a `denied_action` event to the
@@ -72,7 +67,6 @@ final class EnsureCredentialAdmin
     public const string ABILITY = 'credential:admin';
 
     public function __construct(
-        private readonly TokenRegistry $tokens,
         private readonly CredentialResolver $credentials,
         private readonly CredentialUsageRecorder $usage,
         private readonly ClientIdentityRecorder $clientIdentities,
@@ -98,28 +92,7 @@ final class EnsureCredentialAdmin
             abort(401);
         }
 
-        // Branch 1 — the legacy admin token, byte-for-byte EnsureAdminToken
-        // semantics (client-identity attribution included). An admin
-        // `api_tokens` row is admin-equivalent on every operator verb —
-        // exactly what the public contract's "admin token" auth promises.
-        $token = $this->tokens->resolveModel($bearer);
-
-        if ($token !== null) {
-            $this->tokens->recordClientIdentityFromRequest($request, $token);
-
-            if ($token->hasScope(Scope::Admin)) {
-                $request->attributes->set('bfc.actor_token_id', (string) $token->getKey());
-                StandaloneRouteOwnership::markOperatorGateExecuted($request, self::class.':'.$required);
-
-                return $next($request);
-            }
-
-            $this->auditDenial($request, 'denied: token without admin scope', AuditActor::adminToken((string) $token->getKey()));
-
-            abort(403);
-        }
-
-        // Branch 2 — a unified-store operator credential. Presenting it is
+        // Presenting a unified-store operator credential is
         // a use: the gated recorder both stamps it and re-asserts the row
         // still authenticates (SEC-2). Full account containment (PRD
         // 1.15) needs no check here: an offboarded principal never
