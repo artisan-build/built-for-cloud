@@ -365,17 +365,18 @@ API listing shape.
     their order, and the spelled count — so the document and that method cannot disagree. It
     pins nothing else; see that test's own docblock for what it deliberately does not cover.
 
-  **A legacy admin `api_tokens` row remains admin-equivalent on these routes, console key
-  custody included — deliberately.** That set is not only the deprecated legacy credential
-  API's output: it is above all the **owner token** minted by
-  [`POST /bfc/ownership/claim`](#post-bfcownershipclaim), which is the deployment owner's root
-  authority and is exactly the party a console key names. Excluding it would also be no
-  boundary — **in an app that declares no mint ceiling**, an admin `api_tokens` row can mint
-  itself an operator credential carrying `console:key:write` in one request — and it would be
-  incoherent with the CLI transport, which already treats host access as sufficient for this
-  verb. An operator who wants console key custody held by a narrower credential should not
-  issue admin `api_tokens` rows; the unified store's per-verb-family abilities are the
-  instrument for that.
+  **A legacy admin `api_tokens` row already in place remains admin-equivalent on these routes,
+  console key custody included — deliberately.** New ownership claims do not mint such a row:
+  they return a unified-store `operator` credential holding `credential:admin`, linked from
+  `ownership.owner_credential_id` while `owner_token_id` remains null. That compatibility is
+  transitional only: existing legacy rows remain valid during this slice and are removed in a
+  later slice. Excluding a legacy admin row would also be no boundary — **in an app that
+  declares no mint ceiling**, it can mint itself an operator credential carrying
+  `console:key:write` in one request, and exclusion would be incoherent with the CLI transport,
+  which already treats host access as
+  sufficient for this verb. An operator who wants console key custody held by a narrower
+  credential should not mint additional admin `api_tokens` rows; the unified store's
+  per-verb-family abilities are the instrument for that.
 
   That qualifier does not weaken the decision, and the reason is worth stating rather than
   leaving to be reconstructed. A declared mint ceiling is **not** a check on who is asking:
@@ -416,9 +417,9 @@ API listing shape.
 
   **Two paths work meanwhile, neither of which needs a deploy:**
 
-  1. an admin token — the **owner token** from
-     [`POST /bfc/ownership/claim`](#post-bfcownershipclaim), or any admin `api_tokens` row —
-     which is admin-equivalent on this route (see the paragraph above); or
+  1. the unified owner credential from [`POST /bfc/ownership/claim`](#post-bfcownershipclaim),
+     any other operator credential holding `credential:admin`, or any legacy admin `api_tokens`
+     row already in place — each is admin-equivalent on this route (see the paragraph above); or
   2. the CLI transports, `bfc:console:re-key --local` and `bfc:console:retire-key --local`,
      whose authority is host access and which consult no ability at all.
 
@@ -694,8 +695,10 @@ the claim-time countersigning-key exchange — see
 [Console key custody](#console-key-custody).)
 
 - **201** — `{"owner_token": "...", "webhook_secret": "...", "product": "..."}` — the single
-  reveal of both secrets. The owner token is an admin-ability `api_tokens` row with no expiry;
-  ownership transfer, not a clock, ends its life. A claim that carried `console_key`
+  reveal of both secrets. The owner token authenticates a unified-store `operator` credential
+  holding `credential:admin` with no expiry; `ownership.owner_credential_id` links that row and
+  `owner_token_id` remains null. Ownership transfer, not a clock, ends its life. A claim that
+  carried `console_key`
   additionally answers with the `console_key` object documented below; a claim that did not
   carries no such field (absent, never null).
 - **401** — the claim token is unknown, expired, or already consumed.
@@ -869,13 +872,13 @@ through the staged cutover window — it only reads through the keyring — thou
 delivery briefly answers the same retryable `server_error`: deliveries and the sweep's
 completion verification share one lock, so no write can straddle the verified zero-count.
 
-Which store the durable lands in is the app's declaration: `api_tokens` by default; an app
-rebuilt on the unified store receives a `credentials` row instead (same wire shape here either
-way — the difference is visible in which listing the row appears in). Each code records which
-store its durable was minted into, and make-before-break always revokes in the RECORDED store —
-so an app switching stores between exchanges never strands a still-live durable in the old one
-(the name/scope sweep covers the current target store plus the recorded store of the code's own
-linked durable).
+Every newly exchanged durable lands in a unified `credentials` row: `DurableCredentialMinter`
+is unconditionally backed by `UnifiedStoreCredentialMinter`, and a `DeclaresDurableStore`
+declaration no longer selects the exchange target. Each new code records the row through
+`durable_credential_id`. Existing legacy `api_tokens` rows and `durable_token_id` links remain
+valid during this transitional slice and are removed in a later slice; make-before-break
+always revokes a code's previously linked durable from whichever transitional link records it
+before minting the replacement in `credentials`.
 
 ### POST /bfc/onboarding/verify
 
