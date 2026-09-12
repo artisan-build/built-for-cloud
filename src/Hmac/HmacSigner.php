@@ -33,12 +33,14 @@ final class HmacSigner
 
     /**
      * Sign a message body for the subject; returns the full
-     * `BFC-Signature` header value. `$audience` defaults to the
-     * configured verifier audience
-     * (`built-for-cloud.hmac.audience`, falling back to `app.url`).
+     * `BFC-Signature` header value. The audience always comes from the
+     * required `built-for-cloud.hmac.audience` value. The optional
+     * argument is retained for source compatibility, but may only confirm
+     * that same value; it can never override the deployment boundary.
      */
     public function sign(Subject $subject, string $body, string $eventType, ?string $audience = null): string
     {
+        $configuredAudience = $this->configuredAudience($audience);
         $credential = $this->activeSigningKey($subject);
 
         $envelope = new HmacEnvelope(
@@ -46,7 +48,7 @@ final class HmacSigner
             eventType: $eventType,
             timestamp: now()->getTimestamp(),
             nonce: bin2hex(random_bytes(16)),
-            audience: $audience ?? $this->defaultAudience(),
+            audience: $configuredAudience,
         );
 
         $signature = hash_hmac(
@@ -94,10 +96,18 @@ final class HmacSigner
         return $signer;
     }
 
-    private function defaultAudience(): string
+    private function configuredAudience(?string $supplied): string
     {
-        $audience = config('built-for-cloud.hmac.audience') ?? config('app.url');
+        $configured = config('built-for-cloud.hmac.audience');
 
-        return is_string($audience) && $audience !== '' ? $audience : 'app';
+        if (! is_string($configured) || $configured === '') {
+            throw HmacSigningRefused::audienceNotConfigured();
+        }
+
+        if ($supplied !== null && ! hash_equals($configured, $supplied)) {
+            throw HmacSigningRefused::audienceMismatch();
+        }
+
+        return $configured;
     }
 }

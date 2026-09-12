@@ -72,6 +72,7 @@ abstract class TestCase extends Orchestra
         // install always has. Deterministic on purpose: a fixed key makes
         // key-version fingerprints stable within a run.
         $app['config']->set('app.key', 'base64:'.base64_encode(str_repeat('bfc-test-key-32b', 2)));
+        $app['config']->set('built-for-cloud.hmac.audience', 'https://bfc-test-installation.example');
     }
 
     private function environment(string $name, string $default): string

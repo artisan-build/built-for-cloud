@@ -67,7 +67,7 @@ it('rewraps every hmac ciphertext — active, pending, grace, revoked — and ve
         eventType: 'evt',
         timestamp: now()->getTimestamp(),
         nonce: bin2hex(random_bytes(16)),
-        audience: (string) config('app.url'),
+        audience: (string) config('built-for-cloud.hmac.audience'),
     );
     $header = $envelope->headerValue(hash_hmac('sha256', $envelope->canonical('body'), $knownKey));
 

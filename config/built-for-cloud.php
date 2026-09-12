@@ -120,9 +120,11 @@ return [
     | as the default cache store — instance-local stores (array, file)
     | bound replays per instance, not per fleet.
     |
-    | `audience` — the audience string this app signs FOR and verifies AS
-    | (a re-targeted message signed for another audience is rejected).
-    | Null falls back to `app.url`.
+    | `audience` — the REQUIRED deployment-specific audience this app signs
+    | FOR and verifies AS. There is deliberately no `app.url` or literal
+    | fallback: shared defaults would let a signed message be re-targeted to
+    | another deployment. A caller-supplied audience may only equal this
+    | configured value and can never override it.
     |
     | The hmac ENCRYPTION keyring deliberately has no config here: it
     | rides APP_KEY + APP_PREVIOUS_KEYS (SEC-V3-08) — see bfc:hmac:rewrap

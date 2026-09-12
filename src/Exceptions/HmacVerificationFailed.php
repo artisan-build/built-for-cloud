@@ -47,6 +47,11 @@ final class HmacVerificationFailed extends RuntimeException
         return new self('The signed audience is not this verifier\'s audience.', 'wrong_audience');
     }
 
+    public static function audienceNotConfigured(): self
+    {
+        return new self('HMAC verification requires an explicitly configured audience.', 'audience_not_configured');
+    }
+
     public static function staleTimestamp(int $toleranceSeconds): self
     {
         return new self(sprintf(
