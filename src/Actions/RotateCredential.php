@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
@@ -29,6 +30,7 @@ use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintedSecret;
 use ArtisanBuild\BuiltForCloud\MintResult;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\ReportedStatus;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\RotationResult;
@@ -110,6 +112,14 @@ final class RotateCredential
      */
     public function __invoke(string $id, RotateOptions $options, ?AuditActor $actor = null): ?RotationResult
     {
+        OperatorAbility::assertValues($options->abilities);
+
+        $root = Credential::query()->whereKey($id)->where('purpose', CredentialPurpose::SigningRoot->value)->exists();
+
+        if ($root) {
+            return app(\ArtisanBuild\BuiltForCloud\Hmac\SigningRootLifecycle::class)->rotate($id, $options->emergency);
+        }
+
         $phaseOne = fn (): ?RotationResult => DB::transaction(fn (): ?RotationResult => $this->mintReplacement($id, $options, $actor));
 
         // The writer barrier (SEC-V3-08, check-through-commit): an
@@ -389,6 +399,7 @@ final class RotateCredential
         $replacement = new Credential;
         $replacement->forceFill([
             'kind' => CredentialKind::Hmac,
+            'purpose' => $source->purpose,
             'subject_type' => $source->subject_type,
             'subject_ref' => $source->subject_ref,
             'name' => $source->name,
@@ -485,6 +496,7 @@ final class RotateCredential
 
         $replacement = Credential::query()->create([
             'kind' => $source->kind,
+            'purpose' => $source->purpose,
             'subject_type' => $source->subject_type,
             'subject_ref' => $source->subject_ref,
             'name' => $source->name,
@@ -528,6 +540,7 @@ final class RotateCredential
 
         $replacement = Credential::query()->create([
             'kind' => CredentialKind::Asymmetric,
+            'purpose' => $source->purpose,
             'subject_type' => $source->subject_type,
             'subject_ref' => $source->subject_ref,
             'name' => $source->name,

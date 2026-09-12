@@ -97,7 +97,7 @@ final class ManageCredentials extends OperatorRouteController
             $result = $mint(
                 new Subject(SubjectType::from($validated['subject_type']), $validated['subject_ref']),
                 MintOptions::fromInput($request->only([
-                    'kind', 'name', 'abilities', 'expires_at', 'user_id', 'code_ttl_seconds',
+                    'kind', 'purpose', 'name', 'abilities', 'expires_at', 'user_id', 'code_ttl_seconds',
                 ])),
                 $this->actor($request),
             );

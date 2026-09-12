@@ -34,6 +34,7 @@ final class CredentialMintCommand extends Command
         {subject-type : What a revocation costs: application, installation, user_principal, external_consumer or operator}
         {subject-ref : The subject\'s partition key (tenancy lives here, never in the name)}
         {--kind=bearer : bearer, basic, asymmetric or hmac}
+        {--purpose= : Required package protocol purpose}
         {--name= : Decorative, freely editable, non-unique label}
         {--abilities= : Comma-separated abilities; omitted grants nothing}
         {--expires= : Credential expiry (ISO-8601). Omitted means NO expiry — never defaulted}
@@ -65,6 +66,7 @@ final class CredentialMintCommand extends Command
                 new Subject($subjectType, (string) $this->argument('subject-ref')),
                 MintOptions::fromInput([
                     'kind' => $this->stringOption('kind'),
+                    'purpose' => $this->stringOption('purpose'),
                     'name' => $this->stringOption('name'),
                     'abilities' => $this->stringOption('abilities'),
                     'expires_at' => $this->stringOption('expires'),

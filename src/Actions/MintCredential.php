@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
@@ -24,6 +25,7 @@ use ArtisanBuild\BuiltForCloud\MintedSecret;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\MintResult;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Subject;
 use Illuminate\Support\Facades\DB;
@@ -64,6 +66,8 @@ final class MintCredential
 
     public function __invoke(Subject $subject, MintOptions $options, ?AuditActor $actor = null): MintResult
     {
+        $this->validateProtocolBoundary($subject, $options);
+
         if (! $this->verbAllowed(CredentialVerb::Issue, $subject)) {
             throw CredentialVerbRefused::byMatrix(CredentialVerb::Issue);
         }
@@ -77,6 +81,22 @@ final class MintCredential
             CredentialKind::Asymmetric => $this->mintEnrollment($subject, $options, $actor),
             CredentialKind::Hmac => $this->mintSigningKey($subject, $options, $actor),
         };
+    }
+
+    private function validateProtocolBoundary(Subject $subject, MintOptions $options): void
+    {
+        OperatorAbility::assertValues($options->abilities);
+
+        if ($options->purpose === null) {
+            throw InvalidCredentialInput::missingPurpose();
+        }
+
+        if ($options->purpose === CredentialPurpose::SigningRoot
+            || ($subject->type === \ArtisanBuild\BuiltForCloud\SubjectType::Installation
+                && $subject->ref === \ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac::SUBJECT_REF)
+            || ! $options->purpose->allowedFor($options->kind, $subject->type)) {
+            throw InvalidCredentialInput::purposeNotAllowed();
+        }
     }
 
     /**
@@ -119,6 +139,7 @@ final class MintCredential
 
             $credential = Credential::query()->create([
                 'kind' => $options->kind,
+                'purpose' => $options->purpose,
                 'subject_type' => $subject->type,
                 'subject_ref' => $subject->ref,
                 'name' => $options->name,
@@ -171,6 +192,7 @@ final class MintCredential
         return DB::transaction(function () use ($subject, $options, $actor, $ttlSeconds): MintResult {
             $credential = Credential::query()->create([
                 'kind' => CredentialKind::Asymmetric,
+                'purpose' => $options->purpose,
                 'subject_type' => $subject->type,
                 'subject_ref' => $subject->ref,
                 'name' => $options->name,
@@ -256,6 +278,7 @@ final class MintCredential
             $credential = new Credential;
             $credential->forceFill([
                 'kind' => CredentialKind::Hmac,
+                'purpose' => $options->purpose,
                 'subject_type' => $subject->type,
                 'subject_ref' => $subject->ref,
                 'name' => $options->name,

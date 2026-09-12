@@ -274,6 +274,11 @@ final readonly class PersonalCredentialSurface
 
         return new MintOptions(
             kind: $options->kind,
+            purpose: match ($options->kind) {
+                CredentialKind::Bearer, CredentialKind::Basic => CredentialPurpose::Consumption,
+                CredentialKind::Hmac => CredentialPurpose::Signing,
+                CredentialKind::Asymmetric => CredentialPurpose::Enrollment,
+            },
             name: $options->name,
             // The one canonical empty, matching MintOptions::fromInput():
             // null and [] both grant nothing, and summaries serialize null.
