@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Testing;
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
@@ -131,10 +130,10 @@ trait ContractAssertions
 
     public function assertBuiltForCloudModelContract(): void
     {
-        foreach ($this->builtForCloudApiTokenColumns() as $column) {
+        foreach ($this->builtForCloudCredentialColumns() as $column) {
             Assert::assertTrue(
-                Schema::hasColumn('api_tokens', $column),
-                sprintf('The api_tokens table is missing the expected %s column.', $column),
+                Schema::hasColumn('credentials', $column),
+                sprintf('The credentials table is missing the expected %s column.', $column),
             );
         }
 
@@ -182,35 +181,32 @@ trait ContractAssertions
     }
 
     /**
-     * The credential-API listing shape (PRD 1.5). NOT part of
-     * assertBuiltForCloudContract(): the credential API is disabled by
-     * default, so this is called only from a test that enables it
-     * (`built-for-cloud.credential_api.enabled` true before boot).
-     *
-     * Asserts every listing row carries the full additive field set — the
-     * pre-PR5 fields AND `id` / `request_count` / `subject_type` /
-     * `subject_ref` / `status` / `presentation_cadence_seconds` — and that
-     * no hash column ever appears.
+     * The unified credential listing shape. Every summary field is present,
+     * while secret material and hashes never appear.
      */
     public function assertBuiltForCloudCredentialListingContract(): void
     {
         $admin = $this->mintBuiltForCloudAdminToken('contract-listing-admin');
 
-        $response = $this->getJson('/api/credentials', $this->builtForCloudBearerHeaders($admin));
+        $response = $this->getJson('/bfc/credentials', $this->builtForCloudBearerHeaders($admin));
 
         $response->assertOk()
             ->assertJsonStructure([
                 '*' => [
+                    'id',
+                    'kind',
+                    'subject_type',
+                    'subject_ref',
                     'name',
+                    'abilities',
+                    'status',
+                    'created_at',
                     'last_used_at',
                     'expires_at',
                     'revoked_at',
-                    'abilities',
-                    'client_identity',
-                    'client_identity_last_seen_at',
-                    'id',
-                    'request_count',
-                    'status',
+                    'rotated_at',
+                    'presentation_cadence_seconds',
+                    'unsupported',
                 ],
             ]);
 
@@ -222,17 +218,12 @@ trait ContractAssertions
         foreach ($rows as $row) {
             Assert::assertIsArray($row);
 
-            // Nullable fields assert as PRESENT keys, not truthy values.
-            foreach (['subject_type', 'subject_ref', 'presentation_cadence_seconds'] as $key) {
-                Assert::assertArrayHasKey($key, $row, sprintf('A credential listing row is missing the %s key.', $key));
-            }
-
-            Assert::assertArrayNotHasKey('token_hash', $row);
             Assert::assertArrayNotHasKey('secret_hash', $row);
+            Assert::assertArrayNotHasKey('secret_ciphertext', $row);
         }
 
-        Assert::assertStringNotContainsString('token_hash', (string) $response->getContent());
         Assert::assertStringNotContainsString('secret_hash', (string) $response->getContent());
+        Assert::assertStringNotContainsString('secret_ciphertext', (string) $response->getContent());
     }
 
     /**
@@ -743,25 +734,29 @@ trait ContractAssertions
 
     public function mintBuiltForCloudAdminToken(string $name = 'contract-admin'): string
     {
-        return $this->mintBuiltForCloudToken($name, [Scope::Admin->value]);
+        return $this->mintBuiltForCloudCredential($name, SubjectType::Operator, [OperatorAbility::ADMIN]);
     }
 
     public function mintBuiltForCloudConsumeToken(string $name = 'contract-consume'): string
     {
-        return $this->mintBuiltForCloudToken($name, [Scope::Consume->value]);
+        return $this->mintBuiltForCloudCredential($name, SubjectType::ExternalConsumer, [Scope::Consume->value]);
     }
 
     /**
      * @param  list<string>  $abilities
      */
-    private function mintBuiltForCloudToken(string $name, array $abilities): string
+    private function mintBuiltForCloudCredential(string $name, SubjectType $subjectType, array $abilities): string
     {
         $plainTextToken = $name.'-'.bin2hex(random_bytes(16));
 
-        ApiToken::query()->create([
+        Credential::query()->create([
+            'kind' => CredentialKind::Bearer,
+            'subject_type' => $subjectType,
+            'subject_ref' => $name,
             'name' => $name,
-            'token_hash' => hash('sha256', $plainTextToken),
+            'secret_hash' => hash('sha256', $plainTextToken),
             'abilities' => $abilities,
+            'status' => CredentialStatus::Active,
         ]);
 
         return $plainTextToken;
@@ -795,19 +790,31 @@ trait ContractAssertions
     /**
      * @return list<string>
      */
-    private function builtForCloudApiTokenColumns(): array
+    private function builtForCloudCredentialColumns(): array
     {
         return [
             'id',
-            'name',
-            'token_hash',
-            'last_used_at',
-            'request_count',
-            'expires_at',
-            'revoked_at',
-            'abilities',
+            'kind',
             'subject_type',
             'subject_ref',
+            'name',
+            'abilities',
+            'user_id',
+            'secret_hash',
+            'public_key',
+            'status',
+            'revoked_at',
+            'rotated_at',
+            'expires_at',
+            'last_used_at',
+            'client_identity',
+            'client_identity_last_seen_at',
+            'secret_ciphertext',
+            'secret_key_version',
+            'delivered_at',
+            'delivered_generation',
+            'delivery_fingerprint',
+            'activated_at',
             'created_at',
             'updated_at',
         ];

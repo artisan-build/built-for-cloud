@@ -33,15 +33,13 @@ use Symfony\Component\HttpFoundation\Response;
 
 /**
  * The unified store's HTTP transport (PRD 1.0 + 1.6): the SAME action
- * classes the `--local` CLI runs, behind the admin-token gate at a fixed
+ * classes the `--local` CLI runs, behind the operator credential gate at a fixed
  * `/bfc/credentials` path. Neither transport can do anything the other
  * cannot — every authority answer (verb matrix, mint ceilings,
  * declared-unsupported fields) lives inside the actions, so this
  * controller only translates HTTP in and out.
  *
- * These routes are part of the versioned public contract
- * (docs/http-contract.md); the legacy `api_tokens` credential API
- * (`/api/credentials`) is a separate, unchanged surface.
+ * These routes are part of the versioned public contract.
  */
 final class ManageCredentials extends OperatorRouteController
 {
@@ -71,7 +69,7 @@ final class ManageCredentials extends OperatorRouteController
         ));
 
         // The declared cadence rides per row already; the header states it
-        // once per listing, matching the legacy listing's convention.
+        // once per listing.
         $cadence = $summaries === [] ? null : $summaries[0]->presentationCadenceSeconds;
 
         if ($cadence !== null) {
@@ -214,7 +212,7 @@ final class ManageCredentials extends OperatorRouteController
         return match ($outcome) {
             RevokeOutcome::NotFound => abort(404),
             // Idempotently 204 for a row already dead — one death, one
-            // audit event — matching the legacy by-id verb's semantics.
+            // audit event.
             RevokeOutcome::Revoked, RevokeOutcome::AlreadyDead => response()->noContent(),
         };
     }

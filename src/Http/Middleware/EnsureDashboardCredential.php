@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
 use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
@@ -49,47 +48,17 @@ use Throwable;
  *  1. **A `bfc` guard that exists.** A package-mounted route may not
  *     depend on the consuming app having registered one; a name with no
  *     guard behind it is a bounded 401, not a 500 out of the AuthManager.
- *  2. **A bearer that is not ALSO a legacy stored credential.** Before
- *     anything is resolved, the presented bytes are compared against the
- *     legacy store; a match is refused.
- *
- *     This is not belt-and-braces. The `bfc` guard has no code path to
- *     either store, so neither can authenticate a request HERE — and
- *     that fact, which an earlier docblock stated as if it settled
- *     something, is beside the point. The danger runs the other way:
- *     File the same bytes as a real exact-`{metadata:read}` credential in
- *     the legacy store and the dashboard read succeeds while those bytes
- *     stay admin-equivalent on the legacy surfaces. D16 requires the
- *     dashboard credential to be unable to touch mutating surfaces;
- *     aliased bytes can, so the alias is what has to be refused.
- *
- *     The check is deliberately free of APPLICATION-STATE side effects
- *     — a digest comparison and one existence query, no usage stamped,
- *     no client identity observed, no row resolved — and its answer is
- *     the ordinary 401, byte for byte.
- *
- *     What it is NOT is time-equalised, and that is a decision rather
- *     than an oversight. A legacy collision returns after one query and
- *     an ordinary unknown bearer continues into unified-store resolution.
- *     To read that oracle an attacker must
- *     already hold the bearer — and holding it, they can present it on
- *     a legacy surface and learn the same fact directly and far more
- *     reliably. It discloses nothing they cannot get more cheaply, and
- *     constant-time lookup across two stores is a large change with its
- *     own failure modes on a route whose contract is that it does not
- *     fail.
- *
- *  3. **An authenticated unified-store credential.** The guard resolves
+ *  2. **An authenticated unified-store credential.** The guard resolves
  *     that store only, and an expired, revoked or offboarded principal
  *     resolves to nothing. Every one of those is the same 401.
- *  4. **The app's declaration authorizing it** for `metadata:read` —
+ *  3. **The app's declaration authorizing it** for `metadata:read` —
  *     the hook {@see EnsureCredentialAbility} calls, kept because an app
  *     narrowing its own credentials must be able to narrow this one too.
- *  5. **An operator subject.** The contract heads this route "operator
+ *  4. **An operator subject.** The contract heads this route "operator
  *     credential"; the ability vocabulary is an operator vocabulary, and
  *     a credential minted for an application principal is not an
  *     operator however its abilities list reads.
- *  6. **An ability set exactly equal to `{metadata:read}`.** Not a
+ *  5. **An ability set exactly equal to `{metadata:read}`.** Not a
  *     superset. D16 does not say "a credential that has
  *     `metadata:read`"; it says the dashboard credential is
  *     "least-privilege, read-audited, **unable to touch
@@ -115,7 +84,7 @@ use Throwable;
  * mail. The denial branch is the one an attacker can reach at will, so
  * it is the branch that most needed that.
  *
- * The other four branches — an aliased bearer, no `bfc` guard, a guest,
+ * The other three branches — no `bfc` guard, a guest,
  * a credential the guard resolved to null — write NOTHING, deliberately.
  * Each of them refuses before, or without, identifying a principal, so
  * there is no actor to attribute a row to; and this route is reachable
@@ -139,14 +108,6 @@ final class EnsureDashboardCredential
      */
     public function handle(Request $request, Closure $next): Response
     {
-        // BEFORE anything resolves. An aliased bearer must not stamp
-        // usage, observe a client identity or touch a row on its way to
-        // being refused, and it must be refused with the same answer an
-        // unknown one gets.
-        if ($this->isAliased((string) $request->bearerToken())) {
-            abort(401);
-        }
-
         $guard = $this->guard();
 
         if ($guard === null) {
@@ -213,35 +174,6 @@ final class EnsureDashboardCredential
         StandaloneRouteOwnership::markOperatorGateExecuted($request, self::class);
 
         return $next($request);
-    }
-
-    /**
-     * Whether these bearer bytes are also a row in the legacy store.
-     *
-     * Free of application-state side effects by construction: a
-     * single `exists()` query on a hashed column. Nothing is resolved,
-     * stamped or observed, and the
-     * response is the ordinary 401 byte for byte.
-     *
-     * The PATHS are not time-equalised, and deliberately so — see the
-     * class docblock for why the oracle discloses nothing an attacker
-     * holding the bearer cannot get more cheaply from a legacy surface.
-     *
-     * EVERY legacy row counts, revoked and expired included. A revoked
-     * row is not usable on the legacy surfaces today, but the question
-     * here is not "can these bytes act elsewhere right now" — it is
-     * whether this deployment has ever filed them as something else. A
-     * dashboard credential whose bytes are on file in a second store is
-     * not the least-privilege credential D16 describes, whatever that
-     * store's row currently says.
-     */
-    private function isAliased(string $bearer): bool
-    {
-        if ($bearer === '') {
-            return false;
-        }
-
-        return ApiToken::query()->where('token_hash', hash('sha256', $bearer))->exists();
     }
 
     /**

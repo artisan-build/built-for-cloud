@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Actions;
 
 use ArtisanBuild\BuiltForCloud\Actions\Concerns\ConsultsDeclaration;
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\Credential;
@@ -330,24 +329,6 @@ final class OffboardSubject
 
             $credential->forceFill(['revoked_at' => now()])->save();
             $this->auditRevocation((string) $credential->getKey(), $actor);
-            $revoked++;
-        }
-
-        /** @var list<ApiToken> $legacyTokens */
-        $legacyTokens = ApiToken::query()
-            ->where('subject_type', $subject->type->value)
-            ->where('subject_ref', $subject->ref)
-            ->lockForUpdate()
-            ->get()
-            ->all();
-
-        foreach ($legacyTokens as $token) {
-            if ($token->revoked_at !== null) {
-                continue;
-            }
-
-            $token->forceFill(['expires_at' => now(), 'revoked_at' => now()])->save();
-            $this->auditRevocation((string) $token->getKey(), $actor);
             $revoked++;
         }
 
