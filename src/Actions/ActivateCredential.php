@@ -14,7 +14,6 @@ use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
-use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\Exceptions\ActivationRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
@@ -190,8 +189,7 @@ final class ActivateCredential
         // already burned by an `at_exchange` declaration) dies here, so
         // a link left in an inbox cannot re-deliver a LIVE key.
         $codeId = OnboardingToken::query()
-            ->where('durable_token_id', $credential->id)
-            ->where('durable_store', DurableStore::Credentials->value)
+            ->where('durable_credential_id', $credential->id)
             ->whereNull('consumed_at')
             ->value('id');
 

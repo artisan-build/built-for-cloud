@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
+use ArtisanBuild\BuiltForCloud\Contracts\DeclaresDurableStore;
+use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
@@ -11,228 +13,204 @@ use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
-use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnifiedStoreDeclaration;
-use ArtisanBuild\BuiltForCloud\TokenRegistry;
+use ArtisanBuild\BuiltForCloud\UnifiedStoreCredentialMinter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
+use Illuminate\Support\Str;
+use Symfony\Component\Process\Process;
 
 uses(RefreshDatabase::class);
 
-// Locked AC 10: with a declaration targeting the unified store, exchange
-// mints a credentials row (burn semantics intact); the default keeps
-// api_tokens. Locked AC 11: the claim-contract wire surfaces are unchanged.
-
-function bindUnifiedStore(): void
+function issueScopedClaimCode(Scope $scope, string $email): string
 {
-    app()->bind(CredentialDeclaration::class, UnifiedStoreDeclaration::class);
+    $response = test()->postJson('/bfc/onboarding/issue', [
+        'email' => $email,
+        'scope' => $scope->value,
+        'ttl_seconds' => 3600,
+    ], ['Authorization' => 'Bearer '.auditAdminToken('scope-'.$scope->value.'-'.bin2hex(random_bytes(4)))])
+        ->assertCreated();
+
+    return (string) $response->json('claim_code');
 }
 
-it('keeps minting into api_tokens by default — the seam toggle is opt-in', function (): void {
-    $code = auditIssueCode('legacy@example.test');
+it('always resolves the unified minter and a hostile declaration cannot select api_tokens', function (bool $hostile): void {
+    if ($hostile) {
+        app()->instance(CredentialDeclaration::class, new class implements CredentialDeclaration, DeclaresDurableStore
+        {
+            public function durableCredentialStore(): DurableStore
+            {
+                return DurableStore::ApiTokens;
+            }
+
+            public function resolveSubject(Request $request): ?Subject
+            {
+                return null;
+            }
+
+            public function authorize(Credential $credential, ?string $ability, Request $request): bool
+            {
+                return true;
+            }
+        });
+    }
+
+    expect(app(DurableCredentialMinter::class))->toBeInstanceOf(UnifiedStoreCredentialMinter::class);
+
+    $code = auditIssueCode(($hostile ? 'hostile' : 'default').'@example.test');
+    $apiTokenCount = ApiToken::query()->count();
 
     $this->postJson('/bfc/onboarding/exchange', ['token' => $code])->assertCreated();
 
-    expect(ApiToken::query()->where('name', 'legacy@example.test')->exists())->toBeTrue()
-        ->and(Credential::query()->count())->toBe(0);
-});
+    expect(Credential::query()->where('subject_ref', ($hostile ? 'hostile' : 'default').'@example.test')->count())->toBe(1)
+        ->and(ApiToken::query()->count())->toBe($apiTokenCount);
+})->with([
+    'default declaration' => [false],
+    'declaration selecting api_tokens' => [true],
+]);
 
-it('mints a credentials row through the seam when the declaration targets the unified store', function (): void {
-    bindUnifiedStore();
+it('mints and verifies every accepted scope as an exactly linked unified bearer', function (Scope $scope): void {
+    $email = $scope->value.'@example.test';
+    $claimCode = issueScopedClaimCode($scope, $email);
 
-    $code = auditIssueCode('rebuilt@example.test');
-
-    $response = $this->postJson('/bfc/onboarding/exchange', ['token' => $code])->assertCreated();
-
-    // The wire contract is unchanged: same fields, same single reveal.
-    $durable = (string) $response->json('durable_token');
-
-    expect($response->json('name'))->toBe('rebuilt@example.test');
-
-    $credential = Credential::query()->sole();
+    $response = $this->postJson('/bfc/onboarding/exchange', ['token' => $claimCode])
+        ->assertCreated()
+        ->assertJsonPath('name', $email);
+    $secret = (string) $response->json('durable_token');
+    $credential = Credential::query()->where('subject_ref', $email)->sole();
+    $code = OnboardingToken::query()->where('token_hash', OnboardingToken::hashToken($claimCode))->sole();
 
     expect($credential->kind)->toBe(CredentialKind::Bearer)
         ->and($credential->subject_type)->toBe(SubjectType::ExternalConsumer)
-        ->and($credential->subject_ref)->toBe('rebuilt@example.test')
-        ->and($credential->abilities)->toBe([Scope::Consume->value])
-        ->and($credential->secret_hash)->toBe(hash('sha256', $durable));
+        ->and($credential->subject_ref)->toBe($email)
+        ->and($credential->abilities)->toBe([$scope->value])
+        ->and($credential->secret_hash)->toBe(hash('sha256', $secret))
+        ->and($code->durable_credential_id)->toBe($credential->id)
+        ->and($code->durable_token_id)->toBeNull()
+        ->and($code->durable_store)->toBeNull()
+        ->and($code->consumed_at)->toBeNull()
+        ->and(ApiToken::query()->where('name', $email)->exists())->toBeFalse();
 
-    // No api_tokens durable was minted (the admin gate token is the only row).
-    expect(ApiToken::query()->where('name', 'rebuilt@example.test')->exists())->toBeFalse();
-
-    // The code links to the credentials row, and under the default
-    // first_use burn it is NOT consumed at exchange.
-    $codeRow = OnboardingToken::query()->where('durable_token_id', $credential->id)->sole();
-
-    expect($codeRow->consumed_at)->toBeNull();
-
-    // The exchange audit event names the new credential.
-    expect(
-        CredentialAuditEvent::query()
-            ->where('credential_id', $credential->id)
-            ->where('event', LifecycleEventType::Exchanged->value)
-            ->exists(),
-    )->toBeTrue();
-});
-
-it('keeps first-use burn semantics intact on the unified store: verify burns the code in one transaction', function (): void {
-    bindUnifiedStore();
-
-    $code = auditIssueCode('burn@example.test');
-
-    $durable = (string) $this->postJson('/bfc/onboarding/exchange', ['token' => $code])
-        ->assertCreated()
-        ->json('durable_token');
-
-    $credential = Credential::query()->sole();
-
-    // First use through the claim contract's own verify surface.
-    $this->postJson('/bfc/onboarding/verify', [], ['Authorization' => 'Bearer '.$durable])
+    $this->postJson('/bfc/onboarding/verify', [], ['Authorization' => 'Bearer '.$secret])
         ->assertOk()
-        ->assertJsonPath('ok', true)
-        ->assertJsonPath('name', 'burn@example.test')
-        ->assertJsonPath('scope', Scope::Consume->value);
+        ->assertExactJson([
+            'ok' => true,
+            'name' => $email,
+            'scope' => $scope->value,
+        ]);
 
     expect($credential->refresh()->last_used_at)->not->toBeNull()
-        ->and(OnboardingToken::query()->where('durable_token_id', $credential->id)->sole()->consumed_at)->not->toBeNull();
+        ->and($code->refresh()->consumed_at)->not->toBeNull()
+        ->and(CredentialAuditEvent::query()
+            ->where('credential_id', $credential->id)
+            ->where('event', LifecycleEventType::FirstUsed->value)
+            ->exists())->toBeTrue();
+})->with([
+    'consume' => [Scope::Consume],
+    'admin' => [Scope::Admin],
+    'onboard' => [Scope::Onboard],
+]);
 
-    // The first_used audit event rode the burn's transaction, addressed to
-    // the code's intended recipient.
-    $event = CredentialAuditEvent::query()
-        ->where('credential_id', $credential->id)
-        ->where('event', LifecycleEventType::FirstUsed->value)
-        ->sole();
+it('refuses a malformed persisted scope before burning or minting', function (): void {
+    $plain = 'malformed-claim-code';
+    $code = OnboardingToken::query()->create([
+        'id' => (string) Str::uuid(),
+        'email' => 'malformed@example.test',
+        'scope' => 'unknown-persisted-scope',
+        'token_hash' => OnboardingToken::hashToken($plain),
+        'expires_at' => now()->addHour(),
+    ]);
+    $before = $code->only([
+        'scope',
+        'durable_token_id',
+        'durable_credential_id',
+        'durable_store',
+        'consumed_at',
+    ]);
 
-    expect($event->recipient)->toBe('burn@example.test');
+    $this->postJson('/bfc/onboarding/exchange', ['token' => $plain])
+        ->assertBadRequest()
+        ->assertJsonPath('error', 'invalid_code');
+
+    expect($code->refresh()->only(array_keys($before)))->toBe($before)
+        ->and(Credential::query()->count())->toBe(0)
+        ->and(ApiToken::query()->count())->toBe(0);
 });
 
-it('re-exchanges make-before-break on the unified store: the pending durable dies, the fresh one lives', function (): void {
-    bindUnifiedStore();
-
+it('re-exchanges make-before-break through the unified link', function (): void {
     $code = auditIssueCode('reclaim@example.test');
-
     $first = (string) $this->postJson('/bfc/onboarding/exchange', ['token' => $code])
         ->assertCreated()->json('durable_token');
-
-    // Re-claim before first use (the lost-token path).
     $second = (string) $this->postJson('/bfc/onboarding/exchange', ['token' => $code])
         ->assertCreated()->json('durable_token');
-
-    expect($second)->not->toBe($first);
 
     $firstRow = Credential::query()->where('secret_hash', hash('sha256', $first))->sole();
     $secondRow = Credential::query()->where('secret_hash', hash('sha256', $second))->sole();
 
-    expect($firstRow->revoked_at)->not->toBeNull()
-        ->and($secondRow->revoked_at)->toBeNull();
+    expect($second)->not->toBe($first)
+        ->and($firstRow->revoked_at)->not->toBeNull()
+        ->and($secondRow->revoked_at)->toBeNull()
+        ->and(OnboardingToken::query()->where('token_hash', OnboardingToken::hashToken($code))->sole()->durable_credential_id)->toBe($secondRow->id);
 
-    // A revoked unified durable no longer verifies.
     $this->postJson('/bfc/onboarding/verify', [], ['Authorization' => 'Bearer '.$first])
         ->assertNotFound()
         ->assertJsonPath('error', 'code_not_found');
 });
 
-// Fix 3: the store transition. The code records which store its durable
-// was minted into, and make-before-break revokes in the RECORDED store —
-// a declaration switching stores between exchanges must not strand a
-// still-live durable in the old one (two live secrets).
+it('revokes a genuinely legacy linked api token before relinking the code to credentials', function (): void {
+    $plain = bin2hex(random_bytes(32));
+    $legacy = ApiToken::factory()->create([
+        'name' => 'legacy-link@example.test',
+        'abilities' => [Scope::Consume->value],
+    ]);
+    $code = OnboardingToken::query()->create([
+        'id' => (string) Str::uuid(),
+        'email' => 'legacy-link@example.test',
+        'scope' => Scope::Consume->value,
+        'token_hash' => OnboardingToken::hashToken($plain),
+        'durable_token_id' => $legacy->id,
+        'durable_store' => DurableStore::ApiTokens,
+        'expires_at' => now()->addHour(),
+    ]);
 
-it('revokes the recorded api_tokens durable on re-exchange after the declaration switches to the unified store', function (): void {
-    // First exchange under the DEFAULT declaration: the durable lands in
-    // api_tokens, and under first_use burn the code stays unburned.
-    $code = auditIssueCode('switch@example.test');
+    $this->postJson('/bfc/onboarding/exchange', ['token' => $plain])->assertCreated();
 
-    $first = (string) $this->postJson('/bfc/onboarding/exchange', ['token' => $code])
-        ->assertCreated()->json('durable_token');
-
-    $apiRow = ApiToken::query()->where('name', 'switch@example.test')->sole();
-    $codeRow = OnboardingToken::query()->where('durable_token_id', $apiRow->getKey())->sole();
-
-    expect($codeRow->durableStore())->toBe(DurableStore::ApiTokens)
-        ->and($codeRow->consumed_at)->toBeNull()
-        ->and($apiRow->token_hash)->toBe(hash('sha256', $first));
-
-    // The app rebuilds: the declaration now targets the unified store.
-    bindUnifiedStore();
-
-    // Re-exchange the same unburned code (the lost-token path).
-    $second = (string) $this->postJson('/bfc/onboarding/exchange', ['token' => $code])
-        ->assertCreated()->json('durable_token');
-
-    // The old durable died in its RECORDED store — nothing stranded…
-    expect($apiRow->refresh()->revoked_at)->not->toBeNull()
-        ->and(app(TokenRegistry::class)->resolve($first))->toBeNull();
-
-    // …and exactly ONE live credential exists: the fresh unified row.
-    $live = Credential::query()->whereNull('revoked_at')->sole();
-
-    expect($live->secret_hash)->toBe(hash('sha256', $second))
-        ->and(ApiToken::query()->where('name', 'switch@example.test')->whereNull('revoked_at')->count())->toBe(0);
+    expect($legacy->refresh()->revoked_at)->not->toBeNull()
+        ->and($code->refresh()->durable_token_id)->toBe($legacy->id)
+        ->and($code->durable_store)->toBe(DurableStore::ApiTokens)
+        ->and($code->durable_credential_id)->not->toBeNull()
+        ->and(Credential::query()->whereKey($code->durable_credential_id)->exists())->toBeTrue();
 });
 
-it('treats a null durable_store as api_tokens — the backfill semantics for pre-column linkages', function (): void {
-    $code = auditIssueCode('legacy-null@example.test');
-
-    $first = (string) $this->postJson('/bfc/onboarding/exchange', ['token' => $code])
-        ->assertCreated()->json('durable_token');
-
-    $apiRow = ApiToken::query()->where('name', 'legacy-null@example.test')->sole();
-
-    // Simulate a linkage written before the column existed.
-    OnboardingToken::query()
-        ->where('durable_token_id', $apiRow->getKey())
-        ->update(['durable_store' => null]);
-
-    bindUnifiedStore();
-
-    $this->postJson('/bfc/onboarding/exchange', ['token' => $code])->assertCreated();
-
-    expect($apiRow->refresh()->revoked_at)->not->toBeNull()
-        ->and(app(TokenRegistry::class)->resolve($first))->toBeNull()
-        ->and(Credential::query()->whereNull('revoked_at')->count())->toBe(1);
-});
-
-it('sweeps the live same-subject durable on exchange (D1d) while sparing rows governed by other pending codes', function (): void {
-    bindUnifiedStore();
-
-    // A live durable for the same subject+scope, not linked to any code.
+it('sweeps the live same-subject credential while sparing one governed by another pending code', function (): void {
     $standing = Credential::factory()->create([
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'sweep@example.test',
         'abilities' => [Scope::Consume->value],
     ]);
-
-    // A durable governed by a DIFFERENT pending code survives the sweep.
     $governed = Credential::factory()->create([
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'sweep@example.test',
         'abilities' => [Scope::Consume->value],
     ]);
-
     OnboardingToken::query()->create([
         'id' => (string) Str::uuid(),
         'email' => 'other@example.test',
         'scope' => Scope::Consume->value,
         'token_hash' => hash('sha256', 'other-code'),
-        'durable_token_id' => $governed->id,
+        'durable_credential_id' => $governed->id,
         'expires_at' => now()->addHour(),
     ]);
 
     $code = auditIssueCode('sweep@example.test');
-
     $this->postJson('/bfc/onboarding/exchange', ['token' => $code])->assertCreated();
 
     expect($standing->refresh()->revoked_at)->not->toBeNull()
         ->and($governed->refresh()->revoked_at)->toBeNull();
 });
 
-it('spares a unified row in rotation grace from the exchange sweep — the same row without the marker dies', function (): void {
-    bindUnifiedStore();
-
-    // Two same-subject, same-scope rows: one superseded by rotation and
-    // living out its grace window (rotated_at set, grace expiry), one an
-    // unmarked collision. PR3 fixed exactly this on api_tokens; the
-    // unified sweep must honor the same provenance — killing a grace row
-    // would break the make-before-break window rotation exists to provide.
+it('spares a unified row in rotation grace from the exchange sweep', function (): void {
     $graced = Credential::factory()->create([
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'rotated@example.test',
@@ -240,7 +218,6 @@ it('spares a unified row in rotation grace from the exchange sweep — the same 
         'rotated_at' => now(),
         'expires_at' => now()->addHour(),
     ]);
-
     $unmarked = Credential::factory()->create([
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'rotated@example.test',
@@ -248,19 +225,13 @@ it('spares a unified row in rotation grace from the exchange sweep — the same 
     ]);
 
     $code = auditIssueCode('rotated@example.test');
-
     $this->postJson('/bfc/onboarding/exchange', ['token' => $code])->assertCreated();
 
     expect($graced->refresh()->revoked_at)->toBeNull()
         ->and($unmarked->refresh()->revoked_at)->not->toBeNull();
 });
 
-it('sweeps a stamped row whose expiry is not grace-bounded — the exemption requires the shape rotation actually leaves', function (): void {
-    bindUnifiedStore();
-
-    // An INCOMPLETE phase-B cutover: stamped, but retirement failed, so
-    // nothing bounds the row. The marker alone must not exempt it — spared,
-    // it would sit outside the sweep forever.
+it('sweeps malformed rotation-grace shapes', function (): void {
     $unbounded = Credential::factory()->create([
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'stamped@example.test',
@@ -268,9 +239,6 @@ it('sweeps a stamped row whose expiry is not grace-bounded — the exemption req
         'rotated_at' => now(),
         'expires_at' => null,
     ]);
-
-    // Stamped with an expiry BEYOND the grace horizon: also not the shape
-    // the rotate verb leaves — swept.
     $overlong = Credential::factory()->create([
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'stamped@example.test',
@@ -280,9 +248,76 @@ it('sweeps a stamped row whose expiry is not grace-bounded — the exemption req
     ]);
 
     $code = auditIssueCode('stamped@example.test');
-
     $this->postJson('/bfc/onboarding/exchange', ['token' => $code])->assertCreated();
 
     expect($unbounded->refresh()->revoked_at)->not->toBeNull()
         ->and($overlong->refresh()->revoked_at)->not->toBeNull();
 });
+
+it('persists exchange and verification across fresh processes for every accepted scope and refuses malformed persisted scope', function (): void {
+    foreach ([...Scope::cases(), 'malformed-persisted-scope'] as $scope) {
+        $scopeValue = $scope instanceof Scope ? $scope->value : $scope;
+        $database = tempnam(sys_get_temp_dir(), 'bfc-p5b-claim-');
+        expect($database)->toBeString();
+
+        try {
+            $setup = runUnifiedClaimProcess('setup', $database, $scopeValue);
+            $claimCode = $setup['claim_code'];
+            $exchange = runUnifiedClaimProcess('exchange', $database, $claimCode);
+            $inspection = runUnifiedClaimProcess('inspect', $database, $claimCode);
+
+            if (! $scope instanceof Scope) {
+                expect($exchange['status'])->toBe(400)
+                    ->and($exchange['body']['error'])->toBe('invalid_code')
+                    ->and($inspection['scope'])->toBe($scopeValue)
+                    ->and($inspection['consumed'])->toBeFalse()
+                    ->and($inspection['durable_credential_id'])->toBeNull()
+                    ->and($inspection['durable_token_id'])->toBeNull()
+                    ->and($inspection['credentials'])->toBe(0)
+                    ->and($inspection['api_tokens'])->toBe(0);
+
+                continue;
+            }
+
+            $secret = $exchange['body']['durable_token'];
+            $credential = $inspection['credential'];
+
+            expect($exchange['status'])->toBe(201)
+                ->and($inspection['durable_token_id'])->toBeNull()
+                ->and($inspection['durable_store'])->toBeNull()
+                ->and($inspection['durable_credential_id'])->toBe($credential['id'])
+                ->and($inspection['credentials'])->toBe(1)
+                ->and($inspection['api_tokens'])->toBe(0)
+                ->and($credential['kind'])->toBe(CredentialKind::Bearer->value)
+                ->and($credential['subject_type'])->toBe(SubjectType::ExternalConsumer->value)
+                ->and($credential['subject_ref'])->toBe($scopeValue.'@fresh-process.test')
+                ->and($credential['abilities'])->toBe([$scopeValue])
+                ->and($credential['secret_hash'])->toBe(hash('sha256', $secret));
+
+            $verified = runUnifiedClaimProcess('verify', $database, $secret);
+            expect($verified['status'])->toBe(200)
+                ->and($verified['body']['scope'])->toBe($scopeValue);
+        } finally {
+            if (is_string($database) && is_file($database)) {
+                unlink($database);
+            }
+        }
+    }
+});
+
+/** @return array<string, mixed> */
+function runUnifiedClaimProcess(string $phase, string $database, string $value): array
+{
+    $process = new Process([
+        PHP_BINARY,
+        __DIR__.'/Fixtures/unified-claim-process.php',
+        $phase,
+        $database,
+        $value,
+    ]);
+    $process->run();
+
+    expect($process->isSuccessful())->toBeTrue($process->getOutput().$process->getErrorOutput());
+
+    return json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+}

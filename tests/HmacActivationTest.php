@@ -95,7 +95,7 @@ it('activates a delivered pending key: status flips, activated_at stamps, the cl
     // Activation is the first_use burn point: the code is consumed, and
     // the activated event carries its id (ids only, never values).
     /** @var OnboardingToken $code */
-    $code = OnboardingToken::query()->where('durable_token_id', $credential->id)->firstOrFail();
+    $code = OnboardingToken::query()->where('durable_credential_id', $credential->id)->firstOrFail();
 
     expect($code->consumed_at)->not->toBeNull();
 

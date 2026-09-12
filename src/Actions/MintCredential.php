@@ -13,7 +13,6 @@ use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\DeliveryShape;
-use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
@@ -192,10 +191,7 @@ final class MintCredential
                 // an ability that grants nothing on any gate.
                 'scope' => Scope::Onboard->value,
                 'token_hash' => $code->hash(),
-                'durable_token_id' => $credential->id,
-                // The linkage names its store: the pending row lives in the
-                // unified store whatever the declaration currently targets.
-                'durable_store' => DurableStore::Credentials,
+                'durable_credential_id' => $credential->id,
                 'expires_at' => now()->addSeconds($ttlSeconds),
             ]);
 
@@ -310,8 +306,7 @@ final class MintCredential
                 'email' => null,
                 'scope' => Scope::Onboard->value,
                 'token_hash' => $code->hash(),
-                'durable_token_id' => $credential->id,
-                'durable_store' => DurableStore::Credentials,
+                'durable_credential_id' => $credential->id,
                 'expires_at' => now()->addSeconds($ttlSeconds),
             ]);
 

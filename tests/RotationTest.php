@@ -14,7 +14,6 @@ use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
-use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
@@ -940,8 +939,7 @@ it('rotates an asymmetric credential into a fresh enrollment code with both cred
 
     // The code is a claim-primitive row linked to the pending replacement.
     $code = OnboardingToken::query()
-        ->where('durable_token_id', $replacementId)
-        ->where('durable_store', DurableStore::Credentials->value)
+        ->where('durable_credential_id', $replacementId)
         ->sole();
 
     expect($code->token_hash)->toBe(hash('sha256', (string) $response->json('delivery.enrollment_code')));

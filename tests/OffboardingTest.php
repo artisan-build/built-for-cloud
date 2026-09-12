@@ -144,13 +144,6 @@ it('contains the whole account in one action: every credential state, codes, inv
         new Subject(SubjectType::ExternalConsumer, 'acme'),
         MintOptions::fromInput(['kind' => 'hmac', 'code_ttl_seconds' => 3600]),
     );
-    OnboardingToken::query()
-        ->where('durable_token_id', $hmacResult->summary->id)
-        ->update([
-            'durable_credential_id' => $hmacResult->summary->id,
-            'durable_token_id' => null,
-            'durable_store' => null,
-        ]);
 
     // A subject-stamped legacy api_tokens row.
     $legacy = ApiToken::query()->create([

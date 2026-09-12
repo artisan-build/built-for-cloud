@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\AuditReason;
+use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
@@ -68,7 +69,7 @@ it('audits the supersession revocation when re-issuing over a pending exchanged 
     $pendingDurableId = OnboardingToken::query()
         ->where('token_hash', OnboardingToken::hashToken($firstCode))
         ->firstOrFail()
-        ->durable_token_id;
+        ->durable_credential_id;
 
     // Re-issuing for the same address+scope supersedes the pending code and
     // revokes its never-used durable — and audits that revocation.
@@ -87,9 +88,9 @@ it('audits the supersession revocation when re-issuing over a pending exchanged 
 
 it('audits exchange and links both revocations old-to-new with supersession lineage', function (): void {
     // A live durable of the same name+scope that exchange's sweep revokes.
-    $liveDurable = ApiToken::query()->create([
+    $liveDurable = Credential::factory()->create([
         'name' => 'lineage@example.test',
-        'token_hash' => hash('sha256', 'pre-existing-durable'),
+        'subject_ref' => 'lineage@example.test',
         'abilities' => [Scope::Consume->value],
     ]);
 
@@ -100,7 +101,7 @@ it('audits exchange and links both revocations old-to-new with supersession line
     $code = OnboardingToken::query()
         ->where('token_hash', OnboardingToken::hashToken($claimCode))
         ->firstOrFail();
-    $newId = $code->durable_token_id;
+    $newId = $code->durable_credential_id;
 
     $exchanged = auditEvents(LifecycleEventType::Exchanged);
     expect($exchanged)->toHaveCount(1)
@@ -126,7 +127,7 @@ it('audits exchange and links both revocations old-to-new with supersession line
     // durable by its link, with lineage to the replacement.
     $this->postJson('/bfc/onboarding/exchange', ['token' => $claimCode])->assertCreated();
 
-    $replacementId = $code->refresh()->durable_token_id;
+    $replacementId = $code->refresh()->durable_credential_id;
 
     $linkRevocations = array_values(array_filter(
         auditEvents(LifecycleEventType::Revoked),
@@ -150,12 +151,12 @@ it('audits first use inside the burn transaction with the code linkage and recip
     // authenticated request IS a first use); scope to this durable.
     $durableFirstUses = fn (): array => array_values(array_filter(
         auditEvents(LifecycleEventType::FirstUsed),
-        fn (CredentialAuditEvent $event): bool => $event->credential_id === $code->durable_token_id,
+        fn (CredentialAuditEvent $event): bool => $event->credential_id === $code->durable_credential_id,
     ));
 
     expect($durableFirstUses())->toHaveCount(0);
 
-    expect(app(TokenRegistry::class)->resolve($durable))->toBe('burn@example.test');
+    $this->postJson('/bfc/onboarding/verify', [], ['Authorization' => 'Bearer '.$durable])->assertOk();
 
     $firstUsed = $durableFirstUses();
     expect($firstUsed)->toHaveCount(1)
@@ -164,7 +165,7 @@ it('audits first use inside the burn transaction with the code linkage and recip
         ->and($firstUsed[0]->actor_type)->toBe(AuditActorType::CredentialHolder);
 
     // A second use is not a first use: no further event.
-    app(TokenRegistry::class)->resolve($durable);
+    $this->postJson('/bfc/onboarding/verify', [], ['Authorization' => 'Bearer '.$durable])->assertOk();
     expect($durableFirstUses())->toHaveCount(1);
 });
 
@@ -251,7 +252,7 @@ it('rolls the audit row and outbox row back with a failed exchange, delivering n
 
     expect($armed)->toBeFalse()
         // The mutation rolled back...
-        ->and(OnboardingToken::query()->where('token_hash', OnboardingToken::hashToken($claimCode))->firstOrFail()->durable_token_id)->toBeNull()
+        ->and(OnboardingToken::query()->where('token_hash', OnboardingToken::hashToken($claimCode))->firstOrFail()->durable_credential_id)->toBeNull()
         // ...and took the audit and outbox rows with it.
         ->and(CredentialAuditEvent::query()->count())->toBe($baselineAudit)
         ->and(CredentialOutboxEntry::query()->count())->toBe($baselineOutbox);

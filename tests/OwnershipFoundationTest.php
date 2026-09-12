@@ -52,6 +52,20 @@ it('targets both transitional ownership links at their correct stores', function
     );
 });
 
+it('targets both transitional onboarding links at their distinct stores', function (): void {
+    /** @var list<object{table: string, from: string, to: string, on_delete: string}> $foreignKeys */
+    $foreignKeys = DB::select("PRAGMA foreign_key_list('onboarding_tokens')");
+
+    $targets = collect($foreignKeys)
+        ->map(static fn (object $key): string => "{$key->from}:{$key->table}.{$key->to}:{$key->on_delete}")
+        ->all();
+
+    expect($targets)->toContain(
+        'durable_credential_id:credentials.id:SET NULL',
+        'durable_token_id:api_tokens.id:SET NULL',
+    );
+});
+
 it('returns unauthenticated bfc meta for unclaimed and claimed environments', function (): void {
     config(['built-for-cloud.product' => 'Sink']);
 

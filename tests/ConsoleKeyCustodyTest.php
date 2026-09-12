@@ -414,6 +414,7 @@ it('refuses a console key delivered on a code with no key-custody authority (AC1
 
     // The routine code an operator hands a low-privilege integration.
     $code = keyCustodyOnboardingCode('integration@example.test', keyAuthority: false);
+    $credentialCount = Credential::query()->count();
 
     $refusal = $this->postJson('/bfc/onboarding/exchange', [
         'token' => $code,
@@ -431,8 +432,9 @@ it('refuses a console key delivered on a code with no key-custody authority (AC1
     expect(ConsoleKey::query()->count())->toBe(0)
         ->and($row->consumed_at)->toBeNull()
         ->and($row->durable_token_id)->toBeNull()
+        ->and($row->durable_credential_id)->toBeNull()
         ->and($row->console_key_filed_at)->toBeNull()
-        ->and(Credential::query()->count())->toBe(0);
+        ->and(Credential::query()->count())->toBe($credentialCount);
 
     // And the code still works for what it WAS issued to do.
     $this->postJson('/bfc/onboarding/exchange', ['token' => $code])->assertCreated();
@@ -654,7 +656,8 @@ it('rolls an at-exchange onboarding exchange back when the key id is already on 
         ->and($row->console_key_filed_at)->toBeNull()
         ->and(ConsoleKey::query()->count())->toBe(1)
         // No durable survived the rollback either.
-        ->and(ApiToken::query()->where('name', 'rollback@example.test')->count())->toBe(0);
+        ->and(ApiToken::query()->where('name', 'rollback@example.test')->count())->toBe(0)
+        ->and(Credential::query()->where('name', 'rollback@example.test')->count())->toBe(0);
 
     $denied = CredentialAuditEvent::query()
         ->where('event', LifecycleEventType::DeniedAction->value)

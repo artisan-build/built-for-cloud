@@ -4,12 +4,15 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
+use ArtisanBuild\BuiltForCloud\Actions\RevokeCredential;
+use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Notifications\CredentialLifecycleNotification;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
+use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ConfigMapHolderDeclaration;
 use ArtisanBuild\BuiltForCloud\TokenRegistry;
@@ -65,7 +68,7 @@ it('notifies the intended recipient on first use of a credential from an address
     $exchange = $this->postJson('/bfc/onboarding/exchange', ['token' => $claimCode]);
     $durable = (string) $exchange->json('durable_token');
 
-    app(TokenRegistry::class)->resolve($durable);
+    $this->postJson('/bfc/onboarding/verify', [], ['Authorization' => 'Bearer '.$durable])->assertOk();
 
     Notification::assertSentOnDemand(
         CredentialLifecycleNotification::class,
@@ -84,7 +87,7 @@ it('notifies nobody for an unaddressed code under the default declaration, with 
     $exchange = $this->postJson('/bfc/onboarding/exchange', ['token' => $claimCode]);
     $durable = (string) $exchange->json('durable_token');
 
-    app(TokenRegistry::class)->resolve($durable);
+    $this->postJson('/bfc/onboarding/verify', [], ['Authorization' => 'Bearer '.$durable])->assertOk();
 
     // Exactly ONE notification went anywhere: the issuer's exchange notice.
     // The unaddressed first_used resolved to NOBODY — not to the issuer,
@@ -108,12 +111,12 @@ it('resolves the holder to the bound user email through the app declaration', fu
     $durableId = OnboardingToken::query()
         ->where('token_hash', OnboardingToken::hashToken($claimCode))
         ->firstOrFail()
-        ->durable_token_id;
+        ->durable_credential_id;
 
     // This credential is bound to a user; the declaration knows their email.
     config()->set('built-for-cloud-tests.holder_map', [$durableId => 'bound-user@example.test']);
 
-    app(TokenRegistry::class)->resolve($durable);
+    $this->postJson('/bfc/onboarding/verify', [], ['Authorization' => 'Bearer '.$durable])->assertOk();
 
     Notification::assertSentOnDemand(
         CredentialLifecycleNotification::class,
@@ -185,14 +188,17 @@ it('carries ids and metadata only in notification payloads and mail bodies', fun
     $durableId = OnboardingToken::query()
         ->where('token_hash', OnboardingToken::hashToken($claimCode))
         ->firstOrFail()
-        ->durable_token_id;
+        ->durable_credential_id;
 
     config()->set('built-for-cloud-tests.holder_map', [$durableId => 'bound-user@example.test']);
 
     // First use, rotation, revocation — every hooked surface fires.
-    app(TokenRegistry::class)->resolve($durable);
-    app(TokenRegistry::class)->rotate('person@example.test', hash('sha256', 'rotated-replacement'));
-    app(TokenRegistry::class)->revoke('person@example.test');
+    $this->postJson('/bfc/onboarding/verify', [], ['Authorization' => 'Bearer '.$durable])->assertOk();
+    $rotation = app(RotateCredential::class)((string) $durableId, new RotateOptions(emergency: true));
+    expect($rotation)->not->toBeNull();
+    assert($rotation !== null);
+    $rotation->mint->secret?->reveal();
+    app(RevokeCredential::class)($rotation->mint->summary->id);
 
     // The claim code escaped into no side-effect channel — audit rows and
     // outbox rows included (the at-rest sweep covers both tables).
