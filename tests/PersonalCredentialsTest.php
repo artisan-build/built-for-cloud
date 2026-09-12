@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Actions\OffboardSubject;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
+use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesCredentialVerbs;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
@@ -11,10 +12,11 @@ use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
-use ArtisanBuild\BuiltForCloud\Hmac\HmacSigner;
-use ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
+use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\OffboardOptions;
@@ -31,7 +33,9 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Route as RoutingRoute;
 use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
+use Symfony\Component\Process\Process;
 
 /**
  * The personal-credentials surface (PRD 1.17): an authenticated human
@@ -569,28 +573,153 @@ it('mints and uses an account-bound hmac key once the self-service policy opts i
     SelfServicePolicyDeclaration::$kinds = [CredentialKind::Bearer, CredentialKind::Hmac];
 
     $mine = personalUser('mine@example.test');
+    $victim = personalUser('victim@example.test');
 
-    $mint = $this->actingAsVersioned($mine, 'web')
-        ->postJson('/bfc/me/credentials', ['name' => 'signing', 'kind' => CredentialKind::Hmac->value])
-        ->assertCreated()
-        ->assertJsonPath('delivery.shape', 'signing_key');
+    expect(InstallationAuthority::current()->mode)->toBe(AuthorityMode::Standalone);
 
-    $credential = Credential::query()->where('name', 'signing')->sole();
-    $this->postJson('/bfc/credentials/'.$credential->id.'/activate', [
-        'delivery_fingerprint' => $mint->json('delivery.delivery_fingerprint'),
-    ], [
-        'Authorization' => 'Bearer '.auditAdminToken('self-service-hmac-activation'),
-    ])->assertOk();
+    Route::post('/personal-hmac/{user}', function (Request $request): array {
+        return ['credential_id' => $request->attributes->get('bfc.hmac_credential_id')];
+    })->middleware('bfc.hmac');
 
-    $subject = new Subject(SubjectType::UserPrincipal, personalSubjectRef($mine));
-    $body = '{"event":"self-service"}';
-    $header = app(HmacSigner::class)->sign($subject, $body, 'self-service.test');
+    $mint = $this->assertNoSecretLeakageOfMinted(
+        fn () => $this->actingAsVersioned($mine, 'web')->postJson('/bfc/me/credentials', [
+            'name' => 'signing',
+            'kind' => CredentialKind::Hmac->value,
+            'subject_type' => SubjectType::Operator->value,
+            'subject_ref' => personalSubjectRef($victim),
+            'user_id' => (string) $victim->getKey(),
+        ])->assertCreated(),
+        fn ($response): string => (string) $response->json('delivery.signing_key'),
+    );
+
+    $keyId = (string) $mint->json('delivery.key_id');
+    $signingKey = (string) $mint->json('delivery.signing_key');
+    $fingerprint = (string) $mint->json('delivery.delivery_fingerprint');
+
+    $mint->assertJsonPath('delivery.shape', 'signing_key')
+        ->assertJsonPath('credential.id', $keyId)
+        ->assertJsonPath('credential.subject_type', SubjectType::UserPrincipal->value)
+        ->assertJsonPath('credential.subject_ref', personalSubjectRef($mine));
+
+    expect($keyId)->not->toBe('')
+        ->and($signingKey)->toMatch('/^[0-9a-f]{64}$/')
+        ->and($fingerprint)->toMatch('/^[0-9a-f]{16}$/');
+
+    $this->assertRevealsSecretExactlyOnce((string) $mint->getContent(), $signingKey);
+    $this->assertResponseCarriesNoSecret(
+        $this->actingAsVersioned($mine, 'web')->getJson('/bfc/me/credentials')->assertOk(),
+        $signingKey,
+    );
+
+    $credential = Credential::query()->findOrFail($keyId);
+    $stored = DB::table('credentials')->where('id', $keyId)->sole();
 
     expect($credential->kind)->toBe(CredentialKind::Hmac)
+        ->and($credential->subject_type)->toBe(SubjectType::UserPrincipal)
+        ->and($credential->subject_ref)->toBe(personalSubjectRef($mine))
         ->and((string) $credential->user_id)->toBe((string) $mine->getKey())
-        ->and(app(HmacVerifier::class)->verify($subject, $header, $body)->id)->toBe($credential->id)
-        ->and($credential->refresh()->last_used_at)->not->toBeNull();
+        ->and($credential->last_used_at)->toBeNull()
+        ->and($stored->secret_hash)->toBeNull()
+        ->and($stored->public_key)->toBeNull()
+        ->and($stored->secret_key_version)->not->toBeNull()
+        ->and($stored->secret_ciphertext)->not->toContain($signingKey)
+        ->and($stored->secret_ciphertext)->not->toBe(hash('sha256', $signingKey))
+        ->and(app(HmacKeyring::class)->decrypt($stored->secret_ciphertext, $stored->secret_key_version))
+        ->toBe($signingKey);
+
+    $this->postJson('/bfc/credentials/'.$keyId.'/activate', [
+        'delivery_fingerprint' => $fingerprint,
+    ], [
+        'Authorization' => 'Bearer '.auditAdminToken('self-service-hmac-activation'),
+    ])->assertOk()
+        ->assertJsonPath('credential.id', $keyId)
+        ->assertJsonPath('credential.status', CredentialStatus::Active->value);
+
+    $body = '{"event":"self-service"}';
+    $envelope = new HmacEnvelope(
+        keyId: $keyId,
+        eventType: 'self-service.test',
+        timestamp: now()->getTimestamp(),
+        nonce: bin2hex(random_bytes(16)),
+        audience: (string) config('built-for-cloud.hmac.audience'),
+    );
+    $header = $envelope->headerValue(hash_hmac('sha256', $envelope->canonical($body), $signingKey));
+
+    $this->call('POST', '/personal-hmac/'.$mine->getKey(), server: [
+        'HTTP_'.str_replace('-', '_', strtoupper(HmacEnvelope::HEADER)) => $header,
+        'CONTENT_TYPE' => 'application/json',
+    ], content: $body)
+        ->assertOk()
+        ->assertJsonPath('credential_id', $keyId);
+
+    expect($credential->refresh()->last_used_at)->not->toBeNull();
 });
+
+it('persists personal hmac mint activation and middleware verification across fresh standalone processes', function (): void {
+    $database = tempnam(sys_get_temp_dir(), 'bfc-p5b-personal-hmac-');
+    expect($database)->toBeString();
+
+    try {
+        $setup = runPersonalHmacProcess('setup', $database);
+        $mint = runPersonalHmacProcess('mint', $database);
+        $delivery = $mint['body']['delivery'];
+
+        expect($setup['authority'])->toBe(AuthorityMode::Standalone->value)
+            ->and($mint['login_status'])->toBe(302)
+            ->and($mint['status'])->toBe(201)
+            ->and($delivery['shape'])->toBe('signing_key');
+
+        $activation = runPersonalHmacProcess('activate', $database, [
+            'key_id' => $delivery['key_id'],
+            'delivery_fingerprint' => $delivery['delivery_fingerprint'],
+            'admin_token' => $setup['admin_token'],
+        ]);
+        $verified = runPersonalHmacProcess('verify', $database, [
+            'key_id' => $delivery['key_id'],
+            'signing_key' => $delivery['signing_key'],
+            'user_id' => $setup['user_id'],
+        ]);
+        $inspection = runPersonalHmacProcess('inspect', $database, [
+            'key_id' => $delivery['key_id'],
+            'signing_key' => $delivery['signing_key'],
+        ]);
+
+        expect($activation['status'])->toBe(200)
+            ->and($verified['status'])->toBe(200)
+            ->and($verified['body']['credential_id'])->toBe($delivery['key_id'])
+            ->and($inspection['kind'])->toBe(CredentialKind::Hmac->value)
+            ->and($inspection['status'])->toBe(CredentialStatus::Active->value)
+            ->and($inspection['subject_ref'])->toBe('user:'.$setup['user_id'])
+            ->and((string) $inspection['user_id'])->toBe((string) $setup['user_id'])
+            ->and($inspection['ciphertext_contains_key'])->toBeFalse()
+            ->and($inspection['decrypts_to_delivered_key'])->toBeTrue()
+            ->and($inspection['last_used_at'])->not->toBeNull();
+    } finally {
+        if (is_string($database) && is_file($database)) {
+            unlink($database);
+        }
+    }
+});
+
+/**
+ * @param  array<string, mixed>  $value
+ * @return array<string, mixed>
+ */
+function runPersonalHmacProcess(string $phase, string $database, array $value = []): array
+{
+    $process = new Process([
+        PHP_BINARY,
+        __DIR__.'/Fixtures/personal-hmac-process.php',
+        $phase,
+        $database,
+        json_encode($value, JSON_THROW_ON_ERROR),
+    ]);
+    $process->run();
+
+    expect($process->isSuccessful())->toBeTrue($process->getOutput().$process->getErrorOutput());
+
+    return json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+}
 
 it('leaves the durable expiry caller-chosen and never defaults one on the self-service mint', function (): void {
     $mine = personalUser('mine@example.test');

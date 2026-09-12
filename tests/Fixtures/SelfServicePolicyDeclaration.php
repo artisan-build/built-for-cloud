@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Tests\Fixtures;
 
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresSelfServiceMintPolicy;
+use ArtisanBuild\BuiltForCloud\Contracts\ResolvesHmacSubjects;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\Subject;
@@ -21,7 +22,7 @@ use Illuminate\Http\Request;
  * Both statics are per test so one fixture covers "grants a narrow
  * ability", "opts a kind in" and "grants nothing at all".
  */
-final class SelfServicePolicyDeclaration implements CredentialDeclaration, DeclaresSelfServiceMintPolicy
+final class SelfServicePolicyDeclaration implements CredentialDeclaration, DeclaresSelfServiceMintPolicy, ResolvesHmacSubjects
 {
     /**
      * @var list<string>
@@ -42,6 +43,15 @@ final class SelfServicePolicyDeclaration implements CredentialDeclaration, Decla
         }
 
         return new Subject(SubjectType::UserPrincipal, 'user:'.$user->getAuthIdentifier());
+    }
+
+    public function resolveHmacSubject(Request $request): ?Subject
+    {
+        $user = $request->route('user');
+
+        return is_string($user) && $user !== ''
+            ? new Subject(SubjectType::UserPrincipal, 'user:'.$user)
+            : null;
     }
 
     public function authorize(Credential $credential, ?string $ability, Request $request): bool
