@@ -935,7 +935,6 @@ final class ManagedTransitions
         }
 
         $transition = DB::transaction(function () use ($request, $transition): ManagedTransition {
-            $this->assertOwnerRequest($request, true);
             $locked = $this->locked($transition, [
                 ManagedTransitionStatus::Prepared,
                 ManagedTransitionStatus::Rostered,
@@ -943,6 +942,7 @@ final class ManagedTransitions
                 ManagedTransitionStatus::Staging,
                 ManagedTransitionStatus::Staged,
             ]);
+            $this->assertOwnerRequest($request, true);
 
             if ($locked->abandon_idempotency_key === null) {
                 $key = $this->randomKey();

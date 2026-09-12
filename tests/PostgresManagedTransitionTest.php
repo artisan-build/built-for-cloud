@@ -386,11 +386,20 @@ it('arbitrates the staged T7-versus-commit race with exactly one durable winner'
         $outcomes = array_column($results, 'result');
         sort($outcomes);
         $persisted = $transition->refresh();
+        $workerPayload = json_encode($results, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR);
+        $sqlStates = collect($results)
+            ->flatMap(static fn (array $result): array => $result['causes'] ?? [])
+            ->pluck('sqlstate')
+            ->filter()
+            ->values()
+            ->all();
 
-        expect($outcomes)->toBeIn([
-            ['abandoned', 'refused'],
-            ['committed', 'refused'],
-        ]);
+        expect($sqlStates)->not->toContain('40P01', $workerPayload)
+            ->and($outcomes)->not->toContain('deadlock-aborted', $workerPayload)
+            ->and($outcomes)->toBeIn([
+                ['abandoned', 'refused'],
+                ['committed', 'refused'],
+            ], $workerPayload);
 
         if ($persisted->status === ManagedTransitionStatus::Committed) {
             expect($persisted->local_commit_receipt)->toBeString()->not->toBeEmpty()
