@@ -18,25 +18,6 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Fallback Token
-    |--------------------------------------------------------------------------
-    |
-    | DEPRECATED (PRD 1.20): the install path now mints a real, revocable,
-    | operator-subject credential instead (bfc:install:operator-credential);
-    | an env pseudo-credential can never be revoked, audited, or attributed.
-    | This key stays read because live 0.4.x apps still carry fallbacks —
-    | delete FALLBACK_TOKEN from the environment to disable it. Nothing in
-    | the framework's own paths writes or depends on it any more (the
-    | unified-store guard never consults it), and a later major removes it.
-    |
-    | When null, fallback authentication is disabled entirely.
-    |
-    */
-
-    'fallback_token' => env('FALLBACK_TOKEN'),
-
-    /*
-    |--------------------------------------------------------------------------
     | Token Prefix
     |--------------------------------------------------------------------------
     |
@@ -69,8 +50,7 @@ return [
     |
     | The one store and the one guard. Point any guard in your app's
     | `auth.guards` config at the `bfc` driver to authenticate requests
-    | against the `credentials` table. The guard NEVER consults the fallback
-    | token above — env pseudo-credentials have no path into the new store.
+    | against the `credentials` table.
     |
     | `guard` names the app's bfc-driven guard, used by the `bfc.ability`
     | middleware to find the authenticated credential.

@@ -49,18 +49,16 @@ use Throwable;
  *  1. **A `bfc` guard that exists.** A package-mounted route may not
  *     depend on the consuming app having registered one; a name with no
  *     guard behind it is a bounded 401, not a 500 out of the AuthManager.
- *  2. **A bearer that is not ALSO something else.** Before anything is
- *     resolved, the presented bytes are compared against the configured
- *     `FALLBACK_TOKEN` and against the legacy `api_tokens` store; a
- *     match is refused.
+ *  2. **A bearer that is not ALSO a legacy stored credential.** Before
+ *     anything is resolved, the presented bytes are compared against the
+ *     legacy store; a match is refused.
  *
  *     This is not belt-and-braces. The `bfc` guard has no code path to
  *     either store, so neither can authenticate a request HERE — and
  *     that fact, which an earlier docblock stated as if it settled
  *     something, is beside the point. The danger runs the other way:
- *     set `FALLBACK_TOKEN` to the plaintext of a real exact-
- *     `{metadata:read}` credential (or file the same bytes as a legacy
- *     admin token) and the dashboard read succeeds while the SAME bytes
+ *     File the same bytes as a real exact-`{metadata:read}` credential in
+ *     the legacy store and the dashboard read succeeds while those bytes
  *     stay admin-equivalent on the legacy surfaces. D16 requires the
  *     dashboard credential to be unable to touch mutating surfaces;
  *     aliased bytes can, so the alias is what has to be refused.
@@ -71,10 +69,9 @@ use Throwable;
  *     the ordinary 401, byte for byte.
  *
  *     What it is NOT is time-equalised, and that is a decision rather
- *     than an oversight. A fallback collision returns before any query,
- *     a legacy collision after one, and an ordinary unknown bearer
- *     continues into unified-store resolution, so the three paths are
- *     distinguishable by timing. To read that oracle an attacker must
+ *     than an oversight. A legacy collision returns after one query and
+ *     an ordinary unknown bearer continues into unified-store resolution.
+ *     To read that oracle an attacker must
  *     already hold the bearer — and holding it, they can present it on
  *     a legacy surface and learn the same fact directly and far more
  *     reliably. It discloses nothing they cannot get more cheaply, and
@@ -219,12 +216,11 @@ final class EnsureDashboardCredential
     }
 
     /**
-     * Whether these bearer bytes are ALSO the configured fallback token
-     * or a row in the legacy `api_tokens` store.
+     * Whether these bearer bytes are also a row in the legacy store.
      *
      * Free of application-state side effects by construction: a
-     * constant-time digest comparison, then one `exists()` query on a
-     * hashed column. Nothing is resolved, stamped or observed, and the
+     * single `exists()` query on a hashed column. Nothing is resolved,
+     * stamped or observed, and the
      * response is the ordinary 401 byte for byte.
      *
      * The PATHS are not time-equalised, and deliberately so — see the
@@ -243,14 +239,6 @@ final class EnsureDashboardCredential
     {
         if ($bearer === '') {
             return false;
-        }
-
-        $fallback = config('built-for-cloud.fallback_token');
-
-        if (is_string($fallback)
-            && $fallback !== ''
-            && hash_equals(hash('sha256', $fallback), hash('sha256', $bearer))) {
-            return true;
         }
 
         return ApiToken::query()->where('token_hash', hash('sha256', $bearer))->exists();

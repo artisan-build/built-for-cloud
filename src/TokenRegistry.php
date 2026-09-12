@@ -16,18 +16,10 @@ use Throwable;
 
 final class TokenRegistry
 {
-    public const FALLBACK = 'fallback';
-
     public function resolve(string $bearer): ?string
     {
         if ($bearer === '') {
             return null;
-        }
-
-        $fallback = config('built-for-cloud.fallback_token');
-
-        if ($fallback !== null && $fallback !== '' && hash_equals(hash('sha256', (string) $fallback), hash('sha256', $bearer))) {
-            return self::FALLBACK;
         }
 
         /** @var ApiToken|null $row */
@@ -50,12 +42,6 @@ final class TokenRegistry
     public function resolveModel(string $bearer): ?ApiToken
     {
         if ($bearer === '') {
-            return null;
-        }
-
-        $fallback = config('built-for-cloud.fallback_token');
-
-        if ($fallback !== null && $fallback !== '' && hash_equals(hash('sha256', (string) $fallback), hash('sha256', $bearer))) {
             return null;
         }
 

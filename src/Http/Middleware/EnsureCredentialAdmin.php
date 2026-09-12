@@ -52,12 +52,6 @@ use Throwable;
  * audit store is down, so the append is best-effort here (denials carry no
  * state transition to keep it transactional with).
  *
- * The FALLBACK token is rejected here EXPLICITLY, with a distinguishable
- * 403, and BEFORE either granting branch — the invariant is absolute even
- * under a config whose fallback bytes collide with a real credential's
- * secret. The env pseudo-credential is deprecated (PRD 1.20) and never
- * operates this surface; silently treating it as unknown would send its
- * holder chasing a typo instead of the real fix.
  */
 final class EnsureCredentialAdmin
 {
@@ -102,18 +96,6 @@ final class EnsureCredentialAdmin
             $this->auditDenial($request, 'token_auth_failure: no credential presented', null);
 
             abort(401);
-        }
-
-        // The deprecated fallback pseudo-credential is rejected FIRST,
-        // before either granting branch, so "the fallback never operates
-        // this surface" is absolute: even a config whose fallback bytes
-        // collide with a real credential's secret rejects here — nothing
-        // resolves, nothing stamps usage. Distinguishable, so its holder
-        // chases the real fix rather than a typo.
-        if ($this->isFallback($bearer)) {
-            $this->auditDenial($request, 'denied: fallback token on an operator surface', null);
-
-            abort(403, 'Fallback tokens never operate the credential verbs. Mint an operator credential with bfc:install:operator-credential instead.');
         }
 
         // Branch 1 — the legacy admin token, byte-for-byte EnsureAdminToken
@@ -205,16 +187,4 @@ final class EnsureCredentialAdmin
         }
     }
 
-    /**
-     * The fallback bytes themselves, compared directly — never through a
-     * resolver that could touch rows or record usage.
-     */
-    private function isFallback(string $bearer): bool
-    {
-        $fallback = config('built-for-cloud.fallback_token');
-
-        return is_string($fallback)
-            && $fallback !== ''
-            && hash_equals(hash('sha256', $fallback), hash('sha256', $bearer));
-    }
 }
