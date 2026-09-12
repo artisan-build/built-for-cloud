@@ -3,11 +3,12 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
-use ArtisanBuild\BuiltForCloud\Tests\Fixtures\FutureLocalAuthenticationController;
 use ArtisanBuild\BuiltForCloud\Tests\Support\StandaloneSurfaceInventory;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Route as RouteFacade;
+
+require_once __DIR__.'/Fixtures/FutureLocalAuthenticationController.php';
 
 it('derives the standalone surface structurally and detects an added route without its authority gate', function (): void {
     /** @var Router $router */
@@ -30,7 +31,6 @@ it('derives the standalone surface structurally and detects an added route witho
     }
 
     $controlController = 'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\FutureLocalAuthenticationController';
-    class_alias(FutureLocalAuthenticationController::class, $controlController);
     $control = RouteFacade::get('/_bfc-standalone-inventory-control', [$controlController, 'authenticate']);
     $discoveredControl = array_values(array_filter(
         StandaloneSurfaceInventory::packageRoutes($router),

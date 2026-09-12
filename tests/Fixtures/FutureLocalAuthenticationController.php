@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace ArtisanBuild\BuiltForCloud\Tests\Fixtures;
+namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 final class FutureLocalAuthenticationController
 {
