@@ -4,21 +4,18 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
-use ArtisanBuild\BuiltForCloud\Scope;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
-use Illuminate\Support\Facades\Route;
 
 uses(RefreshDatabase::class);
 
 beforeEach(function (): void {
     config(['built-for-cloud.product' => 'Sink']);
     Queue::fake();
-
-    Route::middleware('bfc.token.admin')->post('/owner-gate', fn (): array => ['ok' => true]);
 });
 
 it('claims an unowned environment with a claim token and returns an admin owner token once', function (): void {
@@ -43,11 +40,12 @@ it('claims an unowned environment with a claim token and returns an admin owner 
         ->and($ownership?->pending_claim_id)->toBeNull()
         ->and(OwnershipClaim::resolve($claimToken))->toBeNull();
 
-    $ownerToken = ApiToken::query()->whereKey($ownership?->owner_token_id)->firstOrFail();
+    $ownerCredential = Credential::query()->whereKey($ownership?->owner_credential_id)->firstOrFail();
 
-    expect($ownerToken->abilities)->toBe([Scope::Admin->value]);
+    expect($ownership?->owner_token_id)->toBeNull()
+        ->and($ownerCredential->abilities)->toBe([EnsureCredentialAdmin::ABILITY]);
 
-    $this->postJson('/owner-gate', [], ownerHeaders($ownerPlaintext))->assertOk();
+    $this->getJson('/bfc/credentials', ownerHeaders($ownerPlaintext))->assertOk();
     $this->postJson('/bfc/ownership/claim', ['token' => $claimToken])->assertUnauthorized();
 });
 
@@ -64,13 +62,13 @@ it('releases ownership for make before break and keeps the old owner valid until
     expect($ownership?->pending_claim_id)->not->toBeNull()
         ->and(OwnershipClaim::resolve($swapToken)?->getKey())->toBe($ownership?->pending_claim_id);
 
-    $this->postJson('/owner-gate', [], ownerHeaders($ownerPlaintext))->assertOk();
+    $this->getJson('/bfc/credentials', ownerHeaders($ownerPlaintext))->assertOk();
 });
 
 it('cuts over ownership with the pending claim and revokes the old owner token', function (): void {
     $ownerPlaintext = claimInitialOwner();
     $oldOwnership = Ownership::current();
-    $oldOwnerTokenId = $oldOwnership?->owner_token_id;
+    $oldOwnerCredentialId = $oldOwnership?->owner_credential_id;
     $oldWebhookSecret = $oldOwnership?->webhook_secret;
     $swapToken = releaseOwnership($ownerPlaintext);
 
@@ -84,19 +82,19 @@ it('cuts over ownership with the pending claim and revokes the old owner token',
     $newOwnerPlaintext = (string) $cutover->json('owner_token');
     $ownership = Ownership::current();
 
-    expect($ownership?->owner_token_id)->not->toBe($oldOwnerTokenId)
+    expect($ownership?->owner_credential_id)->not->toBe($oldOwnerCredentialId)
+        ->and($ownership?->owner_token_id)->toBeNull()
         ->and($ownership?->pending_claim_id)->toBeNull()
         ->and($ownership?->notify_callback)->toBe('https://cutover.example.test/hook')
         ->and($ownership?->webhook_secret)->not->toBe($oldWebhookSecret)
         ->and(OwnershipClaim::resolve($swapToken))->toBeNull();
 
-    $oldOwnerToken = ApiToken::query()->whereKey($oldOwnerTokenId)->firstOrFail();
+    $oldOwnerCredential = Credential::query()->whereKey($oldOwnerCredentialId)->firstOrFail();
 
-    expect($oldOwnerToken->expires_at)->not->toBeNull()
-        ->and($oldOwnerToken->revoked_at)->not->toBeNull();
+    expect($oldOwnerCredential->revoked_at)->not->toBeNull();
 
-    $this->postJson('/owner-gate', [], ownerHeaders($ownerPlaintext))->assertUnauthorized();
-    $this->postJson('/owner-gate', [], ownerHeaders($newOwnerPlaintext))->assertOk();
+    $this->getJson('/bfc/credentials', ownerHeaders($ownerPlaintext))->assertUnauthorized();
+    $this->getJson('/bfc/credentials', ownerHeaders($newOwnerPlaintext))->assertOk();
 });
 
 it('cancels a pending transfer and invalidates the outstanding swap token', function (): void {

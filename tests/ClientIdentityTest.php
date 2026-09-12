@@ -4,10 +4,15 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\ClientIdentity;
-use ArtisanBuild\BuiltForCloud\Scope;
-use ArtisanBuild\BuiltForCloud\TokenRegistry;
+use ArtisanBuild\BuiltForCloud\ClientIdentityRecorder;
+use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
+use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialStatus;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
+use ArtisanBuild\BuiltForCloud\SubjectType;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnifiedStoreDeclaration;
 use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Database\QueryException;
 use Illuminate\Database\Schema\Blueprint;
@@ -30,10 +35,10 @@ final class ClientIdentityTest extends TestCase
     {
         $identity = '9f8b1c34-0a2e-4f77-9c1d-6b0f2a5e7d31';
 
-        $this->getJson('/api/credentials', $this->adminHeaders() + [ClientIdentity::HEADER => $identity])
+        $this->getJson('/bfc/credentials', $this->adminHeaders() + [ClientIdentity::HEADER => $identity])
             ->assertOk();
 
-        $token = $this->adminToken();
+        $token = $this->adminCredential();
 
         $this->assertSame($identity, $token->client_identity);
         $this->assertNotNull($token->client_identity_last_seen_at);
@@ -43,20 +48,20 @@ final class ClientIdentityTest extends TestCase
     #[DataProvider('verbatimIdentities')]
     public function test_it_stores_the_client_identity_verbatim(string $identity): void
     {
-        $this->getJson('/api/credentials', $this->adminHeaders() + [ClientIdentity::HEADER => $identity])
+        $this->getJson('/bfc/credentials', $this->adminHeaders() + [ClientIdentity::HEADER => $identity])
             ->assertOk();
 
-        $this->assertSame($identity, $this->adminToken()->client_identity);
+        $this->assertSame($identity, $this->adminCredential()->client_identity);
     }
 
     // AC3 — a contract violation is dropped without changing what the request does.
     #[DataProvider('contractViolations')]
     public function test_it_drops_a_contract_violating_client_identity_without_breaking_the_request(string $identity): void
     {
-        $this->getJson('/api/credentials', $this->adminHeaders() + [ClientIdentity::HEADER => $identity])
+        $this->getJson('/bfc/credentials', $this->adminHeaders() + [ClientIdentity::HEADER => $identity])
             ->assertOk();
 
-        $token = $this->adminToken();
+        $token = $this->adminCredential();
 
         $this->assertNull($token->client_identity);
         $this->assertNull($token->client_identity_last_seen_at);
@@ -67,14 +72,14 @@ final class ClientIdentityTest extends TestCase
     {
         $headers = $this->adminHeaders();
 
-        $request = Request::create('/api/credentials', 'GET');
+        $request = Request::create('/bfc/credentials', 'GET');
         $request->headers->set('Authorization', $headers['Authorization']);
         $request->headers->set(ClientIdentity::HEADER, ['first-identity', 'second-identity']);
 
         $response = $this->app->make(Kernel::class)->handle($request);
 
         $this->assertSame(200, $response->getStatusCode());
-        $this->assertNull($this->adminToken()->client_identity);
+        $this->assertNull($this->adminCredential()->client_identity);
     }
 
     // AC3 — the rejected value is attacker-controlled and must never reach the log.
@@ -84,7 +89,7 @@ final class ClientIdentityTest extends TestCase
 
         $identity = str_repeat('a', self::MAX_BYTES + 1);
 
-        $this->getJson('/api/credentials', $this->adminHeaders() + [ClientIdentity::HEADER => $identity])
+        $this->getJson('/bfc/credentials', $this->adminHeaders() + [ClientIdentity::HEADER => $identity])
             ->assertOk();
 
         Log::shouldHaveReceived('warning')
@@ -103,10 +108,10 @@ final class ClientIdentityTest extends TestCase
     {
         $this->assertSame(self::MAX_BYTES, strlen($identity));
 
-        $this->getJson('/api/credentials', $this->adminHeaders() + [ClientIdentity::HEADER => $identity])
+        $this->getJson('/bfc/credentials', $this->adminHeaders() + [ClientIdentity::HEADER => $identity])
             ->assertOk();
 
-        $this->assertSame($identity, $this->adminToken()->client_identity);
+        $this->assertSame($identity, $this->adminCredential()->client_identity);
     }
 
     // AC4 — the limit is BYTES: a value under the CHARACTER limit but over the BYTE limit
@@ -120,28 +125,29 @@ final class ClientIdentityTest extends TestCase
 
         $this->assertFalse(ClientIdentity::isValid($identity));
 
-        $this->getJson('/api/credentials', $this->adminHeaders() + [ClientIdentity::HEADER => $identity])
+        $this->getJson('/bfc/credentials', $this->adminHeaders() + [ClientIdentity::HEADER => $identity])
             ->assertOk();
 
-        $this->assertNull($this->adminToken()->client_identity);
+        $this->assertNull($this->adminCredential()->client_identity);
     }
 
     // AC5 — the identity grants nothing: a non-admin token still 403s.
     public function test_a_client_identity_does_not_grant_the_admin_scope(): void
     {
-        ApiToken::factory()->create([
+        Credential::factory()->create([
             'name' => 'consume',
-            'token_hash' => hash('sha256', 'consume-secret'),
-            'abilities' => [Scope::Consume->value],
+            'secret_hash' => hash('sha256', 'consume-secret'),
+            'subject_type' => SubjectType::Application,
+            'abilities' => [OperatorAbility::CredentialRead->value],
         ]);
 
-        $this->getJson('/api/credentials', [
+        $this->getJson('/bfc/credentials', [
             'Authorization' => 'Bearer consume-secret',
             ClientIdentity::HEADER => 'consume-client',
         ])->assertForbidden();
 
         // Attribution is about WHICH token authenticated, not what it may do.
-        $token = ApiToken::query()->where('name', 'consume')->firstOrFail();
+        $token = Credential::query()->where('name', 'consume')->firstOrFail();
 
         $this->assertSame('consume-client', $token->client_identity);
     }
@@ -149,36 +155,36 @@ final class ClientIdentityTest extends TestCase
     // AC5 — an unauthenticated request still 401s and records nothing.
     public function test_a_client_identity_alone_authenticates_nothing(): void
     {
-        ApiToken::factory()->create(['name' => 'bystander']);
+        Credential::factory()->create(['name' => 'bystander']);
 
-        $this->getJson('/api/credentials', [ClientIdentity::HEADER => 'unauthenticated-client'])
+        $this->getJson('/bfc/credentials', [ClientIdentity::HEADER => 'unauthenticated-client'])
             ->assertUnauthorized();
 
-        $this->assertFalse(ApiToken::query()->whereNotNull('client_identity')->exists());
+        $this->assertFalse(Credential::query()->whereNotNull('client_identity')->exists());
     }
 
     // AC6 — forward-only. The ordering has to be REAL: the legacy row must already exist when
     // this PR's migration runs, or a backfill in up() would sail straight past the assertion.
     public function test_the_migration_does_not_backfill_pre_existing_tokens(): void
     {
-        $migration = require __DIR__.'/../database/migrations/2026_08_24_000001_add_client_identity_to_api_tokens_table.php';
+        $migration = require __DIR__.'/../database/migrations/2026_09_12_000001_add_unified_credential_links.php';
 
         // Wind the schema back to how it stood before this PR.
         $migration->down();
 
-        $this->assertFalse(Schema::hasColumn('api_tokens', 'client_identity'));
-        $this->assertFalse(Schema::hasColumn('api_tokens', 'client_identity_last_seen_at'));
+        $this->assertFalse(Schema::hasColumn('credentials', 'client_identity'));
+        $this->assertFalse(Schema::hasColumn('credentials', 'client_identity_last_seen_at'));
 
         // A token that predates the migration.
-        $legacy = ApiToken::factory()->create(['name' => 'legacy']);
+        $legacy = Credential::factory()->create(['name' => 'legacy']);
 
         // Now run this PR's migration on its own, with that row already in the table.
         $migration->up();
 
-        $this->assertTrue(Schema::hasColumns('api_tokens', ['client_identity', 'client_identity_last_seen_at']));
+        $this->assertTrue(Schema::hasColumns('credentials', ['client_identity', 'client_identity_last_seen_at']));
 
         // Read past the model so no cast or cached attribute can mask a backfill.
-        $row = DB::table('api_tokens')->where('id', $legacy->getKey())->first();
+        $row = DB::table('credentials')->where('id', $legacy->getKey())->first();
 
         $this->assertNotNull($row);
         $this->assertNull($row->client_identity);
@@ -190,16 +196,16 @@ final class ClientIdentityTest extends TestCase
     {
         $headers = $this->adminHeaders();
 
-        $this->getJson('/api/credentials', $headers + [ClientIdentity::HEADER => 'first-client'])->assertOk();
+        $this->getJson('/bfc/credentials', $headers + [ClientIdentity::HEADER => 'first-client'])->assertOk();
 
-        $seenAt = $this->adminToken()->client_identity_last_seen_at;
+        $seenAt = $this->adminCredential()->client_identity_last_seen_at;
         $this->assertNotNull($seenAt);
 
         $this->travel(1)->minutes();
 
-        $this->getJson('/api/credentials', $headers)->assertOk();
+        $this->getJson('/bfc/credentials', $headers)->assertOk();
 
-        $token = $this->adminToken();
+        $token = $this->adminCredential();
 
         $this->assertSame('first-client', $token->client_identity);
         $this->assertTrue($token->client_identity_last_seen_at?->equalTo($seenAt));
@@ -211,16 +217,16 @@ final class ClientIdentityTest extends TestCase
         $headers = $this->adminHeaders();
         $identity = 'stable-client-id';
 
-        $this->getJson('/api/credentials', $headers + [ClientIdentity::HEADER => $identity])->assertOk();
+        $this->getJson('/bfc/credentials', $headers + [ClientIdentity::HEADER => $identity])->assertOk();
 
-        $seenAt = $this->adminToken()->client_identity_last_seen_at;
+        $seenAt = $this->adminCredential()->client_identity_last_seen_at;
         $this->assertNotNull($seenAt);
 
         $this->travel(1)->minutes();
 
-        $this->getJson('/api/credentials', $headers + [ClientIdentity::HEADER => $identity])->assertOk();
+        $this->getJson('/bfc/credentials', $headers + [ClientIdentity::HEADER => $identity])->assertOk();
 
-        $token = $this->adminToken();
+        $token = $this->adminCredential();
 
         $this->assertSame($identity, $token->client_identity);
         $this->assertTrue($token->client_identity_last_seen_at?->greaterThan($seenAt));
@@ -230,20 +236,21 @@ final class ClientIdentityTest extends TestCase
     {
         $headers = $this->adminHeaders();
 
-        $this->getJson('/api/credentials', $headers + [ClientIdentity::HEADER => 'old-client'])->assertOk();
-        $this->getJson('/api/credentials', $headers + [ClientIdentity::HEADER => 'new-client'])->assertOk();
+        $this->getJson('/bfc/credentials', $headers + [ClientIdentity::HEADER => 'old-client'])->assertOk();
+        $this->getJson('/bfc/credentials', $headers + [ClientIdentity::HEADER => 'new-client'])->assertOk();
 
-        $this->assertSame('new-client', $this->adminToken()->client_identity);
+        $this->assertSame('new-client', $this->adminCredential()->client_identity);
     }
 
     // FIX 1 — the onboarding verify endpoint authenticates a real durable token too.
     public function test_it_records_the_client_identity_on_the_onboarding_verify_endpoint(): void
     {
         $plaintext = 'durable-secret';
-        ApiToken::factory()->create([
+        $this->app->instance(CredentialDeclaration::class, new UnifiedStoreDeclaration);
+        Credential::factory()->create([
             'name' => 'person@example.test',
-            'token_hash' => hash('sha256', $plaintext),
-            'abilities' => [Scope::Consume->value],
+            'secret_hash' => hash('sha256', $plaintext),
+            'abilities' => ['consume'],
         ]);
 
         $this->postJson('/bfc/onboarding/verify', [], [
@@ -251,7 +258,7 @@ final class ClientIdentityTest extends TestCase
             ClientIdentity::HEADER => 'onboarding-client',
         ])->assertOk()->assertJsonPath('ok', true);
 
-        $token = ApiToken::query()->where('name', 'person@example.test')->firstOrFail();
+        $token = Credential::query()->where('name', 'person@example.test')->firstOrFail();
 
         $this->assertSame('onboarding-client', $token->client_identity);
         $this->assertNotNull($token->client_identity_last_seen_at);
@@ -261,10 +268,11 @@ final class ClientIdentityTest extends TestCase
     public function test_a_malformed_client_identity_does_not_disturb_the_onboarding_verify_endpoint(): void
     {
         $plaintext = 'durable-secret';
-        ApiToken::factory()->create([
+        $this->app->instance(CredentialDeclaration::class, new UnifiedStoreDeclaration);
+        Credential::factory()->create([
             'name' => 'person@example.test',
-            'token_hash' => hash('sha256', $plaintext),
-            'abilities' => [Scope::Consume->value],
+            'secret_hash' => hash('sha256', $plaintext),
+            'abilities' => ['consume'],
         ]);
 
         $this->postJson('/bfc/onboarding/verify', [], [
@@ -273,10 +281,10 @@ final class ClientIdentityTest extends TestCase
         ])->assertOk()->assertExactJson([
             'ok' => true,
             'name' => 'person@example.test',
-            'scope' => Scope::Consume->value,
+            'scope' => 'consume',
         ]);
 
-        $this->assertNull(ApiToken::query()->where('name', 'person@example.test')->firstOrFail()->client_identity);
+        $this->assertNull(Credential::query()->where('name', 'person@example.test')->firstOrFail()->client_identity);
     }
 
     // FIX 2 — a write that throws must not reach the customer. The column inherits the consuming
@@ -286,23 +294,13 @@ final class ClientIdentityTest extends TestCase
     {
         $headers = $this->adminHeaders();
 
-        $expected = $this->getJson('/api/credentials', $headers)->assertOk()->json();
+        $expected = $this->getJson('/bfc/credentials', $headers)->assertOk()->json();
 
-        // The listing now reports request_count, and presenting the admin token for the second
-        // request below is itself a counted use — align the snapshot to that one bump.
-        $expected = array_map(static function (array $row): array {
-            if ($row['name'] === 'admin') {
-                $row['request_count']++;
-            }
-
-            return $row;
-        }, $expected);
-
-        Schema::table('api_tokens', function (Blueprint $table): void {
+        Schema::table('credentials', function (Blueprint $table): void {
             $table->dropColumn('client_identity');
         });
 
-        $this->getJson('/api/credentials', $headers + [ClientIdentity::HEADER => 'doomed-client'])
+        $this->getJson('/bfc/credentials', $headers + [ClientIdentity::HEADER => 'doomed-client'])
             ->assertOk()
             ->assertExactJson($expected);
     }
@@ -313,11 +311,11 @@ final class ClientIdentityTest extends TestCase
     {
         Log::shouldReceive('warning')->andThrow(new RuntimeException('log handler is down'));
 
-        $this->getJson('/api/credentials', $this->adminHeaders() + [
+        $this->getJson('/bfc/credentials', $this->adminHeaders() + [
             ClientIdentity::HEADER => str_repeat('a', self::MAX_BYTES + 1),
         ])->assertOk();
 
-        $this->assertNull($this->adminToken()->client_identity);
+        $this->assertNull($this->adminCredential()->client_identity);
     }
 
     // FIX A — a NUL byte is rejected up front. PostgreSQL truncates a bound value at the first
@@ -333,10 +331,10 @@ final class ClientIdentityTest extends TestCase
         $this->assertFalse(ClientIdentity::isValid($identity));
         $this->assertSame('contains a null byte', ClientIdentity::rejectionReason($identity));
 
-        $this->getJson('/api/credentials', $this->adminHeaders() + [ClientIdentity::HEADER => $identity])
+        $this->getJson('/bfc/credentials', $this->adminHeaders() + [ClientIdentity::HEADER => $identity])
             ->assertOk();
 
-        $this->assertNull($this->adminToken()->client_identity);
+        $this->assertNull($this->adminCredential()->client_identity);
     }
 
     // FIX C1 — pin the contract's central number. Every other case derives its expectation from
@@ -355,13 +353,13 @@ final class ClientIdentityTest extends TestCase
         $identity = 'needle-a1b2c3d4-identity';
         $headers = $this->adminHeaders();
 
-        Schema::table('api_tokens', function (Blueprint $table): void {
+        Schema::table('credentials', function (Blueprint $table): void {
             $table->dropColumn('client_identity');
         });
 
         // Precondition: the exception really does leak the identity, so this test is not vacuous.
         try {
-            (new TokenRegistry)->recordClientIdentity($this->adminToken(), $identity);
+            (new ClientIdentityRecorder)->recordClientIdentity($this->adminCredential(), $identity);
             $this->fail('expected the write to throw once the column is gone');
         } catch (QueryException $e) {
             $this->assertStringContainsString($identity, $e->getMessage());
@@ -374,7 +372,7 @@ final class ClientIdentityTest extends TestCase
             }
         );
 
-        $this->getJson('/api/credentials', $headers + [ClientIdentity::HEADER => $identity])
+        $this->getJson('/bfc/credentials', $headers + [ClientIdentity::HEADER => $identity])
             ->assertOk();
 
         // FIX C3: exactly one report -- an emptied catch block would produce none.
@@ -396,15 +394,15 @@ final class ClientIdentityTest extends TestCase
             }
         );
 
-        $this->getJson('/api/credentials', $this->adminHeaders())->assertOk();
+        $this->getJson('/bfc/credentials', $this->adminHeaders())->assertOk();
 
         $this->assertSame([], $records);
     }
 
     public function test_the_registry_refuses_to_record_an_invalid_identity(): void
     {
-        $token = ApiToken::factory()->create(['name' => 'direct']);
-        $registry = new TokenRegistry;
+        $token = Credential::factory()->create(['name' => 'direct']);
+        $registry = new ClientIdentityRecorder;
 
         $this->assertFalse($registry->recordClientIdentity($token, str_repeat('a', self::MAX_BYTES + 1)));
         $this->assertNull($token->refresh()->client_identity);
@@ -508,17 +506,21 @@ final class ClientIdentityTest extends TestCase
      */
     private function adminHeaders(string $plaintext = 'secret-admin'): array
     {
-        ApiToken::factory()->create([
+        Credential::factory()->create([
             'name' => 'admin',
-            'token_hash' => hash('sha256', $plaintext),
-            'abilities' => [Scope::Admin->value],
+            'kind' => CredentialKind::Bearer,
+            'subject_type' => SubjectType::Operator,
+            'subject_ref' => 'client-identity-admin',
+            'status' => CredentialStatus::Active,
+            'secret_hash' => hash('sha256', $plaintext),
+            'abilities' => [OperatorAbility::CredentialRead->value],
         ]);
 
         return ['Authorization' => 'Bearer '.$plaintext];
     }
 
-    private function adminToken(): ApiToken
+    private function adminCredential(): Credential
     {
-        return ApiToken::query()->where('name', 'admin')->firstOrFail();
+        return Credential::query()->where('name', 'admin')->firstOrFail();
     }
 }

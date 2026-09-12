@@ -376,7 +376,7 @@ it('fails closed when a matched request loses its route resolver before controll
 });
 
 it('fails closed when a rebound gate swaps the container request for a routeless request', function (): void {
-    app()->bind(EnsureAdminToken::class, RequestSwappingPackageGateMiddleware::class);
+    app()->bind(EnsureCredentialAdmin::class, RequestSwappingPackageGateMiddleware::class);
 
     $owner = ApiToken::factory()->create(['abilities' => [Scope::Admin->value]]);
     $ownership = Ownership::query()->create(['owner_token_id' => $owner->getKey()]);
@@ -393,7 +393,9 @@ it('reports an explicitly inventoried route whose gate is missing entirely', fun
     $router->post('/bfc/ownership/release', [ManageOwnership::class, 'release']);
     $scan = packageGateProtectionScan($router, packageOperatorGateInventory());
 
-    expect($scan['breaks'])->toContain('POST /bfc/ownership/release: missing '.EnsureAdminToken::class);
+    expect($scan['breaks'])->toContain(
+        'POST /bfc/ownership/release: missing '.EnsureCredentialAdmin::class.':'.OperatorAbility::OwnershipRelease->value,
+    );
 
     $owner = ApiToken::factory()->create([
         'name' => 'missing-gate-owner',
