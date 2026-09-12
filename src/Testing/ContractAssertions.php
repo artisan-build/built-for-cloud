@@ -75,10 +75,12 @@ trait ContractAssertions
     public function assertBuiltForCloudOwnershipAuthContract(): void
     {
         $wrongAbility = $this->mintBuiltForCloudOperatorCredential([OperatorAbility::CredentialMint->value]);
+        $consumeToken = $this->mintBuiltForCloudConsumeToken();
 
         foreach (['/bfc/ownership/release', '/bfc/ownership/cancel-transfer'] as $uri) {
             $this->postJson($uri)->assertUnauthorized();
             $this->postJson($uri, [], $this->builtForCloudBearerHeaders($wrongAbility))->assertForbidden();
+            $this->postJson($uri, [], $this->builtForCloudBearerHeaders($consumeToken))->assertForbidden();
         }
 
         $this->postJson('/bfc/ownership/claim', ['token' => 'invalid-contract-claim'])
@@ -93,6 +95,7 @@ trait ContractAssertions
     public function assertBuiltForCloudOnboardingAuthContract(): void
     {
         $wrongAbility = $this->mintBuiltForCloudOperatorCredential([OperatorAbility::CredentialRead->value]);
+        $consumeToken = $this->mintBuiltForCloudConsumeToken();
 
         $this->postJson('/bfc/onboarding/issue', ['email' => 'contract@example.test'])
             ->assertUnauthorized();
@@ -100,6 +103,11 @@ trait ContractAssertions
             '/bfc/onboarding/issue',
             ['email' => 'contract@example.test'],
             $this->builtForCloudBearerHeaders($wrongAbility),
+        )->assertForbidden();
+        $this->postJson(
+            '/bfc/onboarding/issue',
+            ['email' => 'contract@example.test'],
+            $this->builtForCloudBearerHeaders($consumeToken),
         )->assertForbidden();
 
         // The claim surfaces speak the claim contract's error enum: clients
