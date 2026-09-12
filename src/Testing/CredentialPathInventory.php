@@ -576,8 +576,10 @@ final class CredentialPathInventory
 
             $spellings = [$class, '\\'.$class];
 
-            if (($providerImports[self::shortName($class)] ?? null) === $class) {
-                $spellings[] = self::shortName($class);
+            foreach ($providerImports as $alias => $importedClass) {
+                if ($importedClass === $class) {
+                    $spellings[] = $alias;
+                }
             }
 
             foreach ($spellings as $spelling) {
