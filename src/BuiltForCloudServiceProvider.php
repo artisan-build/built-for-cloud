@@ -348,6 +348,11 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $router->post('/bfc/onboarding/verify', [ManageOnboarding::class, 'verify'])
             ->middleware('throttle:bfc-public');
 
+        $this->protectOperatorRoute(
+            $router->get('/bfc/client-observations', ClientObservations::class),
+            $operatorRoutes,
+        );
+
         // The unified store's verb routes (PRD 1.0): the HTTP half of
         // the two-transport rule, at a FIXED /bfc/ path like every
         // other package surface (PRD 1.12's precedent) — part of the

@@ -321,11 +321,14 @@ API listing shape.
   [`POST /bfc/console/keys/{key_id}/retire`](#post-bfcconsolekeyskey_idretire) — where what the
   split would reveal is worth more to an attacker than the diagnostic is to an operator; each
   answers one uniform `403` to every pre-authorization failure alike.
-- **Operator routes** (the `/bfc/credentials` and `/bfc/subjects` verbs)
+- **Operator routes** (the `/bfc/credentials`, `/bfc/subjects`, ownership release,
+  onboarding issue, and client-observation verbs)
   additionally accept a unified-store `operator` credential, authorized **per verb family**
   (GATE-3.7 least privilege). The ability vocabulary: `credential:read` (the listing — an
   audited sensitive read), `credential:mint` (credential minting), `credential:rotate`
   (rotate + the hmac activate cutover, same family), `credential:revoke`, `subject:offboard`,
+  `ownership:release` (release or cancel an ownership transfer, deliberately separate from
+  credential and subject lifecycle authority),
   `audit:read` (vocabulary now; the first audit-read surface will enforce it), and
   `console:key:write` (write this deployment's console key ring — file a countersigning key with
   [`POST /bfc/console/re-key`](#post-bfcconsolere-key), retire one with
@@ -341,8 +344,8 @@ API listing shape.
   gate, which requires an operator subject and an abilities list EXACTLY equal to
   `{metadata:read}`. There is **no wildcard**; a credential with no abilities can do nothing. The
   one admin-equivalent name is **`credential:admin`** — the explicit break-glass, expanding
-  to exactly the seven operator abilities `credential:read`, `credential:mint`,
-  `credential:rotate`, `credential:revoke`, `subject:offboard`, `audit:read` and
+  to exactly the eight operator abilities `credential:read`, `credential:mint`,
+  `credential:rotate`, `credential:revoke`, `subject:offboard`, `ownership:release`, `audit:read` and
   `console:key:write` (never the MCP pair); it is what
   `bfc:install:operator-credential` mints, and holding that literal name in the abilities
   list is how a break-glass credential is marked.
@@ -486,6 +489,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `DELETE /bfc/me/sessions/others` | `metadata` | redirect after caller-owned session deletion |
 | `DELETE /bfc/me/sessions/{session}` | `metadata` | redirect after one caller-owned session deletion |
 | `GET /api/credentials` | `content` | rows carry free-text names, subject refs and client identities |
+| `GET /bfc/client-observations` | `content` | client-claimed free-text identities |
 | `GET /api/credentials/client-observations` | `content` | client-claimed free-text identities |
 | `POST /api/credentials` | `content` | single reveal of the minted plaintext, plus the free-text name |
 | `DELETE /api/credentials/id/{id}` | `metadata` | empty `204` body |
@@ -708,7 +712,7 @@ failure separately would spend a single-use code on a deployment that ended up u
 
 ### POST /bfc/ownership/release
 
-*Admin token.* Begin a make-before-break ownership transfer: mints a fresh one-time ownership
+*Unified operator credential with `ownership:release`, or `credential:admin` break-glass.* Begin a make-before-break ownership transfer: mints a fresh one-time ownership
 claim code for the successor. The current owner token keeps working until the successor claims.
 
 - **201** — `{"ownership_claim_code": "..."}` — the single reveal.
@@ -716,7 +720,7 @@ claim code for the successor. The current owner token keeps working until the su
 
 ### POST /bfc/ownership/cancel-transfer
 
-*Admin token.* Cancel a pending transfer (consumes the outstanding claim code).
+*Unified operator credential with `ownership:release`, or `credential:admin` break-glass.* Cancel a pending transfer (consumes the outstanding claim code).
 
 - **200** — `{"ok": true}`. Idempotent: also `200` when no transfer was pending.
 
@@ -742,7 +746,7 @@ advisory statuses:
 
 ### POST /bfc/onboarding/issue
 
-*Admin token.* Mint a claim code.
+*Unified operator credential with `credential:mint`, or `credential:admin` break-glass.* Mint a claim code.
 
 **Request** — `{"email": "a@b.c" | null, "scope": "consume" | "admin" | "onboard",
 "ttl_seconds": 3600, "console_key_authority": false}`.
@@ -1140,15 +1144,22 @@ input to the consumer's own health mapper, never a verdict. `presentation_cadenc
 app's declared presentation rhythm (null = none declared); when declared it is also sent once as
 the `BFC-Presentation-Cadence` response header.
 
-### GET /api/credentials/client-observations
+### GET /bfc/client-observations
 
 Identities claimed on requests that presented **no valid credential**. Advisory and spoofable by
-design — the payload says so itself.
+design — the payload says so itself. Requires a unified operator credential with
+`credential:read`, or `credential:admin` break-glass. The fixed route is always registered with
+the HTTP surface and is not controlled by the legacy credential API flag or prefix.
 
 **200** — `{"enabled": bool, "advisory": true, "spoofable": true, "note": "...",
 "at_capacity": bool, "max_observations": 100, "observations": [{"client_identity": "...",
 "first_seen_at": "...", "last_seen_at": "...", "observation_count": 3}]}`. `observations` is
 `[]` while the feature is disabled (`enabled` distinguishes "off" from "on and quiet").
+
+### GET /api/credentials/client-observations
+
+Transitional configurable-prefix alias for `GET /bfc/client-observations`. It has the same unified
+`credential:read` gate and response while the legacy credential route family remains mounted.
 
 ### POST /api/credentials
 

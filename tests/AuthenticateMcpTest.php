@@ -2,22 +2,26 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\Audit\AppActionActor;
 use ArtisanBuild\BuiltForCloud\Audit\AppActorType;
+use ArtisanBuild\BuiltForCloud\AuditActor;
+use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Console\AssertionBurn;
 use ArtisanBuild\BuiltForCloud\Console\AssertionRefusalReason;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleEntryRefusalReason;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleSession;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
+use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\Exceptions\AssertionRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\SelfServiceUnavailable;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
-use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
@@ -39,11 +43,14 @@ beforeEach(function (): void {
 
     Route::post('/mcp-probe', function (Request $request): array {
         $acting = app(ActingPrincipalResolver::class)->resolve();
-        $audit = $acting->check() ? AppActionActor::fromActingPrincipal($acting) : null;
+        $actorCredentialId = $request->attributes->get('bfc.actor_credential_id');
+        $audit = is_string($actorCredentialId) && $actorCredentialId !== ''
+            ? AuditActor::operatorIntegration($actorCredentialId)
+            : ($acting->check() ? AppActionActor::fromActingPrincipal($acting) : null);
         $user = $request->user();
         $userId = match (true) {
             $user instanceof DelegatedActor => $user->getAuthIdentifier(),
-            $user instanceof ApiToken => $user->getKey(),
+            $user instanceof Credential => $user->getKey(),
             default => null,
         };
 
@@ -51,6 +58,7 @@ beforeEach(function (): void {
             'user_type' => is_object($user) ? $user::class : null,
             'user_id' => $userId,
             'actor_token_id' => $request->attributes->get('bfc.actor_token_id'),
+            'actor_credential_id' => $actorCredentialId,
             'acting_id' => $acting->identifier(),
             'delegated' => $acting->delegated,
             'guard' => $acting->guard,
@@ -58,7 +66,7 @@ beforeEach(function (): void {
             'on_behalf_of' => $acting->onBehalfOf,
             'audit_type' => $audit?->type->value,
             'audit_ref' => $audit?->ref,
-            'audit_agency' => $audit?->onBehalfOf,
+            'audit_agency' => $audit instanceof AppActionActor ? $audit->onBehalfOf : null,
             'authorization' => $request->header('Authorization'),
             'server_authorization' => $request->server->get('HTTP_AUTHORIZATION'),
             'redirect_server_authorization' => $request->server->get('REDIRECT_HTTP_AUTHORIZATION'),
@@ -120,6 +128,22 @@ function mcpRequest(array $overrides = [], string $keyId = 'k1', ?AsymmetricSecr
 {
     return test()->postJson('/mcp-probe', [], [
         'Authorization' => 'Bearer '.mcpAssertion($overrides, $keyId, $secret),
+    ]);
+}
+
+/** @param list<string>|null $abilities */
+function mcpStoreCredential(
+    string $secret,
+    SubjectType $subjectType = SubjectType::Application,
+    ?array $abilities = null,
+): Credential {
+    return Credential::query()->create([
+        'kind' => CredentialKind::Bearer,
+        'subject_type' => $subjectType,
+        'subject_ref' => 'mcp-'.bin2hex(random_bytes(8)),
+        'name' => 'mcp credential',
+        'abilities' => $abilities,
+        'secret_hash' => hash('sha256', $secret),
     ]);
 }
 
@@ -272,22 +296,48 @@ it('writes no session key under an assertion', function (): void {
         ->not->toHaveKey(ConsoleSession::ON_BEHALF_OF);
 });
 
-it('authenticates a TokenRegistry bearer and does not leak the prior request assertion memo', function (): void {
+it('authenticates a unified bearer, records its use and does not leak the prior request assertion memo', function (): void {
     mcpRequest(['sub' => 'first-request'])->assertOk();
 
-    $plaintext = 'registry-'.bin2hex(random_bytes(16));
-    $token = ApiToken::query()->create([
-        'name' => 'mcp registry token',
-        'token_hash' => hash('sha256', $plaintext),
-        'abilities' => ['apps:call'],
-    ]);
+    $plaintext = 'credential-'.bin2hex(random_bytes(16));
+    $credential = mcpStoreCredential($plaintext, abilities: ['apps:call']);
 
-    $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$plaintext])
+    expect($credential->last_used_at)->toBeNull();
+
+    $this->postJson('/mcp-probe', [], [
+        'Authorization' => 'Bearer '.$plaintext,
+        'X-BfC-Client-Id' => 'mcp-client',
+    ])
         ->assertOk()
-        ->assertJsonPath('user_type', ApiToken::class)
-        ->assertJsonPath('user_id', $token->getKey())
+        ->assertJsonPath('user_type', Credential::class)
+        ->assertJsonPath('user_id', $credential->getKey())
+        ->assertJsonPath('actor_token_id', null)
+        ->assertJsonPath('actor_credential_id', null)
         ->assertJsonPath('acting_id', null)
         ->assertJsonPath('delegated', false);
+
+    $credential->refresh();
+
+    expect($credential->last_used_at)->not->toBeNull()
+        ->and($credential->client_identity)->toBe('mcp-client')
+        ->and($credential->client_identity_last_seen_at)->not->toBeNull();
+});
+
+it('uniformly refuses a credential that dies between resolution and usage', function (): void {
+    $plaintext = 'dies-before-use-'.bin2hex(random_bytes(16));
+    $credential = mcpStoreCredential($plaintext);
+
+    Credential::retrieved(static function (Credential $resolved) use ($credential): void {
+        if ($resolved->id === $credential->id) {
+            Credential::query()->whereKey($resolved->id)->delete();
+        }
+    });
+
+    $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$plaintext])
+        ->assertUnauthorized()
+        ->assertExactJson(['message' => 'Unauthenticated.']);
+
+    expect(CredentialAuditEvent::query()->where('credential_id', $credential->id)->count())->toBe(0);
 });
 
 it('keeps local and browser-session consumers closed to a request assertion', function (): void {
@@ -301,56 +351,70 @@ it('keeps local and browser-session consumers closed to a request assertion', fu
         ->assertJsonPath('refused', true);
 });
 
-it('grants the admin actor attribute only to an admin-scoped registry token', function (): void {
-    // A non-admin, MCP-scoped token authenticates this door — that is
-    // the point of a per-tool gate — but `bfc.actor_token_id` means
-    // "an ADMIN token authenticated" (EnsureAdminToken's convention;
-    // six package readers convert it straight into an admin audit
-    // actor), so a token without the scope must not carry it.
-    $limited = 'non-admin-'.bin2hex(random_bytes(16));
-    $limitedToken = ApiToken::query()->create([
-        'name' => 'mcp non-admin token',
-        'token_hash' => hash('sha256', $limited),
-        'abilities' => ['apps:call'],
-    ]);
+it('gives a non-admin unified bearer no admin attribution', function (): void {
+    $plaintext = 'non-admin-'.bin2hex(random_bytes(16));
+    $credential = mcpStoreCredential($plaintext, SubjectType::Operator, ['apps:call']);
 
-    $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$limited])
+    $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$plaintext])
         ->assertOk()
-        ->assertJsonPath('user_type', ApiToken::class)
-        ->assertJsonPath('user_id', $limitedToken->getKey())
-        ->assertJsonPath('actor_token_id', null);
+        ->assertJsonPath('user_type', Credential::class)
+        ->assertJsonPath('user_id', $credential->id)
+        ->assertJsonPath('actor_token_id', null)
+        ->assertJsonPath('actor_credential_id', null)
+        ->assertJsonPath('audit_type', null)
+        ->assertJsonPath('audit_ref', null);
 
-    $admin = 'admin-'.bin2hex(random_bytes(16));
-    $adminToken = ApiToken::query()->create([
-        'name' => 'mcp admin token',
-        'token_hash' => hash('sha256', $admin),
-        'abilities' => [Scope::Admin->value],
-    ]);
-
-    $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$admin])
-        ->assertOk()
-        ->assertJsonPath('actor_token_id', (string) $adminToken->getKey());
+    expect(CredentialAuditEvent::query()->where('actor_type', AuditActorType::AdminToken->value)->count())->toBe(0);
 });
 
-it('never falls through between registry and assertion authentication paths', function (): void {
+it('attributes only an operator credential with credential admin ability', function (): void {
+    $plaintext = 'operator-admin-'.bin2hex(random_bytes(16));
+    $credential = mcpStoreCredential($plaintext, SubjectType::Operator, [EnsureCredentialAdmin::ABILITY]);
+
+    $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$plaintext])
+        ->assertOk()
+        ->assertJsonPath('user_type', Credential::class)
+        ->assertJsonPath('user_id', $credential->id)
+        ->assertJsonPath('actor_token_id', null)
+        ->assertJsonPath('actor_credential_id', $credential->id)
+        ->assertJsonPath('audit_type', AuditActorType::OperatorIntegration->value)
+        ->assertJsonPath('audit_ref', $credential->id);
+
+    expect(CredentialAuditEvent::query()->where('actor_type', AuditActorType::AdminToken->value)->count())->toBe(0);
+});
+
+it('gives a non-operator with credential admin ability no admin attribution', function (): void {
+    $plaintext = 'application-admin-'.bin2hex(random_bytes(16));
+    $credential = mcpStoreCredential($plaintext, SubjectType::Application, [EnsureCredentialAdmin::ABILITY]);
+
+    $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$plaintext])
+        ->assertOk()
+        ->assertJsonPath('user_type', Credential::class)
+        ->assertJsonPath('user_id', $credential->id)
+        ->assertJsonPath('actor_token_id', null)
+        ->assertJsonPath('actor_credential_id', null)
+        ->assertJsonPath('audit_type', null)
+        ->assertJsonPath('audit_ref', null);
+
+    expect(CredentialAuditEvent::query()->where('actor_type', AuditActorType::AdminToken->value)->count())->toBe(0);
+});
+
+it('never falls through between store bearer and assertion authentication paths', function (): void {
     // An ordinary invalid bearer is never parsed or assertion-audited.
     $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer not-an-assertion'])
         ->assertUnauthorized();
 
     $foreign = consoleKeypair();
     $assertion = mcpAssertion([], 'not-filed', $foreign);
-    $token = ApiToken::query()->create([
-        'name' => 'collision witness',
-        'token_hash' => hash('sha256', $assertion),
-        'abilities' => ['apps:call'],
-    ]);
+    $credential = mcpStoreCredential($assertion, abilities: ['apps:call']);
 
     // Prefix selects assertion exclusively even though these exact bytes are
-    // also a resolvable registry token.
+    // also a resolvable unified credential.
     $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$assertion])
         ->assertUnauthorized();
 
-    expect($token->refresh()->request_count)->toBe(0)
+    expect($credential->refresh()->last_used_at)->toBeNull()
+        ->and(CredentialAuditEvent::query()->where('credential_id', $credential->id)->count())->toBe(0)
         ->and(mcpRefusalReasons())->toBe([AssertionRefusalReason::UnknownKey->value]);
 });
 

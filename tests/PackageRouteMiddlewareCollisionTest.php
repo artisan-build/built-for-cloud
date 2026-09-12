@@ -118,9 +118,9 @@ beforeEach(function (): void {
 function packageOperatorGateInventory(): array
 {
     return [
-        'POST /bfc/ownership/release' => ['uri' => 'bfc/ownership/release', 'methods' => ['POST'], 'action' => ManageOwnership::class.'@release', 'gate' => EnsureAdminToken::class],
-        'POST /bfc/ownership/cancel-transfer' => ['uri' => 'bfc/ownership/cancel-transfer', 'methods' => ['POST'], 'action' => ManageOwnership::class.'@cancelTransfer', 'gate' => EnsureAdminToken::class],
-        'POST /bfc/onboarding/issue' => ['uri' => 'bfc/onboarding/issue', 'methods' => ['POST'], 'action' => ManageOnboarding::class.'@issue', 'gate' => EnsureAdminToken::class],
+        'POST /bfc/ownership/release' => ['uri' => 'bfc/ownership/release', 'methods' => ['POST'], 'action' => ManageOwnership::class.'@release', 'gate' => EnsureCredentialAdmin::class.':'.OperatorAbility::OwnershipRelease->value],
+        'POST /bfc/ownership/cancel-transfer' => ['uri' => 'bfc/ownership/cancel-transfer', 'methods' => ['POST'], 'action' => ManageOwnership::class.'@cancelTransfer', 'gate' => EnsureCredentialAdmin::class.':'.OperatorAbility::OwnershipRelease->value],
+        'POST /bfc/onboarding/issue' => ['uri' => 'bfc/onboarding/issue', 'methods' => ['POST'], 'action' => ManageOnboarding::class.'@issue', 'gate' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialMint->value],
         'GET /bfc/credentials' => ['uri' => 'bfc/credentials', 'methods' => ['GET', 'HEAD'], 'action' => ManageCredentials::class.'@index', 'gate' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRead->value],
         'POST /bfc/credentials' => ['uri' => 'bfc/credentials', 'methods' => ['POST'], 'action' => ManageCredentials::class.'@store', 'gate' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialMint->value],
         'DELETE /bfc/credentials/{id}' => ['uri' => 'bfc/credentials/{id}', 'methods' => ['DELETE'], 'action' => ManageCredentials::class.'@destroy', 'gate' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRevoke->value],
@@ -131,8 +131,9 @@ function packageOperatorGateInventory(): array
         'GET /bfc/console/vitals' => ['uri' => 'bfc/console/vitals', 'methods' => ['GET', 'HEAD'], 'action' => ConsoleVitals::class, 'gate' => EnsureDashboardCredential::class],
         'GET /bfc/console/chrome.js' => ['uri' => 'bfc/console/chrome.js', 'methods' => ['GET', 'HEAD'], 'action' => ConsoleChromeScript::class, 'gate' => EnsureConsoleSession::class],
         'POST /bfc/subjects/offboard' => ['uri' => 'bfc/subjects/offboard', 'methods' => ['POST'], 'action' => ManageSubjects::class.'@offboard', 'gate' => EnsureCredentialAdmin::class.':'.OperatorAbility::SubjectOffboard->value],
+        'GET /bfc/client-observations' => ['uri' => 'bfc/client-observations', 'methods' => ['GET', 'HEAD'], 'action' => ClientObservations::class, 'gate' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRead->value],
         'GET /api/credentials' => ['uri' => 'api/credentials', 'methods' => ['GET', 'HEAD'], 'action' => ManageTokens::class.'@index', 'gate' => EnsureAdminToken::class],
-        'GET /api/credentials/client-observations' => ['uri' => 'api/credentials/client-observations', 'methods' => ['GET', 'HEAD'], 'action' => ClientObservations::class, 'gate' => EnsureAdminToken::class],
+        'GET /api/credentials/client-observations' => ['uri' => 'api/credentials/client-observations', 'methods' => ['GET', 'HEAD'], 'action' => ClientObservations::class, 'gate' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRead->value],
         'POST /api/credentials' => ['uri' => 'api/credentials', 'methods' => ['POST'], 'action' => ManageTokens::class.'@store', 'gate' => EnsureAdminToken::class],
         'DELETE /api/credentials/id/{id}' => ['uri' => 'api/credentials/id/{id}', 'methods' => ['DELETE'], 'action' => ManageTokens::class.'@destroyById', 'gate' => EnsureAdminToken::class],
         'POST /api/credentials/id/{id}/rotate' => ['uri' => 'api/credentials/id/{id}/rotate', 'methods' => ['POST'], 'action' => ManageTokens::class.'@rotateById', 'gate' => EnsureAdminToken::class],

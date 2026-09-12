@@ -5,11 +5,11 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Notifications\CredentialLifecycleNotification;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ConfigMapHolderDeclaration;
-use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Notifications\AnonymousNotifiable;
@@ -30,13 +30,22 @@ it('warns once, idempotently across runs, for a durable whose chosen expiry is i
     Notification::fake();
     config()->set('built-for-cloud.credentials.declaration', ConfigMapHolderDeclaration::class);
 
-    $registry = app(TokenRegistry::class);
-    $expiringToken = $registry->store('chose-expiry', hash('sha256', 'expiring-secret'), now()->addHours(24));
-    $foreverToken = $registry->store('no-expiry', hash('sha256', 'forever-secret'));
+    $expiringCredential = Credential::factory()->create(['expires_at' => now()->addHours(24)]);
+    $foreverCredential = Credential::factory()->create(['expires_at' => null]);
+    $pendingCredential = Credential::factory()->pending()->create(['expires_at' => now()->addHours(24)]);
+    $revokedCredential = Credential::factory()->revoked()->create(['expires_at' => now()->addHours(24)]);
+    $legacyToken = ApiToken::query()->create([
+        'name' => 'legacy-expiring',
+        'token_hash' => hash('sha256', 'legacy-expiring-secret'),
+        'expires_at' => now()->addHours(24),
+    ]);
 
     config()->set('built-for-cloud-tests.holder_map', [
-        $expiringToken->id => 'holder@example.test',
-        $foreverToken->id => 'never-mailed@example.test',
+        $expiringCredential->id => 'holder@example.test',
+        $foreverCredential->id => 'never-mailed@example.test',
+        $pendingCredential->id => 'pending@example.test',
+        $revokedCredential->id => 'revoked@example.test',
+        $legacyToken->id => 'legacy@example.test',
     ]);
 
     $this->artisan('bfc:credentials:warn-expiring')
@@ -48,10 +57,14 @@ it('warns once, idempotently across runs, for a durable whose chosen expiry is i
         ->expectsOutputToContain('Warned about 0 expiring credential(s).')
         ->assertSuccessful();
 
-    expect(expiringEventsFor($expiringToken->id))->toBe(1)
+    expect(expiringEventsFor($expiringCredential->id))->toBe(1)
         // A durable WITHOUT expires_at never warns: expiry is a choice,
         // and nothing here nudges anyone toward making it.
-        ->and(expiringEventsFor($foreverToken->id))->toBe(0);
+        ->and(expiringEventsFor($foreverCredential->id))->toBe(0)
+        ->and(expiringEventsFor($pendingCredential->id))->toBe(0)
+        ->and(expiringEventsFor($revokedCredential->id))->toBe(0)
+        // The transitional legacy store is no longer scanned.
+        ->and(expiringEventsFor($legacyToken->id))->toBe(0);
 
     Notification::assertSentOnDemandTimes(CredentialLifecycleNotification::class, 1);
     Notification::assertSentOnDemand(
@@ -60,21 +73,18 @@ it('warns once, idempotently across runs, for a durable whose chosen expiry is i
             && ($notifiable->routes['mail'] ?? null) === 'holder@example.test',
     );
 
-    // An extended expiry re-arms the warning for the new date. (Model
-    // updates on api_tokens are allowed; only the audit table is
-    // append-only.)
-    ApiToken::query()->whereKey($expiringToken->id)->update(['expires_at' => now()->addHours(48)]);
+    // An extended expiry re-arms the warning for the new date.
+    Credential::query()->whereKey($expiringCredential->id)->update(['expires_at' => now()->addHours(48)]);
 
     $this->artisan('bfc:credentials:warn-expiring')->assertSuccessful();
 
-    expect(expiringEventsFor($expiringToken->id))->toBe(2);
+    expect(expiringEventsFor($expiringCredential->id))->toBe(2);
 });
 
 it('ignores expiries outside the window until the window says otherwise', function (): void {
     Notification::fake();
 
-    $registry = app(TokenRegistry::class);
-    $farOut = $registry->store('far-out', hash('sha256', 'far-secret'), now()->addHours(100));
+    $farOut = Credential::factory()->create(['expires_at' => now()->addHours(100)]);
 
     $this->artisan('bfc:credentials:warn-expiring')
         ->expectsOutputToContain('Warned about 0 expiring credential(s).')
@@ -92,8 +102,7 @@ it('ignores expiries outside the window until the window says otherwise', functi
 it('skips a credential revoked between the eligibility select and its warning transaction', function (): void {
     Notification::fake();
 
-    $registry = app(TokenRegistry::class);
-    $token = $registry->store('revoked-under-us', hash('sha256', 'race-secret'), now()->addHours(24));
+    $credential = Credential::factory()->create(['expires_at' => now()->addHours(24)]);
 
     // The command has read its eligible set; before it processes this row,
     // the credential is revoked (a raw write, the way another process
@@ -101,16 +110,15 @@ it('skips a credential revoked between the eligibility select and its warning tr
     // skip silently.
     $armed = true;
 
-    DB::listen(function (QueryExecuted $query) use (&$armed, $token): void {
+    DB::listen(function (QueryExecuted $query) use (&$armed, $credential): void {
         if ($armed
             && preg_match('/^\s*select\b/i', $query->sql) === 1
-            && str_contains($query->sql, 'api_tokens')
+            && str_contains($query->sql, 'credentials')
             && str_contains($query->sql, 'expires_at')) {
             $armed = false;
 
-            DB::table('api_tokens')->where('id', $token->id)->update([
+            DB::table('credentials')->where('id', $credential->id)->update([
                 'revoked_at' => now(),
-                'expires_at' => now(),
             ]);
         }
     });
@@ -120,7 +128,7 @@ it('skips a credential revoked between the eligibility select and its warning tr
         ->assertSuccessful();
 
     expect($armed)->toBeFalse()
-        ->and(expiringEventsFor($token->id))->toBe(0);
+        ->and(expiringEventsFor($credential->id))->toBe(0);
 
     Notification::assertNothingSent();
 });
@@ -128,9 +136,8 @@ it('skips a credential revoked between the eligibility select and its warning tr
 it('does not warn about rotation-grace rows despite their one-hour expiry', function (): void {
     Notification::fake();
 
-    $registry = app(TokenRegistry::class);
-    $old = $registry->store('graceful', hash('sha256', 'old-secret'));
-    $registry->rotate('graceful', hash('sha256', 'new-secret'));
+    $old = Credential::factory()->create(['expires_at' => now()->addHour()]);
+    Credential::query()->whereKey($old->id)->update(['rotated_at' => now()]);
 
     // The old row now expires within the window — but it is a superseded
     // grace row, not a chosen expiry.

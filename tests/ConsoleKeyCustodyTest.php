@@ -333,10 +333,11 @@ it('leaves both claim envelopes and the issue verb byte-identical when no key is
         ->and($claim->json('product'))->toBe('Sink');
 
     // And the claim did everything it always did: ownership is held by
-    // an owner token that works.
+    // the unified credential linked behind the wire-compatible key.
     $ownership = Ownership::current();
 
-    expect($ownership?->owner_token_id)->not->toBeNull();
+    expect($ownership?->owner_credential_id)->not->toBeNull()
+        ->and($ownership?->owner_token_id)->toBeNull();
 
     // The onboarding exchange: likewise exactly two keys.
     $exchange = $this->postJson('/bfc/onboarding/exchange', [
@@ -572,7 +573,8 @@ it('refuses a half-filled console_key object rather than reading it as absence (
     }
 
     expect(ConsoleKey::query()->count())->toBe(0)
-        ->and(Ownership::current()?->owner_token_id)->toBeNull();
+        ->and(Ownership::current()?->owner_token_id)->toBeNull()
+        ->and(Ownership::current()?->owner_credential_id)->toBeNull();
 });
 
 // --------------------- J2 — the in-transaction rollback, driven for real
@@ -588,7 +590,7 @@ it('rolls the ownership claim back when the delivered key id is already on file 
 
     // A SECOND deployment claim (a transfer) that re-uses `k1`.
     $owner = Ownership::current();
-    $ownerTokenBefore = $owner?->owner_token_id;
+    $ownerCredentialBefore = $owner?->owner_credential_id;
 
     $release = $this->postJson('/bfc/ownership/release', [], [
         'Authorization' => 'Bearer '.keyCustodyAdminToken(),
@@ -608,7 +610,9 @@ it('rolls the ownership claim back when the delivered key id is already on file 
     // Rolled back whole: the successor did not take ownership, the
     // successor's single-use code is unconsumed and still presentable,
     // and no second keyring row exists.
-    expect(Ownership::current()?->owner_token_id)->toBe($ownerTokenBefore)
+    expect(Ownership::current()?->owner_credential_id)->toBe($ownerCredentialBefore)
+        ->and(Ownership::current()?->owner_token_id)->toBeNull()
+        ->and(Credential::query()->count())->toBe(1)
         ->and(OwnershipClaim::query()->whereNull('consumed_at')->count())->toBe(1)
         ->and(ConsoleKey::query()->count())->toBe(1);
 
@@ -693,9 +697,9 @@ it('re-keys an already-claimed deployment without re-onboarding and without reti
     keyCustodyClaimedDeployment();
 
     $ownershipBefore = Ownership::current();
-    $ownerTokenBefore = $ownershipBefore?->owner_token_id;
+    $ownerCredentialBefore = $ownershipBefore?->owner_credential_id;
 
-    expect($ownerTokenBefore)->not->toBeNull();
+    expect($ownerCredentialBefore)->not->toBeNull();
 
     $writer = keyCustodyWriter();
 
@@ -730,9 +734,10 @@ it('re-keys an already-claimed deployment without re-onboarding and without reti
         ->and(consoleVerify(consoleMint($second, consoleClaims(), 'k2'))->keyId)->toBe('k2');
 
     // No re-onboarding happened: the SAME ownership row, the same owner
-    // token id — compared against a value asserted non-null above, so
+    // credential id — compared against a value asserted non-null above, so
     // this cannot pass by both sides being null.
-    expect(Ownership::current()?->owner_token_id)->toBe($ownerTokenBefore)
+    expect(Ownership::current()?->owner_credential_id)->toBe($ownerCredentialBefore)
+        ->and(Ownership::current()?->owner_token_id)->toBeNull()
         ->and(Ownership::query()->count())->toBe(1)
         // No fresh onboarding code was minted or consumed to do it.
         ->and(OnboardingToken::query()->count())->toBe(0);
@@ -935,7 +940,8 @@ it('refuses to key a deployment nobody owns (AC18)', function (): void {
     // alone never proved "already claimed".
     $writer = keyCustodyWriter();
 
-    expect(Ownership::current()?->owner_token_id)->toBeNull();
+    expect(Ownership::current()?->owner_token_id)->toBeNull()
+        ->and(Ownership::current()?->owner_credential_id)->toBeNull();
 
     $refusal = $this->postJson('/bfc/console/re-key', [
         'key_id' => 'k1',

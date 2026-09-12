@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\BurnMode;
 use ArtisanBuild\BuiltForCloud\ClaimError;
+use ArtisanBuild\BuiltForCloud\ClientIdentityRecorder;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyDelivery;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
@@ -163,6 +164,12 @@ final class ManageOnboarding extends OperatorRouteController
      */
     private function requestActor(Request $request): ?AuditActor
     {
+        $credentialId = $request->attributes->get('bfc.actor_credential_id');
+
+        if (is_string($credentialId) && $credentialId !== '') {
+            return AuditActor::operatorIntegration($credentialId);
+        }
+
         $tokenId = $request->attributes->get('bfc.actor_token_id');
 
         return is_string($tokenId) && $tokenId !== '' ? AuditActor::adminToken($tokenId) : null;
@@ -775,6 +782,8 @@ final class ManageOnboarding extends OperatorRouteController
         if ($credential === null) {
             return ClaimError::CodeNotFound->respond('No live credential matches the one presented.');
         }
+
+        app(ClientIdentityRecorder::class)->recordClientIdentityFromRequest($request, $credential);
 
         return response()->json([
             'ok' => true,

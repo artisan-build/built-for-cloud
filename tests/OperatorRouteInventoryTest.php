@@ -38,8 +38,8 @@ it('derives the complete operator route inventory across optional surface combin
 
     expect($operatorRoutes)->toHaveCount($expected);
 })->with([
-    'console and legacy API enabled' => [true, true, 19],
-    'console only' => [true, false, 13],
-    'legacy API only' => [false, true, 18],
-    'both optional surfaces disabled' => [false, false, 12],
+    'console and legacy API enabled' => [true, true, 20],
+    'console only' => [true, false, 14],
+    'legacy API only' => [false, true, 19],
+    'both optional surfaces disabled' => [false, false, 13],
 ]);
