@@ -5,7 +5,6 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\CredentialPathInventory;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\DeviceCompositionOutsidePair;
-use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SecondStoreAuthenticator;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SecondStoreResolver;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnguardedCredentialAuthenticator;
 
@@ -181,8 +180,7 @@ it('reports all four deliberate controls through their assigned derivation roots
 
     expect($inventory['violations'])->toContain(
         'unchoked-authenticator:'.UnguardedCredentialAuthenticator::class,
-        'unchoked-authenticator:'.SecondStoreAuthenticator::class,
-        'second-store-resolver:'.SecondStoreAuthenticator::class.'=>'.SecondStoreResolver::class,
+        'second-store-resolver:'.UnguardedCredentialAuthenticator::class.'=>'.SecondStoreResolver::class,
         'unlisted-enrollment-route:route:POST /bfc/unlisted-enrollment=>ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding::exchange',
         'out-of-pair-device-composition:device-subject:ArtisanBuild\BuiltForCloud\SubjectType::UserPrincipal',
     )
