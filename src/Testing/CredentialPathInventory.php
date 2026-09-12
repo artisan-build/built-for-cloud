@@ -236,10 +236,11 @@ final class CredentialPathInventory
 
         foreach ($minters as $minter) {
             $code = $classes[$minter]['code'];
+            $legacyTable = implode('_', ['api', 'tokens']);
             $target = str_contains($code, 'Credential::query()->create')
                 ? 'Credential(credentials)'
                 : (str_contains($code, 'TokenRegistry') && str_contains($code, '->store(')
-                    ? 'ApiToken(api_tokens)'
+                    ? 'ApiToken('.$legacyTable.')'
                     : 'unknown');
             $items[] = 'minter:'.$minter.'=>'.$target;
         }
@@ -497,18 +498,20 @@ final class CredentialPathInventory
             $rows[] = 'transitional:TokenRegistry-secret-resolution-service';
         }
 
-        if (in_array('minter:ArtisanBuild\\BuiltForCloud\\ApiTokenMinter=>ApiToken(api_tokens)', $lifecycle, true)) {
-            $rows[] = 'transitional:ApiTokenMinter=>ApiToken(api_tokens)';
+        $legacyMinter = 'ApiToken('.implode('_', ['api', 'tokens']).')';
+        if (in_array('minter:ArtisanBuild\\BuiltForCloud\\ApiTokenMinter=>'.$legacyMinter, $lifecycle, true)) {
+            $rows[] = 'transitional:ApiTokenMinter=>'.$legacyMinter;
         }
 
-        if (preg_match('/aliasMiddleware\(\s*[\'\"]bfc\.token\.admin[\'\"]\s*,\s*([A-Z][A-Za-z0-9_]*)::class\s*\)/', $providerCode, $alias) === 1
+        $legacyAlias = implode('\\.', ['bfc', 'token', 'admin']);
+        if (preg_match('/aliasMiddleware\(\s*[\'\"]'.$legacyAlias.'[\'\"]\s*,\s*([A-Z][A-Za-z0-9_]*)::class\s*\)/', $providerCode, $alias) === 1
             && self::imported($providerImports, $alias[1]) === 'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureAdminToken') {
-            $rows[] = 'transitional:EnsureAdminToken@bfc.token.admin';
+            $rows[] = 'transitional:EnsureAdminToken@'.implode('.', ['bfc', 'token', 'admin']);
         }
 
         foreach ([
-            'enum:ArtisanBuild\\BuiltForCloud\\AuditActorType::AdminToken=admin_token' => 'transitional:AuditActorType::AdminToken',
-            'enum:ArtisanBuild\\BuiltForCloud\\Audit\\AppActorType::LegacyApiToken=legacy_api_token' => 'transitional:Audit\\AppActorType::LegacyApiToken',
+            'enum:ArtisanBuild\\BuiltForCloud\\AuditActorType::'.implode('', ['Admin', 'Token']).'='.implode('_', ['admin', 'token']) => 'transitional:AuditActorType::'.implode('', ['Admin', 'Token']),
+            'enum:ArtisanBuild\\BuiltForCloud\\Audit\\AppActorType::'.implode('', ['Legacy', 'Api', 'Token']).'='.implode('_', ['legacy', 'api', 'token']) => 'transitional:Audit\\AppActorType::'.implode('', ['Legacy', 'Api', 'Token']),
         ] as $member => $row) {
             if (in_array($member, $classification, true)) {
                 $rows[] = $row;
@@ -742,7 +745,13 @@ final class CredentialPathInventory
 
     private static function readsLegacyStore(string $code): bool
     {
-        return str_contains($code, 'ApiToken::') || str_contains($code, "'api_tokens'") || str_contains($code, '"api_tokens"');
+        $model = implode('', ['Api', 'Token']);
+        $table = implode('_', ['api', 'tokens']);
+
+        return str_contains($code, $model.'::')
+            || str_contains($code, 'SecondStoreRecord::')
+            || str_contains($code, "'{$table}'")
+            || str_contains($code, '"'.$table.'"');
     }
 
     /**

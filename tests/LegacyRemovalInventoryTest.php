@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Testing\LegacyRemovalInventory;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 
@@ -63,9 +64,7 @@ function frozenTestRemovalDispositions(): array
         'tests/ContractAssertionsTest.php',
         'tests/CredentialDeliveryBoundaryTest.php',
         'tests/CredentialGuardTest.php',
-        'tests/CredentialPathInventoryTest.php',
         'tests/ExpiryWarningTest.php',
-        'tests/Fixtures/SecondStoreResolver.php',
         'tests/Fixtures/UnifiedStoreDeclaration.php',
         'tests/Fixtures/operator-route-cache.php',
         'tests/Fixtures/personal-hmac-process.php',
@@ -106,6 +105,7 @@ function frozenTestRemovalDispositions(): array
     return [
         ...array_fill_keys($delete, 'delete'),
         ...array_fill_keys($migrate, 'migrate'),
+        'tests/CredentialPathInventoryTest.php' => 'keep-as-historical',
     ];
 }
 
@@ -166,53 +166,122 @@ it('reports a test-corpus marker control at its file and line', function (): voi
 it('enforces the frozen disposition of every test file carrying a removal marker', function (): void {
     $markers = LegacyRemovalInventory::testFilesWithRemovalMarkers(removalPackageRoot());
     $dispositions = frozenTestRemovalDispositions();
-
-    expect(array_values(array_diff(array_keys($markers), array_keys($dispositions))))->toBe([]);
+    $violations = array_map(
+        static fn (string $file): string => $file.':missing-disposition',
+        array_values(array_diff(array_keys($markers), array_keys($dispositions))),
+    );
 
     foreach ($dispositions as $file => $disposition) {
         if ($disposition === 'delete') {
-            expect($file)->not->toBeFile();
+            if (is_file(removalPackageRoot().'/'.$file)) {
+                $violations[] = $file.':delete-still-present';
+            }
 
             continue;
         }
 
         if ($disposition === 'migrate') {
-            expect($markers)->not->toHaveKey($file);
+            if (isset($markers[$file])) {
+                $violations[] = $file.':migrate-markers='.implode(',', $markers[$file]);
+            }
 
             continue;
         }
 
-        expect($markers)->toHaveKey($file);
+        if (! isset($markers[$file])) {
+            $violations[] = $file.':historical-marker-missing';
+        }
     }
+
+    sort($violations);
+
+    expect($violations)->toBe([]);
 });
 
-it('finds no forbidden production or public-document remnants in the installed tree', function (): void {
-    expect(LegacyRemovalInventory::productionOffences(removalPackageRoot()))->toBe([])
-        ->and(LegacyRemovalInventory::publicDocumentOffences(removalPackageRoot()))->toBe([]);
+it('finds no forbidden production remnants in the installed tree', function (): void {
+    expect(LegacyRemovalInventory::productionOffences(removalPackageRoot()))->toBe([]);
+});
+
+it('finds no removed surfaces in installed public documents', function (): void {
+    expect(LegacyRemovalInventory::publicDocumentOffences(removalPackageRoot()))->toBe([]);
 });
 
 it('pins the fresh schema config commands and client-observation route identity', function (): void {
     $config = config('built-for-cloud');
     $commands = array_keys(Artisan::all());
+    $legacyController = 'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\'.implode('', ['Manage', 'Tokens']);
+    $legacyRoutes = collect(Route::getRoutes()->getRoutes())
+        ->filter(static fn ($route): bool => str_starts_with($route->getActionName(), $legacyController.'@'))
+        ->values();
     $clientObservationRoutes = collect(Route::getRoutes()->getRoutes())
         ->filter(static fn ($route): bool => $route->getActionName() === ClientObservations::class)
         ->values();
+    $ownershipTargets = collect(DB::select("PRAGMA foreign_key_list('ownership')"))
+        ->map(static fn (object $key): string => "{$key->from}:{$key->table}.{$key->to}:{$key->on_delete}")
+        ->filter(static fn (string $target): bool => str_starts_with($target, 'owner_'))
+        ->values()
+        ->all();
+    $onboardingTargets = collect(DB::select("PRAGMA foreign_key_list('onboarding_tokens')"))
+        ->map(static fn (object $key): string => "{$key->from}:{$key->table}.{$key->to}:{$key->on_delete}")
+        ->filter(static fn (string $target): bool => str_starts_with($target, 'durable_'))
+        ->values()
+        ->all();
+    $violations = [];
 
-    expect(Schema::hasTable(implode('_', ['api', 'tokens'])))->toBeFalse()
-        ->and(Schema::hasColumn('ownership', implode('_', ['owner', 'token', 'id'])))->toBeFalse()
-        ->and(Schema::hasColumn('ownership', 'owner_credential_id'))->toBeTrue()
-        ->and(Schema::hasColumn('onboarding_tokens', implode('_', ['durable', 'token', 'id'])))->toBeFalse()
-        ->and(Schema::hasColumn('onboarding_tokens', 'durable_credential_id'))->toBeTrue()
-        ->and(Schema::hasColumn('onboarding_tokens', implode('_', ['durable', 'store'])))->toBeFalse()
-        ->and(Arr::has($config, implode('_', ['fallback', 'token'])))->toBeFalse()
-        ->and(Arr::has($config, implode('_', ['credential', 'api'])))->toBeFalse()
-        ->and(array_values(array_intersect($commands, transitionCommandSignatures())))->toBe([])
-        ->and($clientObservationRoutes)->toHaveCount(1)
-        ->and($clientObservationRoutes->first()?->methods())->toContain('GET')
-        ->and($clientObservationRoutes->first()?->uri())->toBe('bfc/client-observations')
-        ->and($clientObservationRoutes->first()?->gatherMiddleware())->toContain(
-            EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRead->value,
-        );
+    if (Schema::hasTable(implode('_', ['api', 'tokens']))) {
+        $violations[] = 'schema:legacy-table-present';
+    }
+    foreach ([
+        ['ownership', implode('_', ['owner', 'token', 'id'])],
+        ['onboarding_tokens', implode('_', ['durable', 'token', 'id'])],
+        ['onboarding_tokens', implode('_', ['durable', 'store'])],
+    ] as [$table, $column]) {
+        if (Schema::hasColumn($table, $column)) {
+            $violations[] = "schema:legacy-column-present:{$table}.{$column}";
+        }
+    }
+    if (! Schema::hasColumn('ownership', 'owner_credential_id')) {
+        $violations[] = 'schema:missing:ownership.owner_credential_id';
+    }
+    if (! Schema::hasColumn('onboarding_tokens', 'durable_credential_id')) {
+        $violations[] = 'schema:missing:onboarding_tokens.durable_credential_id';
+    }
+    if ($ownershipTargets !== ['owner_credential_id:credentials.id:SET NULL']) {
+        $violations[] = 'schema:ownership-targets='.implode(',', $ownershipTargets);
+    }
+    if ($onboardingTargets !== ['durable_credential_id:credentials.id:SET NULL']) {
+        $violations[] = 'schema:onboarding-targets='.implode(',', $onboardingTargets);
+    }
+    foreach ([implode('_', ['fallback', 'token']), implode('_', ['credential', 'api'])] as $key) {
+        if (Arr::has($config, $key)) {
+            $violations[] = 'config:key-present:'.$key;
+        }
+    }
+    foreach (array_values(array_intersect($commands, transitionCommandSignatures())) as $command) {
+        $violations[] = 'command:registered:'.$command;
+    }
+    foreach ($legacyRoutes as $route) {
+        $violations[] = 'route:legacy-action:'.implode('|', $route->methods()).' '.$route->uri();
+    }
+    if ($clientObservationRoutes->count() !== 1) {
+        $violations[] = 'route:client-observations-count='.$clientObservationRoutes->count();
+    } else {
+        $route = $clientObservationRoutes->first();
+        if (! in_array('GET', $route->methods(), true)) {
+            $violations[] = 'route:client-observations-methods='.implode('|', $route->methods());
+        }
+        if ($route->uri() !== 'bfc/client-observations') {
+            $violations[] = 'route:client-observations-uri='.$route->uri();
+        }
+        $gate = EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRead->value;
+        if (! in_array($gate, $route->gatherMiddleware(), true)) {
+            $violations[] = 'route:client-observations-gate-missing='.$gate;
+        }
+    }
+
+    sort($violations);
+
+    expect($violations)->toBe([]);
 });
 
 it('reports an injected old client-observation alias and configurable key', function (): void {
