@@ -154,6 +154,8 @@ final class MetaController
     /**
      * Additive per the compatibility rule (docs/http-contract.md):
      * consumers feature-detect on membership, never on position.
+     * `tokens` is a historical family name kept for wire stability; it now
+     * names credentials served solely by the unified store.
      *
      * @return list<string>
      */

@@ -595,11 +595,9 @@ plane holds this instance.
 name nobody can act on. The four original entries — **`tokens`**, **`ownership`**, **`onboarding`**
 and **`webhooks`** — are UNCONDITIONAL: every install of the package reports all four, whatever it
 is configured to serve. They name the package's four original feature families, and they are not
-predicates about this deployment. One of them reads like one and is not: **`tokens` does not say the
-legacy credential API is mounted.** That surface is gated on `built-for-cloud.credential_api.enabled`
-(default `false`) and **no capability reports it** — an instance reporting `tokens` may answer `404`
-to every route under [the legacy credential API](#the-legacy-credential-api-api_tokens-store). The
-entries below are the ones that do carry a predicate, and each states it.
+predicates about this deployment. **`tokens` is a historical family name retained for wire
+stability; it names the credential family now served solely by the unified store.** The entries
+below are the ones that do carry a predicate, and each states it.
 
 `console-keys` means this instance serves the countersigning-key DELIVERY surfaces below: the
 optional claim-time key exchange and `POST /bfc/console/re-key`. It deliberately does **not** say
