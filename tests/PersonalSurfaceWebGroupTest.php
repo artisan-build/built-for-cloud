@@ -133,6 +133,7 @@ final class PersonalSurfaceWebGroupTest extends TestCase
             'POST /bfc/logout',
             'POST /bfc/members/invitations',
             'POST /bfc/reset-password',
+            'POST /bfc/transitions/proposals/{transition}/complete',
             'POST /bfc/transitions/{direction}/prepare',
             'PUT /bfc/members/{user}/role',
             'PUT /bfc/transitions/proposals/{transition}',

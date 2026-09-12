@@ -12,14 +12,15 @@ use Illuminate\Support\Facades\Route as RouteFacade;
 it('derives the standalone surface structurally and detects an added route without its authority gate', function (): void {
     /** @var Router $router */
     $router = app('router');
-    $routes = StandaloneSurfaceInventory::routes($router);
+    $packageRoutes = StandaloneSurfaceInventory::packageRoutes($router);
     $controllers = array_values(array_unique(array_map(
         StandaloneSurfaceInventory::controller(...),
-        $routes,
+        $packageRoutes,
     )));
-    $expectedControllers = StandaloneSurfaceInventory::requiredControllerFamilies();
+    $expectedControllers = array_keys(StandaloneSurfaceInventory::expectedControllerFamilies());
     sort($controllers);
     sort($expectedControllers);
+    $routes = StandaloneSurfaceInventory::routes($router);
 
     expect($routes)->not->toBeEmpty()
         ->and($controllers)->toBe($expectedControllers);
@@ -28,19 +29,20 @@ it('derives the standalone surface structurally and detects an added route witho
         expect($router->gatherRouteMiddleware($route))->toContain(EnsureStandaloneAuthority::class);
     }
 
-    $control = RouteFacade::get('/_bfc-standalone-inventory-control', [FutureLocalAuthenticationController::class, 'authenticate']);
-    $control->setAction([...$control->getAction(), 'bfc_standalone_owned' => true]);
+    $controlController = 'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\FutureLocalAuthenticationController';
+    class_alias(FutureLocalAuthenticationController::class, $controlController);
+    $control = RouteFacade::get('/_bfc-standalone-inventory-control', [$controlController, 'authenticate']);
     $discoveredControl = array_values(array_filter(
-        StandaloneSurfaceInventory::routes($router),
+        StandaloneSurfaceInventory::packageRoutes($router),
         static fn (Route $route): bool => $route === $control,
     ));
     $unexpectedControllers = array_values(array_diff(
-        array_unique(array_map(StandaloneSurfaceInventory::controller(...), StandaloneSurfaceInventory::routes($router))),
+        array_unique(array_map(StandaloneSurfaceInventory::controller(...), StandaloneSurfaceInventory::packageRoutes($router))),
         $expectedControllers,
     ));
 
     expect($discoveredControl)->toHaveCount(1)
-        ->and($unexpectedControllers)->toBe([FutureLocalAuthenticationController::class])
+        ->and($unexpectedControllers)->toBe([$controlController])
         ->and($router->gatherRouteMiddleware($discoveredControl[0]))
         ->not->toContain(EnsureStandaloneAuthority::class);
 });

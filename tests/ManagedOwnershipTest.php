@@ -687,7 +687,7 @@ it('refuses O1 when the seated Owner moved after the request and when the statem
     expect(p4aProtectedState())->toBe($before);
 })->with(['moved', 'older', 'equal']);
 
-it('drives the owner_contested exchange through one O1 pull and re-evaluates the same browser login', function (): void {
+it('accepts inaccessible-owner O1 recovery after billing removal and a long frozen interval', function (): void {
     CarbonImmutable::setTestNow('2026-09-11T12:00:00+00:00');
     $fixture = p4aConfigureAuthority();
     $incumbent = p4aUser('recover-incumbent', 'owner');
@@ -703,6 +703,31 @@ it('drives the owner_contested exchange through one O1 pull and re-evaluates the
         'owner' => ['scalpels_id' => 'subject-fixture', 'membership_status' => 'active', 'role' => 'owner'],
         'seated_owner' => ['scalpels_id' => 'recover-incumbent', 'membership_status' => 'active', 'role' => 'admin'],
     ];
+    DB::table('integration_entitlements')->insert([
+        'id' => (string) Str::uuid(),
+        'integration_namespace' => 'billing-control',
+        'external_subject' => 'installation-fixture',
+        'entitlement_version' => 3,
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    DB::table('integration_events')->insert([
+        'id' => (string) Str::uuid(),
+        'integration_namespace' => 'billing-control',
+        'event_id' => 'ownership-subscription-cancelled',
+        'external_subject' => 'installation-fixture',
+        'event_kind' => 'subscription.cancelled',
+        'entitlement_version' => 4,
+        'applied' => true,
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    DB::table('integration_events')->delete();
+    DB::table('integration_entitlements')->delete();
+    $this->travel(10)->years();
+
+    expect(DB::table('integration_entitlements')->count())->toBe(0)
+        ->and(DB::table('integration_events')->count())->toBe(0);
     $begin = $this->get('/bfc/managed/login')->assertRedirect();
     $nonce = session(ManagedHandoff::SESSION_NONCE_KEY);
     parse_str((string) parse_url((string) $begin->headers->get('Location'), PHP_URL_QUERY), $query);

@@ -668,6 +668,14 @@ final class ManagedTransitions
             if (Schema::hasTable($sessionTable)) {
                 DB::table($sessionTable)->whereIn('user_id', $userIds)->delete();
             }
+            $sessionStore = StandaloneAccess::sessionStore();
+            $sessionConnection = config('session.connection');
+            if ($sessionStore !== null
+                && is_string($sessionConnection)
+                && $sessionConnection !== ''
+                && $sessionConnection !== config('database.default')) {
+                $sessionStore->table($sessionTable)->whereIn('user_id', $userIds)->delete();
+            }
 
             Credential::query()
                 ->whereIn('user_id', $userIds)

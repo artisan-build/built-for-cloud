@@ -481,6 +481,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/transitions/{direction}/prepare` | `metadata` | redirect after preparing and persisting a default proposal |
 | `GET /bfc/transitions/proposals/{transition}` | `content` | package-owned HTML containing authority-roster and local-identity data |
 | `PUT /bfc/transitions/proposals/{transition}` | `metadata` | redirect after replacing the persisted proposal mapping |
+| `POST /bfc/transitions/proposals/{transition}/complete` | `metadata` | redirect after resuming the transition through commit and acknowledgment |
 | `GET /bfc/me/sessions` | `content` | package-owned HTML containing caller-owned session metadata |
 | `DELETE /bfc/me/sessions/others` | `metadata` | redirect after caller-owned session deletion |
 | `DELETE /bfc/me/sessions/{session}` | `metadata` | redirect after one caller-owned session deletion |
@@ -1033,6 +1034,11 @@ missing or duplicate identities, illegal direction-specific dispositions, adopti
 duplicate projected final emails. It locks and rechecks the Owner before replacing the stored mapping;
 staging revalidates the mapping against the current local identities before sending the exact persisted
 mapping to T3.
+
+### POST /bfc/transitions/proposals/{transition}/complete
+
+Owner alone may resume a persisted proposal through staging, local commit, and acknowledgment. Retries
+continue from the transition's durable status rather than blindly replaying a mutating authority leg.
 
 ### GET /bfc/me/sessions
 
