@@ -311,8 +311,11 @@ final class OffboardSubject
 
         $revoked = 0;
         $boundUserIds = [];
+        $processedCredentialIds = [];
 
         foreach ($credentials as $credential) {
+            $processedCredentialIds[] = (string) $credential->getKey();
+
             if ($credential->user_id !== null) {
                 $boundUserIds[] = $credential->user_id;
             }
@@ -355,6 +358,32 @@ final class OffboardSubject
         // account an accepted invitation of this principal CREATED, plus
         // (for a human principal) the account whose email IS the ref.
         [$userIds, $emails, $traversalComplete] = $this->resolvePrincipals($subject, array_values(array_unique($boundUserIds)), $integrationNamespace);
+
+        // A user's credentials can belong to several subjects. Sweep every
+        // unified row bound to the resolved users, without processing rows
+        // already reached by the subject sweep a second time.
+        if ($userIds !== []) {
+            /** @var list<Credential> $userCredentials */
+            $userCredentials = Credential::query()
+                ->whereNotNull('user_id')
+                ->whereIn('user_id', $userIds)
+                ->whereNotIn('id', $processedCredentialIds)
+                ->lockForUpdate()
+                ->get()
+                ->all();
+
+            foreach ($userCredentials as $credential) {
+                $this->consumeLinkedCodes((string) $credential->getKey(), DurableStore::Credentials);
+
+                if ($credential->revoked_at !== null) {
+                    continue;
+                }
+
+                $credential->forceFill(['revoked_at' => now()])->save();
+                $this->auditRevocation((string) $credential->getKey(), $actor);
+                $revoked++;
+            }
+        }
 
         // 3 — outstanding claim codes addressed to the principal, with
         // their never-used make-before-break durables.
