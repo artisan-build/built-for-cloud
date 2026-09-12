@@ -28,6 +28,8 @@ use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Subject;
+use ArtisanBuild\BuiltForCloud\SubjectType;
+use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -92,8 +94,7 @@ final class MintCredential
         }
 
         if ($options->purpose === CredentialPurpose::SigningRoot
-            || ($subject->type === \ArtisanBuild\BuiltForCloud\SubjectType::Installation
-                && $subject->ref === \ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac::SUBJECT_REF)
+            || ($subject->type === SubjectType::Installation && $subject->ref === SigningRootMac::SUBJECT_REF)
             || ! $options->purpose->allowedFor($options->kind, $subject->type)) {
             throw InvalidCredentialInput::purposeNotAllowed();
         }

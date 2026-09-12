@@ -16,7 +16,7 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
  * Credential::hasAbility}), and there is NO wildcard value — `*` is not an
  * ability and matches nothing anywhere in the package.
  *
- * The one admin-equivalent name is {@see self::ADMIN} (`credential:admin`,
+ * The one admin-equivalent name is {@see self::Admin} (`credential:admin`,
  * shipped in PRD 1.20 as {@see EnsureCredentialAdmin::ABILITY}): on the
  * operator surfaces it satisfies every ability those routes name, and
  * {@see self::adminEquivalent} is the declared inventory of what that
@@ -68,6 +68,9 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
  */
 enum OperatorAbility: string
 {
+    /** Explicit break-glass access to the bounded operator surfaces. */
+    case Admin = 'credential:admin';
+
     /** Read the credential listings — an audited sensitive read. */
     case CredentialRead = 'credential:read';
 
@@ -147,16 +150,6 @@ enum OperatorAbility: string
     case McpAdmin = 'mcp:admin';
 
     /**
-     * The admin-equivalent break-glass ability
-     * ({@see EnsureCredentialAdmin::ABILITY} — one name, asserted equal in
-     * the test suite). On the operator surfaces, holding it satisfies
-     * whatever ability the route names — see {@see self::adminEquivalent}
-     * for what that is today, and for why the method is an inventory
-     * rather than the bound.
-     */
-    public const string ADMIN = 'credential:admin';
-
-    /**
      * The DECLARED inventory of what `credential:admin` reaches on the
      * operator surfaces — every ability those routes ask for today.
      *
@@ -211,5 +204,26 @@ enum OperatorAbility: string
             self::AuditRead,
             self::ConsoleKeyWrite,
         ];
+    }
+
+    /**
+     * @param  list<string>|null  $abilities
+     * @return list<string>|null
+     */
+    public static function parseValues(?array $abilities): ?array
+    {
+        self::assertValues($abilities);
+
+        return $abilities;
+    }
+
+    /** @param list<string>|null $abilities */
+    public static function assertValues(?array $abilities): void
+    {
+        foreach ($abilities ?? [] as $ability) {
+            if (self::tryFrom($ability) === null) {
+                throw \ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput::unknownAbility($ability);
+            }
+        }
     }
 }

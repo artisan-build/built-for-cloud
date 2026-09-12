@@ -40,6 +40,7 @@ use InvalidArgumentException;
  *
  * @property string $id
  * @property CredentialKind $kind
+ * @property CredentialPurpose $purpose
  * @property SubjectType $subject_type
  * @property string $subject_ref
  * @property string|null $name
@@ -80,6 +81,7 @@ final class Credential extends Model implements Authenticatable
     protected $fillable = [
         'id',
         'kind',
+        'purpose',
         'subject_type',
         'subject_ref',
         'name',
@@ -127,6 +129,7 @@ final class Credential extends Model implements Authenticatable
     {
         return [
             'kind' => CredentialKind::class,
+            'purpose' => CredentialPurpose::class,
             'subject_type' => SubjectType::class,
             'status' => CredentialStatus::class,
             'abilities' => 'array',

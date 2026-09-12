@@ -13,6 +13,7 @@ return new class extends Migration
         Schema::create('credentials', function (Blueprint $table): void {
             $table->uuid('id')->primary();
             $table->string('kind', 32);
+            $table->string('purpose', 32);
             $table->string('subject_type', 32);
             $table->string('subject_ref');
             // Decorative label. Deliberately NON-unique: rotation depends on

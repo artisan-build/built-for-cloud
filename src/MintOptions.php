@@ -45,6 +45,7 @@ final readonly class MintOptions
      */
     public function __construct(
         public CredentialKind $kind = CredentialKind::Bearer,
+        public ?CredentialPurpose $purpose = null,
         public ?string $name = null,
         public ?array $abilities = null,
         public ?CarbonInterface $expiresAt = null,
@@ -74,8 +75,9 @@ final readonly class MintOptions
     {
         return new self(
             kind: self::kindFrom($input['kind'] ?? null),
+            purpose: self::purposeFrom($input['purpose'] ?? null),
             name: self::optionalString($input['name'] ?? null),
-            abilities: self::abilitiesFrom($input['abilities'] ?? null),
+            abilities: OperatorAbility::parseValues(self::abilitiesFrom($input['abilities'] ?? null)),
             expiresAt: self::expiryFrom($input['expires_at'] ?? null),
             userId: self::optionalString($input['user_id'] ?? null),
             codeTtlSeconds: self::codeTtlFrom($input['code_ttl_seconds'] ?? null),
@@ -96,6 +98,25 @@ final readonly class MintOptions
 
         if ($parsed === null) {
             throw InvalidCredentialInput::unknownKind(is_scalar($kind) ? (string) $kind : gettype($kind));
+        }
+
+        return $parsed;
+    }
+
+    private static function purposeFrom(mixed $purpose): ?CredentialPurpose
+    {
+        if ($purpose === null || $purpose === '') {
+            return null;
+        }
+
+        if ($purpose instanceof CredentialPurpose) {
+            return $purpose;
+        }
+
+        $parsed = is_string($purpose) ? CredentialPurpose::tryFrom($purpose) : null;
+
+        if ($parsed === null) {
+            throw InvalidCredentialInput::unknownPurpose(is_scalar($purpose) ? (string) $purpose : gettype($purpose));
         }
 
         return $parsed;
