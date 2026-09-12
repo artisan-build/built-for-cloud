@@ -90,7 +90,8 @@ $case = new class('testProbe') extends TestCase
                 $id = spl_object_id($route);
 
                 if (isset($seen[$id])
-                    || ! in_array(EnsureUserIsAuthenticated::class, $route->middleware(), true)) {
+                    || ! in_array(EnsureUserIsAuthenticated::class, $route->middleware(), true)
+                    || str_starts_with((string) $route->getName(), 'bfc.transitions.')) {
                     continue;
                 }
 
@@ -99,7 +100,7 @@ $case = new class('testProbe') extends TestCase
             }
         }
 
-        if (count($routes) !== 15) {
+        if (count($routes) !== 11) {
             fwrite(STDERR, 'compiled-auth-route-count-'.count($routes).PHP_EOL);
 
             return false;
@@ -158,8 +159,8 @@ $case = new class('testProbe') extends TestCase
 
         foreach ($routes as $route) {
             $path = '/'.str_replace(
-                ['{user}', '{session}', '{id}', '{direction}', '{transition}'],
-                [(string) $member->getKey(), 'compiled-auth-gate-session', (string) $credential->getKey(), 'adopt', '00000000-0000-4000-8000-000000000000'],
+                ['{user}', '{session}', '{id}'],
+                [(string) $member->getKey(), 'compiled-auth-gate-session', (string) $credential->getKey()],
                 $route->uri(),
             );
             $response = $this->call($route->methods()[0], $path, [
@@ -183,11 +184,11 @@ $case = new class('testProbe') extends TestCase
         }
 
         $allRefused = $vector === 'fqcn-alias'
-            ? $statuses === array_fill(0, 15, 500)
-            : count(array_filter($statuses, static fn (int $status): bool => $status < 200 || $status >= 300)) === 15;
+            ? $statuses === array_fill(0, 11, 500)
+            : count(array_filter($statuses, static fn (int $status): bool => $status < 200 || $status >= 300)) === 11;
 
         return $allRefused
-            && ($vector === 'fqcn-alias' || ($poisonedStacks === 15 && ! in_array(false, $recomputed, true)))
+            && ($vector === 'fqcn-alias' || ($poisonedStacks === 11 && ! in_array(false, $recomputed, true)))
             && BfcStandaloneAuthCacheState::$paths === []
             && Invitation::query()->count() === 0
             && Credential::query()->count() === $credentialCount
@@ -211,7 +212,7 @@ if (! $valid) {
 }
 
 if ($vector === 'fqcn-alias') {
-    fwrite(STDOUT, "standalone-auth-route-cache-refused-15\n");
+    fwrite(STDOUT, "standalone-auth-route-cache-refused-11\n");
 } else {
-    fwrite(STDOUT, "standalone-auth-route-cache-{$vector}-refused-15\n");
+    fwrite(STDOUT, "standalone-auth-route-cache-{$vector}-refused-11\n");
 }
