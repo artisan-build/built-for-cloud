@@ -10,6 +10,7 @@ use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Throwable;
 
 final class ManagedTransitions
 {
@@ -164,6 +165,104 @@ final class ManagedTransitions
         });
     }
 
+    public function proposeDefault(ManagedTransition $transition): ManagedTransition
+    {
+        $transition = $this->fresh($transition, [ManagedTransitionStatus::Rostered]);
+        $roster = DB::table('bfc_managed_transition_roster_members')
+            ->where('managed_transition_id', $transition->id)
+            ->orderBy('ordinal')
+            ->get(['scalpels_id', 'role', 'contact_email']);
+        $users = User::query()->orderBy('id')->get([
+            'id', 'email', 'normalized_email', 'role', 'scalpels_issuer', 'scalpels_connection_id', 'scalpels_id',
+        ]);
+        $invitations = Invitation::query()
+            ->pending()
+            ->orderBy('created_at')
+            ->get(['id']);
+        $mapping = [];
+        $linkedUsers = [];
+        $reservedEmails = $users->pluck('normalized_email')->filter()->flip()->all();
+
+        if ($transition->direction === ManagedTransitionDirection::Adopt) {
+            foreach ($roster as $member) {
+                $matched = $users->first(static fn (User $user): bool => $user->scalpels_issuer === $transition->issuer
+                    && $user->scalpels_connection_id === $transition->connection_id
+                    && $user->scalpels_id === $member->scalpels_id);
+
+                if ($matched instanceof User) {
+                    $linkedUsers[(string) $matched->getKey()] = true;
+                    $mapping[] = [
+                        'scalpels_id' => $member->scalpels_id,
+                        'local_kind' => 'user',
+                        'local_id' => (string) $matched->getKey(),
+                        'role' => $member->role,
+                        'disposition' => 'link',
+                        'final_email' => $matched->email,
+                    ];
+
+                    continue;
+                }
+
+                $normalized = strtolower((string) $member->contact_email);
+                $create = ! isset($reservedEmails[$normalized]);
+                if ($create) {
+                    $reservedEmails[$normalized] = true;
+                }
+                $mapping[] = [
+                    'scalpels_id' => $member->scalpels_id,
+                    'local_kind' => null,
+                    'local_id' => null,
+                    'role' => $create ? $member->role : null,
+                    'disposition' => $create ? 'create' : 'defer_to_managed_jit',
+                    'final_email' => $create ? $member->contact_email : null,
+                ];
+            }
+
+            foreach ($users as $user) {
+                if (! isset($linkedUsers[(string) $user->getKey()])) {
+                    $mapping[] = $this->unmatchedLocalElement('user', (string) $user->getKey(), 'exclude');
+                }
+            }
+
+            foreach ($invitations as $invitation) {
+                $mapping[] = $this->unmatchedLocalElement('invitation', (string) $invitation->id, 'exclude');
+            }
+        } else {
+            $rosterBySubject = $roster->keyBy('scalpels_id');
+
+            foreach ($users as $user) {
+                $member = $user->scalpels_issuer === $transition->issuer
+                    && $user->scalpels_connection_id === $transition->connection_id
+                    && is_string($user->scalpels_id)
+                        ? $rosterBySubject->get($user->scalpels_id)
+                        : null;
+                $mapping[] = is_object($member)
+                    ? [
+                        'scalpels_id' => $member->scalpels_id,
+                        'local_kind' => 'user',
+                        'local_id' => (string) $user->getKey(),
+                        'role' => $user->role,
+                        'disposition' => 'link',
+                        'final_email' => $user->email,
+                    ]
+                    : [
+                        'scalpels_id' => null,
+                        'local_kind' => 'user',
+                        'local_id' => (string) $user->getKey(),
+                        'role' => $user->role,
+                        'disposition' => 'retain_local',
+                        'final_email' => $user->email,
+                    ];
+            }
+
+            foreach ($invitations as $invitation) {
+                $mapping[] = $this->unmatchedLocalElement('invitation', (string) $invitation->id, 'retain_local');
+            }
+        }
+
+        return $this->propose($transition, $mapping);
+    }
+
     /** @param list<array<string, mixed>> $mapping */
     public function propose(ManagedTransition $transition, array $mapping): ManagedTransition
     {
@@ -171,13 +270,38 @@ final class ManagedTransitions
             ManagedTransitionStatus::Rostered,
             ManagedTransitionStatus::Proposed,
         ]);
-        $validated = $this->validateMapping($transition, $mapping);
 
-        return DB::transaction(function () use ($transition, $validated): ManagedTransition {
+        return $this->persistProposal($transition, $mapping);
+    }
+
+    /** @param list<array<string, mixed>> $mapping */
+    public function proposeForOwner(User $actor, ManagedTransition $transition, array $mapping): ManagedTransition
+    {
+        $transition = $this->fresh($transition, [
+            ManagedTransitionStatus::Rostered,
+            ManagedTransitionStatus::Proposed,
+        ]);
+
+        return $this->persistProposal($transition, $mapping, $actor);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $mapping
+     */
+    private function persistProposal(
+        ManagedTransition $transition,
+        array $mapping,
+        ?User $actor = null,
+    ): ManagedTransition {
+        return DB::transaction(function () use ($transition, $mapping, $actor): ManagedTransition {
             $locked = $this->locked($transition, [
                 ManagedTransitionStatus::Rostered,
                 ManagedTransitionStatus::Proposed,
             ]);
+            if ($actor instanceof User) {
+                $this->assertOwnerUser($actor, true);
+            }
+            $validated = $this->validateMapping($locked, $mapping);
             DB::table('bfc_managed_transition_mappings')
                 ->where('managed_transition_id', $locked->id)
                 ->delete();
@@ -211,6 +335,7 @@ final class ManagedTransitions
                 ->get(['scalpels_id', 'local_kind', 'local_id', 'role', 'disposition', 'final_email'])
                 ->map(static fn (object $row): array => (array) $row)
                 ->all();
+            $mapping = $this->validateMapping($locked, $mapping);
             $key = $this->randomKey();
             $body = $this->serialize([
                 'connection_id' => $locked->connection_id,
@@ -393,6 +518,7 @@ final class ManagedTransitions
         }
 
         if ($transition->status === ManagedTransitionStatus::Staging) {
+            $this->assertStageMappingCurrent($transition);
             $this->client($transition)->stage();
 
             return $this->advance($transition, ManagedTransitionStatus::Staging, ManagedTransitionStatus::Staged);
@@ -407,6 +533,25 @@ final class ManagedTransitions
         }
 
         return $transition;
+    }
+
+    private function assertStageMappingCurrent(ManagedTransition $transition): void
+    {
+        if (! is_string($transition->stage_request_body) || $transition->stage_request_body === '') {
+            throw new ManagedAuthRefused;
+        }
+
+        try {
+            $payload = json_decode($transition->stage_request_body, true, flags: JSON_THROW_ON_ERROR);
+        } catch (Throwable $exception) {
+            throw new ManagedAuthRefused(previous: $exception);
+        }
+
+        if (! is_array($payload) || ! is_array($payload['mapping'] ?? null)) {
+            throw new ManagedAuthRefused;
+        }
+
+        $this->validateMapping($transition, $payload['mapping']);
     }
 
     public function abandon(Request $request, ManagedTransition $transition): ManagedTransition
@@ -594,14 +739,13 @@ final class ManagedTransitions
             ->where('managed_transition_id', $transition->id)
             ->get(['scalpels_id', 'role'])
             ->keyBy('scalpels_id');
-        $users = User::query()->get(['id', 'scalpels_issuer', 'scalpels_connection_id', 'scalpels_id'])->keyBy(
+        $users = User::query()->get(['id', 'email', 'scalpels_issuer', 'scalpels_connection_id', 'scalpels_id'])->keyBy(
             static fn (User $user): string => (string) $user->getKey(),
         );
-        $invitations = DB::table('invitations')
-            ->whereNull('accepted_at')
-            ->whereNull('cancelled_at')
+        $invitations = Invitation::query()
+            ->pending()
             ->get(['id'])
-            ->keyBy(static fn (object $row): string => (string) $row->id);
+            ->keyBy(static fn (Invitation $invitation): string => (string) $invitation->getKey());
         $validated = [];
         $seenSubjects = [];
         $seenLocal = [];
@@ -723,7 +867,49 @@ final class ManagedTransitions
             }
         }
 
+        $projectedEmails = [];
+        foreach ($validated as $element) {
+            $email = null;
+            if ($element['local_kind'] === 'user') {
+                $user = $users->get($element['local_id']);
+                if (! $user instanceof User) {
+                    throw new ManagedAuthRefused;
+                }
+
+                $email = in_array($element['disposition'], ['link', 'retain_local'], true)
+                    ? $element['final_email']
+                    : $user->email;
+            } elseif ($element['disposition'] === 'create'
+                || ($element['local_kind'] === 'invitation' && $element['disposition'] === 'link')) {
+                $email = $element['final_email'];
+            }
+
+            if (is_string($email)) {
+                $normalized = strtolower($email);
+                if (isset($projectedEmails[$normalized])) {
+                    throw new ManagedAuthRefused;
+                }
+
+                $projectedEmails[$normalized] = true;
+            }
+        }
+
         return $validated;
+    }
+
+    /**
+     * @return array{scalpels_id: null, local_kind: string, local_id: string, role: null, disposition: string, final_email: null}
+     */
+    private function unmatchedLocalElement(string $kind, string $id, string $disposition): array
+    {
+        return [
+            'scalpels_id' => null,
+            'local_kind' => $kind,
+            'local_id' => $id,
+            'role' => null,
+            'disposition' => $disposition,
+            'final_email' => null,
+        ];
     }
 
     /**
