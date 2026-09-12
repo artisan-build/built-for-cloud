@@ -63,8 +63,8 @@ final class ManageOnboarding extends OperatorRouteController
     /**
      * Resolved per call, never via the constructor: the router caches
      * controller instances per route, so an injected declaration or minter
-     * would outlive a rebinding in a long-lived worker. ManageTokens and the
-     * guard resolve the same way.
+     * would outlive a rebinding in a long-lived worker. The guard resolves
+     * the same way.
      */
     private function declaration(): CredentialDeclaration
     {

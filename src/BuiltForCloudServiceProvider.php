@@ -49,7 +49,6 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ManagedAuthentication;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTransitions;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\PersonalCredentials;
@@ -742,24 +741,6 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 ->middleware('throttle:bfc-operator-write'),
             $operatorRoutes,
         );
-
-        if ((bool) config('built-for-cloud.credential_api.enabled', false)) {
-            $router->prefix(trim((string) config('built-for-cloud.credential_api.prefix', 'api/credentials'), '/'))
-                ->group(function (Router $router) use (&$operatorRoutes): void {
-                    $this->protectOperatorRoute($router->get('/', [ManageTokens::class, 'index']), $operatorRoutes);
-                    $this->protectOperatorRoute($router->get('/client-observations', ClientObservations::class), $operatorRoutes);
-                    $this->protectOperatorRoute($router->post('/', [ManageTokens::class, 'store']), $operatorRoutes);
-                    // The precise verb rides its own two-segment path, so
-                    // it can never collide with the one-segment name route
-                    // below — a token literally named "id" still deletes
-                    // by name.
-                    $this->protectOperatorRoute($router->delete('/id/{id}', [ManageTokens::class, 'destroyById']), $operatorRoutes);
-                    // Rotation's primary verb on this store too (PRD
-                    // 1.7): by id, on the same collision-proof path.
-                    $this->protectOperatorRoute($router->post('/id/{id}/rotate', [ManageTokens::class, 'rotateById']), $operatorRoutes);
-                    $this->protectOperatorRoute($router->delete('/{name}', [ManageTokens::class, 'destroy']), $operatorRoutes);
-                });
-        }
 
         $this->app->booted(function () use ($operatorRoutes, $router): void {
             StandaloneRouteOwnership::assertOperatorOwned($router, $operatorRoutes);
