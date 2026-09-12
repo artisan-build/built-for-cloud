@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
@@ -39,14 +40,20 @@ it('keeps mcp read and destructive administration as distinct abilities', functi
 
     // A credential can hold the narrow read ability without ANY
     // destructive ability — and the per-tool gate honors the split.
-    $readOnly = $this->mintCredential(['abilities' => [OperatorAbility::McpRead->value]]);
+    $readOnly = $this->mintCredential([
+        'purpose' => CredentialPurpose::Mcp,
+        'abilities' => [OperatorAbility::McpRead->value],
+    ]);
 
     $this->postJson('/mcp/status', [], ['Authorization' => $readOnly->bearerHeader()])->assertOk();
     $this->postJson('/mcp/purge', [], ['Authorization' => $readOnly->bearerHeader()])->assertForbidden();
 });
 
 it('lets a credential holding mcp:admin invoke the destructive tool (the positive control)', function (): void {
-    $admin = $this->mintCredential(['abilities' => [OperatorAbility::McpAdmin->value]]);
+    $admin = $this->mintCredential([
+        'purpose' => CredentialPurpose::Mcp,
+        'abilities' => [OperatorAbility::McpAdmin->value],
+    ]);
 
     $this->postJson('/mcp/purge', [], ['Authorization' => $admin->bearerHeader()])
         ->assertOk()
@@ -55,7 +62,10 @@ it('lets a credential holding mcp:admin invoke the destructive tool (the positiv
 
 // Locked negative 1: an ingest-scoped token cannot invoke a destructive tool.
 it('denies an ingest-scoped credential the destructive tool', function (): void {
-    $ingest = $this->mintCredential(['abilities' => [Scope::Consume->value]]);
+    $ingest = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
+        'abilities' => [],
+    ]);
 
     $this->postJson('/mcp/purge', [], ['Authorization' => $ingest->bearerHeader()])->assertForbidden();
 });
@@ -83,7 +93,10 @@ it('denies the fallback token the destructive tool', function (): void {
 
 // Locked negative 3: an mcp:read token cannot invoke a destructive tool.
 it('denies an mcp:read credential the destructive tool and audits the denial', function (): void {
-    $readOnly = $this->mintCredential(['abilities' => [OperatorAbility::McpRead->value]]);
+    $readOnly = $this->mintCredential([
+        'purpose' => CredentialPurpose::Mcp,
+        'abilities' => [OperatorAbility::McpRead->value],
+    ]);
 
     $this->postJson('/mcp/purge', [], ['Authorization' => $readOnly->bearerHeader()])->assertForbidden();
 
@@ -99,6 +112,7 @@ it('denies an mcp:read credential the destructive tool and audits the denial', f
 // Locked negative 4: an expired token cannot invoke a destructive tool.
 it('denies an expired credential the destructive tool even when it holds mcp:admin', function (): void {
     $expired = $this->mintCredential([
+        'purpose' => CredentialPurpose::Mcp,
         'abilities' => [OperatorAbility::McpAdmin->value],
         'expires_at' => now()->subMinute(),
     ]);
@@ -109,6 +123,7 @@ it('denies an expired credential the destructive tool even when it holds mcp:adm
 // Locked negative 5: a revoked token cannot invoke a destructive tool.
 it('denies a revoked credential the destructive tool even when it holds mcp:admin', function (): void {
     $revoked = $this->mintCredential([
+        'purpose' => CredentialPurpose::Mcp,
         'abilities' => [OperatorAbility::McpAdmin->value],
         'revoked_at' => now(),
     ]);
@@ -118,13 +133,15 @@ it('denies a revoked credential the destructive tool even when it holds mcp:admi
 
 it('never lets the operator break-glass ability stand in for an mcp ability', function (): void {
     $breakGlass = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'control-plane',
         'abilities' => [OperatorAbility::Admin->value],
     ]);
 
-    // Exact match per tool: `credential:admin` is the operator surface's
-    // break-glass, not an MCP grant of any kind.
-    $this->postJson('/mcp/purge', [], ['Authorization' => $breakGlass->bearerHeader()])->assertForbidden();
-    $this->postJson('/mcp/status', [], ['Authorization' => $breakGlass->bearerHeader()])->assertForbidden();
+    // The operator-purpose break-glass is rejected before an MCP tool
+    // ability is considered. Compound compatibility belongs to the MCP
+    // authentication door, not this per-tool gate.
+    $this->postJson('/mcp/purge', [], ['Authorization' => $breakGlass->bearerHeader()])->assertUnauthorized();
+    $this->postJson('/mcp/status', [], ['Authorization' => $breakGlass->bearerHeader()])->assertUnauthorized();
 });

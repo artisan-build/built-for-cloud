@@ -13,6 +13,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
@@ -142,7 +143,11 @@ it('contains the whole account in one action: every credential state, codes, inv
     // A pending hmac signing key WITH its outstanding delivery claim code.
     $hmacResult = app(MintCredential::class)(
         new Subject(SubjectType::ExternalConsumer, 'acme'),
-        MintOptions::fromInput(['kind' => 'hmac', 'code_ttl_seconds' => 3600]),
+        MintOptions::fromInput([
+            'kind' => 'hmac',
+            'purpose' => CredentialPurpose::Signing->value,
+            'code_ttl_seconds' => 3600,
+        ]),
     );
 
     // A subject-stamped legacy api_tokens row.

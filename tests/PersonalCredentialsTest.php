@@ -95,6 +95,7 @@ function personalCredentialFor(User $user, array $attributes = []): Credential
     /** @var Credential */
     return Credential::query()->create(array_merge([
         'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::UserPrincipal,
         'subject_ref' => personalSubjectRef($user),
         'user_id' => (string) $user->getAuthIdentifier(),
@@ -491,7 +492,9 @@ it('mints no abilities at all when the app declares no self-service policy, so a
 
     $this->postJson('/mcp/purge', [], $header)->assertForbidden();
     $this->postJson('/mcp/status', [], $header)->assertForbidden();
-    $this->getJson('/bfc/credentials', $header)->assertForbidden();
+    // The operator surface rejects this consumption-purpose credential
+    // before its empty ability set is considered.
+    $this->getJson('/bfc/credentials', $header)->assertUnauthorized();
 });
 
 it('grants exactly the self-service policy abilities and never the clients', function (): void {

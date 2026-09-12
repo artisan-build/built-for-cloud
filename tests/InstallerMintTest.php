@@ -6,7 +6,9 @@ use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
@@ -88,7 +90,8 @@ it('authorizes the freshly installed operator credential on the /bfc/credentials
     $response = $this->postJson('/bfc/credentials', [
         'subject_type' => 'external_consumer',
         'subject_ref' => 'first-customer',
-        'abilities' => ['consume'],
+        'purpose' => CredentialPurpose::Consumption->value,
+        'abilities' => [],
     ], $headers)->assertCreated();
 
     // …audited as the unified-store actor, reflecting WHICH store
@@ -110,21 +113,21 @@ it('authorizes the freshly installed operator credential on the /bfc/credentials
 });
 
 it('refuses a non-operator unified credential on the /bfc/credentials verbs', function (): void {
-    // Right ability, wrong subject: possession of the ability string on a
-    // non-operator subject grants nothing.
+    // Right ability, wrong subject and purpose: the operator surface rejects
+    // the consumption-purpose credential before evaluating the ability.
     $nonOperator = $this->mintCredential([
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'not-an-operator',
         'abilities' => [OperatorAbility::Admin->value],
     ]);
 
-    $this->getJson('/bfc/credentials', ['Authorization' => $nonOperator->bearerHeader()])->assertForbidden();
+    $this->getJson('/bfc/credentials', ['Authorization' => $nonOperator->bearerHeader()])->assertUnauthorized();
 
     // Right subject, missing ability: same refusal.
     $unableOperator = $this->mintCredential([
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'powerless',
-        'abilities' => ['consume'],
+        'abilities' => [],
     ]);
 
     $this->getJson('/bfc/credentials', ['Authorization' => $unableOperator->bearerHeader()])->assertForbidden();
@@ -172,7 +175,7 @@ it('mints despite an existing operator that lacks the promised ability — mere 
     $this->mintCredential([
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'powerless',
-        'abilities' => ['consume'],
+        'abilities' => [OperatorAbility::CredentialRead->value],
     ]);
 
     expect(Artisan::call('bfc:install:operator-credential'))->toBe(Command::SUCCESS);
@@ -225,14 +228,17 @@ it('honours a custom operator ref and abilities', function (): void {
     Artisan::call('bfc:install:operator-credential', [
         '--ref' => 'scalpels',
         '--name' => 'Scalpels control plane',
-        '--abilities' => 'admin,consume',
+        '--abilities' => OperatorAbility::CredentialRead->value.','.OperatorAbility::AuditRead->value,
     ]);
 
     $credential = Credential::query()->sole();
 
     expect($credential->subject_ref)->toBe('scalpels')
         ->and($credential->name)->toBe('Scalpels control plane')
-        ->and($credential->abilities)->toBe(['admin', 'consume']);
+        ->and($credential->abilities)->toBe([
+            OperatorAbility::CredentialRead->value,
+            OperatorAbility::AuditRead->value,
+        ]);
 });
 
 it('warns that fallback-token:generate is deprecated while still functioning for 0.4.x apps', function (): void {
