@@ -36,7 +36,6 @@ use ArtisanBuild\BuiltForCloud\Console\ConsoleGuard;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActorProvider;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
-use ArtisanBuild\BuiltForCloud\Contracts\DeclaresDurableStore;
 use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
 use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
@@ -112,19 +111,8 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
 
         $this->app->singleton(UsageReporter::class, NullUsageReporter::class);
 
-        // The seam (PRD 1.0): exchange mints durables through this binding
-        // only. `api_tokens` stays the default; an app's declaration opts
-        // into the unified store at rebuild time (DeclaresDurableStore).
-        $this->app->bind(DurableCredentialMinter::class, function (Application $app): DurableCredentialMinter {
-            $declaration = $app->make(CredentialDeclaration::class);
-
-            if ($declaration instanceof DeclaresDurableStore
-                && $declaration->durableCredentialStore() === DurableStore::Credentials) {
-                return $app->make(UnifiedStoreCredentialMinter::class);
-            }
-
-            return $app->make(ApiTokenMinter::class);
-        });
+        // P5b's forward-only carry: exchange has one durable destination.
+        $this->app->bind(DurableCredentialMinter::class, UnifiedStoreCredentialMinter::class);
 
         // D14's single resolved value (Console PRD): one instance per
         // application, memoizing per REQUEST inside itself, so the

@@ -45,6 +45,8 @@ use InvalidArgumentException;
  * @property string|null $name
  * @property array<int, string>|null $abilities
  * @property string|null $user_id
+ * @property string|null $client_identity
+ * @property CarbonInterface|null $client_identity_last_seen_at
  * @property string|null $secret_hash
  * @property string|null $public_key
  * @property string|null $secret_ciphertext
@@ -85,6 +87,8 @@ final class Credential extends Model implements Authenticatable
         'name',
         'abilities',
         'user_id',
+        'client_identity',
+        'client_identity_last_seen_at',
         'secret_hash',
         'public_key',
         'status',
@@ -130,6 +134,7 @@ final class Credential extends Model implements Authenticatable
             'subject_type' => SubjectType::class,
             'status' => CredentialStatus::class,
             'abilities' => 'array',
+            'client_identity_last_seen_at' => 'datetime',
             'revoked_at' => 'datetime',
             'rotated_at' => 'datetime',
             'delivered_at' => 'datetime',

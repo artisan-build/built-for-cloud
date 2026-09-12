@@ -141,7 +141,7 @@ final class MetaController
             // check can see, exactly as `console-chrome-assets` cannot
             // see whether any page wears the chrome.
             'capabilities' => self::capabilities(),
-            'claimed' => $ownership !== null && $ownership->owner_token_id !== null,
+            'claimed' => $ownership !== null && $ownership->hasOwner(),
         ];
 
         if (($mcp = McpConfiguration::endpoint()) !== null) {

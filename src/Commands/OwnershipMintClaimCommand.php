@@ -65,7 +65,7 @@ final class OwnershipMintClaimCommand extends Command
         $status = DB::transaction(function () use ($minter, $hash): int {
             $ownership = Ownership::query()->lockForUpdate()->first();
 
-            if ($ownership !== null && $ownership->owner_token_id !== null) {
+            if ($ownership !== null && $ownership->hasOwner()) {
                 $this->error('Ownership is already claimed. Refusing to mint a claim token; use the owner token to release ownership instead.');
 
                 return self::FAILURE;
