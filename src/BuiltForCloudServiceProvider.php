@@ -18,6 +18,7 @@ use ArtisanBuild\BuiltForCloud\Commands\CredentialRotateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\FallbackTokenGenerateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\HmacRewrapCommand;
 use ArtisanBuild\BuiltForCloud\Commands\InstallOperatorCredentialCommand;
+use ArtisanBuild\BuiltForCloud\Commands\SigningRootProvisionCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand;
@@ -897,6 +898,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             FallbackTokenGenerateCommand::class,
             HmacRewrapCommand::class,
             InstallOperatorCredentialCommand::class,
+            SigningRootProvisionCommand::class,
             OutboxDrainCommand::class,
             OwnershipMintClaimCommand::class,
             OwnershipRemintOwnerTokenCommand::class,

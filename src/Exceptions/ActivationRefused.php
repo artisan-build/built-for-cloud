@@ -28,6 +28,11 @@ final class ActivationRefused extends RuntimeException
         ));
     }
 
+    public static function signingRoot(string $id): self
+    {
+        return new self(sprintf('Credential %s is a signing root and has no activation transition.', $id));
+    }
+
     /**
      * Premature activation (locked AC 3): the key was never delivered —
      * neither revealed at mint nor exchanged through its claim link — so

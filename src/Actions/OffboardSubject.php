@@ -25,6 +25,7 @@ use ArtisanBuild\BuiltForCloud\OffboardResult;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
+use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
@@ -124,6 +125,10 @@ final class OffboardSubject
         }
 
         $subject = $this->targetSubject($options);
+
+        if ($subject->type === SubjectType::Installation && $subject->ref === SigningRootMac::SUBJECT_REF) {
+            throw InvalidCredentialInput::signingRootLifecycleOnly();
+        }
 
         if (! $this->verbAllowed(CredentialVerb::Offboard, $subject)) {
             throw CredentialVerbRefused::byMatrix(CredentialVerb::Offboard);

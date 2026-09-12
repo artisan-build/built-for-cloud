@@ -48,6 +48,11 @@ final class InvalidCredentialInput extends InvalidArgumentException
         return new self(sprintf('Unknown or unmapped app purpose "%s".', $purpose));
     }
 
+    public static function unknownScope(): self
+    {
+        return new self('Unknown claim scope.');
+    }
+
     public static function signingRootLifecycleOnly(): self
     {
         return new self('The signing root is managed only by its dedicated lifecycle.');

@@ -12,7 +12,6 @@ use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -27,12 +26,12 @@ use Illuminate\Console\Command;
  * to the environment file, and nothing on this path reads or writes the
  * fallback config.
  *
- * The credential carries {@see EnsureCredentialAdmin::ABILITY}, so it
+ * The credential carries {@see OperatorAbility::Admin}, so it
  * authorizes on the `/bfc/credentials` verbs — the surface it exists to
  * manage — from the moment it is printed.
  *
  * IDEMPOTENT by default: when a live operator credential ALREADY HOLDING
- * {@see EnsureCredentialAdmin::ABILITY} exists, the command skips with a
+ * {@see OperatorAbility::Admin} exists, the command skips with a
  * notice instead of silently minting a sibling — an install scaffold
  * re-run must not mint twice. The predicate checks the promised
  * authority, not mere operator existence: an operator credential WITHOUT

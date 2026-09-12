@@ -11,6 +11,7 @@ use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
@@ -143,6 +144,10 @@ final class ActivateCredential
 
         if ($credential === null) {
             return null;
+        }
+
+        if ($credential->purpose === CredentialPurpose::SigningRoot) {
+            throw ActivationRefused::signingRoot($id);
         }
 
         if ($credential->kind !== CredentialKind::Hmac) {

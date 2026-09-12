@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Hmac;
 
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacSigningRefused;
 use ArtisanBuild\BuiltForCloud\Subject;
 
@@ -64,6 +65,7 @@ final class HmacSigner
     {
         $candidates = Credential::query()
             ->where('kind', CredentialKind::Hmac->value)
+            ->where('purpose', CredentialPurpose::Signing->value)
             ->where('subject_type', $subject->type->value)
             ->where('subject_ref', $subject->ref)
             ->whereNotNull('secret_ciphertext')
@@ -84,6 +86,7 @@ final class HmacSigner
         if ($signer === null) {
             $pendingKeys = Credential::query()
                 ->where('kind', CredentialKind::Hmac->value)
+                ->where('purpose', CredentialPurpose::Signing->value)
                 ->where('subject_type', $subject->type->value)
                 ->where('subject_ref', $subject->ref)
                 ->where('status', 'pending')

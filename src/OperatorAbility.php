@@ -17,7 +17,7 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
  * ability and matches nothing anywhere in the package.
  *
  * The one admin-equivalent name is {@see self::Admin} (`credential:admin`,
- * shipped in PRD 1.20 as {@see EnsureCredentialAdmin::ABILITY}): on the
+ * used by {@see EnsureCredentialAdmin}): on the
  * operator surfaces it satisfies every ability those routes name, and
  * {@see self::adminEquivalent} is the declared inventory of what that
  * is today — an inventory the gate does not read, not a bound it

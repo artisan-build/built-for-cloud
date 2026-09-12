@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
@@ -89,13 +90,13 @@ final class EnsureCredentialAbility
             );
         }
 
-        if ($guard->guest()) {
+        $credential = $guard->credentialForPurposes(CredentialPurpose::Mcp, CredentialPurpose::Consumption);
+
+        if ($credential === null) {
             abort(401);
         }
 
-        $credential = $guard->credential();
-
-        if ($credential === null || ! $credential->hasAbility($ability)) {
+        if (! $credential->hasAbility($ability)) {
             $this->auditDenial($request, $credential, $ability);
 
             abort(403);

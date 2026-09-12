@@ -6,7 +6,9 @@ namespace ArtisanBuild\BuiltForCloud\Hmac;
 
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
+use ArtisanBuild\BuiltForCloud\ManagedAccountAccess;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\Subject;
 use Illuminate\Support\Facades\Cache;
@@ -57,7 +59,10 @@ use Illuminate\Support\Facades\Cache;
  */
 final class HmacVerifier
 {
-    public function __construct(private readonly HmacKeyring $keyring) {}
+    public function __construct(
+        private readonly HmacKeyring $keyring,
+        private readonly ManagedAccountAccess $managedAccess,
+    ) {}
 
     /**
      * Verify a presented `BFC-Signature` header against the message body
@@ -88,6 +93,7 @@ final class HmacVerifier
         /** @var Credential|null $credential */
         $credential = Credential::query()
             ->where('kind', CredentialKind::Hmac->value)
+            ->where('purpose', CredentialPurpose::Signing->value)
             ->where('subject_type', $subject->type->value)
             ->where('subject_ref', $subject->ref)
             ->whereKey($envelope->keyId)
@@ -101,7 +107,9 @@ final class HmacVerifier
         // no oracle). The registry check rides key selection because this
         // verifier resolves credentials directly rather than via the bfc
         // guard, and containment must hold at every authentication point.
-        if ($credential === null || OffboardedSubject::rejects($credential)) {
+        if ($credential === null
+            || OffboardedSubject::rejects($credential)
+            || ! $this->managedAccess->allowsCredential($credential)) {
             throw HmacVerificationFailed::unusableKey();
         }
 

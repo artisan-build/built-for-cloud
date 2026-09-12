@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
@@ -74,8 +75,6 @@ final class EnsureCredentialAdmin
      * grant the ability to a break-glass credential, which Console PRD
      * D16 forbids.
      */
-    public const string ABILITY = 'credential:admin';
-
     public function __construct(
         private readonly TokenRegistry $tokens,
         private readonly CredentialResolver $credentials,
@@ -90,7 +89,7 @@ final class EnsureCredentialAdmin
      */
     public function handle(Request $request, Closure $next, ?string $ability = null): Response
     {
-        $required = $ability ?? self::ABILITY;
+        $required = $ability ?? OperatorAbility::Admin->value;
 
         $bearer = $request->bearerToken();
 
@@ -146,6 +145,12 @@ final class EnsureCredentialAdmin
         $credential = $this->credentials->resolve(CredentialKind::Bearer, $bearer);
 
         if ($credential !== null) {
+            if ($credential->purpose !== CredentialPurpose::OperatorManagement) {
+                $this->auditDenial($request, 'token_auth_failure: wrong credential purpose', null);
+
+                abort(401);
+            }
+
             if (! $this->usage->recordUsage($credential)) {
                 $this->auditDenial($request, 'token_auth_failure: credential died before use', null);
 
@@ -157,8 +162,11 @@ final class EnsureCredentialAdmin
             // (`credential:admin` — the documented mapping in
             // {@see OperatorAbility}). Nothing else satisfies; a null or
             // empty ability list satisfies nothing.
+            $breakGlass = $credential->hasAbility(OperatorAbility::Admin->value)
+                && in_array(OperatorAbility::tryFrom($required), OperatorAbility::adminEquivalent(), true);
+
             if ($credential->subject_type === SubjectType::Operator
-                && ($credential->hasAbility($required) || $credential->hasAbility(self::ABILITY))) {
+                && ($credential->hasAbility($required) || $breakGlass)) {
                 $request->attributes->set('bfc.actor_credential_id', $credential->id);
                 StandaloneRouteOwnership::markOperatorGateExecuted($request, self::class.':'.$required);
 

@@ -20,6 +20,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\DeclaresDurableStore;
 use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
 use ArtisanBuild\BuiltForCloud\DurableStore;
@@ -765,6 +766,11 @@ final class ManageOnboarding extends OperatorRouteController
         try {
             $credential = app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $bearer);
 
+            if ($credential !== null
+                && ! in_array($credential->purpose, [CredentialPurpose::Consumption, CredentialPurpose::OperatorManagement, CredentialPurpose::Enrollment], true)) {
+                $credential = null;
+            }
+
             if ($credential !== null && ! app(CredentialUsageRecorder::class)->recordUsage($credential)) {
                 $credential = null;
             }
@@ -779,7 +785,12 @@ final class ManageOnboarding extends OperatorRouteController
         return response()->json([
             'ok' => true,
             'name' => $credential->name,
-            'scope' => $credential->abilities[0] ?? null,
+            'scope' => match ($credential->purpose) {
+                CredentialPurpose::Consumption => Scope::Consume->value,
+                CredentialPurpose::OperatorManagement => Scope::Admin->value,
+                CredentialPurpose::Enrollment => Scope::Onboard->value,
+                default => null,
+            },
         ]);
     }
 

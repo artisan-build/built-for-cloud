@@ -25,6 +25,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
+use ArtisanBuild\BuiltForCloud\Hmac\SigningRootLifecycle;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintedSecret;
@@ -117,7 +118,18 @@ final class RotateCredential
         $root = Credential::query()->whereKey($id)->where('purpose', CredentialPurpose::SigningRoot->value)->exists();
 
         if ($root) {
-            return app(\ArtisanBuild\BuiltForCloud\Hmac\SigningRootLifecycle::class)->rotate($id, $options->emergency);
+            if ($options->requestsChange() || $options->override || $options->codeTtlSeconds !== null) {
+                throw InvalidCredentialInput::signingRootLifecycleOnly();
+            }
+
+            /** @var Credential $rootCredential */
+            $rootCredential = Credential::query()->whereKey($id)->firstOrFail();
+
+            if (! $this->verbAllowed(CredentialVerb::Rotate, $rootCredential->subject())) {
+                throw CredentialVerbRefused::byMatrix(CredentialVerb::Rotate);
+            }
+
+            return app(SigningRootLifecycle::class)->rotate($id, $options->emergency, $actor);
         }
 
         $phaseOne = fn (): ?RotationResult => DB::transaction(fn (): ?RotationResult => $this->mintReplacement($id, $options, $actor));

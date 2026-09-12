@@ -11,13 +11,17 @@ use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleEntryRefusalReason;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Console\RequestAssertion;
+use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
+use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
 use ArtisanBuild\BuiltForCloud\Exceptions\AssertionRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleEntryRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\DelegatedActorDeactivated;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
-use ArtisanBuild\BuiltForCloud\Scope;
-use ArtisanBuild\BuiltForCloud\TokenRegistry;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use Carbon\CarbonImmutable;
 use Closure;
 use Illuminate\Http\JsonResponse;
@@ -68,7 +72,8 @@ final class AuthenticateMcp
     public const string AUDIT_NOTE = 'mcp authentication refused: ';
 
     public function __construct(
-        private readonly TokenRegistry $tokens,
+        private readonly CredentialResolver $credentials,
+        private readonly CredentialUsageRecorder $usage,
         private readonly AssertionVerifier $verifier,
         private readonly LifecycleEventRecorder $recorder,
     ) {}
@@ -90,25 +95,29 @@ final class AuthenticateMcp
             return $this->authenticateAssertion($request, $next, $bearer);
         }
 
-        $token = $this->tokens->resolveModel($bearer);
+        $credential = $this->credentials->resolve(CredentialKind::Bearer, $bearer);
 
-        if ($token === null) {
+        if ($credential === null) {
             return $this->refuseToken();
         }
 
-        $this->tokens->recordClientIdentityFromRequest($request, $token);
+        $admin = $credential->purpose === CredentialPurpose::OperatorManagement
+            && $credential->subject_type === SubjectType::Operator
+            && $credential->hasAbility(OperatorAbility::Admin->value);
 
-        // The attribute keeps its ONE meaning — an ADMIN token
-        // authenticated, EnsureAdminToken's convention: the package's
-        // readers convert it straight into AuditActor::adminToken(),
-        // which types the audit row AdminToken. A non-admin MCP token
-        // still authenticates this door, but must not arrive anywhere
-        // wearing an attribution its credential does not hold.
-        if ($token->hasScope(Scope::Admin)) {
-            $request->attributes->set('bfc.actor_token_id', (string) $token->getKey());
+        if ($credential->purpose !== CredentialPurpose::Mcp && ! $admin) {
+            return $this->refuseToken();
         }
 
-        $request->setUserResolver(static fn () => $token);
+        if (! $this->usage->recordUsage($credential)) {
+            return $this->refuseToken();
+        }
+
+        if ($admin) {
+            $request->attributes->set('bfc.actor_credential_id', $credential->id);
+        }
+
+        $request->setUserResolver(static fn () => $credential);
 
         return $next($request);
     }

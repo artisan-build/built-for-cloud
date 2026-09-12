@@ -11,6 +11,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialAuthenticator;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthManager;
@@ -77,7 +78,11 @@ final class CredentialGuard implements Guard
 
     private ?Credential $credential = null;
 
+    private ?Credential $resolvedCredential = null;
+
     private bool $attempted = false;
+
+    private bool $sideEffectsAttempted = false;
 
     private ?Request $resolvedFor = null;
 
@@ -103,6 +108,13 @@ final class CredentialGuard implements Guard
 
     public function user(): ?Authenticatable
     {
+        $this->credentialForPurposes(CredentialPurpose::Consumption, CredentialPurpose::SystemDeployment);
+
+        return $this->user;
+    }
+
+    public function credentialForPurposes(CredentialPurpose ...$purposes): ?Credential
+    {
         $request = $this->request();
 
         // The auth manager caches guard instances across requests (long-lived
@@ -111,27 +123,30 @@ final class CredentialGuard implements Guard
         if ($this->resolvedFor !== $request) {
             $this->user = null;
             $this->credential = null;
+            $this->resolvedCredential = null;
             $this->attempted = false;
+            $this->sideEffectsAttempted = false;
             $this->resolvedFor = $request;
         }
 
-        if ($this->user !== null || $this->attempted) {
-            return $this->user;
+        if (! $this->attempted) {
+            $this->attempted = true;
+            $this->resolvedCredential = $this->resolveCredential($request);
         }
 
-        $this->attempted = true;
+        $credential = $this->resolvedCredential;
 
-        // Full account containment (PRD 1.15, SEC-V3-04) needs no check
-        // here: the resolver itself refuses an offboarded principal —
-        // {@see CredentialResolver}, the containment choke point — so an
-        // offboarded subject, or a credential bound to a deactivated
-        // user, never resolves in the first place, indistinguishably from
-        // an unknown secret.
-        $credential = $this->resolveCredential($request);
-
-        if ($credential === null) {
+        if ($credential === null || ! in_array($credential->purpose, $purposes, true)) {
             return null;
         }
+
+        // Resolution and its side effects are cached separately. Every gate
+        // still checks the cached row against its own admitted purpose set.
+        if ($this->sideEffectsAttempted) {
+            return $this->user === null ? null : $this->credential;
+        }
+
+        $this->sideEffectsAttempted = true;
 
         try {
             $sessionUser = $this->sessionUser();
@@ -176,7 +191,7 @@ final class CredentialGuard implements Guard
         $this->credential = $credential;
         $this->user = $principal;
 
-        return $this->user;
+        return $this->credential;
     }
 
     public function id(): int|string|null
@@ -195,8 +210,15 @@ final class CredentialGuard implements Guard
             return false;
         }
 
-        return $this->resolver->resolve(CredentialKind::Bearer, $secret) !== null
-            || $this->resolver->resolve(CredentialKind::Basic, $secret) !== null;
+        foreach ([CredentialKind::Bearer, CredentialKind::Basic] as $kind) {
+            $credential = $this->resolver->resolve($kind, $secret);
+
+            if ($credential !== null && in_array($credential->purpose, [CredentialPurpose::Consumption, CredentialPurpose::SystemDeployment], true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function hasUser(): bool
@@ -211,6 +233,7 @@ final class CredentialGuard implements Guard
     {
         $this->user = $user;
         $this->attempted = true;
+        $this->sideEffectsAttempted = true;
         $this->resolvedFor = $this->request();
 
         return $this;
@@ -221,9 +244,7 @@ final class CredentialGuard implements Guard
      */
     public function credential(): ?Credential
     {
-        $this->user();
-
-        return $this->credential;
+        return $this->credentialForPurposes(CredentialPurpose::Consumption, CredentialPurpose::SystemDeployment);
     }
 
     private function resolveCredential(Request $request): ?Credential

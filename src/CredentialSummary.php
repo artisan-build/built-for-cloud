@@ -33,6 +33,7 @@ final readonly class CredentialSummary
     public function __construct(
         public string $id,
         public CredentialKind $kind,
+        public CredentialPurpose $purpose,
         public SubjectType $subjectType,
         public string $subjectRef,
         public ?string $name,
@@ -57,6 +58,7 @@ final readonly class CredentialSummary
         return new self(
             id: $credential->id,
             kind: $credential->kind,
+            purpose: $credential->purpose,
             subjectType: $credential->subject_type,
             subjectRef: $credential->subject_ref,
             name: in_array('name', $unsupported, true) ? null : $credential->name,
@@ -108,6 +110,7 @@ final readonly class CredentialSummary
         return [
             'id' => $this->id,
             'kind' => $this->kind->value,
+            'purpose' => $this->purpose->value,
             'subject_type' => $this->subjectType->value,
             'subject_ref' => $this->subjectRef,
             'name' => $this->name,
