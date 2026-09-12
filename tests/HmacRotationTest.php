@@ -74,7 +74,7 @@ function signedHeaderFor(Credential $credential, string $body): string
         eventType: 'test.event',
         timestamp: now()->getTimestamp(),
         nonce: bin2hex(random_bytes(16)),
-        audience: (string) config('app.url'),
+        audience: (string) config('built-for-cloud.hmac.audience'),
     );
 
     return $envelope->headerValue(hash_hmac('sha256', $envelope->canonical($body), $key));

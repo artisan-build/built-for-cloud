@@ -73,7 +73,7 @@ final class HmacVerifier
             throw HmacVerificationFailed::algorithmRejected($claimedAlgorithm);
         }
 
-        $expectedAudience = $audience ?? $this->defaultAudience();
+        $expectedAudience = $this->configuredAudience($audience);
 
         if (! hash_equals($expectedAudience, $envelope->audience)) {
             throw HmacVerificationFailed::wrongAudience();
@@ -174,10 +174,18 @@ final class HmacVerifier
         return is_numeric($tolerance) && (int) $tolerance > 0 ? (int) $tolerance : 300;
     }
 
-    private function defaultAudience(): string
+    private function configuredAudience(?string $supplied): string
     {
-        $audience = config('built-for-cloud.hmac.audience') ?? config('app.url');
+        $configured = config('built-for-cloud.hmac.audience');
 
-        return is_string($audience) && $audience !== '' ? $audience : 'app';
+        if (! is_string($configured) || $configured === '') {
+            throw HmacVerificationFailed::audienceNotConfigured();
+        }
+
+        if ($supplied !== null && ! hash_equals($configured, $supplied)) {
+            throw HmacVerificationFailed::wrongAudience();
+        }
+
+        return $configured;
     }
 }

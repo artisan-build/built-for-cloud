@@ -10,8 +10,12 @@ use Illuminate\Http\Request;
 
 final class UnguardedCredentialAuthenticator implements CredentialAuthenticator
 {
+    public function __construct(private SecondStoreResolver $resolver) {}
+
     public function credential(Request $request): ?Credential
     {
+        $this->resolver->resolve($request->bearerToken() ?? '');
+
         return null;
     }
 }

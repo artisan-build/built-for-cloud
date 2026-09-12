@@ -29,6 +29,14 @@ uses(RefreshDatabase::class, DetectsSecretLeaks::class);
  * selection is server-derived — a crafted header naming another
  * subject's key id cannot verify), 9 (signing uses only the active key;
  * a subject with only pending keys cannot sign).
+ *
+ * P5-AC6 adds the six supported-service audience cells here: unconfigured
+ * with and without a compatibility argument, and configured-but-mismatched,
+ * for signer and verifier. They prove those public methods always consult
+ * required configuration and cannot be re-targeted by their arguments. They
+ * cannot see a host bypassing these services to construct or verify an
+ * HmacEnvelope directly; that is outside the supported signing/verification
+ * paths the criterion claims.
  */
 function hmacSubject(string $ref = 'acme'): Subject
 {
@@ -57,7 +65,7 @@ function headerSignedBy(Credential $credential, string $body, ?string $audience 
         eventType: 'test.event',
         timestamp: $timestamp ?? now()->getTimestamp(),
         nonce: $nonce ?? bin2hex(random_bytes(16)),
-        audience: $audience ?? (string) config('app.url'),
+        audience: $audience ?? (string) config('built-for-cloud.hmac.audience'),
     );
 
     $key = app(HmacKeyring::class)->decrypt((string) $credential->secret_ciphertext, $credential->secret_key_version);
@@ -92,6 +100,36 @@ it('leaks no key material while signing: the header carries the key id, never th
     );
 
     expect($header)->not->toContain($signingKey);
+});
+
+it('refuses signing without configured audience and does not fall back to app.url', function (): void {
+    activeKeyFor('acme');
+    config()->set('app.url', 'https://shared-fallback.example');
+    config()->set('built-for-cloud.hmac.audience', null);
+
+    app(HmacSigner::class)->sign(hmacSubject(), 'body', 'evt');
+})->throws(HmacSigningRefused::class, 'requires a non-empty built-for-cloud.hmac.audience');
+
+it('refuses signing without configured audience even when the caller supplies one', function (): void {
+    activeKeyFor('acme');
+    config()->set('built-for-cloud.hmac.audience', null);
+
+    app(HmacSigner::class)->sign(hmacSubject(), 'body', 'evt', 'https://caller.example');
+})->throws(HmacSigningRefused::class, 'requires a non-empty built-for-cloud.hmac.audience');
+
+it('refuses a caller-supplied signing audience that differs from configuration', function (): void {
+    activeKeyFor('acme');
+
+    app(HmacSigner::class)->sign(hmacSubject(), 'body', 'evt', 'https://other-installation.example');
+})->throws(HmacSigningRefused::class, 'does not match the configured audience');
+
+it('retains equal audience arguments as compatibility confirmations, never overrides', function (): void {
+    $credential = activeKeyFor('acme');
+    $audience = (string) config('built-for-cloud.hmac.audience');
+    $header = app(HmacSigner::class)->sign(hmacSubject(), 'body', 'evt', $audience);
+
+    expect(app(HmacVerifier::class)->verify(hmacSubject(), $header, 'body', $audience)->id)
+        ->toBe($credential->id);
 });
 
 // --------------------------------------------------- signing refusals (AC 9)
@@ -188,6 +226,45 @@ it('rejects the wrong audience', function (): void {
 
     try {
         app(HmacVerifier::class)->verify(hmacSubject(), $header, 'body');
+        $this->fail('Verification should have refused.');
+    } catch (HmacVerificationFailed $failed) {
+        expect($failed->reason)->toBe('wrong_audience');
+    }
+});
+
+it('refuses verification without configured audience and does not fall back to app.url', function (): void {
+    $credential = activeKeyFor('acme');
+    $header = headerSignedBy($credential, 'body');
+    config()->set('app.url', 'https://shared-fallback.example');
+    config()->set('built-for-cloud.hmac.audience', null);
+
+    try {
+        app(HmacVerifier::class)->verify(hmacSubject(), $header, 'body');
+        $this->fail('Verification should have refused.');
+    } catch (HmacVerificationFailed $failed) {
+        expect($failed->reason)->toBe('audience_not_configured');
+    }
+});
+
+it('refuses verification without configured audience even when the caller supplies one', function (): void {
+    $credential = activeKeyFor('acme');
+    $header = headerSignedBy($credential, 'body');
+    config()->set('built-for-cloud.hmac.audience', null);
+
+    try {
+        app(HmacVerifier::class)->verify(hmacSubject(), $header, 'body', 'https://caller.example');
+        $this->fail('Verification should have refused.');
+    } catch (HmacVerificationFailed $failed) {
+        expect($failed->reason)->toBe('audience_not_configured');
+    }
+});
+
+it('refuses a caller-supplied verification audience that differs from configuration', function (): void {
+    $credential = activeKeyFor('acme');
+    $header = headerSignedBy($credential, 'body');
+
+    try {
+        app(HmacVerifier::class)->verify(hmacSubject(), $header, 'body', 'https://other-installation.example');
         $this->fail('Verification should have refused.');
     } catch (HmacVerificationFailed $failed) {
         expect($failed->reason)->toBe('wrong_audience');
@@ -375,7 +452,7 @@ it('rejects an unknown key id with the same indistinct answer as every selection
         eventType: 'evt',
         timestamp: now()->getTimestamp(),
         nonce: bin2hex(random_bytes(16)),
-        audience: (string) config('app.url'),
+        audience: (string) config('built-for-cloud.hmac.audience'),
     );
     $header = $envelope->headerValue(hash_hmac('sha256', $envelope->canonical('body'), 'whatever'));
 

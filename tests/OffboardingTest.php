@@ -1058,7 +1058,7 @@ function offboardSignedHeader(Credential $credential, string $body): string
         eventType: 'test.event',
         timestamp: now()->getTimestamp(),
         nonce: bin2hex(random_bytes(16)),
-        audience: (string) config('app.url'),
+        audience: (string) config('built-for-cloud.hmac.audience'),
     );
 
     $key = app(HmacKeyring::class)->decrypt((string) $credential->secret_ciphertext, $credential->secret_key_version);

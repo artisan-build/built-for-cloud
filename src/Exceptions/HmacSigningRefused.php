@@ -16,6 +16,16 @@ use RuntimeException;
  */
 final class HmacSigningRefused extends RuntimeException
 {
+    public static function audienceNotConfigured(): self
+    {
+        return new self('HMAC signing requires a non-empty built-for-cloud.hmac.audience configuration value.');
+    }
+
+    public static function audienceMismatch(): self
+    {
+        return new self('The supplied HMAC audience does not match the configured audience.');
+    }
+
     public static function noActiveKey(Subject $subject, int $pendingKeys): self
     {
         $pendingClause = $pendingKeys > 0
