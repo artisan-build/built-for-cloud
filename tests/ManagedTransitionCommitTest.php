@@ -1208,7 +1208,16 @@ it('enumerates post-commit and terminal recovery outcomes under the frozen read 
         }
     } else {
         $transition = $service->fetchRoster($transition);
-        $transition = $service->proposeDefault($transition);
+        $transition = $direction === ManagedTransitionDirection::Adopt
+            ? $service->propose($transition, [[
+                'scalpels_id' => 'owner-subject',
+                'local_kind' => 'user',
+                'local_id' => (string) $owner->getKey(),
+                'role' => 'owner',
+                'disposition' => 'link',
+                'final_email' => 'recovery-owner@example.test',
+            ]])
+            : $service->proposeDefault($transition);
         $transition = $service->stage($transition);
         $transition = $service->commit($transition, $owner);
         if ($case === 'acknowledging staged') {
