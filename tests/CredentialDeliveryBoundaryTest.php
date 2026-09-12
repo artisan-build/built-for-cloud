@@ -9,7 +9,10 @@ use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\DeliveryShape;
+use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacSigner;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\MintResult;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
@@ -152,6 +155,13 @@ it('resolves a stored secret only in the installation store that contains its ha
         'user_id' => null,
         'secret_hash' => hash('sha256', $secret),
     ]);
+    $hmacSubject = new Subject(SubjectType::Installation, 'installation-a');
+    Credential::factory()->hmac()->activated()->create([
+        'subject_type' => $hmacSubject->type,
+        'subject_ref' => $hmacSubject->ref,
+    ]);
+    $hmacBody = '{}';
+    $hmacHeader = app(HmacSigner::class)->sign($hmacSubject, $hmacBody, 'locality.control');
 
     config()->set('database.connections.separate_installation', [
         'driver' => 'sqlite',
@@ -168,6 +178,7 @@ it('resolves a stored secret only in the installation store that contains its ha
         $table->string('subject_ref');
         $table->string('user_id')->nullable();
         $table->string('secret_hash', 64)->nullable()->unique();
+        $table->text('secret_ciphertext')->nullable();
         $table->string('status', 16);
         $table->timestamp('revoked_at')->nullable();
         $table->timestamp('expires_at')->nullable();
@@ -186,6 +197,8 @@ it('resolves a stored secret only in the installation store that contains its ha
         DB::setDefaultConnection('separate_installation');
 
         expect(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $secret))->toBeNull();
+        expect(fn () => app(HmacVerifier::class)->verify($hmacSubject, $hmacHeader, $hmacBody))
+            ->toThrow(HmacVerificationFailed::class, 'No usable signing key matches');
 
         DB::connection()->table('credentials')->insert([
             'id' => $credential->id,

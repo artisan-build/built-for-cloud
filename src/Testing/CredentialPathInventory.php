@@ -15,7 +15,7 @@ use SplFileInfo;
  * enrollment, authority classification and HMAC key selection. It derives
  * named classes, provider registrations, direct dependencies/calls, action
  * methods, minter targets, literal routes, enum cases and command signatures
- * from installed PHP source. The frozen eight-path and transitional oracles
+ * from installed PHP source. The seven discoverable path identities and transitional oracles
  * deliberately live in the test, not here, so discovery cannot edit its own
  * expected answer. Stable path identities do not embed transitional resolver
  * choices, so P5-AC12 can use the same five roots and positive controls.

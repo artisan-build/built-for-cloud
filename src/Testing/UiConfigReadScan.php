@@ -16,8 +16,9 @@ use SplFileInfo;
  * visibility-only set, so an added enforcement consumer is unexpected.
  *
  * This scanner sees global `config('key')`, `config()->get('key')`, imported
- * Config facade `get('key')`, and `get('key')` on a variable declared with the
- * injected Config Repository contract. It deliberately does not claim data-
+ * Config facade reads, and reads on a variable declared with the injected
+ * Config Repository contract. Reads include `get` and the typed `string`,
+ * `integer`, `float`, `boolean`, and `array` getters. It does not claim data-
  * flow analysis: dynamic/concatenated keys, untyped repositories, wrappers,
  * reflection, Blade/resources, host code and generated caches remain review
  * concerns. Executed enforcement fixtures prove every supported read form.
@@ -329,7 +330,8 @@ final class UiConfigReadScan
         $argument = $open === null ? null : self::nextSignificant($tokens, $open + 1);
 
         if ($method === null || ! is_array($tokens[$method]) || $tokens[$method][0] !== T_STRING
-            || strtolower($tokens[$method][1]) !== 'get' || $open === null || $tokens[$open] !== '('
+            || ! in_array(strtolower($tokens[$method][1]), ['get', 'string', 'integer', 'float', 'boolean', 'array'], true)
+            || $open === null || $tokens[$open] !== '('
             || $argument === null) {
             return null;
         }

@@ -8,12 +8,13 @@ use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConfigChainEnforcementPath;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConfigEnforcementPath;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConfigFacadeEnforcementPath;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConfigRepositoryEnforcementPath;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConfigTypedGetterEnforcementPath;
 use Illuminate\Contracts\Config\Repository;
 
 /**
  * P5-AC13's installed-src enumeration. It covers all four statically
- * attributable literal read forms documented by UiConfigReadScan and no
- * dynamic config access; the executable rogue gates below are its controls.
+ * attributable literal read forms and the typed-getter family documented by
+ * UiConfigReadScan; the executable rogue gates below are its controls.
  */
 it('derives exactly the frozen visibility-only ui config consumer', function (): void {
     $root = dirname(__DIR__).'/src';
@@ -29,6 +30,7 @@ it('reports an executed enforcement path for every supported ui config read form
         'built-for-cloud.ui.rogue_facade_gate' => new UiConfigFacadeEnforcementPath,
         'built-for-cloud.ui.rogue_gate' => new UiConfigEnforcementPath,
         'built-for-cloud.ui.rogue_repository_gate' => new UiConfigRepositoryEnforcementPath(app(Repository::class)),
+        'built-for-cloud.ui.rogue_typed_gate' => new UiConfigTypedGetterEnforcementPath,
     ];
 
     foreach ($gates as $key => $gate) {
@@ -46,5 +48,6 @@ it('reports an executed enforcement path for every supported ui config read form
         UiConfigEnforcementPath::class.'|built-for-cloud.ui.rogue_gate|1',
         UiConfigFacadeEnforcementPath::class.'|built-for-cloud.ui.rogue_facade_gate|1',
         UiConfigRepositoryEnforcementPath::class.'|built-for-cloud.ui.rogue_repository_gate|1',
+        UiConfigTypedGetterEnforcementPath::class.'|built-for-cloud.ui.rogue_typed_gate|1',
     ]);
 });
