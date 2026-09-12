@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
+use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
@@ -16,7 +17,10 @@ use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnifiedStoreDeclaration;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Testing\TestResponse;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -132,6 +136,74 @@ it('enumerates every credential kind in the delivery table without inventing a s
     sort($expected);
 
     expect($kinds)->toBe($expected);
+});
+
+/**
+ * P5-AC6's installation-locality control. The separate in-memory connection
+ * represents another installation store; this does not claim hostile-host
+ * resistance or any caller-selected cross-installation routing path.
+ */
+it('resolves a stored secret only in the installation store that contains its hash', function (): void {
+    $secret = 'installation-local-secret';
+    $credential = Credential::factory()->create([
+        'kind' => CredentialKind::Bearer,
+        'subject_type' => SubjectType::Installation,
+        'subject_ref' => 'installation-a',
+        'user_id' => null,
+        'secret_hash' => hash('sha256', $secret),
+    ]);
+
+    config()->set('database.connections.separate_installation', [
+        'driver' => 'sqlite',
+        'database' => ':memory:',
+        'prefix' => '',
+        'foreign_key_constraints' => true,
+    ]);
+    DB::purge('separate_installation');
+
+    Schema::connection('separate_installation')->create('credentials', function (Blueprint $table): void {
+        $table->uuid('id')->primary();
+        $table->string('kind', 32);
+        $table->string('subject_type', 32);
+        $table->string('subject_ref');
+        $table->string('user_id')->nullable();
+        $table->string('secret_hash', 64)->nullable()->unique();
+        $table->string('status', 16);
+        $table->timestamp('revoked_at')->nullable();
+        $table->timestamp('expires_at')->nullable();
+    });
+    Schema::connection('separate_installation')->create('offboarded_subjects', function (Blueprint $table): void {
+        $table->string('subject_type');
+        $table->string('subject_ref');
+        $table->string('user_id')->default('');
+    });
+
+    expect(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $secret)?->id)->toBe($credential->id);
+
+    $originalConnection = DB::getDefaultConnection();
+
+    try {
+        DB::setDefaultConnection('separate_installation');
+
+        expect(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $secret))->toBeNull();
+
+        DB::connection()->table('credentials')->insert([
+            'id' => $credential->id,
+            'kind' => $credential->kind->value,
+            'subject_type' => $credential->subject_type->value,
+            'subject_ref' => $credential->subject_ref,
+            'user_id' => null,
+            'secret_hash' => $credential->secret_hash,
+            'status' => $credential->status->value,
+            'revoked_at' => null,
+            'expires_at' => null,
+        ]);
+
+        expect(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $secret)?->id)->toBe($credential->id);
+    } finally {
+        DB::setDefaultConnection($originalConnection);
+        DB::purge('separate_installation');
+    }
 });
 
 /**

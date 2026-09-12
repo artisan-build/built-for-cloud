@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Testing;
 
-use ArtisanBuild\BuiltForCloud\SubjectType;
 use FilesystemIterator;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
@@ -18,38 +17,33 @@ use SplFileInfo;
  * methods, minter targets, literal routes, enum cases and command signatures
  * from installed PHP source. The frozen eight-path and transitional oracles
  * deliberately live in the test, not here, so discovery cannot edit its own
- * expected answer. P5-AC12 can run this same scanner after removal unchanged.
+ * expected answer. Stable path identities do not embed transitional resolver
+ * choices, so P5-AC12 can use the same five roots and positive controls.
  *
  * This is source classification, not whole-program data-flow analysis. It
  * cannot see dynamic class names, container bindings assembled outside the
  * provider, routes registered through an unknown wrapper, runtime rebinding,
  * direct model writes, host code or non-PHP generated code. The device path is
- * honestly partial: no enrollment verifier exists, so this scanner derives
- * only the declared composition over ExternalConsumer and Installation. Four
- * fixture controls prove the ordinary bypass, second-store resolver, extra
- * enrollment-route and out-of-pair device shapes this instrument claims to
- * report; deliberately hidden dynamic equivalents remain review/P6 concerns.
+ * honestly partial and is NOT emitted as a discovery: its conventional
+ * ExternalConsumer/Installation binding is unenforced, so this scanner derives
+ * only the enrollment code's real hash, lifetime, single-use and revocation
+ * properties. Fixture controls prove the ordinary bypass, second-store
+ * resolver, extra enrollment-route and indirect class-bound gate shapes this
+ * instrument claims to report; hidden dynamic equivalents remain review/P6
+ * concerns.
  */
 final class CredentialPathInventory
 {
-    /**
-     * The source declaration for the partial device composition. It does not
-     * create an enrollment protocol; it gives the otherwise conceptual row an
-     * executable, enumerable pair while R1 owns completion.
-     */
-    private const array DEVICE_SUBJECT_TYPES = [
-        SubjectType::ExternalConsumer,
-        SubjectType::Installation,
-    ];
-
     /**
      * @param  list<string>  $additionalRoots
      * @return array{
      *   mechanisms: list<string>,
      *   lifecycle: list<string>,
      *   enrollment: list<string>,
+     *   enrollment_properties: list<string>,
      *   classification: list<string>,
      *   key_selection: list<string>,
+     *   resolution_choke_points: list<string>,
      *   paths: list<string>,
      *   transitional: list<string>,
      *   transition_members: list<string>,
@@ -66,14 +60,7 @@ final class CredentialPathInventory
 
         $authenticators = self::implementations($classes, 'CredentialAuthenticator');
         $minters = self::implementations($classes, 'DurableCredentialMinter');
-        $middleware = [];
-
-        foreach ($providerImports as $class) {
-            if (str_starts_with($class, 'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\')
-                && str_contains($providerCode, self::shortName($class).'::class')) {
-                $middleware[] = 'middleware:'.$class;
-            }
-        }
+        $middleware = self::registeredMiddleware($classes, $providerCode, $providerImports);
 
         preg_match_all(
             '/\$auth->extend\((?:(?!\$auth->extend).)*?return\s+new\s+([A-Z][A-Za-z0-9_]*)\s*\(/s',
@@ -81,11 +68,7 @@ final class CredentialPathInventory
             $guardMatches,
         );
 
-        $mechanisms = [
-            'resolver:ArtisanBuild\\BuiltForCloud\\Auth\\CredentialResolver',
-            'key-sink:ArtisanBuild\\BuiltForCloud\\Hmac\\HmacSigner',
-            'key-sink:ArtisanBuild\\BuiltForCloud\\Hmac\\HmacVerifier',
-        ];
+        $mechanisms = [];
 
         foreach ($guardMatches[1] as $guard) {
             $mechanisms[] = 'guard:'.self::imported($providerImports, $guard);
@@ -132,18 +115,29 @@ final class CredentialPathInventory
         }
 
         $lifecycle = self::lifecycle($classes, $minters);
-        $enrollment = self::enrollment($files, $providerImports);
+        $enrollment = self::enrollment($files, $classes, $providerImports);
+        $enrollmentProperties = self::enrollmentProperties($classes);
         $classification = self::classification($classes, $providerCode, $providerImports);
         $keySelection = self::keySelection($classes);
-        $deviceSubjects = self::deviceSubjects($files);
         $transitionMembers = self::transitionMembers($classification);
+        $resolutionChokePoints = [];
 
-        foreach (self::DEVICE_SUBJECT_TYPES as $subjectType) {
-            $declared = 'device-subject:'.SubjectType::class.'::'.$subjectType->name;
+        foreach ($keySelection as $selection) {
+            $mechanisms[] = 'key-sink:'.substr($selection, strlen('key-selection:'));
+        }
 
-            if (! in_array($declared, $deviceSubjects, true)) {
-                $violations[] = 'undiscovered-device-declaration:'.$declared;
-            }
+        $credentialResolver = 'ArtisanBuild\\BuiltForCloud\\Auth\\CredentialResolver';
+        if (isset($classes[$credentialResolver])
+            && str_contains($classes[$credentialResolver]['code'], 'public function resolve(')
+            && in_array('resolver-service:'.$credentialResolver, $mechanisms, true)) {
+            $mechanisms[] = 'resolver:'.$credentialResolver;
+            $resolutionChokePoints[] = 'choke-point:'.$credentialResolver.'::resolve';
+        }
+
+        $hmacVerifier = 'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacVerifier';
+        if (in_array('key-selection:'.$hmacVerifier, $keySelection, true)
+            && str_contains($classes[$hmacVerifier]['code'], 'public function verify(')) {
+            $resolutionChokePoints[] = 'choke-point:'.$hmacVerifier.'::verify';
         }
 
         $paths = self::paths(
@@ -152,7 +146,7 @@ final class CredentialPathInventory
             $enrollment,
             $classification,
             $keySelection,
-            $deviceSubjects,
+            $resolutionChokePoints,
         );
         $transitional = self::transitional(
             $mechanisms,
@@ -176,20 +170,13 @@ final class CredentialPathInventory
             }
         }
 
-        foreach ($deviceSubjects as $subject) {
-            if (! in_array($subject, [
-                'device-subject:ArtisanBuild\\BuiltForCloud\\SubjectType::ExternalConsumer',
-                'device-subject:ArtisanBuild\\BuiltForCloud\\SubjectType::Installation',
-            ], true)) {
-                $violations[] = 'out-of-pair-device-composition:'.$subject;
-            }
-        }
-
         $mechanisms = self::sortedUnique($mechanisms);
         $lifecycle = self::sortedUnique($lifecycle);
         $enrollment = self::sortedUnique($enrollment);
+        $enrollmentProperties = self::sortedUnique($enrollmentProperties);
         $classification = self::sortedUnique($classification);
         $keySelection = self::sortedUnique($keySelection);
+        $resolutionChokePoints = self::sortedUnique($resolutionChokePoints);
         $paths = self::sortedUnique($paths);
         $transitional = self::sortedUnique($transitional);
         $transitionMembers = self::sortedUnique($transitionMembers);
@@ -199,8 +186,10 @@ final class CredentialPathInventory
             'mechanisms' => $mechanisms,
             'lifecycle' => $lifecycle,
             'enrollment' => $enrollment,
+            'enrollment_properties' => $enrollmentProperties,
             'classification' => $classification,
             'key_selection' => $keySelection,
+            'resolution_choke_points' => $resolutionChokePoints,
             'paths' => $paths,
             'transitional' => $transitional,
             'transition_members' => $transitionMembers,
@@ -260,10 +249,11 @@ final class CredentialPathInventory
 
     /**
      * @param  array<string, string>  $files
+     * @param  array<string, array{code: string, imports: array<string, string>}>  $classes
      * @param  array<string, string>  $providerImports
      * @return list<string>
      */
-    private static function enrollment(array $files, array $providerImports): array
+    private static function enrollment(array $files, array $classes, array $providerImports): array
     {
         $items = [];
 
@@ -284,9 +274,63 @@ final class CredentialPathInventory
             }
         }
 
-        $items[] = 'model:ArtisanBuild\\BuiltForCloud\\OnboardingToken';
+        $model = 'ArtisanBuild\\BuiltForCloud\\OnboardingToken';
+        $controller = 'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding';
+
+        if (isset($classes[$model], $classes[$controller])
+            && str_contains($classes[$controller]['code'], 'OnboardingToken')) {
+            $items[] = 'model:'.$model;
+        }
 
         return $items;
+    }
+
+    /**
+     * @param  array<string, array{code: string, imports: array<string, string>}>  $classes
+     * @return list<string>
+     */
+    private static function enrollmentProperties(array $classes): array
+    {
+        $properties = [];
+        $token = $classes['ArtisanBuild\\BuiltForCloud\\OnboardingToken']['code'] ?? '';
+        $mint = $classes['ArtisanBuild\\BuiltForCloud\\Actions\\MintCredential']['code'] ?? '';
+        $exchange = $classes['ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding']['code'] ?? '';
+        $revoke = $classes['ArtisanBuild\\BuiltForCloud\\Actions\\RevokeCredential']['code'] ?? '';
+        $declaration = $classes['ArtisanBuild\\BuiltForCloud\\DefaultCredentialDeclaration']['code'] ?? '';
+        $usage = $classes['ArtisanBuild\\BuiltForCloud\\CredentialUsageRecorder']['code'] ?? '';
+
+        if (str_contains($mint, "'token_hash' => \$code->hash()")
+            && str_contains($token, "return hash('sha256', \$token)")
+            && str_contains($token, "->where('token_hash', self::hashToken(\$plainTextToken))")) {
+            $properties[] = 'enrollment-code:hash-only';
+        }
+
+        if (preg_match('/\$ttlSeconds\s*===\s*null\s*\|\|\s*\$ttlSeconds\s*<\s*self::CODE_TTL_MIN_SECONDS\s*\|\|\s*\$ttlSeconds\s*>\s*self::CODE_TTL_MAX_SECONDS/', $mint) === 1
+            && str_contains($mint, "'expires_at' => now()->addSeconds(\$ttlSeconds)")) {
+            $properties[] = 'enrollment-code:short-lived';
+        }
+
+        if (str_contains($token, "return \$query->whereNull('consumed_at')")
+            && str_contains($exchange, 'if ($code->consumed_at !== null)')
+            && str_contains($exchange, 'if ($this->burnMode() === BurnMode::AtExchange)')
+            && str_contains($exchange, "->whereNull('consumed_at')")
+            && str_contains($exchange, "->update(['consumed_at' => now()])")
+            && str_contains($declaration, 'return BurnMode::FirstUse')
+            && str_contains($usage, 'return $this->burnFirstUse($credential)')
+            && str_contains($usage, "->where('durable_token_id', \$credential->getKey())")
+            && str_contains($usage, "->whereNull('consumed_at')")
+            && str_contains($usage, "->update(['consumed_at' => now()])")) {
+            $properties[] = 'enrollment-code:single-use';
+        }
+
+        if (str_contains($revoke, 'OnboardingToken::query()')
+            && str_contains($revoke, "->where('durable_token_id', \$id)")
+            && str_contains($revoke, "->whereNull('consumed_at')")
+            && str_contains($revoke, "->update(['consumed_at' => \$now])")) {
+            $properties[] = 'enrollment-code:revocable';
+        }
+
+        return $properties;
     }
 
     /**
@@ -353,7 +397,7 @@ final class CredentialPathInventory
      * @param  list<string>  $enrollment
      * @param  list<string>  $classification
      * @param  list<string>  $keySelection
-     * @param  list<string>  $deviceSubjects
+     * @param  list<string>  $resolutionChokePoints
      * @return list<string>
      */
     private static function paths(
@@ -362,7 +406,7 @@ final class CredentialPathInventory
         array $enrollment,
         array $classification,
         array $keySelection,
-        array $deviceSubjects,
+        array $resolutionChokePoints,
     ): array {
         $paths = [];
 
@@ -370,33 +414,37 @@ final class CredentialPathInventory
             $code = $classes[$authenticator]['code'];
 
             if (preg_match('/CredentialKind::(Basic|Bearer)/', $code, $kind) === 1
-                && str_contains($code, 'CredentialResolver')) {
+                && str_contains($code, 'CredentialResolver')
+                && in_array('choke-point:ArtisanBuild\\BuiltForCloud\\Auth\\CredentialResolver::resolve', $resolutionChokePoints, true)) {
                 $paths[] = sprintf(
-                    'path:%s|%s|CredentialKind::%s+secret_hash|CredentialResolver::resolve',
+                    'path:%s|%s',
                     $kind[1],
                     $authenticator,
-                    $kind[1],
                 );
             }
         }
 
         $mcp = $classes['ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\AuthenticateMcp']['code'] ?? '';
-        if (str_contains($mcp, 'TokenRegistry') && str_contains($mcp, 'AssertionVerifier')) {
-            $paths[] = 'path:MCP|Http\\Middleware\\AuthenticateMcp:store-bearer+v4.public|CredentialKind::Bearer/DelegatedActor|TokenRegistry::resolveModel/AssertionVerifier+ConsoleKeyring';
+        if (str_contains($mcp, 'bearerToken()')
+            && str_contains($mcp, 'AssertionVerifier::HEADER')
+            && str_contains($mcp, 'authenticateAssertion(')
+            && (str_contains($mcp, '->resolveModel($bearer)')
+                || (str_contains($mcp, 'CredentialKind::Bearer') && str_contains($mcp, '->resolve(')))) {
+            $paths[] = 'path:MCP|Http\\Middleware\\AuthenticateMcp:store-bearer+v4.public';
         }
 
         if ($keySelection === [
             'key-selection:ArtisanBuild\\BuiltForCloud\\Hmac\\HmacSigner',
             'key-selection:ArtisanBuild\\BuiltForCloud\\Hmac\\HmacVerifier',
         ]) {
-            $paths[] = 'path:HMAC|Http\\Middleware\\VerifyHmacSignature+Hmac\\HmacVerifier|CredentialKind::Hmac+secret_ciphertext+secret_key_version|HmacVerifier::verify';
+            $paths[] = 'path:HMAC|Http\\Middleware\\VerifyHmacSignature+Hmac\\HmacVerifier';
         }
 
         $mint = $classes['ArtisanBuild\\BuiltForCloud\\Actions\\MintCredential']['code'] ?? '';
         if (str_contains($mint, 'CredentialKind::Asymmetric => $this->mintEnrollment(')
             && ! str_contains($mint, "'public_key'")
             && str_contains($mint, 'status\' => CredentialStatus::Pending')) {
-            $paths[] = 'path:asymmetric|Actions\\MintCredential::mintEnrollment|CredentialKind::Asymmetric+public_key:null|no-verifier';
+            $paths[] = 'path:asymmetric|Actions\\MintCredential::mintEnrollment';
         }
 
         $expectedEnrollmentRoutes = [
@@ -409,14 +457,7 @@ final class CredentialPathInventory
         sort($actualRoutes);
 
         if (array_diff($expectedEnrollmentRoutes, $actualRoutes) === []) {
-            $paths[] = 'path:enrollment|OnboardingToken+POST:/bfc/claim,/bfc/onboarding/issue,/exchange,/verify|DeliveryShape::EnrollmentCode|CredentialResolver::resolve-after-exchange';
-        }
-
-        if ($deviceSubjects === [
-            'device-subject:ArtisanBuild\\BuiltForCloud\\SubjectType::ExternalConsumer',
-            'device-subject:ArtisanBuild\\BuiltForCloud\\SubjectType::Installation',
-        ]) {
-            $paths[] = 'path:device|enrollment+(external_consumer,installation)|DeliveryShape::EnrollmentCode|as-enrollment-partial';
+            $paths[] = 'path:enrollment|OnboardingToken+POST:/bfc/claim,/bfc/onboarding/issue,/exchange,/verify';
         }
 
         $requiredSystem = [
@@ -428,7 +469,7 @@ final class CredentialPathInventory
         ];
 
         if (array_diff($requiredSystem, $classification) === []) {
-            $paths[] = 'path:system|SubjectType::Operator/Application/Installation+AuditActorType::CliOperator|CredentialKind::Bearer/Basic|CredentialResolver::resolve';
+            $paths[] = 'path:system|SubjectType::Operator/Application/Installation+AuditActorType::CliOperator';
         }
 
         return $paths;
@@ -516,29 +557,134 @@ final class CredentialPathInventory
     }
 
     /**
-     * @param  array<string, string>  $files
+     * Derive middleware from literal provider registrations and from a
+     * class-valued mapping method whose result is attached to a route.
+     *
+     * @param  array<string, array{code: string, imports: array<string, string>}>  $classes
+     * @param  array<string, string>  $providerImports
      * @return list<string>
      */
-    private static function deviceSubjects(array $files): array
+    private static function registeredMiddleware(array $classes, string $providerCode, array $providerImports): array
     {
-        $subjects = [];
+        $middleware = [];
 
-        foreach ($files as $code) {
-            if (preg_match('/DEVICE_SUBJECT_TYPES\s*=\s*\[(.*?)\]/s', $code, $declaration) !== 1) {
+        foreach ($classes as $class => $record) {
+            if (! str_starts_with($class, 'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\')
+                || ! str_contains($record['code'], 'public function handle(')) {
                 continue;
             }
 
-            preg_match_all('/SubjectType::([A-Za-z_][A-Za-z0-9_]*)/', $declaration[1], $cases);
+            $spellings = [$class, '\\'.$class];
 
-            foreach ($cases[1] as $case) {
-                $subjects[] = 'device-subject:ArtisanBuild\\BuiltForCloud\\SubjectType::'.$case;
+            if (($providerImports[self::shortName($class)] ?? null) === $class) {
+                $spellings[] = self::shortName($class);
+            }
+
+            foreach ($spellings as $spelling) {
+                if (self::directlyRegistersMiddleware($providerCode, $spelling)) {
+                    $middleware[] = 'middleware:'.$class;
+                    break;
+                }
             }
         }
 
-        $subjects = array_values(array_unique($subjects));
-        sort($subjects);
+        foreach ($classes as $registrationClass => $registration) {
+            preg_match_all(
+                '/\$([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Z][A-Za-z0-9_]*)::([A-Za-z_][A-Za-z0-9_]*)\([^;]*\);[\s\S]{0,1000}?->middleware\(\s*\$\1\s*\)/',
+                $registration['code'],
+                $bindings,
+                PREG_SET_ORDER,
+            );
 
-        return $subjects;
+            foreach ($bindings as $binding) {
+                $mappingClass = self::resolvedClass($registrationClass, $registration['imports'], $binding[2]);
+                $mapping = $classes[$mappingClass] ?? null;
+
+                if ($mapping === null || ! str_contains($mapping['code'], 'function '.$binding[3].'(')) {
+                    continue;
+                }
+
+                preg_match_all('/=>\s*([^\s:,()]+)::class(?:\.|,)/', $mapping['code'], $mappedGates);
+
+                foreach ($mappedGates[1] as $short) {
+                    $gate = self::resolvedClass($mappingClass, $mapping['imports'], $short);
+
+                    if (isset($classes[$gate]) && str_contains($classes[$gate]['code'], 'public function handle(')) {
+                        $middleware[] = 'middleware:'.$gate;
+                    }
+                }
+            }
+        }
+
+        return self::sortedUnique($middleware);
+    }
+
+    private static function directlyRegistersMiddleware(string $providerCode, string $short): bool
+    {
+        $class = preg_quote($short, '/').'::class';
+
+        if (preg_match('/(?:aliasMiddleware|addPersistentMiddleware)\([^;]*'.$class.'/', $providerCode) === 1
+            || preg_match('/->middleware\(\s*(?:\[[^\]]*)?'.$class.'/', $providerCode) === 1) {
+            return true;
+        }
+
+        preg_match_all('/\$([A-Za-z_][A-Za-z0-9_]*)\s*=\s*\[(.*?)\];/s', $providerCode, $assignments, PREG_SET_ORDER);
+        $arrays = [];
+
+        foreach ($assignments as $assignment) {
+            $arrays[$assignment[1]] = $assignment[2];
+        }
+
+        foreach ($arrays as $variable => $body) {
+            if (preg_match('/\b'.$class.'/', $body) === 1
+                && self::middlewareArrayIsRegistered($providerCode, $variable, $arrays)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array<string, string>  $arrays
+     * @param  list<string>  $seen
+     */
+    private static function middlewareArrayIsRegistered(string $providerCode, string $variable, array $arrays, array $seen = []): bool
+    {
+        if (in_array($variable, $seen, true)) {
+            return false;
+        }
+
+        if (preg_match('/->middleware\([^)]*(?:\.\.\.)?\$'.preg_quote($variable, '/').'\b/', $providerCode) === 1) {
+            return true;
+        }
+
+        $seen[] = $variable;
+
+        foreach ($arrays as $parent => $body) {
+            if (preg_match('/(?:\.\.\.)?\$'.preg_quote($variable, '/').'\b/', $body) === 1
+                && self::middlewareArrayIsRegistered($providerCode, $parent, $arrays, $seen)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** @param array<string, string> $imports */
+    private static function resolvedClass(string $contextClass, array $imports, string $short): string
+    {
+        if (str_starts_with($short, '\\')) {
+            return ltrim($short, '\\');
+        }
+
+        if (isset($imports[$short])) {
+            return $imports[$short];
+        }
+
+        $separator = strrpos($contextClass, '\\');
+
+        return $separator === false ? $short : substr($contextClass, 0, $separator).'\\'.$short;
     }
 
     private static function presentsSecret(string $code): bool
@@ -555,13 +701,26 @@ final class CredentialPathInventory
      */
     private static function resolutionDependencies(string $gate, string $code, array $imports): array
     {
-        preg_match_all('/(?:private|protected|public)\s+(?:readonly\s+)?([A-Z][A-Za-z0-9_]*)\s+\$[A-Za-z_][A-Za-z0-9_]*/', $code, $constructorTypes);
+        preg_match_all('/(?:private|protected|public)\s+(?:readonly\s+)?([A-Z][A-Za-z0-9_]*)\s+\$([A-Za-z_][A-Za-z0-9_]*)/', $code, $constructorTypes, PREG_SET_ORDER);
         preg_match_all('/app\(\s*([A-Z][A-Za-z0-9_]*)::class\s*\)\s*->\s*(?:resolve|resolveModel|verify)\s*\(/', $code, $locatedTypes);
         $dependencies = [];
         $separator = strrpos($gate, '\\');
         $namespace = $separator === false ? '' : substr($gate, 0, $separator);
 
-        foreach ([...$constructorTypes[1], ...$locatedTypes[1]] as $short) {
+        foreach ($constructorTypes as $constructorType) {
+            if (preg_match('/\$this\s*->\s*'.preg_quote($constructorType[2], '/').'\s*->\s*(?:resolve|resolveModel|verify)\s*\(/', $code) !== 1) {
+                continue;
+            }
+
+            $short = $constructorType[1];
+            $dependency = $imports[$short] ?? ($namespace === '' ? $short : $namespace.'\\'.$short);
+
+            if (self::isResolutionService($dependency)) {
+                $dependencies[] = $dependency;
+            }
+        }
+
+        foreach ($locatedTypes[1] as $short) {
             $dependency = $imports[$short] ?? ($namespace === '' ? $short : $namespace.'\\'.$short);
 
             if (self::isResolutionService($dependency)) {
@@ -655,18 +814,41 @@ final class CredentialPathInventory
         preg_match_all('/^use\s+([^;]+);$/m', $contents, $matches);
         $imports = [];
 
-        foreach ($matches[1] as $class) {
-            if (str_contains($class, '{') || str_contains($class, ' function ') || str_contains($class, ' const ')) {
-                continue;
-            }
+        foreach ($matches[1] as $declaration) {
+            foreach (self::expandedImports($declaration) as $class) {
+                if (str_starts_with($class, 'function ') || str_starts_with($class, 'const ')) {
+                    continue;
+                }
 
-            $parts = preg_split('/\s+as\s+/i', trim($class));
-            $target = $parts[0];
-            $alias = $parts[1] ?? self::shortName($target);
-            $imports[$alias] = $target;
+                $parts = preg_split('/\s+as\s+/i', trim($class));
+                $target = ltrim($parts[0], '\\');
+                $alias = $parts[1] ?? self::shortName($target);
+                $imports[$alias] = $target;
+            }
         }
 
         return $imports;
+    }
+
+    /** @return list<string> */
+    private static function expandedImports(string $declaration): array
+    {
+        $open = strpos($declaration, '{');
+
+        if ($open === false) {
+            return array_map('trim', explode(',', $declaration));
+        }
+
+        $close = strrpos($declaration, '}');
+
+        if ($close === false) {
+            return [];
+        }
+
+        $prefix = rtrim(trim(substr($declaration, 0, $open)), '\\').'\\';
+        $members = explode(',', substr($declaration, $open + 1, $close - $open - 1));
+
+        return array_map(static fn (string $member): string => $prefix.trim($member), $members);
     }
 
     /** @param array<string, string> $imports */

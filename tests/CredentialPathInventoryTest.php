@@ -2,9 +2,8 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\CredentialPathInventory;
-use ArtisanBuild\BuiltForCloud\Tests\Fixtures\DeviceCompositionOutsidePair;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ClassBoundCredentialGate;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SecondStoreResolver;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnguardedCredentialAuthenticator;
 
@@ -20,14 +19,13 @@ function sortedCredentialInventory(array $items): array
 function frozenCredentialPathRows(): array
 {
     return sortedCredentialInventory([
-        'path:Basic|ArtisanBuild\BuiltForCloud\Auth\BasicAuthenticator|CredentialKind::Basic+secret_hash|CredentialResolver::resolve',
-        'path:Bearer|ArtisanBuild\BuiltForCloud\Auth\BearerAuthenticator|CredentialKind::Bearer+secret_hash|CredentialResolver::resolve',
-        'path:MCP|Http\Middleware\AuthenticateMcp:store-bearer+v4.public|CredentialKind::Bearer/DelegatedActor|TokenRegistry::resolveModel/AssertionVerifier+ConsoleKeyring',
-        'path:HMAC|Http\Middleware\VerifyHmacSignature+Hmac\HmacVerifier|CredentialKind::Hmac+secret_ciphertext+secret_key_version|HmacVerifier::verify',
-        'path:asymmetric|Actions\MintCredential::mintEnrollment|CredentialKind::Asymmetric+public_key:null|no-verifier',
-        'path:enrollment|OnboardingToken+POST:/bfc/claim,/bfc/onboarding/issue,/exchange,/verify|DeliveryShape::EnrollmentCode|CredentialResolver::resolve-after-exchange',
-        'path:device|enrollment+(external_consumer,installation)|DeliveryShape::EnrollmentCode|as-enrollment-partial',
-        'path:system|SubjectType::Operator/Application/Installation+AuditActorType::CliOperator|CredentialKind::Bearer/Basic|CredentialResolver::resolve',
+        'path:Basic|ArtisanBuild\BuiltForCloud\Auth\BasicAuthenticator',
+        'path:Bearer|ArtisanBuild\BuiltForCloud\Auth\BearerAuthenticator',
+        'path:MCP|Http\Middleware\AuthenticateMcp:store-bearer+v4.public',
+        'path:HMAC|Http\Middleware\VerifyHmacSignature+Hmac\HmacVerifier',
+        'path:asymmetric|Actions\MintCredential::mintEnrollment',
+        'path:enrollment|OnboardingToken+POST:/bfc/claim,/bfc/onboarding/issue,/exchange,/verify',
+        'path:system|SubjectType::Operator/Application/Installation+AuditActorType::CliOperator',
     ]);
 }
 
@@ -98,19 +96,21 @@ function frozenCredentialClassification(): array
 }
 
 /**
- * P5-AC1's oracle is Part 1.1 plus Part 1.2b, while the independently
+ * P5-AC1's oracle is Part 1.1's seven discoverable path identities plus
+ * Part 1.2b, while the independently
  * asserted root inventories keep row classification from hiding a newly
  * discovered mechanism. CredentialPathInventory documents the static-only
- * and partial-device limits that bound this proof.
+ * limits and the unenforced, non-discovered device binding that bound this
+ * proof.
  */
-it('derives the frozen eight paths plus exactly six transitional rows from all five roots', function (): void {
+it('derives the seven discoverable paths plus exactly six transitional rows from all five roots', function (): void {
     $inventory = CredentialPathInventory::discover(dirname(__DIR__).'/src');
     $expectedRows = sortedCredentialInventory([...frozenCredentialPathRows(), ...frozenTransitionalRows()]);
     $derivedRows = sortedCredentialInventory([...$inventory['paths'], ...$inventory['transitional']]);
 
     expect($inventory['violations'])->toBe([])
         ->and($derivedRows)->toBe($expectedRows)
-        ->and($inventory['paths'])->toHaveCount(8)
+        ->and($inventory['paths'])->toHaveCount(7)
         ->and($inventory['transitional'])->toHaveCount(6)
         ->and($inventory['mechanisms'])->toBe(sortedCredentialInventory([
             'authenticator:ArtisanBuild\BuiltForCloud\Auth\BasicAuthenticator',
@@ -124,6 +124,7 @@ it('derives the frozen eight paths plus exactly six transitional rows from all f
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin',
+            'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureManagedAuthority',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin',
@@ -156,10 +157,20 @@ it('derives the frozen eight paths plus exactly six transitional rows from all f
             'route:POST /bfc/onboarding/issue=>ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding::issue',
             'route:POST /bfc/onboarding/verify=>ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding::verify',
         ]))
+        ->and($inventory['enrollment_properties'])->toBe([
+            'enrollment-code:hash-only',
+            'enrollment-code:revocable',
+            'enrollment-code:short-lived',
+            'enrollment-code:single-use',
+        ])
         ->and($inventory['classification'])->toBe(frozenCredentialClassification())
         ->and($inventory['key_selection'])->toBe([
             'key-selection:ArtisanBuild\BuiltForCloud\Hmac\HmacSigner',
             'key-selection:ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier',
+        ])
+        ->and($inventory['resolution_choke_points'])->toBe([
+            'choke-point:ArtisanBuild\BuiltForCloud\Auth\CredentialResolver::resolve',
+            'choke-point:ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier::verify',
         ])
         ->and($inventory['transition_members'])->toBe(sortedCredentialInventory([
             'command:ArtisanBuild\BuiltForCloud\Commands\FallbackTokenGenerateCommand=fallback-token:generate',
@@ -177,18 +188,24 @@ it('reports all four deliberate controls through their assigned derivation roots
         dirname(__DIR__).'/src',
         [__DIR__.'/Fixtures'],
     );
+    $production = CredentialPathInventory::discover(dirname(__DIR__).'/src');
+    $unexpectedMiddleware = array_values(array_diff(
+        array_values(array_filter($inventory['mechanisms'], static fn (string $item): bool => str_starts_with($item, 'middleware:'))),
+        array_values(array_filter($production['mechanisms'], static fn (string $item): bool => str_starts_with($item, 'middleware:'))),
+    ));
+    $devicePaths = array_values(array_filter(
+        $inventory['paths'],
+        static fn (string $item): bool => str_starts_with($item, 'path:device|'),
+    ));
 
     expect($inventory['violations'])->toContain(
         'unchoked-authenticator:'.UnguardedCredentialAuthenticator::class,
         'second-store-resolver:'.UnguardedCredentialAuthenticator::class.'=>'.SecondStoreResolver::class,
         'unlisted-enrollment-route:route:POST /bfc/unlisted-enrollment=>ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding::exchange',
-        'out-of-pair-device-composition:device-subject:ArtisanBuild\BuiltForCloud\SubjectType::UserPrincipal',
     )
         ->and($inventory['enrollment'])->toContain(
             'route:POST /bfc/unlisted-enrollment=>ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding::exchange',
         )
-        ->and($inventory['paths'])->not->toContain(
-            'path:device|enrollment+(external_consumer,installation)|DeliveryShape::EnrollmentCode|as-enrollment-partial',
-        )
-        ->and(DeviceCompositionOutsidePair::DEVICE_SUBJECT_TYPES)->toBe([SubjectType::UserPrincipal]);
+        ->and($unexpectedMiddleware)->toBe(['middleware:'.ClassBoundCredentialGate::class])
+        ->and($devicePaths)->toBe([]);
 });

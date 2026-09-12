@@ -11,17 +11,16 @@ use RuntimeException;
 use SplFileInfo;
 
 /**
- * Derives every direct literal `config('built-for-cloud.ui.*')` read in a
- * PHP source tree. P5-AC13 compares those identities with its reviewed
+ * Derives every statically attributable literal `built-for-cloud.ui.*` read
+ * in a PHP source tree. P5-AC13 compares those identities with its reviewed
  * visibility-only set, so an added enforcement consumer is unexpected.
  *
- * This scanner sees `config()` and `\config()` calls whose first argument is
- * one literal string. It deliberately does not claim data-flow analysis: it
- * cannot see dynamic/concatenated keys, Config facade calls, injected config
- * repositories, wrappers, aliases, reflection, Blade/resources, host code or
- * generated caches. The positive-control enforcement fixture proves the
- * direct-call class this instrument claims; review remains responsible for
- * newly introduced indirection.
+ * This scanner sees global `config('key')`, `config()->get('key')`, imported
+ * Config facade `get('key')`, and `get('key')` on a variable declared with the
+ * injected Config Repository contract. It deliberately does not claim data-
+ * flow analysis: dynamic/concatenated keys, untyped repositories, wrappers,
+ * reflection, Blade/resources, host code and generated caches remain review
+ * concerns. Executed enforcement fixtures prove every supported read form.
  */
 final class UiConfigReadScan
 {
@@ -70,31 +69,290 @@ final class UiConfigReadScan
     private static function literalConfigReads(array $tokens): array
     {
         $reads = [];
+        [$facades, $repositoryVariables] = self::configSymbols($tokens);
 
         foreach ($tokens as $index => $token) {
-            $isConfig = is_array($token)
-                && (($token[0] === T_STRING && strtolower($token[1]) === 'config')
-                    || ($token[0] === T_NAME_FULLY_QUALIFIED && strtolower($token[1]) === '\\config'));
-
-            if (! $isConfig || self::isMethodCall($tokens, $index)) {
+            if (! is_array($token)) {
                 continue;
             }
 
-            $open = self::nextSignificant($tokens, $index + 1);
-            $argument = $open === null ? null : self::nextSignificant($tokens, $open + 1);
+            $isConfig = ($token[0] === T_STRING && strtolower($token[1]) === 'config')
+                || ($token[0] === T_NAME_FULLY_QUALIFIED && strtolower($token[1]) === '\\config');
 
-            if ($open === null || $tokens[$open] !== '(' || $argument === null) {
-                continue;
+            if ($isConfig && ! self::isMethodCall($tokens, $index)) {
+                $open = self::nextSignificant($tokens, $index + 1);
+                $argument = $open === null ? null : self::nextSignificant($tokens, $open + 1);
+
+                if ($open !== null && $tokens[$open] === '(' && $argument !== null) {
+                    $key = $tokens[$argument] === ')'
+                        ? self::chainedGetLiteral($tokens, $argument)
+                        : self::literalArgument($tokens, $argument);
+
+                    if ($key !== null) {
+                        $reads[] = $key;
+                    }
+                }
             }
 
-            $literal = $tokens[$argument];
+            if (self::isConfigFacade($token, $facades)) {
+                $key = self::staticGetLiteral($tokens, $index);
 
-            if (is_array($literal) && $literal[0] === T_CONSTANT_ENCAPSED_STRING) {
-                $reads[] = self::decodeLiteral($literal[1]);
+                if ($key !== null) {
+                    $reads[] = $key;
+                }
+            }
+
+            if ($token[0] === T_VARIABLE && in_array($token[1], $repositoryVariables, true)) {
+                $key = self::objectGetLiteral($tokens, $index);
+
+                if ($key !== null) {
+                    $reads[] = $key;
+                }
+            }
+
+            if ($token[0] === T_VARIABLE && $token[1] === '$this') {
+                $key = self::repositoryPropertyGetLiteral($tokens, $index, $repositoryVariables);
+
+                if ($key !== null) {
+                    $reads[] = $key;
+                }
             }
         }
 
         return $reads;
+    }
+
+    /**
+     * @param  list<array{int, string, int}|string>  $tokens
+     * @return array{list<string>, list<string>}
+     */
+    private static function configSymbols(array $tokens): array
+    {
+        $facades = [];
+        $repositories = [];
+
+        foreach ($tokens as $index => $token) {
+            if (! is_array($token) || $token[0] !== T_USE) {
+                continue;
+            }
+
+            $statement = '';
+
+            for ($cursor = $index + 1, $count = count($tokens); $cursor < $count && $tokens[$cursor] !== ';'; $cursor++) {
+                $statement .= is_array($tokens[$cursor]) ? $tokens[$cursor][1] : $tokens[$cursor];
+            }
+
+            $statement = trim($statement);
+
+            array_push($facades, ...self::importedAliases($statement, 'Illuminate\\Support\\Facades\\Config'));
+            array_push($repositories, ...self::importedAliases($statement, 'Illuminate\\Contracts\\Config\\Repository'));
+        }
+
+        $repositoryVariables = [];
+
+        foreach ($tokens as $index => $token) {
+            if (! is_array($token) || $token[0] !== T_VARIABLE) {
+                continue;
+            }
+
+            $typeIndex = self::previousSignificant($tokens, $index - 1);
+            $type = $typeIndex === null ? null : $tokens[$typeIndex];
+
+            if (is_array($type)
+                && (($type[0] === T_STRING && in_array($type[1], $repositories, true))
+                    || (in_array($type[0], [T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED], true)
+                        && ltrim(strtolower($type[1]), '\\') === 'illuminate\\contracts\\config\\repository'))) {
+                $repositoryVariables[] = $token[1];
+            }
+        }
+
+        return [array_values(array_unique($facades)), array_values(array_unique($repositoryVariables))];
+    }
+
+    /** @return list<string> */
+    private static function importedAliases(string $statement, string $class): array
+    {
+        foreach (self::expandedImports($statement) as $import) {
+            $pattern = '/^\\\\?'.preg_quote($class, '/').'(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?$/i';
+
+            if (preg_match($pattern, $import, $match) === 1) {
+                return [$match[1] ?? self::shortName($class)];
+            }
+        }
+
+        return [];
+    }
+
+    /** @return list<string> */
+    private static function expandedImports(string $statement): array
+    {
+        $imports = [];
+
+        foreach (self::topLevelUseItems($statement) as $item) {
+            $open = strpos($item, '{');
+
+            if ($open === false) {
+                $imports[] = trim($item);
+
+                continue;
+            }
+
+            $close = strrpos($item, '}');
+
+            if ($close === false) {
+                continue;
+            }
+
+            $prefix = rtrim(trim(substr($item, 0, $open)), '\\').'\\';
+
+            foreach (self::topLevelUseItems(substr($item, $open + 1, $close - $open - 1)) as $member) {
+                $imports[] = $prefix.trim($member);
+            }
+        }
+
+        return $imports;
+    }
+
+    /** @return list<string> */
+    private static function topLevelUseItems(string $statement): array
+    {
+        $items = [];
+        $item = '';
+        $depth = 0;
+
+        foreach (str_split($statement) as $character) {
+            if ($character === '{') {
+                $depth++;
+            } elseif ($character === '}') {
+                $depth--;
+            }
+
+            if ($character === ',' && $depth === 0) {
+                $items[] = $item;
+                $item = '';
+
+                continue;
+            }
+
+            $item .= $character;
+        }
+
+        $items[] = $item;
+
+        return $items;
+    }
+
+    private static function shortName(string $class): string
+    {
+        $separator = strrpos($class, '\\');
+
+        return $separator === false ? $class : substr($class, $separator + 1);
+    }
+
+    /**
+     * @param  array{int, string, int}  $token
+     * @param  list<string>  $facades
+     */
+    private static function isConfigFacade(array $token, array $facades): bool
+    {
+        if ($token[0] === T_STRING) {
+            return in_array($token[1], $facades, true);
+        }
+
+        return in_array($token[0], [T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED], true)
+            && ltrim(strtolower($token[1]), '\\') === 'illuminate\\support\\facades\\config';
+    }
+
+    /** @param list<array{int, string, int}|string> $tokens */
+    private static function staticGetLiteral(array $tokens, int $index): ?string
+    {
+        $operator = self::nextSignificant($tokens, $index + 1);
+
+        if ($operator === null || ! is_array($tokens[$operator]) || $tokens[$operator][0] !== T_DOUBLE_COLON) {
+            return null;
+        }
+
+        return self::getLiteralAfterOperator($tokens, $operator);
+    }
+
+    /** @param list<array{int, string, int}|string> $tokens */
+    private static function objectGetLiteral(array $tokens, int $index): ?string
+    {
+        $operator = self::nextSignificant($tokens, $index + 1);
+
+        if ($operator === null || ! is_array($tokens[$operator]) || $tokens[$operator][0] !== T_OBJECT_OPERATOR) {
+            return null;
+        }
+
+        return self::getLiteralAfterOperator($tokens, $operator);
+    }
+
+    /**
+     * @param  list<array{int, string, int}|string>  $tokens
+     * @param  list<string>  $repositoryVariables
+     */
+    private static function repositoryPropertyGetLiteral(array $tokens, int $index, array $repositoryVariables): ?string
+    {
+        $propertyOperator = self::nextSignificant($tokens, $index + 1);
+        $property = $propertyOperator === null ? null : self::nextSignificant($tokens, $propertyOperator + 1);
+        $getOperator = $property === null ? null : self::nextSignificant($tokens, $property + 1);
+
+        if ($propertyOperator === null || ! is_array($tokens[$propertyOperator])
+            || $tokens[$propertyOperator][0] !== T_OBJECT_OPERATOR || $property === null
+            || ! is_array($tokens[$property]) || $tokens[$property][0] !== T_STRING
+            || ! in_array('$'.$tokens[$property][1], $repositoryVariables, true)
+            || $getOperator === null || ! is_array($tokens[$getOperator])
+            || $tokens[$getOperator][0] !== T_OBJECT_OPERATOR) {
+            return null;
+        }
+
+        return self::getLiteralAfterOperator($tokens, $getOperator);
+    }
+
+    /** @param list<array{int, string, int}|string> $tokens */
+    private static function chainedGetLiteral(array $tokens, int $closeParenthesis): ?string
+    {
+        $operator = self::nextSignificant($tokens, $closeParenthesis + 1);
+
+        if ($operator === null || ! is_array($tokens[$operator]) || $tokens[$operator][0] !== T_OBJECT_OPERATOR) {
+            return null;
+        }
+
+        return self::getLiteralAfterOperator($tokens, $operator);
+    }
+
+    /** @param list<array{int, string, int}|string> $tokens */
+    private static function getLiteralAfterOperator(array $tokens, int $operator): ?string
+    {
+        $method = self::nextSignificant($tokens, $operator + 1);
+        $open = $method === null ? null : self::nextSignificant($tokens, $method + 1);
+        $argument = $open === null ? null : self::nextSignificant($tokens, $open + 1);
+
+        if ($method === null || ! is_array($tokens[$method]) || $tokens[$method][0] !== T_STRING
+            || strtolower($tokens[$method][1]) !== 'get' || $open === null || $tokens[$open] !== '('
+            || $argument === null) {
+            return null;
+        }
+
+        return self::literalArgument($tokens, $argument);
+    }
+
+    /** @param list<array{int, string, int}|string> $tokens */
+    private static function literalArgument(array $tokens, int $argument): ?string
+    {
+        $literal = $tokens[$argument];
+
+        if (! is_array($literal) || $literal[0] !== T_CONSTANT_ENCAPSED_STRING) {
+            return null;
+        }
+
+        $after = self::nextSignificant($tokens, $argument + 1);
+
+        if ($after === null || ! in_array($tokens[$after], [')', ','], true)) {
+            return null;
+        }
+
+        return self::decodeLiteral($literal[1]);
     }
 
     /** @param list<array{int, string, int}|string> $tokens */
