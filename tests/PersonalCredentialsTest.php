@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacSigner;
@@ -471,7 +472,7 @@ it('mints no abilities at all when the app declares no self-service policy, so a
     $secret = (string) $this->actingAsVersioned($mine, 'web')
         ->postJson('/bfc/me/credentials', [
             'name' => 'ci',
-            'abilities' => [OperatorAbility::McpAdmin->value, OperatorAbility::ADMIN],
+            'abilities' => [OperatorAbility::McpAdmin->value, OperatorAbility::Admin->value],
         ])
         ->assertCreated()
         ->json('delivery.secret');
@@ -481,7 +482,7 @@ it('mints no abilities at all when the app declares no self-service policy, so a
 
     expect($credential->abilities)->toBeNull()
         ->and($credential->hasAbility(OperatorAbility::McpAdmin->value))->toBeFalse()
-        ->and($credential->hasAbility(OperatorAbility::ADMIN))->toBeFalse();
+        ->and($credential->hasAbility(OperatorAbility::Admin->value))->toBeFalse();
 
     // And the ability is not merely absent from a column: the credential
     // cannot invoke the destructive tool, or the read tool, or the
@@ -561,6 +562,29 @@ it('refuses a self-service credential kind the app has not opted in', function (
     $this->postJson('/bfc/me/credentials', ['name' => 'default-kind'])->assertCreated();
 
     expect(Credential::query()->where('name', 'default-kind')->sole()->kind)->toBe(CredentialKind::Bearer);
+});
+
+it('keeps opted-in asymmetric self service as an enrollment-purpose pending keyless row', function (): void {
+    config(['built-for-cloud.credentials.declaration' => SelfServicePolicyDeclaration::class]);
+    SelfServicePolicyDeclaration::$kinds = [CredentialKind::Bearer, CredentialKind::Asymmetric];
+
+    $mine = personalUser('asymmetric@example.test');
+
+    $this->actingAsVersioned($mine, 'web')
+        ->postJson('/bfc/me/credentials', [
+            'name' => 'enrollment',
+            'kind' => CredentialKind::Asymmetric->value,
+            'code_ttl_seconds' => 900,
+        ])
+        ->assertCreated()
+        ->assertJsonPath('delivery.shape', 'enrollment_code');
+
+    $credential = Credential::query()->where('name', 'enrollment')->sole();
+
+    expect($credential->purpose)->toBe(CredentialPurpose::Enrollment)
+        ->and($credential->status)->toBe(CredentialStatus::Pending)
+        ->and($credential->public_key)->toBeNull()
+        ->and($credential->secret_hash)->toBeNull();
 });
 
 it('mints and uses an account-bound hmac key once the self-service policy opts it in', function (): void {

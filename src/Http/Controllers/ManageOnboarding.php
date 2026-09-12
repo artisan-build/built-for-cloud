@@ -789,7 +789,6 @@ final class ManageOnboarding extends OperatorRouteController
                 CredentialPurpose::Consumption => Scope::Consume->value,
                 CredentialPurpose::OperatorManagement => Scope::Admin->value,
                 CredentialPurpose::Enrollment => Scope::Onboard->value,
-                default => null,
             },
         ]);
     }

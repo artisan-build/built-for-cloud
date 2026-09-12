@@ -17,6 +17,7 @@ use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\MintResult;
 use ArtisanBuild\BuiltForCloud\RotationResult;
 use ArtisanBuild\BuiltForCloud\SubjectType;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
 
 final class SigningRootLifecycle
@@ -42,13 +43,12 @@ final class SigningRootLifecycle
             $this->lockInstallation();
 
             $current = $this->currentRoots();
+            $source = $current->first();
 
-            if ($current->count() !== 1 || $current->first()?->id !== $id) {
+            if ($current->count() !== 1 || $source === null || $source->id !== $id) {
                 throw SigningRootRefused::unavailable();
             }
 
-            /** @var Credential $source */
-            $source = $current->first();
             $replacement = $this->createRoot();
             $graceEnd = $emergency ? now() : now()->addSeconds(RotateCredential::GRACE_SECONDS);
 
@@ -91,7 +91,8 @@ final class SigningRootLifecycle
         return $root->refresh();
     }
 
-    private function currentRoots(): \Illuminate\Database\Eloquent\Collection
+    /** @return Collection<int, Credential> */
+    private function currentRoots(): Collection
     {
         return Credential::query()
             ->where('kind', CredentialKind::Hmac->value)

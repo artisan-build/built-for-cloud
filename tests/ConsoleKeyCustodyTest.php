@@ -855,7 +855,7 @@ it('gates the re-key verb on its own console:key:write ability (AC14)', function
 
     // …and so does the explicit break-glass, which is a marking an
     // operator chose rather than a family that widened under them.
-    $breakGlass = keyCustodyOperator([OperatorAbility::ADMIN]);
+    $breakGlass = keyCustodyOperator([OperatorAbility::Admin->value]);
 
     $this->postJson('/bfc/console/re-key', ['key_id' => 'break-glass', 'public_key' => keyCustodyPublicKey()], [
         'Authorization' => $breakGlass->bearerHeader(),

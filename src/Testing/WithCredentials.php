@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Testing;
 
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 
@@ -27,9 +28,23 @@ trait WithCredentials
     protected function mintCredential(array $attributes = []): MintedTestCredential
     {
         $plaintext = 'test_'.bin2hex(random_bytes(32));
+        $kind = $attributes['kind'] ?? CredentialKind::Bearer;
+        $kind = $kind instanceof CredentialKind ? $kind : CredentialKind::from((string) $kind);
+        $subjectType = $attributes['subject_type'] ?? SubjectType::Application;
+        $subjectType = $subjectType instanceof SubjectType ? $subjectType : SubjectType::from((string) $subjectType);
+        $purpose = match ($kind) {
+            CredentialKind::Hmac => CredentialPurpose::Signing,
+            CredentialKind::Asymmetric => CredentialPurpose::Enrollment,
+            CredentialKind::Bearer, CredentialKind::Basic => match ($subjectType) {
+                SubjectType::Operator => CredentialPurpose::OperatorManagement,
+                SubjectType::Application, SubjectType::Installation => CredentialPurpose::SystemDeployment,
+                SubjectType::ExternalConsumer, SubjectType::UserPrincipal => CredentialPurpose::Consumption,
+            },
+        };
 
         $credential = Credential::query()->create(array_merge([
             'kind' => CredentialKind::Bearer,
+            'purpose' => $purpose,
             'subject_type' => SubjectType::Application,
             'subject_ref' => 'test-subject',
             'status' => CredentialStatus::Active,

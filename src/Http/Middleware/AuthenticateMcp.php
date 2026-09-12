@@ -5,13 +5,13 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
 
 use ArtisanBuild\BuiltForCloud\AuditActor;
+use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\Console\AssertionBurn;
 use ArtisanBuild\BuiltForCloud\Console\AssertionPurpose;
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleEntryRefusalReason;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Console\RequestAssertion;
-use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;

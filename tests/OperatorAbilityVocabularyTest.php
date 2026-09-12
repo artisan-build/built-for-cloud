@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -64,7 +63,7 @@ it('locks the vocabulary names and the break-glass equivalence', function (): vo
         ->and(OperatorAbility::ConsoleKeyWrite->value)->toBe('console:key:write')
         ->and(OperatorAbility::McpRead->value)->toBe('mcp:read')
         ->and(OperatorAbility::MetadataRead->value)->toBe('metadata:read')
-        ->and(OperatorAbility::ADMIN)->toBe(EnsureCredentialAdmin::ABILITY)
+        ->and(OperatorAbility::Admin->value)->toBe('credential:admin')
         ->and(OperatorAbility::adminEquivalent())->toBe([
             OperatorAbility::CredentialRead,
             OperatorAbility::CredentialMint,
@@ -156,7 +155,7 @@ it('scopes each verb family to its own ability', function (): void {
 });
 
 it('honors the explicit break-glass credential on every verb', function (): void {
-    $breakGlass = operatorCredential([OperatorAbility::ADMIN]);
+    $breakGlass = operatorCredential([OperatorAbility::Admin->value]);
 
     $this->getJson('/bfc/credentials', ['Authorization' => $breakGlass->bearerHeader()])->assertOk();
 

@@ -8,9 +8,11 @@ use ArtisanBuild\BuiltForCloud\Actions\Concerns\ConsultsDeclaration;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
@@ -57,6 +59,10 @@ final class RevokeCredential
 
             if ($target === null) {
                 return RevokeOutcome::NotFound;
+            }
+
+            if ($target->purpose === CredentialPurpose::SigningRoot) {
+                throw InvalidCredentialInput::signingRootLifecycleOnly();
             }
 
             if ($scope !== null

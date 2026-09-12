@@ -19,6 +19,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
+use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintedSecret;
@@ -29,7 +30,6 @@ use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
-use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 

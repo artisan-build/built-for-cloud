@@ -120,7 +120,7 @@ it('never lets the operator break-glass ability stand in for an mcp ability', fu
     $breakGlass = $this->mintCredential([
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'control-plane',
-        'abilities' => [OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::Admin->value],
     ]);
 
     // Exact match per tool: `credential:admin` is the operator surface's

@@ -1147,7 +1147,7 @@ it('rejects an offboarded bound user\'s operator credential on the operator gate
     $operator = $this->mintCredential([
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'control-plane',
-        'abilities' => [OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::Admin->value],
         'user_id' => (string) $user->getKey(),
     ]);
 
@@ -1215,7 +1215,7 @@ it('rejects credentials minted AFTER containment for the offboarded subject on e
     $postMint = $this->mintCredential([
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'rogue-plane',
-        'abilities' => [OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::Admin->value],
     ]);
 
     $this->getJson('/offboard-guarded', ['Authorization' => $postMint->bearerHeader()])->assertUnauthorized();

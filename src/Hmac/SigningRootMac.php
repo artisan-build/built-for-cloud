@@ -10,6 +10,7 @@ use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Exceptions\SigningRootRefused;
 use ArtisanBuild\BuiltForCloud\SigningRootMacResult;
 use ArtisanBuild\BuiltForCloud\SubjectType;
+use Illuminate\Database\Eloquent\Builder;
 use Throwable;
 
 final class SigningRootMac
@@ -29,7 +30,6 @@ final class SigningRootMac
             throw SigningRootRefused::unavailable();
         }
 
-        /** @var Credential $root */
         $root = $roots->first();
 
         return new SigningRootMacResult(
@@ -44,7 +44,6 @@ final class SigningRootMac
             return false;
         }
 
-        /** @var Credential|null $root */
         $root = $this->rootQuery()->whereKey($keyId)->active()->first();
 
         if ($root === null) {
@@ -64,7 +63,8 @@ final class SigningRootMac
         return hash_equals($expected, $presentedMac);
     }
 
-    private function rootQuery(): \Illuminate\Database\Eloquent\Builder
+    /** @return Builder<Credential> */
+    private function rootQuery(): Builder
     {
         return Credential::query()
             ->where('kind', CredentialKind::Hmac->value)

@@ -210,7 +210,7 @@ it('refuses every credential but metadata:read, break-glass and legacy admin tok
     $breakGlass = $this->mintCredential([
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'control-plane',
-        'abilities' => [OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::Admin->value],
     ]);
 
     $this->getJson('/bfc/console/vitals', ['Authorization' => $breakGlass->bearerHeader()])->assertForbidden();
@@ -271,7 +271,7 @@ it('audits a denied dashboard read with the acting credential', function (): voi
     $breakGlass = $this->mintCredential([
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'control-plane',
-        'abilities' => [OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::Admin->value],
     ]);
 
     $this->getJson('/bfc/console/vitals', ['Authorization' => $breakGlass->bearerHeader()])->assertForbidden();
@@ -416,7 +416,7 @@ it('refuses a credential that holds metadata:read alongside another ability', fu
     $combined = $this->mintCredential([
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'combined',
-        'abilities' => [OperatorAbility::MetadataRead->value, OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::MetadataRead->value, OperatorAbility::Admin->value],
     ]);
 
     $this->getJson('/bfc/console/vitals', ['Authorization' => $combined->bearerHeader()])->assertForbidden();
@@ -441,7 +441,7 @@ it('refuses a credential that holds metadata:read alongside another ability', fu
     $reordered = $this->mintCredential([
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'reordered',
-        'abilities' => [OperatorAbility::ADMIN, OperatorAbility::MetadataRead->value],
+        'abilities' => [OperatorAbility::Admin->value, OperatorAbility::MetadataRead->value],
     ]);
 
     $this->getJson('/bfc/console/vitals', ['Authorization' => $reordered->bearerHeader()])->assertForbidden();
@@ -471,7 +471,7 @@ it('audits an exclusivity refusal with the acting credential', function (): void
     $combined = $this->mintCredential([
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'combined',
-        'abilities' => [OperatorAbility::MetadataRead->value, OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::MetadataRead->value, OperatorAbility::Admin->value],
     ]);
 
     $this->getJson('/bfc/console/vitals', ['Authorization' => $combined->bearerHeader()])->assertForbidden();
@@ -972,7 +972,7 @@ it('never drains the outbox from the polled read', function (): void {
     $admin = $this->mintCredential([
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'control-plane',
-        'abilities' => [OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::Admin->value],
     ]);
 
     $this->postJson('/bfc/credentials', [
@@ -1014,7 +1014,7 @@ it('never drains the outbox from a refused poll either', function (): void {
     $admin = $this->mintCredential([
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'control-plane',
-        'abilities' => [OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::Admin->value],
     ]);
 
     $this->postJson('/bfc/credentials', [

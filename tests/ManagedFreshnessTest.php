@@ -1084,7 +1084,7 @@ it('enforces deadline and authoritative denial through EnsureCredentialAdmin', f
         $user,
         $secret,
         subjectType: SubjectType::Operator,
-        abilities: [OperatorAbility::ADMIN],
+        abilities: [OperatorAbility::Admin->value],
     );
     Route::middleware('bfc.credential.admin:'.OperatorAbility::CredentialRead->value)
         ->get('/managed-ingress/credential-admin-'.$outcome, static fn (): string => 'allowed');

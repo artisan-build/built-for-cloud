@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
@@ -222,7 +223,7 @@ enum OperatorAbility: string
     {
         foreach ($abilities ?? [] as $ability) {
             if (self::tryFrom($ability) === null) {
-                throw \ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput::unknownAbility($ability);
+                throw InvalidCredentialInput::unknownAbility($ability);
             }
         }
     }

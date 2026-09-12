@@ -292,7 +292,7 @@ final class HttpContractDocTest extends TestCase
             );
         }
 
-        $this->assertStringContainsString('`'.OperatorAbility::ADMIN.'`', $doc);
+        $this->assertStringContainsString('`'.OperatorAbility::Admin->value.'`', $doc);
     }
 
     /**

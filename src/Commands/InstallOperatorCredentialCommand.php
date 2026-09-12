@@ -13,6 +13,7 @@ use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\MintOptions;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use Illuminate\Console\Command;

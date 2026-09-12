@@ -6,7 +6,6 @@ use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
@@ -53,7 +52,7 @@ it('mints a real operator-subject credential at install time, printed once, with
         ->and($credential->subject_ref)->toBe('installer')
         ->and($credential->kind)->toBe(CredentialKind::Bearer)
         // The admin-equivalent ability the /bfc/credentials gate honours.
-        ->and($credential->abilities)->toBe([EnsureCredentialAdmin::ABILITY])
+        ->and($credential->abilities)->toBe([OperatorAbility::Admin->value])
         // Revocation-on-event, never a clock: no expiry is stamped.
         ->and($credential->expires_at)->toBeNull()
         ->and($credential->secret_hash)->toBe(hash('sha256', $secret));
@@ -116,7 +115,7 @@ it('refuses a non-operator unified credential on the /bfc/credentials verbs', fu
     $nonOperator = $this->mintCredential([
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'not-an-operator',
-        'abilities' => [EnsureCredentialAdmin::ABILITY],
+        'abilities' => [OperatorAbility::Admin->value],
     ]);
 
     $this->getJson('/bfc/credentials', ['Authorization' => $nonOperator->bearerHeader()])->assertForbidden();
@@ -188,7 +187,7 @@ it('mints despite an existing operator that lacks the promised ability — mere 
         ->where('subject_ref', 'installer')
         ->sole();
 
-    expect($usable->hasAbility(EnsureCredentialAdmin::ABILITY))->toBeTrue();
+    expect($usable->hasAbility(OperatorAbility::Admin->value))->toBeTrue();
 
     // And now that a USABLE operator exists, the re-run skips.
     expect(Artisan::call('bfc:install:operator-credential'))->toBe(Command::SUCCESS)
@@ -203,7 +202,7 @@ it('rejects colliding fallback bytes before either granting branch, stamping not
     $operator = $this->mintCredential([
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'collided',
-        'abilities' => [EnsureCredentialAdmin::ABILITY],
+        'abilities' => [OperatorAbility::Admin->value],
     ]);
 
     config(['built-for-cloud.fallback_token' => $operator->plaintext()]);
