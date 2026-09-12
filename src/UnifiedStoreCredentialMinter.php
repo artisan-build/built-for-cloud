@@ -7,10 +7,8 @@ namespace ArtisanBuild\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
 
 /**
- * The seam's unified-store implementation (PRD 1.0): exchange mints a
- * `credentials` row instead of an `api_tokens` row when the app's
- * declaration targets {@see DurableStore::Credentials}. The claim
- * primitive itself is untouched — that is the whole point of the seam.
+ * The claim exchange's single durable destination: every accepted claim
+ * mints a `credentials` row. The claim primitive itself is untouched.
  *
  * The subject is `external_consumer` with the claim's name as its ref:
  * exchange-minted durables belong to the outside party the code was

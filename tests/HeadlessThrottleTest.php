@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -57,8 +57,9 @@ it('claims ownership normally on a headless app with no auth guard', function ()
         ->assertCreated()
         ->assertJsonStructure(['owner_token']);
 
-    expect(Ownership::query()->whereNotNull('owner_token_id')->exists())->toBeTrue()
-        ->and(ApiToken::query()->where('name', 'owner')->exists())->toBeTrue();
+    expect(Ownership::query()->whereNotNull('owner_credential_id')->exists())->toBeTrue()
+        ->and(Ownership::query()->whereNotNull('owner_token_id')->exists())->toBeFalse()
+        ->and(Credential::query()->where('name', 'owner')->exists())->toBeTrue();
 });
 
 it('throttles the meta route at sixty per minute by ip', function (): void {

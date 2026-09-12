@@ -97,9 +97,10 @@ it('mints a claim-code delivery when a code ttl is chosen: the key stays undeliv
         ->and($claimCode)->toMatch('/^[0-9a-f]{64}$/');
 
     /** @var OnboardingToken $code */
-    $code = OnboardingToken::query()->where('durable_token_id', $credential->id)->firstOrFail();
+    $code = OnboardingToken::query()->where('durable_credential_id', $credential->id)->firstOrFail();
 
-    expect($code->durableStore()->value)->toBe('credentials')
+    expect($code->durable_token_id)->toBeNull()
+        ->and($code->durable_store)->toBeNull()
         ->and($code->consumed_at)->toBeNull();
 });
 

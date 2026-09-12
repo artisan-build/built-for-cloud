@@ -9,7 +9,6 @@ use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
-use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Testing\TestResponse;
@@ -75,7 +74,7 @@ it('exchanges the exact contract request for the exact contract success shape', 
         ->and($body['expires_at'])->toBeNull();
 
     // The token is the durable credential hitch installs: it authenticates.
-    expect(app(TokenRegistry::class)->resolveModel((string) $body['token']))->not->toBeNull();
+    $this->postJson('/bfc/onboarding/verify', [], ['Authorization' => 'Bearer '.$body['token']])->assertOk();
 });
 
 it('answers each contract error enum with its documented status', function (): void {
@@ -131,14 +130,12 @@ it('implements make-before-break: a re-claim before first use returns a usable t
     $second = hitchClaim('{"claim_code": "'.$code.'", "version": 1}')->assertOk();
     $secondToken = (string) $second->json('token');
 
-    $registry = app(TokenRegistry::class);
-
     expect($secondToken)->not->toBe($firstToken)
-        ->and($registry->resolveModel($firstToken))->toBeNull();
+        ->and($this->postJson('/bfc/onboarding/verify', [], ['Authorization' => 'Bearer '.$firstToken])->status())->toBe(404);
 
     // First successful USE of the token burns the code (the server
     // issuing the token is the server authenticating it)…
-    expect($registry->resolveModel($secondToken))->not->toBeNull();
+    $this->postJson('/bfc/onboarding/verify', [], ['Authorization' => 'Bearer '.$secondToken])->assertOk();
 
     // …so further claims answer code_already_claimed, with the honest
     // "was used", not "was redeemed", meaning.

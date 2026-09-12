@@ -15,6 +15,7 @@ use Illuminate\Database\Eloquent\Model;
  * @property string $scope
  * @property string $token_hash
  * @property string|null $durable_token_id
+ * @property string|null $durable_credential_id
  * @property DurableStore|null $durable_store
  * @property CarbonInterface|null $consumed_at
  * @property bool $console_key_authority
@@ -47,6 +48,7 @@ final class OnboardingToken extends Model
         'scope',
         'token_hash',
         'durable_token_id',
+        'durable_credential_id',
         'durable_store',
         'consumed_at',
         'expires_at',

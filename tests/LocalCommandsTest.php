@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
+use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
@@ -154,7 +156,7 @@ it('refuses to mint a claim locally when ownership is already claimed', function
 });
 
 it('remints the owner token locally with --local, revoking the previous owner row', function (): void {
-    $old = ApiToken::factory()->create(['name' => 'owner', 'abilities' => [Scope::Admin->value]]);
+    $old = ApiToken::factory()->create(['name' => 'legacy-linked-owner', 'abilities' => [Scope::Admin->value]]);
     Ownership::query()->create(['owner_token_id' => $old->getKey()]);
 
     expect(Artisan::call('bfc:ownership:remint-owner-token', ['--local' => true]))->toBe(Command::SUCCESS);
@@ -164,11 +166,12 @@ it('remints the owner token locally with --local, revoking the previous owner ro
     preg_match('/shown once: (\S+)/', $output, $matches);
     $plaintext = $matches[1];
 
-    $replacement = ApiToken::query()->where('token_hash', hash('sha256', $plaintext))->sole();
+    $replacement = Credential::query()->where('secret_hash', hash('sha256', $plaintext))->sole();
 
     expect(substr_count($output, $plaintext))->toBe(1)
-        ->and($replacement->abilities)->toBe([Scope::Admin->value])
-        ->and(Ownership::query()->sole()->owner_token_id)->toBe((string) $replacement->getKey())
+        ->and($replacement->abilities)->toBe([EnsureCredentialAdmin::ABILITY])
+        ->and(Ownership::query()->sole()->owner_credential_id)->toBe((string) $replacement->getKey())
+        ->and(Ownership::query()->sole()->owner_token_id)->toBeNull()
         ->and($old->refresh()->revoked_at)->not->toBeNull();
 
     Process::assertNothingRan();

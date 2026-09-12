@@ -84,6 +84,12 @@ enum OperatorAbility: string
     case SubjectOffboard = 'subject:offboard';
 
     /**
+     * Release or cancel deployment ownership. This high-blast-radius verb
+     * is not implied by credential mint/revoke or subject offboarding.
+     */
+    case OwnershipRelease = 'ownership:release';
+
+    /**
      * File a console countersigning key (Console PRD D12) — its OWN
      * name, deliberately not folded into {@see self::CredentialRotate}.
      *
@@ -208,6 +214,7 @@ enum OperatorAbility: string
             self::CredentialRotate,
             self::CredentialRevoke,
             self::SubjectOffboard,
+            self::OwnershipRelease,
             self::AuditRead,
             self::ConsoleKeyWrite,
         ];

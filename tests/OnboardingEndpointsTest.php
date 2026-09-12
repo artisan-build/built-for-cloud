@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
@@ -139,7 +140,7 @@ it('exchanges a claim code for a durable scoped token and verifies it', function
 
     expect(substr_count((string) $exchange->getContent(), $durableToken))->toBe(1);
 
-    $row = ApiToken::query()->where('name', 'person@example.test')->firstOrFail();
+    $row = Credential::query()->where('name', 'person@example.test')->firstOrFail();
 
     expect($row->abilities)->toBe([Scope::Consume->value]);
 
@@ -147,7 +148,8 @@ it('exchanges a claim code for a durable scoped token and verifies it', function
     // still pending until the durable's first successful use.
     $code = OnboardingToken::query()->where('token_hash', OnboardingToken::hashToken($claimCode))->firstOrFail();
 
-    expect($code->durable_token_id)->toBe($row->getKey())
+    expect($code->durable_credential_id)->toBe($row->getKey())
+        ->and($code->durable_token_id)->toBeNull()
         ->and($code->consumed_at)->toBeNull();
 
     $verify = $this->assertNoSecretLeakage($durableToken, function () use ($durableToken): TestResponse {
@@ -173,16 +175,15 @@ it('returns a usable token on re-claim before first use with at most one live to
     $firstExchange = $this->postJson('/bfc/onboarding/exchange', ['token' => $claimCode]);
     $firstExchange->assertCreated();
     $firstDurable = (string) $firstExchange->json('durable_token');
-    $firstTokenId = ApiToken::query()->where('name', 'person@example.test')->firstOrFail()->getKey();
+    $firstTokenId = Credential::query()->where('name', 'person@example.test')->firstOrFail()->getKey();
 
     $secondExchange = $this->postJson('/bfc/onboarding/exchange', ['token' => $claimCode]);
     $secondExchange->assertCreated();
     $secondDurable = (string) $secondExchange->json('durable_token');
 
-    $firstToken = ApiToken::query()->whereKey($firstTokenId)->firstOrFail();
+    $firstToken = Credential::query()->whereKey($firstTokenId)->firstOrFail();
 
-    expect($firstToken->expires_at)->not->toBeNull()
-        ->and($firstToken->revoked_at)->not->toBeNull();
+    expect($firstToken->revoked_at)->not->toBeNull();
 
     $this->postJson('/bfc/onboarding/verify', [], bearerHeaders($firstDurable))
         ->assertNotFound()
@@ -226,17 +227,16 @@ it('re-issue to the same email and scope supersedes the pending code and its unu
     $firstExchange = $this->postJson('/bfc/onboarding/exchange', ['token' => $firstCode]);
     $firstExchange->assertCreated();
     $firstDurable = (string) $firstExchange->json('durable_token');
-    $firstTokenId = ApiToken::query()->where('name', 'person@example.test')->firstOrFail()->getKey();
+    $firstTokenId = Credential::query()->where('name', 'person@example.test')->firstOrFail()->getKey();
 
     $secondCode = issueOnboardingToken('person@example.test');
 
     expect(OnboardingToken::resolve($firstCode))->toBeNull()
         ->and(OnboardingToken::resolve($secondCode))->not->toBeNull();
 
-    $firstToken = ApiToken::query()->whereKey($firstTokenId)->firstOrFail();
+    $firstToken = Credential::query()->whereKey($firstTokenId)->firstOrFail();
 
-    expect($firstToken->expires_at)->not->toBeNull()
-        ->and($firstToken->revoked_at)->not->toBeNull();
+    expect($firstToken->revoked_at)->not->toBeNull();
 
     $this->postJson('/bfc/onboarding/verify', [], bearerHeaders($firstDurable))
         ->assertNotFound()

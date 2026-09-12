@@ -9,15 +9,15 @@ use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyDelivery;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyRefusal;
+use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
+use ArtisanBuild\BuiltForCloud\OwnerCredentialMinter;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
 use ArtisanBuild\BuiltForCloud\OwnershipClaimMinter;
-use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\TokenGenerator;
-use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -26,7 +26,7 @@ final class ManageOwnership extends OperatorRouteController
 {
     public function __construct(
         private readonly TokenGenerator $generator,
-        private readonly TokenRegistry $tokens,
+        private readonly OwnerCredentialMinter $ownerCredentials,
         private readonly OwnershipClaimMinter $claims,
         private readonly FileConsoleKey $fileConsoleKey,
     ) {}
@@ -128,12 +128,12 @@ final class ManageOwnership extends OperatorRouteController
         $ownership = Ownership::query()->lockForUpdate()->first();
         $isPendingTransfer = $ownership !== null && $ownership->pending_claim_id === $claim->getKey();
 
-        if ($ownership !== null && $ownership->owner_token_id !== null && ! $isPendingTransfer) {
+        if ($ownership !== null && $ownership->hasOwner() && ! $isPendingTransfer) {
             return response()->json(['message' => 'already claimed'], 409);
         }
 
         $generated = $this->generator->generate();
-        $ownerToken = $this->tokens->store('owner', $generated->hash, abilities: [Scope::Admin->value]);
+        $ownerCredential = $this->ownerCredentials->mintFromHash($generated->hash);
         $webhookSecret = bin2hex(random_bytes(32));
         $now = now();
         $oldCallbackUrl = $ownership?->notify_callback;
@@ -141,21 +141,26 @@ final class ManageOwnership extends OperatorRouteController
 
         if ($ownership === null) {
             $ownership = Ownership::query()->create([
-                'owner_token_id' => $ownerToken->getKey(),
+                'owner_credential_id' => $ownerCredential->getKey(),
                 'notify_callback' => $validated['notify_callback'] ?? null,
                 'webhook_secret' => $webhookSecret,
                 'pending_claim_id' => null,
             ]);
         } else {
-            if ($isPendingTransfer && $ownership->owner_token_id !== null) {
-                ApiToken::query()->whereKey($ownership->owner_token_id)->update([
-                    'expires_at' => $now,
-                    'revoked_at' => $now,
-                ]);
+            if ($isPendingTransfer) {
+                if ($ownership->owner_credential_id !== null) {
+                    Credential::query()->whereKey($ownership->owner_credential_id)->update(['revoked_at' => $now]);
+                } elseif ($ownership->owner_token_id !== null) {
+                    ApiToken::query()->whereKey($ownership->owner_token_id)->update([
+                        'expires_at' => $now,
+                        'revoked_at' => $now,
+                    ]);
+                }
             }
 
             $ownership->forceFill([
-                'owner_token_id' => $ownerToken->getKey(),
+                'owner_credential_id' => $ownerCredential->getKey(),
+                'owner_token_id' => null,
                 'notify_callback' => array_key_exists('notify_callback', $validated)
                     ? $validated['notify_callback']
                     : $ownership->notify_callback,
@@ -200,7 +205,7 @@ final class ManageOwnership extends OperatorRouteController
         return DB::transaction(function (): JsonResponse {
             $ownership = Ownership::query()->lockForUpdate()->first();
 
-            if ($ownership === null || $ownership->owner_token_id === null) {
+            if ($ownership === null || ! $ownership->hasOwner()) {
                 return response()->json(['message' => 'ownership is not claimed'], 409);
             }
 

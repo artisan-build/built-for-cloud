@@ -225,7 +225,7 @@ final readonly class FileConsoleKey
     {
         $ownership = Ownership::query()->lockForUpdate()->first();
 
-        if ($ownership === null || $ownership->owner_token_id === null) {
+        if ($ownership === null || ! $ownership->hasOwner()) {
             throw ConsoleKeyRefused::because(ConsoleKeyRefusal::Unclaimed);
         }
     }

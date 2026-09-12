@@ -5,19 +5,22 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
 
 use ArtisanBuild\BuiltForCloud\AuditActor;
+use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
+use ArtisanBuild\BuiltForCloud\ClientIdentityRecorder;
 use ArtisanBuild\BuiltForCloud\Console\AssertionBurn;
 use ArtisanBuild\BuiltForCloud\Console\AssertionPurpose;
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleEntryRefusalReason;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Console\RequestAssertion;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
 use ArtisanBuild\BuiltForCloud\Exceptions\AssertionRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleEntryRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\DelegatedActorDeactivated;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
-use ArtisanBuild\BuiltForCloud\Scope;
-use ArtisanBuild\BuiltForCloud\TokenRegistry;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use Carbon\CarbonImmutable;
 use Closure;
 use Illuminate\Http\JsonResponse;
@@ -28,19 +31,19 @@ use Symfony\Component\HttpFoundation\Response;
 use Throwable;
 
 /**
- * Authenticate one stateless MCP request with either a registry token or a
+ * Authenticate one stateless MCP request with either a unified credential or a
  * delegated assertion.
  *
  * `Authorization: Bearer` is exclusive and prefix-discriminated. A bearer
  * beginning `v4.public.` is verified only as an assertion; every other bearer
- * is resolved only by TokenRegistry. Neither failure falls through to the
+ * is resolved only by CredentialResolver. Neither failure falls through to the
  * other path.
  *
  * Assertion handling mirrors the console entry door: verify, require the MCP
  * purpose, commit the handoff record independently, then burn and lock-check
  * the actor in this middleware's transaction before publishing a principal on
  * this request object. Assertion refusals are audited and fail closed if that
- * audit cannot be committed. Registry-token refusals are intentionally not
+ * audit cannot be committed. Store-bearer refusals are intentionally not
  * audited here, matching the package's public bearer gates.
  *
  * THE CREDENTIAL IS TAKEN OUT OF THE REQUEST BEFORE ANYTHING CAN THROW,
@@ -49,14 +52,14 @@ use Throwable;
  * residue that survives.
  *
  * Pinned by `tests/AuthenticateMcpTest.php` — "never falls through
- * between registry and assertion authentication paths", "uniformly
+ * between store bearer and assertion authentication paths", "uniformly
  * refuses audience ttl purpose key and signature failures while
  * auditing each reason", "refuses a replay because its mint is spent
  * and audits the bounded reason", "keeps the contained actor handoff
  * but rolls back its burn and principal", "publishes the assertion
  * actor and this handoff claims on the request", "writes no session
- * key under an assertion", "grants the admin actor attribute only to
- * an admin-scoped registry token", "takes the bearer out of the
+ * key under an assertion", "attributes only an operator credential
+ * with credential admin ability", "takes the bearer out of the
  * server bag as well as the headers", "does not answer or audit a
  * downstream refusal as this door refusing" and "fails closed when an
  * assertion refusal cannot be audited".
@@ -68,7 +71,9 @@ final class AuthenticateMcp
     public const string AUDIT_NOTE = 'mcp authentication refused: ';
 
     public function __construct(
-        private readonly TokenRegistry $tokens,
+        private readonly CredentialResolver $credentials,
+        private readonly CredentialUsageRecorder $usage,
+        private readonly ClientIdentityRecorder $clientIdentities,
         private readonly AssertionVerifier $verifier,
         private readonly LifecycleEventRecorder $recorder,
     ) {}
@@ -90,25 +95,20 @@ final class AuthenticateMcp
             return $this->authenticateAssertion($request, $next, $bearer);
         }
 
-        $token = $this->tokens->resolveModel($bearer);
+        $credential = $this->credentials->resolve(CredentialKind::Bearer, $bearer);
 
-        if ($token === null) {
+        if ($credential === null || ! $this->usage->recordUsage($credential)) {
             return $this->refuseToken();
         }
 
-        $this->tokens->recordClientIdentityFromRequest($request, $token);
+        $this->clientIdentities->recordClientIdentityFromRequest($request, $credential);
 
-        // The attribute keeps its ONE meaning — an ADMIN token
-        // authenticated, EnsureAdminToken's convention: the package's
-        // readers convert it straight into AuditActor::adminToken(),
-        // which types the audit row AdminToken. A non-admin MCP token
-        // still authenticates this door, but must not arrive anywhere
-        // wearing an attribution its credential does not hold.
-        if ($token->hasScope(Scope::Admin)) {
-            $request->attributes->set('bfc.actor_token_id', (string) $token->getKey());
+        if ($credential->subject_type === SubjectType::Operator
+            && $credential->hasAbility(EnsureCredentialAdmin::ABILITY)) {
+            $request->attributes->set('bfc.actor_credential_id', $credential->id);
         }
 
-        $request->setUserResolver(static fn () => $token);
+        $request->setUserResolver(static fn () => $credential);
 
         return $next($request);
     }

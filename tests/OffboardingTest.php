@@ -238,7 +238,7 @@ it('contains the whole account in one action: every credential state, codes, inv
         ->and($revoked)->toContain((string) $legacy->getKey());
 });
 
-it('rejects the offboarded principal on every subsequent request — the guard is the belt under the sweep', function (): void {
+it('revokes every credential bound to a resolved user across subjects without duplicate count or audit', function (): void {
     $user = User::query()->create([
         'name' => 'Person',
         'email' => 'person@example.com',
@@ -251,26 +251,73 @@ it('rejects the offboarded principal on every subsequent request — the guard i
         'user_id' => (string) $user->getKey(),
     ]);
 
-    // A credential under a DIFFERENT subject, bound to the same user: the
-    // sweep never touches it, the registry still kills it.
-    $otherSubjectCredential = $this->mintCredential([
+    $sameUserOtherSubject = $this->mintCredential([
         'subject_type' => SubjectType::Application,
         'subject_ref' => 'other-app',
         'user_id' => (string) $user->getKey(),
     ]);
 
-    // Both authenticate before the offboard.
+    $alreadyRevoked = $this->mintCredential([
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => 'already-dead',
+        'user_id' => (string) $user->getKey(),
+        'revoked_at' => now()->subHour(),
+    ]);
+
+    $unrelated = $this->mintCredential([
+        'subject_type' => SubjectType::Application,
+        'subject_ref' => 'unrelated-app',
+    ]);
+
+    $boundCode = OnboardingToken::query()->create([
+        'id' => (string) Str::uuid(),
+        'email' => null,
+        'scope' => Scope::Consume->value,
+        'token_hash' => hash('sha256', 'bound-user-code'),
+        'durable_credential_id' => $sameUserOtherSubject->credential->id,
+        'expires_at' => now()->addHour(),
+    ]);
+    $alreadyRevokedCode = OnboardingToken::query()->create([
+        'id' => (string) Str::uuid(),
+        'email' => null,
+        'scope' => Scope::Consume->value,
+        'token_hash' => hash('sha256', 'already-revoked-user-code'),
+        'durable_credential_id' => $alreadyRevoked->credential->id,
+        'expires_at' => now()->addHour(),
+    ]);
+
+    // Every live control authenticates before containment.
     $this->getJson('/offboard-guarded', ['Authorization' => $offboardedSubjectCredential->bearerHeader()])->assertOk();
-    $this->getJson('/offboard-guarded', ['Authorization' => $otherSubjectCredential->bearerHeader()])->assertOk();
+    $this->getJson('/offboard-guarded', ['Authorization' => $sameUserOtherSubject->bearerHeader()])->assertOk();
+    $this->getJson('/offboard-guarded', ['Authorization' => $unrelated->bearerHeader()])->assertOk();
 
-    offboardViaHttp(['subject_type' => 'external_consumer', 'subject_ref' => 'acme'])->assertOk();
+    $result = app(OffboardSubject::class)(
+        OffboardOptions::fromInput(['subject_type' => 'external_consumer', 'subject_ref' => 'acme']),
+        AuditActor::operatorIntegration('offboard-test'),
+    );
 
-    // …and neither does afterward.
+    // Both target and differently-subjected user-bound rows are physically
+    // revoked; the unrelated credential remains usable.
     $this->getJson('/offboard-guarded', ['Authorization' => $offboardedSubjectCredential->bearerHeader()])->assertUnauthorized();
-    $this->getJson('/offboard-guarded', ['Authorization' => $otherSubjectCredential->bearerHeader()])->assertUnauthorized();
+    $this->getJson('/offboard-guarded', ['Authorization' => $sameUserOtherSubject->bearerHeader()])->assertUnauthorized();
+    $this->getJson('/offboard-guarded', ['Authorization' => $unrelated->bearerHeader()])->assertOk();
 
-    // The untouched row proves it is the REGISTRY rejecting, not a revocation.
-    expect($otherSubjectCredential->credential->refresh()->revoked_at)->toBeNull();
+    expect($result->revokedCredentials)->toBe(2)
+        ->and($offboardedSubjectCredential->credential->refresh()->revoked_at)->not->toBeNull()
+        ->and($sameUserOtherSubject->credential->refresh()->revoked_at)->not->toBeNull()
+        ->and($alreadyRevoked->credential->refresh()->revoked_at)->not->toBeNull()
+        ->and($unrelated->credential->refresh()->revoked_at)->toBeNull()
+        ->and($boundCode->refresh()->consumed_at)->not->toBeNull()
+        ->and($alreadyRevokedCode->refresh()->consumed_at)->not->toBeNull();
+
+    $revocations = CredentialAuditEvent::query()
+        ->where('event', LifecycleEventType::Revoked->value)
+        ->where('reason_code', 'offboarding');
+
+    expect((clone $revocations)->count())->toBe(2)
+        ->and((clone $revocations)->where('credential_id', $offboardedSubjectCredential->credential->id)->count())->toBe(1)
+        ->and((clone $revocations)->where('credential_id', $sameUserOtherSubject->credential->id)->count())->toBe(1)
+        ->and((clone $revocations)->where('credential_id', $alreadyRevoked->credential->id)->count())->toBe(0);
 });
 
 it('rejects and invalidates a surviving session — the stated compensation for stores outside the transaction', function (): void {
@@ -589,8 +636,7 @@ it('consumes a pending code linked to an already-revoked durable (Fix 7)', funct
         'email' => null,
         'scope' => Scope::Consume->value,
         'token_hash' => hash('sha256', 'orphaned-code'),
-        'durable_token_id' => $revoked->credential->id,
-        'durable_store' => 'credentials',
+        'durable_credential_id' => $revoked->credential->id,
         'expires_at' => now()->addHour(),
     ]);
 
@@ -1077,9 +1123,8 @@ it('never resolves an offboarded principal anywhere — the resolver is the cont
         'password' => 'irrelevant',
     ]);
 
-    // Bound to the user under an UNRELATED subject: the sweep never
-    // touches this row — only the registry can kill it — and its linked
-    // claim code is still awaiting its first-use burn.
+    // Bound to the user under an unrelated subject: the user-bound sweep
+    // must physically revoke it and consume its unified claim code.
     $minted = $this->mintCredential([
         'subject_type' => SubjectType::Application,
         'subject_ref' => 'unrelated-app',
@@ -1091,8 +1136,7 @@ it('never resolves an offboarded principal anywhere — the resolver is the cont
         'email' => null,
         'scope' => Scope::Consume->value,
         'token_hash' => hash('sha256', 'linked-first-use-code'),
-        'durable_token_id' => $minted->credential->id,
-        'durable_store' => 'credentials',
+        'durable_credential_id' => $minted->credential->id,
         'expires_at' => now()->addHour(),
     ]);
 
@@ -1102,21 +1146,20 @@ it('never resolves an offboarded principal anywhere — the resolver is the cont
 
     offboardViaHttp(['subject_type' => 'user_principal', 'subject_ref' => 'person@example.com'])->assertOk();
 
-    // 1 — the raw resolver: null, though the row itself is unrevoked.
+    // The pre-existing user-bound row is physically dead everywhere.
     expect(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $minted->plaintext()))->toBeNull()
-        ->and($minted->credential->refresh()->revoked_at)->toBeNull();
+        ->and($minted->credential->refresh()->revoked_at)->not->toBeNull();
 
     // 2 — CredentialGuard::validate(), a path the per-gate patch missed.
     expect(auth('bfc')->validate(['secret' => $minted->plaintext()]))->toBeFalse();
 
-    // 3 — the onboarding verify surface, the other missed path: refused
-    // as an unknown secret, and the FIRST-USE BURN DOES NOT FIRE — the
-    // linked code is untouched, no usage stamped.
+    // The onboarding verify surface also refuses the dead secret. Its code
+    // was consumed by containment, not by a later first-use burn.
     $this->postJson('/bfc/onboarding/verify', [], ['Authorization' => 'Bearer '.$minted->plaintext()])
         ->assertStatus(404)
         ->assertJsonPath('error', 'code_not_found');
 
-    expect($code->refresh()->consumed_at)->toBeNull()
+    expect($code->refresh()->consumed_at)->not->toBeNull()
         ->and($minted->credential->refresh()->last_used_at)->toBeNull();
 
     // 4 — a credential minted AFTER containment for the offboarded
@@ -1128,6 +1171,17 @@ it('never resolves an offboarded principal anywhere — the resolver is the cont
     ]);
 
     expect(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $postMint->plaintext()))->toBeNull();
+
+    // The registry remains the choke point for a differently-subjected
+    // credential created after the sweep can no longer reach the row.
+    $postUserBoundMint = $this->mintCredential([
+        'subject_type' => SubjectType::Application,
+        'subject_ref' => 'late-unrelated-app',
+        'user_id' => (string) $user->getKey(),
+    ]);
+
+    expect(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $postUserBoundMint->plaintext()))->toBeNull()
+        ->and($postUserBoundMint->credential->refresh()->revoked_at)->toBeNull();
 
     // The three gates (auth:bfc, the operator gate, the hmac verifier)
     // keep their own coverage in the Fix 2 tests below — all riding this
@@ -1155,18 +1209,29 @@ it('rejects an offboarded bound user\'s operator credential on the operator gate
 
     offboardViaHttp(['subject_type' => 'user_principal', 'subject_ref' => 'person@example.com'])->assertOk();
 
-    // The gate resolves credentials directly (not via auth:bfc), so this
-    // is the gate's OWN registry check biting — the row itself was never
-    // revoked (its subject was not the offboarded one).
+    // The pre-existing user-bound credential is physically revoked.
     $this->getJson('/bfc/credentials', ['Authorization' => $operator->bearerHeader()])->assertUnauthorized();
 
-    expect($operator->credential->refresh()->revoked_at)->toBeNull();
+    expect($operator->credential->refresh()->revoked_at)->not->toBeNull();
+
+    // A same-user operator credential created after containment proves the
+    // operator gate still enforces the registry independently of the sweep.
+    $postContainmentOperator = $this->mintCredential([
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => 'control-plane',
+        'abilities' => [OperatorAbility::ADMIN],
+        'user_id' => (string) $user->getKey(),
+    ]);
+
+    $this->getJson('/bfc/credentials', ['Authorization' => $postContainmentOperator->bearerHeader()])->assertUnauthorized();
+
+    expect($postContainmentOperator->credential->refresh()->revoked_at)->toBeNull();
 
     // Mutations too: the same credential reaches no verb.
     $this->postJson('/bfc/credentials', [
         'subject_type' => 'external_consumer',
         'subject_ref' => 'someone',
-    ], ['Authorization' => $operator->bearerHeader()])->assertUnauthorized();
+    ], ['Authorization' => $postContainmentOperator->bearerHeader()])->assertUnauthorized();
 });
 
 it('makes an offboarded subject\'s hmac key unselectable by the verifier, post-containment mints included (Fix 2)', function (): void {

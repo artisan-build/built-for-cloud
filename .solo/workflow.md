@@ -9,6 +9,16 @@ via Packagist (`^0.1`). This is a **library** (no app shell).
 - default mode: A-autonomous — merge each PR when CI is green; no human PR code review unless asked.
 - merge method: `gh pr merge --squash` after CI green (repo has issues/PRs ENABLED).
 
+## Who runs which tests (standing order 23, Ed 2026-09-12)
+
+- **Implementers run FOCUSED tests only** — the tests they wrote and the tests covering the files they edited
+  (`--filter`, a path, or a group) — plus `composer stan` and `composer lint:test` **once**, right before handover.
+- **Implementers never run the full suite, the pgsql lane, or the fresh-archive install.** Those are the
+  **coordinator's**, run exactly once per candidate before the PR opens, and once more after a rework.
+- A full-suite run costs minutes and proves nothing an implementer needs mid-task. Seats were running it several
+  times per task and it was the single largest cost in the build.
+- Implementers report which focused commands they ran, and state plainly that they did not run the full suite.
+
 ## Hard gate (must be green before review; verify on committed SHA, clean tree)
 - commands (run all three at repo root): `composer stan` (phpstan/larastan, memory 512M) AND
   `composer lint:test` (pint --test) AND `composer test` (pest).

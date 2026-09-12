@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud\Database;
 use ArtisanBuild\BuiltForCloud\OwnershipClaimMinter;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * The initial ownership-claim mint the install migration runs (D1c), as
@@ -42,6 +43,10 @@ final class MintInitialOwnershipClaim
         $claimed = DB::table('ownership')
             ->whereNotNull('owner_token_id')
             ->exists();
+
+        if (! $claimed && Schema::hasColumn('ownership', 'owner_credential_id')) {
+            $claimed = DB::table('ownership')->whereNotNull('owner_credential_id')->exists();
+        }
 
         if ($claimed || DB::table('ownership_claims')->whereNull('consumed_at')->exists()) {
             return;

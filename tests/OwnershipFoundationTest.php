@@ -6,9 +6,13 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\BuiltForCloud;
+use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 
@@ -28,10 +32,38 @@ it('creates ownership schemas and resolves pending claims by plaintext token', f
     expect(Schema::hasTable('ownership_claims'))->toBeTrue()
         ->and(Schema::hasColumns('ownership_claims', ['id', 'token_hash', 'consumed_at']))->toBeTrue()
         ->and(Schema::hasTable('ownership'))->toBeTrue()
-        ->and(Schema::hasColumns('ownership', ['id', 'owner_token_id', 'notify_callback', 'webhook_secret', 'pending_claim_id']))->toBeTrue()
+        ->and(Schema::hasColumns('ownership', ['id', 'owner_token_id', 'owner_credential_id', 'notify_callback', 'webhook_secret', 'pending_claim_id']))->toBeTrue()
         ->and(OwnershipClaim::query()->pending()->count())->toBe(1)
         ->and(OwnershipClaim::resolve($plainTextToken)?->is($claim))->toBeTrue()
         ->and(OwnershipClaim::resolve('consumed-secret'))->toBeNull();
+});
+
+it('targets both transitional ownership links at their correct stores', function (): void {
+    /** @var list<object{table: string, from: string, to: string, on_delete: string}> $foreignKeys */
+    $foreignKeys = DB::select("PRAGMA foreign_key_list('ownership')");
+
+    $targets = collect($foreignKeys)
+        ->map(static fn (object $key): string => "{$key->from}:{$key->table}.{$key->to}:{$key->on_delete}")
+        ->all();
+
+    expect($targets)->toContain(
+        'owner_credential_id:credentials.id:SET NULL',
+        'owner_token_id:api_tokens.id:SET NULL',
+    );
+});
+
+it('targets both transitional onboarding links at their distinct stores', function (): void {
+    /** @var list<object{table: string, from: string, to: string, on_delete: string}> $foreignKeys */
+    $foreignKeys = DB::select("PRAGMA foreign_key_list('onboarding_tokens')");
+
+    $targets = collect($foreignKeys)
+        ->map(static fn (object $key): string => "{$key->from}:{$key->table}.{$key->to}:{$key->on_delete}")
+        ->all();
+
+    expect($targets)->toContain(
+        'durable_credential_id:credentials.id:SET NULL',
+        'durable_token_id:api_tokens.id:SET NULL',
+    );
 });
 
 it('returns unauthenticated bfc meta for unclaimed and claimed environments', function (): void {
@@ -68,6 +100,20 @@ it('returns unauthenticated bfc meta for unclaimed and claimed environments', fu
     Ownership::query()->create([
         'owner_token_id' => $token->getKey(),
     ]);
+
+    $this->getJson('/bfc/meta')
+        ->assertOk()
+        ->assertJsonPath('claimed', true);
+
+    Ownership::query()->delete();
+
+    $credential = Credential::factory()->create([
+        'kind' => CredentialKind::Bearer,
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => 'owner',
+    ]);
+
+    Ownership::query()->create(['owner_credential_id' => $credential->getKey()]);
 
     $this->getJson('/bfc/meta')
         ->assertOk()

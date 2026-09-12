@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\ClientIdentity;
 use ArtisanBuild\BuiltForCloud\ClientIdentityObservation;
-use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialStatus;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -28,7 +31,7 @@ final class ClientIdentityObservationTest extends TestCase
     {
         $this->enableObservations();
 
-        $this->getJson('/api/credentials', [ClientIdentity::HEADER => 'ghost-client'])
+        $this->getJson('/bfc/credentials', [ClientIdentity::HEADER => 'ghost-client'])
             ->assertUnauthorized();
 
         $row = $this->observationFor('ghost-client');
@@ -46,17 +49,17 @@ final class ClientIdentityObservationTest extends TestCase
         $this->enableObservations();
 
         if ($seed) {
-            ApiToken::factory()->create([
+            Credential::factory()->create([
                 'name' => 'dead',
-                'token_hash' => hash('sha256', $bearer),
+                'secret_hash' => hash('sha256', $bearer),
                 // Admin scope on purpose: a dead credential 401s regardless of what it could do.
-                'abilities' => [Scope::Admin->value],
+                'abilities' => [OperatorAbility::CredentialRead->value],
                 'expires_at' => now()->subMinute(),
                 'revoked_at' => $revoked ? now()->subMinute() : null,
             ]);
         }
 
-        $this->getJson('/api/credentials', [
+        $this->getJson('/bfc/credentials', [
             'Authorization' => 'Bearer '.$bearer,
             ClientIdentity::HEADER => 'ghost-client',
         ])->assertUnauthorized();
@@ -69,7 +72,7 @@ final class ClientIdentityObservationTest extends TestCase
     {
         $this->enableObservations();
 
-        $this->getJson('/api/credentials', [ClientIdentity::HEADER => 'repeat-client'])
+        $this->getJson('/bfc/credentials', [ClientIdentity::HEADER => 'repeat-client'])
             ->assertUnauthorized();
 
         $before = $this->observationFor('repeat-client');
@@ -78,7 +81,7 @@ final class ClientIdentityObservationTest extends TestCase
 
         $this->travel(1)->minutes();
 
-        $this->getJson('/api/credentials', [ClientIdentity::HEADER => 'repeat-client'])
+        $this->getJson('/bfc/credentials', [ClientIdentity::HEADER => 'repeat-client'])
             ->assertUnauthorized();
 
         $after = $this->observationFor('repeat-client');
@@ -95,13 +98,14 @@ final class ClientIdentityObservationTest extends TestCase
     {
         $this->enableObservations();
 
-        ApiToken::factory()->create([
+        Credential::factory()->create([
             'name' => 'consume',
-            'token_hash' => hash('sha256', 'consume-secret'),
-            'abilities' => [Scope::Consume->value],
+            'secret_hash' => hash('sha256', 'consume-secret'),
+            'subject_type' => SubjectType::Application,
+            'abilities' => [OperatorAbility::CredentialRead->value],
         ]);
 
-        $this->getJson('/api/credentials', [
+        $this->getJson('/bfc/credentials', [
             'Authorization' => 'Bearer consume-secret',
             ClientIdentity::HEADER => 'scoped-client',
         ])->assertForbidden();
@@ -109,7 +113,7 @@ final class ClientIdentityObservationTest extends TestCase
         $this->assertSame(0, ClientIdentityObservation::query()->count());
 
         // ...and PR1's path is untouched: the identity is still recorded on the token itself.
-        $this->assertSame('scoped-client', ApiToken::query()->where('name', 'consume')->firstOrFail()->client_identity);
+        $this->assertSame('scoped-client', Credential::query()->where('name', 'consume')->firstOrFail()->client_identity);
     }
 
     // AC4 — the fallback token authenticates, so it is not a NoCredential event either.
@@ -119,7 +123,7 @@ final class ClientIdentityObservationTest extends TestCase
 
         config(['built-for-cloud.fallback_token' => 'fallback-secret']);
 
-        $this->getJson('/api/credentials', [
+        $this->getJson('/bfc/credentials', [
             'Authorization' => 'Bearer fallback-secret',
             ClientIdentity::HEADER => 'fallback-client',
         ])->assertForbidden();
@@ -132,21 +136,22 @@ final class ClientIdentityObservationTest extends TestCase
     {
         $this->assertFalse((bool) config('built-for-cloud.client_identity.observe_unauthenticated'));
 
-        $this->getJson('/api/credentials', [ClientIdentity::HEADER => 'ghost-client'])
+        $this->getJson('/bfc/credentials', [ClientIdentity::HEADER => 'ghost-client'])
             ->assertUnauthorized();
 
-        $this->getJson('/api/credentials', [
+        $this->getJson('/bfc/credentials', [
             'Authorization' => 'Bearer unknown-secret',
             ClientIdentity::HEADER => 'ghost-client',
         ])->assertUnauthorized();
 
-        ApiToken::factory()->create([
+        Credential::factory()->create([
             'name' => 'consume',
-            'token_hash' => hash('sha256', 'consume-secret'),
-            'abilities' => [Scope::Consume->value],
+            'secret_hash' => hash('sha256', 'consume-secret'),
+            'subject_type' => SubjectType::Application,
+            'abilities' => [OperatorAbility::CredentialRead->value],
         ]);
 
-        $this->getJson('/api/credentials', [
+        $this->getJson('/bfc/credentials', [
             'Authorization' => 'Bearer consume-secret',
             ClientIdentity::HEADER => 'ghost-client',
         ])->assertForbidden();
@@ -160,7 +165,7 @@ final class ClientIdentityObservationTest extends TestCase
     {
         $this->enableObservations();
 
-        $this->getJson('/api/credentials', [ClientIdentity::HEADER => $identity])
+        $this->getJson('/bfc/credentials', [ClientIdentity::HEADER => $identity])
             ->assertUnauthorized();
 
         $this->assertSame(0, ClientIdentityObservation::query()->count());
@@ -175,7 +180,7 @@ final class ClientIdentityObservationTest extends TestCase
     {
         $this->enableObservations();
 
-        $request = Request::create('/api/credentials', 'GET');
+        $request = Request::create('/bfc/credentials', 'GET');
         $request->headers->set(ClientIdentity::HEADER, ['first-identity', 'second-identity']);
 
         $response = $this->app->make(Kernel::class)->handle($request);
@@ -207,7 +212,7 @@ final class ClientIdentityObservationTest extends TestCase
 
         $this->assertSame(2, $this->observationFor('client-one')->observation_count);
 
-        $this->getJson('/api/credentials/client-observations', $this->adminHeaders())
+        $this->getJson('/bfc/client-observations', $this->adminHeaders())
             ->assertOk()
             ->assertJsonPath('at_capacity', true)
             ->assertJsonPath('max_observations', 2);
@@ -218,15 +223,16 @@ final class ClientIdentityObservationTest extends TestCase
     {
         $this->enableObservations();
 
-        ApiToken::factory()->create([
+        Credential::factory()->create([
             'name' => 'consume',
-            'token_hash' => hash('sha256', 'consume-secret'),
-            'abilities' => [Scope::Consume->value],
+            'secret_hash' => hash('sha256', 'consume-secret'),
+            'subject_type' => SubjectType::Application,
+            'abilities' => [OperatorAbility::CredentialRead->value],
         ]);
 
-        $this->getJson('/api/credentials/client-observations')->assertUnauthorized();
+        $this->getJson('/bfc/client-observations')->assertUnauthorized();
 
-        $this->getJson('/api/credentials/client-observations', ['Authorization' => 'Bearer consume-secret'])
+        $this->getJson('/bfc/client-observations', ['Authorization' => 'Bearer consume-secret'])
             ->assertForbidden();
     }
 
@@ -237,7 +243,7 @@ final class ClientIdentityObservationTest extends TestCase
 
         $this->claim('ghost-client');
 
-        $response = $this->getJson('/api/credentials/client-observations', $this->adminHeaders())->assertOk();
+        $response = $this->getJson('/bfc/client-observations', $this->adminHeaders())->assertOk();
 
         $response->assertJsonPath('advisory', true)
             ->assertJsonPath('spoofable', true)
@@ -255,7 +261,7 @@ final class ClientIdentityObservationTest extends TestCase
 
         $this->claim('ghost-client');
 
-        $response = $this->getJson('/api/credentials/client-observations', $this->adminHeaders())->assertOk();
+        $response = $this->getJson('/bfc/client-observations', $this->adminHeaders())->assertOk();
 
         $rows = $response->json('observations');
 
@@ -286,7 +292,7 @@ final class ClientIdentityObservationTest extends TestCase
         // Inserted third, in the middle.
         $this->seedObservation('middle-signal', now()->subHour());
 
-        $response = $this->getJson('/api/credentials/client-observations', $this->adminHeaders())->assertOk();
+        $response = $this->getJson('/bfc/client-observations', $this->adminHeaders())->assertOk();
 
         $this->assertSame(
             ['newest-signal', 'middle-signal', 'oldest-signal'],
@@ -297,7 +303,7 @@ final class ClientIdentityObservationTest extends TestCase
     // AC8 — "off" must be distinguishable from "on and nothing seen".
     public function test_the_endpoint_reports_the_feature_as_disabled_without_a_404(): void
     {
-        $this->getJson('/api/credentials/client-observations', $this->adminHeaders())
+        $this->getJson('/bfc/client-observations', $this->adminHeaders())
             ->assertOk()
             ->assertJsonPath('enabled', false)
             ->assertJsonPath('advisory', true)
@@ -310,11 +316,11 @@ final class ClientIdentityObservationTest extends TestCase
     {
         $this->enableObservations();
 
-        $expected = $this->getJson('/api/credentials')->assertUnauthorized();
+        $expected = $this->getJson('/bfc/credentials')->assertUnauthorized();
 
         Schema::drop('bfc_client_identity_observations');
 
-        $actual = $this->getJson('/api/credentials', [ClientIdentity::HEADER => 'ghost-client'])
+        $actual = $this->getJson('/bfc/credentials', [ClientIdentity::HEADER => 'ghost-client'])
             ->assertUnauthorized();
 
         $this->assertSame($expected->getContent(), $actual->getContent());
@@ -332,7 +338,7 @@ final class ClientIdentityObservationTest extends TestCase
             $headers['Authorization'] = 'Bearer '.$bearer;
         }
 
-        $status = $this->getJson('/api/credentials', $headers)->status();
+        $status = $this->getJson('/bfc/credentials', $headers)->status();
 
         $this->assertContains($status, [401, 403]);
     }
@@ -354,7 +360,7 @@ final class ClientIdentityObservationTest extends TestCase
 
         Schema::drop('bfc_client_identity_observations');
 
-        $this->getJson('/api/credentials', [ClientIdentity::HEADER => 'ghost-client'])
+        $this->getJson('/bfc/credentials', [ClientIdentity::HEADER => 'ghost-client'])
             ->assertUnauthorized();
 
         $this->assertSame([], $records);
@@ -371,7 +377,7 @@ final class ClientIdentityObservationTest extends TestCase
 
         $folded = 'first-identity, second-identity';
 
-        $this->getJson('/api/credentials', [ClientIdentity::HEADER => $folded])
+        $this->getJson('/bfc/credentials', [ClientIdentity::HEADER => $folded])
             ->assertUnauthorized();
 
         $this->assertSame(1, ClientIdentityObservation::query()->count());
@@ -394,7 +400,7 @@ final class ClientIdentityObservationTest extends TestCase
             }
         );
 
-        $this->getJson('/api/credentials', [ClientIdentity::HEADER => str_repeat('a', 256)])
+        $this->getJson('/bfc/credentials', [ClientIdentity::HEADER => str_repeat('a', 256)])
             ->assertUnauthorized();
 
         $this->assertSame([], $records);
@@ -426,7 +432,7 @@ final class ClientIdentityObservationTest extends TestCase
 
         $this->claim('ghost-client');
 
-        $content = (string) $this->getJson('/api/credentials/client-observations', $this->adminHeaders())
+        $content = (string) $this->getJson('/bfc/client-observations', $this->adminHeaders())
             ->assertOk()
             ->getContent();
 
@@ -537,7 +543,7 @@ final class ClientIdentityObservationTest extends TestCase
     /** Drive one NoCredential event through the real middleware path. */
     private function claim(string $identity): void
     {
-        $this->getJson('/api/credentials', [ClientIdentity::HEADER => $identity])
+        $this->getJson('/bfc/credentials', [ClientIdentity::HEADER => $identity])
             ->assertUnauthorized();
     }
 
@@ -566,10 +572,14 @@ final class ClientIdentityObservationTest extends TestCase
      */
     private function adminHeaders(string $plaintext = 'secret-admin'): array
     {
-        ApiToken::factory()->create([
+        Credential::factory()->create([
             'name' => 'admin',
-            'token_hash' => hash('sha256', $plaintext),
-            'abilities' => [Scope::Admin->value],
+            'kind' => CredentialKind::Bearer,
+            'subject_type' => SubjectType::Operator,
+            'subject_ref' => 'client-observation-admin',
+            'status' => CredentialStatus::Active,
+            'secret_hash' => hash('sha256', $plaintext),
+            'abilities' => [OperatorAbility::CredentialRead->value],
         ]);
 
         return ['Authorization' => 'Bearer '.$plaintext];

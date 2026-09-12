@@ -7,8 +7,12 @@ namespace ArtisanBuild\BuiltForCloud\Testing;
 use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Foundation\Testing\TestCase;
 use Illuminate\Support\Facades\Artisan;
@@ -70,10 +74,12 @@ trait ContractAssertions
 
     public function assertBuiltForCloudOwnershipAuthContract(): void
     {
+        $wrongAbility = $this->mintBuiltForCloudOperatorCredential([OperatorAbility::CredentialMint->value]);
         $consumeToken = $this->mintBuiltForCloudConsumeToken();
 
         foreach (['/bfc/ownership/release', '/bfc/ownership/cancel-transfer'] as $uri) {
             $this->postJson($uri)->assertUnauthorized();
+            $this->postJson($uri, [], $this->builtForCloudBearerHeaders($wrongAbility))->assertForbidden();
             $this->postJson($uri, [], $this->builtForCloudBearerHeaders($consumeToken))->assertForbidden();
         }
 
@@ -82,16 +88,22 @@ trait ContractAssertions
         $this->postJson(
             '/bfc/ownership/claim',
             ['token' => 'invalid-contract-claim'],
-            $this->builtForCloudBearerHeaders($consumeToken),
+            $this->builtForCloudBearerHeaders($wrongAbility),
         )->assertUnauthorized();
     }
 
     public function assertBuiltForCloudOnboardingAuthContract(): void
     {
+        $wrongAbility = $this->mintBuiltForCloudOperatorCredential([OperatorAbility::CredentialRead->value]);
         $consumeToken = $this->mintBuiltForCloudConsumeToken();
 
         $this->postJson('/bfc/onboarding/issue', ['email' => 'contract@example.test'])
             ->assertUnauthorized();
+        $this->postJson(
+            '/bfc/onboarding/issue',
+            ['email' => 'contract@example.test'],
+            $this->builtForCloudBearerHeaders($wrongAbility),
+        )->assertForbidden();
         $this->postJson(
             '/bfc/onboarding/issue',
             ['email' => 'contract@example.test'],
@@ -106,7 +118,7 @@ trait ContractAssertions
         $this->postJson(
             '/bfc/onboarding/exchange',
             ['token' => 'invalid-contract-onboarding'],
-            $this->builtForCloudBearerHeaders($consumeToken),
+            $this->builtForCloudBearerHeaders($wrongAbility),
         )->assertBadRequest()
             ->assertJsonPath('error', 'invalid_code');
         $this->postJson('/bfc/onboarding/verify')
@@ -753,6 +765,23 @@ trait ContractAssertions
         ]);
 
         return $plainTextToken;
+    }
+
+    /** @param list<string> $abilities */
+    private function mintBuiltForCloudOperatorCredential(array $abilities): string
+    {
+        $plaintext = 'contract-operator-'.bin2hex(random_bytes(16));
+
+        Credential::query()->create([
+            'kind' => CredentialKind::Bearer,
+            'subject_type' => SubjectType::Operator,
+            'subject_ref' => 'contract-operator',
+            'abilities' => $abilities,
+            'secret_hash' => hash('sha256', $plaintext),
+            'status' => CredentialStatus::Active,
+        ]);
+
+        return $plaintext;
     }
 
     /**

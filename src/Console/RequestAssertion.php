@@ -14,8 +14,9 @@ use SensitiveParameter;
  * this class or in the container, so a long-lived worker cannot hand one
  * request's assertion principal to the next request.
  *
- * Pinned by `tests/AuthenticateMcpTest.php` — "authenticates a
- * TokenRegistry bearer and does not leak the prior request assertion memo".
+ * Pinned by `tests/AuthenticateMcpTest.php` — "authenticates a unified
+ * bearer, records its use and does not leak the prior request assertion
+ * memo".
  */
 final class RequestAssertion
 {

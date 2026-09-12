@@ -317,14 +317,14 @@ final class CredentialPathInventory
             && str_contains($exchange, "->update(['consumed_at' => now()])")
             && str_contains($declaration, 'return BurnMode::FirstUse')
             && str_contains($usage, 'return $this->burnFirstUse($credential)')
-            && str_contains($usage, "->where('durable_token_id', \$credential->getKey())")
+            && str_contains($usage, "->where('durable_credential_id', \$credential->getKey())")
             && str_contains($usage, "->whereNull('consumed_at')")
             && str_contains($usage, "->update(['consumed_at' => now()])")) {
             $properties[] = 'enrollment-code:single-use';
         }
 
         if (str_contains($revoke, 'OnboardingToken::query()')
-            && str_contains($revoke, "->where('durable_token_id', \$id)")
+            && str_contains($revoke, "->where('durable_credential_id', \$id)")
             && str_contains($revoke, "->whereNull('consumed_at')")
             && str_contains($revoke, "->update(['consumed_at' => \$now])")) {
             $properties[] = 'enrollment-code:revocable';

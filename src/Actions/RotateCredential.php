@@ -16,7 +16,6 @@ use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\DeliveryShape;
-use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
@@ -428,8 +427,7 @@ final class RotateCredential
             'email' => null,
             'scope' => Scope::Onboard->value,
             'token_hash' => $code->hash(),
-            'durable_token_id' => $replacement->id,
-            'durable_store' => DurableStore::Credentials,
+            'durable_credential_id' => $replacement->id,
             'expires_at' => now()->addSeconds($ttlSeconds),
         ]);
 
@@ -546,8 +544,7 @@ final class RotateCredential
             'email' => null,
             'scope' => Scope::Onboard->value,
             'token_hash' => $code->hash(),
-            'durable_token_id' => $replacement->id,
-            'durable_store' => DurableStore::Credentials,
+            'durable_credential_id' => $replacement->id,
             'expires_at' => now()->addSeconds($ttlSeconds),
         ]);
 

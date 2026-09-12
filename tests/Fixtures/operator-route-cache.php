@@ -218,6 +218,7 @@ $case = new class('testProbe') extends TestCase
             ['GET', '/bfc/console/vitals'],
             ['GET', '/bfc/console/chrome.js'],
             ['POST', '/bfc/subjects/offboard'],
+            ['GET', '/bfc/client-observations'],
             ['GET', '/api/credentials'],
             ['GET', '/api/credentials/client-observations'],
             ['POST', '/api/credentials'],

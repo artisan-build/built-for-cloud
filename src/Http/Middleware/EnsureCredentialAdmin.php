@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
 
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
+use ArtisanBuild\BuiltForCloud\ClientIdentityRecorder;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
@@ -80,6 +81,7 @@ final class EnsureCredentialAdmin
         private readonly TokenRegistry $tokens,
         private readonly CredentialResolver $credentials,
         private readonly CredentialUsageRecorder $usage,
+        private readonly ClientIdentityRecorder $clientIdentities,
     ) {}
 
     /**
@@ -95,7 +97,7 @@ final class EnsureCredentialAdmin
         $bearer = $request->bearerToken();
 
         if ($bearer === null || $bearer === '') {
-            $this->tokens->observeUnauthenticatedClientIdentity($request);
+            $this->clientIdentities->observeUnauthenticatedClientIdentity($request);
 
             $this->auditDenial($request, 'token_auth_failure: no credential presented', null);
 
@@ -152,6 +154,8 @@ final class EnsureCredentialAdmin
                 abort(401);
             }
 
+            $this->clientIdentities->recordClientIdentityFromRequest($request, $credential);
+
             // Least privilege per verb family: the route's required
             // ability, or the explicit admin-equivalent break-glass
             // (`credential:admin` — the documented mapping in
@@ -172,7 +176,7 @@ final class EnsureCredentialAdmin
             abort(403);
         }
 
-        $this->tokens->observeUnauthenticatedClientIdentity($request);
+        $this->clientIdentities->observeUnauthenticatedClientIdentity($request);
 
         $this->auditDenial($request, 'token_auth_failure: unknown credential', null);
 

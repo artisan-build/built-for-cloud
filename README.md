@@ -57,17 +57,17 @@ absent, fallback authentication is off entirely.
 ### Client identity
 
 A BfC client app (`artisan-build/bfc-client`) sends a stable `X-BfC-Client-Id` header alongside the
-bearer token it already authenticates with. This package records that value on the token row that
-authenticated, so a control plane holding the owner token can attribute a token to a client install.
+bearer credential it already authenticates with. This package records that value on the unified
+`credentials` row that authenticated, so a control plane can attribute a credential to a client install.
 
 | Rule | Behaviour |
 | --- | --- |
 | **Shape** | Valid UTF-8, **1–255 bytes** (bytes, not characters), no CR, LF or NUL, exactly one header value. |
 | **Opaque** | Compared byte-wise and stored **verbatim** — no trimming, normalising, case-folding or truncation. |
-| **Not a credential** | It grants nothing. A token without the admin scope still gets `403`; a request with no bearer token still gets `401`. |
-| **Untrusted text** | It is opaque, attacker-controlled text of up to 255 bytes, and it is readable through the token listing — anything rendering it into HTML, a terminal or a log must escape it itself. |
+| **Not a credential** | It grants nothing. A credential without the route ability still gets `403`; a request with no bearer credential still gets `401`. |
+| **Untrusted text** | It is opaque, attacker-controlled text of up to 255 bytes, and it is readable through credential surfaces — anything rendering it into HTML, a terminal or a log must escape it itself. |
 | **Non-fatal** | A header that violates the contract is logged (never its value — it is attacker-controlled) and dropped. The request proceeds exactly as it would have. |
-| **Storage** | `api_tokens.client_identity`, plus `client_identity_last_seen_at`, bumped on **every** valid presentation, not only on change. A changed identity overwrites — last writer wins. |
+| **Storage** | `credentials.client_identity`, plus `client_identity_last_seen_at`, bumped on **every** valid presentation, not only on change. A changed identity overwrites — last writer wins. |
 
 Rejecting NUL is a deliberate **server-side narrowing** of the shipped client contract, which
 permits it: PostgreSQL truncates a bound value at the first NUL silently rather than erroring, so
@@ -123,10 +123,12 @@ value before PHP sees it. That folded value is contract-valid and byte-indisting
 legitimate identity that really is `a, b`, so it **is observed**, as the single opaque identity it
 arrives as. There is no correct behaviour available at the PHP layer.
 
-#### `GET {prefix}/client-observations`
+#### `GET /bfc/client-observations`
 
-Admin-token guarded like the rest of the credential API, and present only when the credential API is
-enabled. Rows are ordered by `last_seen_at`, **most recent first**.
+Always present with the BfC HTTP surface and guarded by an operator credential carrying exactly
+`credential:read` (or `credential:admin` break-glass). Rows are ordered by `last_seen_at`, **most
+recent first**. The configurable `{prefix}/client-observations` route remains a transitional alias
+while the legacy credential API is enabled, but uses the same unified gate.
 
 ```json
 {

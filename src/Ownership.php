@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Model;
 /**
  * @property string $id
  * @property string|null $owner_token_id
+ * @property string|null $owner_credential_id
  * @property string|null $notify_callback
  * @property string|null $webhook_secret
  * @property string|null $pending_claim_id
@@ -33,6 +34,7 @@ final class Ownership extends Model
     protected $fillable = [
         'id',
         'owner_token_id',
+        'owner_credential_id',
         'notify_callback',
         'webhook_secret',
         'pending_claim_id',
@@ -44,5 +46,10 @@ final class Ownership extends Model
         $ownership = self::query()->first();
 
         return $ownership;
+    }
+
+    public function hasOwner(): bool
+    {
+        return $this->owner_credential_id !== null || $this->owner_token_id !== null;
     }
 }

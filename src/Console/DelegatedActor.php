@@ -57,8 +57,8 @@ use Illuminate\Support\Facades\DB;
  *   interleaved rather than one session re-read after a row write.
  * MCP request scoping is pinned by `tests/AuthenticateMcpTest.php` —
  * "publishes the assertion actor and this handoff claims on the request"
- * and "authenticates a TokenRegistry bearer and does not leak the prior
- * request assertion memo".
+ * and "authenticates a unified bearer, records its use and does not leak
+ * the prior request assertion memo".
  *
  * RESIDUE — NOT ESTABLISHED HERE: these tests do not constrain claim
  * storage or principal resolution implemented by a consuming application

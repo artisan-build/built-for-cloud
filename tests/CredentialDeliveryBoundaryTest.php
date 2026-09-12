@@ -95,7 +95,7 @@ it('holds the per-kind direct delivery boundary', function (
     }
 
     if ($storage === 'keyless-code') {
-        $code = OnboardingToken::query()->where('durable_token_id', $credential->id)->sole();
+        $code = OnboardingToken::query()->where('durable_credential_id', $credential->id)->sole();
 
         expect($credential->secret_hash)->toBeNull()
             ->and($credential->secret_ciphertext)->toBeNull()
@@ -120,7 +120,7 @@ it('holds the per-kind direct delivery boundary', function (
         return;
     }
 
-    $code = OnboardingToken::query()->where('durable_token_id', $credential->id)->sole();
+    $code = OnboardingToken::query()->where('durable_credential_id', $credential->id)->sole();
 
     expect($storedKey)->not->toBe($revealed)
         ->and($code->token_hash)->toBe(hash('sha256', (string) $revealed))

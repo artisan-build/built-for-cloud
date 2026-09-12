@@ -6,12 +6,13 @@ namespace ArtisanBuild\BuiltForCloud\Commands;
 
 use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\CloudCommandRunner;
+use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\OwnerCredentialMinter;
 use ArtisanBuild\BuiltForCloud\Ownership;
-use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\TokenGenerator;
-use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Console\Command;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
@@ -29,17 +30,17 @@ final class OwnershipRemintOwnerTokenCommand extends Command
 
     protected $description = 'Mint a replacement admin owner token for the current owner and revoke the previous one';
 
-    public function handle(CloudCommandRunner $runner, TokenGenerator $generator, TokenRegistry $registry): int
+    public function handle(CloudCommandRunner $runner, TokenGenerator $generator, OwnerCredentialMinter $minter): int
     {
         if ((bool) $this->option('execute')) {
-            return $this->remintLocally($registry, (string) $this->option('hash'));
+            return $this->remintLocally($minter, (string) $this->option('hash'));
         }
 
         // `--local` (PRD 1.11): owner-token recovery with zero Cloud
         // dependency — generate here, remint here, print once.
         if ((bool) $this->option('local')) {
             $generated = $generator->generate();
-            $status = $this->remintLocally($registry, $generated->hash);
+            $status = $this->remintLocally($minter, $generated->hash);
 
             if ($status === self::SUCCESS) {
                 $this->line('Save this token - shown once: '.$generated->plaintext);
@@ -63,31 +64,36 @@ final class OwnershipRemintOwnerTokenCommand extends Command
         return self::SUCCESS;
     }
 
-    private function remintLocally(TokenRegistry $registry, string $hash): int
+    private function remintLocally(OwnerCredentialMinter $minter, string $hash): int
     {
         /** @var int $status */
-        $status = DB::transaction(function () use ($registry, $hash): int {
+        $status = DB::transaction(function () use ($minter, $hash): int {
             $ownership = Ownership::query()->lockForUpdate()->first();
 
-            if ($ownership === null || $ownership->owner_token_id === null) {
+            if ($ownership === null || ! $ownership->hasOwner()) {
                 $this->error('Ownership is not claimed. Mint a claim token with bfc:ownership:mint-claim instead.');
 
                 return self::FAILURE;
             }
 
+            $previousCredentialId = $ownership->owner_credential_id;
             $previousTokenId = $ownership->owner_token_id;
 
             try {
-                $ownerToken = $registry->store('owner', $hash, abilities: [Scope::Admin->value]);
+                $ownerCredential = $minter->mintFromHash($hash);
             } catch (InvalidArgumentException $e) {
                 $this->error($e->getMessage());
 
                 return self::FAILURE;
             }
 
-            $this->revokePreviousOwnerTokens($previousTokenId, (string) $ownerToken->getKey());
+            $this->revokePreviousOwnerTokens($previousTokenId);
+            $this->revokePreviousOwnerCredentials($previousCredentialId, (string) $ownerCredential->getKey());
 
-            $ownership->forceFill(['owner_token_id' => $ownerToken->getKey()])->save();
+            $ownership->forceFill([
+                'owner_credential_id' => $ownerCredential->getKey(),
+                'owner_token_id' => null,
+            ])->save();
 
             $this->line('Owner token reminted.');
 
@@ -97,21 +103,47 @@ final class OwnershipRemintOwnerTokenCommand extends Command
         return $status;
     }
 
-    private function revokePreviousOwnerTokens(string $previousTokenId, string $currentTokenId): void
+    private function revokePreviousOwnerTokens(?string $previousTokenId): void
     {
         $now = now();
 
+        if ($previousTokenId !== null) {
+            ApiToken::query()
+                ->whereKey($previousTokenId)
+                ->whereNull('revoked_at')
+                ->update([
+                    'expires_at' => $now,
+                    'revoked_at' => $now,
+                ]);
+        }
+
         ApiToken::query()
-            ->where(function (Builder $query) use ($previousTokenId): void {
-                $query->where('name', 'owner')
-                    ->orWhere((new ApiToken)->getKeyName(), $previousTokenId);
-            })
-            ->whereKeyNot($currentTokenId)
+            ->where('name', 'owner')
             ->resolvable()
             ->update([
                 'expires_at' => $now,
                 'revoked_at' => $now,
             ]);
+    }
+
+    private function revokePreviousOwnerCredentials(?string $previousCredentialId, string $currentCredentialId): void
+    {
+        $now = now();
+
+        if ($previousCredentialId !== null) {
+            Credential::query()
+                ->whereKey($previousCredentialId)
+                ->whereNull('revoked_at')
+                ->update(['revoked_at' => $now]);
+        }
+
+        Credential::query()
+            ->where('kind', CredentialKind::Bearer->value)
+            ->where('subject_type', SubjectType::Operator->value)
+            ->where('subject_ref', 'owner')
+            ->whereKeyNot($currentCredentialId)
+            ->active()
+            ->update(['revoked_at' => $now]);
     }
 
     private function stringOption(string $key): ?string

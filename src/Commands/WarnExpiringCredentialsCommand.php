@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Commands;
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
@@ -34,10 +34,10 @@ final class WarnExpiringCredentialsCommand extends Command
     {
         $window = $this->windowHours();
 
-        /** @var list<ApiToken> $expiring */
-        $expiring = ApiToken::query()
+        /** @var list<Credential> $expiring */
+        $expiring = Credential::query()
+            ->active()
             ->whereNotNull('expires_at')
-            ->whereNull('revoked_at')
             // Rotation-grace rows are already superseded and bounded by
             // design; warning about them would be noise.
             ->whereNull('rotated_at')
@@ -48,8 +48,8 @@ final class WarnExpiringCredentialsCommand extends Command
 
         $warned = 0;
 
-        foreach ($expiring as $token) {
-            if ($this->emitWarning($recorder, $token, $window)) {
+        foreach ($expiring as $credential) {
+            if ($this->emitWarning($recorder, $credential, $window)) {
                 $warned++;
             }
         }
@@ -59,9 +59,9 @@ final class WarnExpiringCredentialsCommand extends Command
         return self::SUCCESS;
     }
 
-    private function emitWarning(LifecycleEventRecorder $recorder, ApiToken $token, int $window): bool
+    private function emitWarning(LifecycleEventRecorder $recorder, Credential $credential, int $window): bool
     {
-        $expiresAt = $token->expires_at;
+        $expiresAt = $credential->expires_at;
 
         if ($expiresAt === null) {
             return false;
@@ -73,7 +73,7 @@ final class WarnExpiringCredentialsCommand extends Command
         // concurrent double-run emit once.
         $alreadyWarned = CredentialAuditEvent::query()
             ->where('event', LifecycleEventType::Expiring->value)
-            ->where('credential_id', $token->getKey())
+            ->where('credential_id', $credential->getKey())
             ->where('credential_expires_at', $expiresAt)
             ->exists();
 
@@ -82,16 +82,16 @@ final class WarnExpiringCredentialsCommand extends Command
         }
 
         try {
-            return (bool) DB::transaction(function () use ($recorder, $token, $expiresAt, $window): bool {
+            return (bool) DB::transaction(function () use ($recorder, $credential, $expiresAt, $window): bool {
                 // Re-assert eligibility under lock, with the SAME predicates
                 // the outer query used: the world can change between the
                 // select and this transaction (a revoke, a rotation, an
                 // extended expiry), and a warning about a dead or moved row
                 // would be a false notice. Stale rows are skipped silently —
                 // the next scheduled run sees the current truth.
-                $stillEligible = ApiToken::query()
-                    ->whereKey($token->getKey())
-                    ->whereNull('revoked_at')
+                $stillEligible = Credential::query()
+                    ->whereKey($credential->getKey())
+                    ->active()
                     ->whereNull('rotated_at')
                     ->where('expires_at', $expiresAt)
                     ->where('expires_at', '>', now())
@@ -105,9 +105,9 @@ final class WarnExpiringCredentialsCommand extends Command
 
                 $recorder->record(
                     event: LifecycleEventType::Expiring,
-                    credentialId: (string) $token->getKey(),
+                    credentialId: (string) $credential->getKey(),
                     credentialExpiresAt: $expiresAt,
-                    dedupKey: 'expiring:'.$token->getKey().':'.$expiresAt->getTimestamp(),
+                    dedupKey: 'expiring:'.$credential->getKey().':'.$expiresAt->getTimestamp(),
                 );
 
                 return true;

@@ -177,7 +177,7 @@ it('mints an asymmetric enrollment via the CLI: a pending row and a linked claim
         ->and($credential->public_key)->toBeNull();
 
     preg_match('/Enrollment code - shown once: (\S+)/', $output, $matches);
-    $code = OnboardingToken::query()->where('durable_token_id', $credential->id)->sole();
+    $code = OnboardingToken::query()->where('durable_credential_id', $credential->id)->sole();
 
     expect($code->token_hash)->toBe(hash('sha256', $matches[1]))
         ->and($code->scope)->toBe(Scope::Onboard->value)
@@ -440,7 +440,7 @@ it('mints an asymmetric enrollment via HTTP delivering the enrollment code', fun
     ], transportAdminHeaders())->assertCreated();
 
     $credential = Credential::query()->where('subject_ref', 'reel-http')->sole();
-    $code = OnboardingToken::query()->where('durable_token_id', $credential->id)->sole();
+    $code = OnboardingToken::query()->where('durable_credential_id', $credential->id)->sole();
 
     expect($response->json('delivery.shape'))->toBe('enrollment_code')
         ->and($response->json('credential.status'))->toBe('pending')
@@ -696,5 +696,5 @@ it('revoking a pending enrollment consumes its outstanding claim code', function
     $this->deleteJson('/bfc/credentials/'.$credential->id, [], transportAdminHeaders())->assertNoContent();
 
     expect($credential->refresh()->revoked_at)->not->toBeNull()
-        ->and(OnboardingToken::query()->where('durable_token_id', $credential->id)->sole()->consumed_at)->not->toBeNull();
+        ->and(OnboardingToken::query()->where('durable_credential_id', $credential->id)->sole()->consumed_at)->not->toBeNull();
 });
