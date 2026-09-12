@@ -10,6 +10,8 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // The historical filename predates P5c; these are now the sole links
+        // to credentials, not additions beside legacy token columns.
         Schema::table('ownership', function (Blueprint $table): void {
             $table->foreignUuid('owner_credential_id')->nullable()->constrained('credentials')->nullOnDelete();
         });
