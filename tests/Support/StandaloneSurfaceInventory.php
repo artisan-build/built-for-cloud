@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests\Support;
 
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleEnter;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
@@ -13,6 +14,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ManagedAuthentication;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTransitions;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\PersonalCredentials;
@@ -32,6 +34,7 @@ final class StandaloneSurfaceInventory
     public static function expectedControllerFamilies(): array
     {
         return [
+            ClientObservations::class => false,
             ConsoleChromeScript::class => false,
             ConsoleEnter::class => false,
             ConsoleVitals::class => false,
@@ -41,6 +44,7 @@ final class StandaloneSurfaceInventory
             ManageOnboarding::class => false,
             ManageOwnership::class => false,
             ManageSubjects::class => false,
+            ManageTokens::class => false,
             ManageTransitions::class => false,
             MetaController::class => false,
             PersonalCredentials::class => false,

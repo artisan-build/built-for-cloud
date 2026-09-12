@@ -129,7 +129,6 @@ function p4dStateExceptAttempt(): array
         'bfc_managed_transition_roster_cursors',
         'bfc_managed_transition_mappings',
         'invitations',
-        'sessions',
         'password_reset_tokens',
         'credentials',
         'bfc_managed_handoffs',
@@ -139,11 +138,29 @@ function p4dStateExceptAttempt(): array
         'integration_events',
     ];
 
-    return collect($tables)->mapWithKeys(static fn (string $table): array => [
+    $state = collect($tables)->mapWithKeys(static fn (string $table): array => [
         $table => DB::table($table)->orderBy(DB::raw('1'))->get()->map(
             static fn (object $row): array => (array) $row,
         )->all(),
     ])->all();
+    $sessionStore = StandaloneAccess::sessionStore() ?? DB::connection();
+    $state['sessions'] = $sessionStore->table((string) config('session.table', 'sessions'))
+        ->orderBy($sessionStore->raw('1'))
+        ->get()
+        ->map(static fn (object $row): array => (array) $row)
+        ->all();
+    $sessionConnection = config('session.connection');
+    if (is_string($sessionConnection)
+        && $sessionConnection !== ''
+        && $sessionConnection !== config('database.default')) {
+        $state['sessions@default'] = DB::table((string) config('session.table', 'sessions'))
+            ->orderBy(DB::raw('1'))
+            ->get()
+            ->map(static fn (object $row): array => (array) $row)
+            ->all();
+    }
+
+    return $state;
 }
 
 /** @return array{ManagedTransition, User, User, Invitation, ManagedTransitionAuthorityFixture} */
@@ -502,6 +519,52 @@ it('deletes mode-switch sessions from a distinct configured session connection',
     expect(DB::table('sessions')->count())->toBe(0)
         ->and(DB::connection('transition_sessions')->table('sessions')->count())->toBe(0)
         ->and($owner->refresh()->auth_session_version)->toBe(2);
+});
+
+it('preserves configured-connection sessions when commit refuses after invalidation', function (): void {
+    $roster = [[
+        'scalpels_id' => 'owner-subject', 'membership_status' => 'active', 'role' => 'owner',
+        'display_name' => 'Rollback Session Owner', 'contact_email' => 'rollback-session-owner@example.test', 'contact_email_verified' => true,
+    ]];
+    [$owner] = p4dConfigure(ManagedTransitionDirection::Exit, $roster);
+    config([
+        'database.connections.transition_sessions' => [
+            'driver' => 'sqlite',
+            'database' => ':memory:',
+            'prefix' => '',
+            'foreign_key_constraints' => true,
+        ],
+        'session.connection' => 'transition_sessions',
+    ]);
+    Schema::connection('transition_sessions')->create('sessions', static function (Blueprint $table): void {
+        $table->string('id')->primary();
+        $table->foreignId('user_id')->nullable()->index();
+        $table->text('payload');
+        $table->integer('last_activity')->index();
+    });
+    DB::connection('transition_sessions')->table('sessions')->insert([
+        'id' => 'remote-rollback-session', 'user_id' => $owner->getKey(), 'payload' => 'remote', 'last_activity' => 1,
+    ]);
+    DB::table('sessions')->insert([
+        'id' => 'default-rollback-session', 'user_id' => $owner->getKey(), 'payload' => 'default', 'last_activity' => 1,
+    ]);
+    $transition = app(ManagedTransitions::class)->stage(p4dProposed(
+        $owner,
+        ManagedTransitionDirection::Exit,
+        [[
+            'scalpels_id' => null, 'local_kind' => 'user', 'local_id' => (string) $owner->getKey(),
+            'role' => null, 'disposition' => 'exclude', 'final_email' => null,
+        ]],
+    ));
+    $before = p4dStateExceptAttempt();
+
+    expect(fn () => app(ManagedTransitions::class)->commit($transition, $owner))
+        ->toThrow(ManagedAuthRefused::class)
+        ->and(p4dStateExceptAttempt())->toBe($before)
+        ->and(DB::table('sessions')->where('id', 'default-rollback-session')->exists())->toBeTrue()
+        ->and(DB::connection('transition_sessions')->table('sessions')->where('id', 'remote-rollback-session')->exists())->toBeTrue()
+        ->and($owner->refresh()->auth_session_version)->toBe(1)
+        ->and($transition->refresh()->status)->toBe(ManagedTransitionStatus::Staged);
 });
 
 it('revalidates final email uniqueness immediately before commit with zero protected effects', function (): void {
@@ -967,6 +1030,99 @@ function p4dAllowedReadTables(): array
     ];
 }
 
+/**
+ * @return array{User, ManagedTransitionAuthorityFixture, list<array<string, mixed>>, array<string, list<array<string, mixed>>>}
+ */
+function p4dReadInventoryScenario(ManagedTransitionDirection $direction, string $disposition): array
+{
+    $roster = [[
+        'scalpels_id' => 'owner-subject', 'membership_status' => 'active', 'role' => 'owner',
+        'display_name' => 'Independent Owner', 'contact_email' => 'independent-owner@example.test', 'contact_email_verified' => true,
+    ]];
+    if (in_array($disposition, ['create', 'defer_to_managed_jit'], true)) {
+        $roster[] = [
+            'scalpels_id' => 'branch-subject', 'membership_status' => 'active', 'role' => 'member',
+            'display_name' => 'Branch Subject', 'contact_email' => 'branch-subject@example.test', 'contact_email_verified' => true,
+        ];
+    }
+    [$owner, $fixture] = p4dConfigure($direction, $roster);
+    $mapping = [[
+        'scalpels_id' => 'owner-subject', 'local_kind' => 'user', 'local_id' => (string) $owner->getKey(),
+        'role' => 'owner', 'disposition' => 'link', 'final_email' => 'independent-owner@example.test',
+    ]];
+    $payload = $direction === ManagedTransitionDirection::Adopt
+        ? [
+            'roster' => [[
+                'scalpels_id' => 'owner-subject',
+                'choice' => 'link:user:'.$owner->getKey(),
+                'final_email' => 'independent-owner@example.test',
+            ]],
+            'locals' => [[
+                'local_kind' => 'user',
+                'local_id' => (string) $owner->getKey(),
+            ]],
+        ]
+        : [
+            'locals' => [[
+                'local_kind' => 'user',
+                'local_id' => (string) $owner->getKey(),
+                'choice' => 'link:owner-subject',
+                'role' => 'owner',
+                'final_email' => 'independent-owner@example.test',
+            ]],
+        ];
+
+    if ($disposition === 'create') {
+        $mapping[] = [
+            'scalpels_id' => 'branch-subject', 'local_kind' => null, 'local_id' => null,
+            'role' => 'member', 'disposition' => 'create', 'final_email' => 'branch-subject@example.test',
+        ];
+        $payload['roster'][] = [
+            'scalpels_id' => 'branch-subject',
+            'choice' => 'create',
+            'final_email' => 'branch-subject@example.test',
+        ];
+    } elseif ($disposition === 'defer_to_managed_jit') {
+        $mapping[] = [
+            'scalpels_id' => 'branch-subject', 'local_kind' => null, 'local_id' => null,
+            'role' => null, 'disposition' => 'defer_to_managed_jit', 'final_email' => null,
+        ];
+        $payload['roster'][] = [
+            'scalpels_id' => 'branch-subject',
+            'choice' => 'defer_to_managed_jit',
+        ];
+    } elseif (in_array($disposition, ['retain_local', 'exclude'], true)) {
+        $local = User::query()->create([
+            'name' => 'Branch Local',
+            'email' => 'branch-local@example.test',
+            'password' => Hash::make('branch-password'),
+        ]);
+        $local->forceFill(['role' => 'member', 'status' => 'active', 'email_verified_at' => now()])->save();
+        $mapping[] = $disposition === 'retain_local'
+            ? [
+                'scalpels_id' => null, 'local_kind' => 'user', 'local_id' => (string) $local->getKey(),
+                'role' => 'member', 'disposition' => 'retain_local', 'final_email' => $local->email,
+            ]
+            : [
+                'scalpels_id' => null, 'local_kind' => 'user', 'local_id' => (string) $local->getKey(),
+                'role' => null, 'disposition' => 'exclude', 'final_email' => null,
+            ];
+        $payload['locals'][] = [
+            'local_kind' => 'user',
+            'local_id' => (string) $local->getKey(),
+            ...($direction === ManagedTransitionDirection::Exit ? [
+                'choice' => $disposition,
+                ...($disposition === 'retain_local' ? [
+                    'role' => 'member',
+                    'final_email' => $local->email,
+                ] : []),
+            ] : []),
+        ];
+    }
+
+    return [$owner, $fixture, $mapping, $payload];
+}
+
 it('rejoins by the preserved external identity key and never by a colliding email', function (): void {
     [, $owner, , , $fixture] = p4dCompletedExit();
     $ownerId = (string) $owner->getKey();
@@ -1289,6 +1445,7 @@ it('enumerates post-commit and terminal recovery outcomes under the frozen read 
 it('enumerates every transition operation in both directions and permits only frozen transition-store reads', function (
     string $operation,
     ManagedTransitionDirection $direction,
+    string $disposition = 'link',
 ): void {
     $expectedOperations = [
         'abandon', 'acknowledge', 'commit', 'complete', 'fetchRoster', 'prepare', 'propose',
@@ -1300,16 +1457,8 @@ it('enumerates every transition operation in both directions and permits only fr
         ->sort()
         ->values()
         ->all();
-    $roster = [[
-        'scalpels_id' => 'owner-subject', 'membership_status' => 'active', 'role' => 'owner',
-        'display_name' => 'Independent Owner', 'contact_email' => 'independent-owner@example.test', 'contact_email_verified' => true,
-    ]];
-    [$owner, $fixture] = p4dConfigure($direction, $roster);
+    [$owner, $fixture, $mapping] = p4dReadInventoryScenario($direction, $disposition);
     $service = app(ManagedTransitions::class);
-    $link = [[
-        'scalpels_id' => 'owner-subject', 'local_kind' => 'user', 'local_id' => (string) $owner->getKey(),
-        'role' => 'owner', 'disposition' => 'link', 'final_email' => 'independent-owner@example.test',
-    ]];
 
     if ($operation === 'prepare') {
         $invoke = fn (): ManagedTransition => $service->prepare($owner, $direction);
@@ -1322,11 +1471,11 @@ it('enumerates every transition operation in both directions and permits only fr
         } else {
             $transition = $service->fetchRoster($transition);
             if ($operation === 'propose') {
-                $invoke = fn (): ManagedTransition => $service->propose($transition, $link);
+                $invoke = fn (): ManagedTransition => $service->propose($transition, $mapping);
             } elseif ($operation === 'proposeDefault') {
                 $invoke = fn (): ManagedTransition => $service->proposeDefault($transition);
             } else {
-                $transition = $service->propose($transition, $link);
+                $transition = $service->propose($transition, $mapping);
                 if ($operation === 'proposeForOwner') {
                     $mapping = p4dStoredMapping($transition);
                     $invoke = fn (): ManagedTransition => $service->proposeForOwner($owner, $transition, $mapping);
@@ -1379,8 +1528,18 @@ it('enumerates every transition operation in both directions and permits only fr
     'exit acknowledge' => ['acknowledge', ManagedTransitionDirection::Exit],
     'adopt commit' => ['commit', ManagedTransitionDirection::Adopt],
     'exit commit' => ['commit', ManagedTransitionDirection::Exit],
+    'adopt commit create' => ['commit', ManagedTransitionDirection::Adopt, 'create'],
+    'adopt commit exclude' => ['commit', ManagedTransitionDirection::Adopt, 'exclude'],
+    'adopt commit defer' => ['commit', ManagedTransitionDirection::Adopt, 'defer_to_managed_jit'],
+    'exit commit retain local' => ['commit', ManagedTransitionDirection::Exit, 'retain_local'],
+    'exit commit exclude' => ['commit', ManagedTransitionDirection::Exit, 'exclude'],
     'adopt complete' => ['complete', ManagedTransitionDirection::Adopt],
     'exit complete' => ['complete', ManagedTransitionDirection::Exit],
+    'adopt complete create' => ['complete', ManagedTransitionDirection::Adopt, 'create'],
+    'adopt complete exclude' => ['complete', ManagedTransitionDirection::Adopt, 'exclude'],
+    'adopt complete defer' => ['complete', ManagedTransitionDirection::Adopt, 'defer_to_managed_jit'],
+    'exit complete retain local' => ['complete', ManagedTransitionDirection::Exit, 'retain_local'],
+    'exit complete exclude' => ['complete', ManagedTransitionDirection::Exit, 'exclude'],
     'adopt fetchRoster' => ['fetchRoster', ManagedTransitionDirection::Adopt],
     'exit fetchRoster' => ['fetchRoster', ManagedTransitionDirection::Exit],
     'adopt prepare' => ['prepare', ManagedTransitionDirection::Adopt],
@@ -1414,6 +1573,7 @@ it('proves the transition read inventory rejects ordinary and CTE commercial-sto
 it('enumerates every transition HTTP surface in both directions under the frozen read inventory', function (
     string $surface,
     ManagedTransitionDirection $direction,
+    string $disposition = 'link',
 ): void {
     $expectedMethods = ['complete', 'edit', 'index', 'store', 'update'];
     $actualMethods = collect((new ReflectionClass(ManageTransitions::class))->getMethods(ReflectionMethod::IS_PUBLIC))
@@ -1435,11 +1595,7 @@ it('enumerates every transition HTTP surface in both directions under the frozen
         ->sort()
         ->values()
         ->all();
-    $roster = [[
-        'scalpels_id' => 'owner-subject', 'membership_status' => 'active', 'role' => 'owner',
-        'display_name' => 'Surface Owner', 'contact_email' => 'surface-inventory@example.test', 'contact_email_verified' => true,
-    ]];
-    [$owner] = p4dConfigure($direction, $roster);
+    [$owner, , $mapping, $updatePayload] = p4dReadInventoryScenario($direction, $disposition);
     $this->actingAsVersioned($owner);
 
     if ($surface === 'index') {
@@ -1447,31 +1603,7 @@ it('enumerates every transition HTTP surface in both directions under the frozen
     } elseif ($surface === 'store') {
         $invoke = fn () => $this->post(route('bfc.transitions.store', $direction->value, false));
     } else {
-        $transition = p4dProposed($owner, $direction, [[
-            'scalpels_id' => 'owner-subject', 'local_kind' => 'user', 'local_id' => (string) $owner->getKey(),
-            'role' => 'owner', 'disposition' => 'link', 'final_email' => 'surface-inventory@example.test',
-        ]]);
-        $updatePayload = $direction === ManagedTransitionDirection::Adopt
-            ? [
-                'roster' => [[
-                    'scalpels_id' => 'owner-subject',
-                    'choice' => 'link:user:'.$owner->getKey(),
-                    'final_email' => 'surface-inventory@example.test',
-                ]],
-                'locals' => [[
-                    'local_kind' => 'user',
-                    'local_id' => (string) $owner->getKey(),
-                ]],
-            ]
-            : [
-                'locals' => [[
-                    'local_kind' => 'user',
-                    'local_id' => (string) $owner->getKey(),
-                    'choice' => 'link:owner-subject',
-                    'role' => 'owner',
-                    'final_email' => 'surface-inventory@example.test',
-                ]],
-            ];
+        $transition = p4dProposed($owner, $direction, $mapping);
         $invoke = match ($surface) {
             'edit' => fn () => $this->get(route('bfc.transitions.edit', $transition, false)),
             'update' => fn () => $this->put(route('bfc.transitions.update', $transition, false), $updatePayload),
@@ -1501,19 +1633,34 @@ it('enumerates every transition HTTP surface in both directions under the frozen
             ->and(DB::table('bfc_managed_transition_mappings')
                 ->where('managed_transition_id', $transition->id)
                 ->where('scalpels_id', 'owner-subject')
-                ->value('final_email'))->toBe('surface-inventory@example.test');
+                ->value('final_email'))->toBe('independent-owner@example.test');
     } elseif ($surface === 'complete') {
         expect($transition->refresh()->status)->toBe(ManagedTransitionStatus::Acknowledged);
     }
 })->with([
     'adopt complete' => ['complete', ManagedTransitionDirection::Adopt],
     'exit complete' => ['complete', ManagedTransitionDirection::Exit],
+    'adopt complete create' => ['complete', ManagedTransitionDirection::Adopt, 'create'],
+    'adopt complete exclude' => ['complete', ManagedTransitionDirection::Adopt, 'exclude'],
+    'adopt complete defer' => ['complete', ManagedTransitionDirection::Adopt, 'defer_to_managed_jit'],
+    'exit complete retain local' => ['complete', ManagedTransitionDirection::Exit, 'retain_local'],
+    'exit complete exclude' => ['complete', ManagedTransitionDirection::Exit, 'exclude'],
     'adopt edit' => ['edit', ManagedTransitionDirection::Adopt],
     'exit edit' => ['edit', ManagedTransitionDirection::Exit],
+    'adopt edit create' => ['edit', ManagedTransitionDirection::Adopt, 'create'],
+    'adopt edit exclude' => ['edit', ManagedTransitionDirection::Adopt, 'exclude'],
+    'adopt edit defer' => ['edit', ManagedTransitionDirection::Adopt, 'defer_to_managed_jit'],
+    'exit edit retain local' => ['edit', ManagedTransitionDirection::Exit, 'retain_local'],
+    'exit edit exclude' => ['edit', ManagedTransitionDirection::Exit, 'exclude'],
     'adopt index' => ['index', ManagedTransitionDirection::Adopt],
     'exit index' => ['index', ManagedTransitionDirection::Exit],
     'adopt store' => ['store', ManagedTransitionDirection::Adopt],
     'exit store' => ['store', ManagedTransitionDirection::Exit],
     'adopt update' => ['update', ManagedTransitionDirection::Adopt],
     'exit update' => ['update', ManagedTransitionDirection::Exit],
+    'adopt update create' => ['update', ManagedTransitionDirection::Adopt, 'create'],
+    'adopt update exclude' => ['update', ManagedTransitionDirection::Adopt, 'exclude'],
+    'adopt update defer' => ['update', ManagedTransitionDirection::Adopt, 'defer_to_managed_jit'],
+    'exit update retain local' => ['update', ManagedTransitionDirection::Exit, 'retain_local'],
+    'exit update exclude' => ['update', ManagedTransitionDirection::Exit, 'exclude'],
 ]);

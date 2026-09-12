@@ -364,7 +364,7 @@ final class ManagedTransitions
     public function commit(ManagedTransition $transition, User $actor): ManagedTransition
     {
         try {
-            return DB::transaction(function () use ($transition, $actor): ManagedTransition {
+            [$committed, $userIds] = DB::transaction(function () use ($transition, $actor): array {
                 $locked = $this->locked($transition, [ManagedTransitionStatus::Staged]);
                 if ($locked->abandon_idempotency_key !== null) {
                     throw new ManagedAuthRefused('transition_state_conflict');
@@ -388,7 +388,7 @@ final class ManagedTransitions
                 }
 
                 $this->assertOwnerUser($actor, true);
-                $this->applyLocalCommit($locked, $this->stagedMapping($locked));
+                $userIds = $this->applyLocalCommit($locked, $this->stagedMapping($locked));
 
                 $changed = InstallationAuthority::change(
                     AuthorityState::fromRaw($locked->mode_before, $locked->generation_before),
@@ -406,8 +406,12 @@ final class ManagedTransitions
                     'local_commit_receipt' => $this->randomKey(),
                 ])->save();
 
-                return $locked->refresh();
+                return [$locked->refresh(), $userIds];
             }, 3);
+
+            $this->deleteConfiguredSessions($userIds);
+
+            return $committed;
         } catch (QueryException $exception) {
             throw new ManagedAuthRefused(previous: $exception);
         }
@@ -646,8 +650,9 @@ final class ManagedTransitions
 
     /**
      * @param  list<array{scalpels_id: ?string, local_kind: ?string, local_id: ?string, role: ?string, disposition: string, final_email: ?string}>  $mapping
+     * @return list<string>
      */
-    private function applyLocalCommit(ManagedTransition $transition, array $mapping): void
+    private function applyLocalCommit(ManagedTransition $transition, array $mapping): array
     {
         $users = User::query()->orderBy('id')->lockForUpdate()->get()->keyBy(
             static fn (User $user): string => (string) $user->getKey(),
@@ -668,15 +673,6 @@ final class ManagedTransitions
             if (Schema::hasTable($sessionTable)) {
                 DB::table($sessionTable)->whereIn('user_id', $userIds)->delete();
             }
-            $sessionStore = StandaloneAccess::sessionStore();
-            $sessionConnection = config('session.connection');
-            if ($sessionStore !== null
-                && is_string($sessionConnection)
-                && $sessionConnection !== ''
-                && $sessionConnection !== config('database.default')) {
-                $sessionStore->table($sessionTable)->whereIn('user_id', $userIds)->delete();
-            }
-
             Credential::query()
                 ->whereIn('user_id', $userIds)
                 ->whereNull('revoked_at')
@@ -891,6 +887,24 @@ final class ManagedTransitions
                     && ! StandaloneAccess::userCanReceiveRecovery($owner))) {
                 throw new ManagedAuthRefused;
             }
+        }
+
+        return $userIds;
+    }
+
+    /** @param list<string> $userIds */
+    private function deleteConfiguredSessions(array $userIds): void
+    {
+        $sessionStore = StandaloneAccess::sessionStore();
+        $sessionConnection = config('session.connection');
+
+        if ($sessionStore !== null
+            && is_string($sessionConnection)
+            && $sessionConnection !== ''
+            && $sessionConnection !== config('database.default')) {
+            $sessionStore->table((string) config('session.table', 'sessions'))
+                ->whereIn('user_id', $userIds)
+                ->delete();
         }
     }
 
