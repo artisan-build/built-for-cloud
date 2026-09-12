@@ -159,6 +159,7 @@ $exemptFromCitation = [
     'resources/views/auth/accept-invitation.blade.php' => 'package form template; structural rendering and request-owned data are driven by StandaloneHumanLifecycleTest',
     'resources/views/auth/forgot-password.blade.php' => 'package form template; structural rendering is driven by StandaloneHumanLifecycleTest',
     'resources/views/auth/login.blade.php' => 'package form template; structural rendering is driven by StandaloneHumanLifecycleTest',
+    'resources/views/auth/managed-transition.blade.php' => 'package form template; transition rendering and correction semantics are driven by ManagedTransitionSurfaceTest',
     'resources/views/auth/members.blade.php' => 'package form template; structural rendering and test-created members are driven by StandaloneHumanLifecycleTest',
     'resources/views/auth/reset-password.blade.php' => 'package form template; structural rendering and request-owned data are driven by StandaloneHumanLifecycleTest',
     'resources/views/auth/sessions.blade.php' => 'package form template; structural rendering and test-created sessions are driven by StandaloneDatabaseSessionsTest',

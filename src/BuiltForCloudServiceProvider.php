@@ -435,16 +435,17 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             ->middleware([EnsureManagedAuthority::class, ...$personal])
             ->name('bfc.managed.callback');
 
-        $router->middleware([...$personal, EnsureUserIsAuthenticated::class])->group(function (Router $router): void {
-            $router->get('/bfc/transitions/{direction}/prepare', [ManageTransitions::class, 'index'])
+        $transitionRoutes = [];
+        $router->middleware([...$personal, EnsureUserIsAuthenticated::class])->group(function (Router $router) use (&$transitionRoutes): void {
+            $transitionRoutes[] = $router->get('/bfc/transitions/{direction}/prepare', [ManageTransitions::class, 'index'])
                 ->whereIn('direction', ManagedTransitionDirection::values())
                 ->name('bfc.transitions.index');
-            $router->post('/bfc/transitions/{direction}/prepare', [ManageTransitions::class, 'store'])
+            $transitionRoutes[] = $router->post('/bfc/transitions/{direction}/prepare', [ManageTransitions::class, 'store'])
                 ->whereIn('direction', ManagedTransitionDirection::values())
                 ->name('bfc.transitions.store');
-            $router->get('/bfc/transitions/proposals/{transition}', [ManageTransitions::class, 'edit'])
+            $transitionRoutes[] = $router->get('/bfc/transitions/proposals/{transition}', [ManageTransitions::class, 'edit'])
                 ->name('bfc.transitions.edit');
-            $router->put('/bfc/transitions/proposals/{transition}', [ManageTransitions::class, 'update'])
+            $transitionRoutes[] = $router->put('/bfc/transitions/proposals/{transition}', [ManageTransitions::class, 'update'])
                 ->name('bfc.transitions.update');
         });
 
@@ -538,6 +539,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $packageMiddlewareRoutes = StandaloneRouteOwnership::packageMiddlewareInventory([
             ...$standaloneRoutes,
             ...$personalCredentialRoutes,
+            ...$transitionRoutes,
         ]);
 
         $this->app->booted(function () use ($packageMiddlewareRoutes, $router, $standaloneRoutes): void {
