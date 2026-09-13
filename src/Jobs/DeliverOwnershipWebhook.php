@@ -4,11 +4,12 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Jobs;
 
+use ArtisanBuild\BuiltForCloud\Contracts\SystemAuthorityQueueEntry;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Support\Facades\Http;
 use JsonException;
 
-final class DeliverOwnershipWebhook implements ShouldQueue
+final class DeliverOwnershipWebhook implements ShouldQueue, SystemAuthorityQueueEntry
 {
     public int $tries = 3;
 

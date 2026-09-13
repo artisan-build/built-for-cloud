@@ -12,7 +12,6 @@ use ArtisanBuild\BuiltForCloud\Exceptions\IntegrationEventContention;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\OffboardOptions;
 use ArtisanBuild\BuiltForCloud\OffboardResult;
-use Illuminate\Console\Command;
 
 /**
  * The offboard verb's CLI transport (PRD 1.15): the same
@@ -20,7 +19,7 @@ use Illuminate\Console\Command;
  * local database with zero Cloud dependency. Full account containment in
  * one command; idempotent, so re-running it is always safe.
  */
-final class SubjectOffboardCommand extends Command
+final class SubjectOffboardCommand extends SystemAuthorityCommand
 {
     use ParsesCredentialVerbInput;
 

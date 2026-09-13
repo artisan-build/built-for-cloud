@@ -29,7 +29,7 @@ it('refuses every standalone authentication route before effects or disclosure a
     $process->run();
 
     expect($process->getExitCode())->toBe(0, $process->getOutput().$process->getErrorOutput())
-        ->and($process->getOutput())->toContain('standalone-auth-gate-match-refused-11');
+        ->and($process->getOutput())->toContain('standalone-auth-gate-match-refused-15');
 })->with([
     'FQCN alias' => 'fqcn-alias',
     'FQCN group' => 'fqcn-group',
@@ -48,7 +48,7 @@ it('refuses every standalone authentication route from a real compiled route col
         $load->run();
 
         expect($load->getExitCode())->toBe(0, $load->getOutput().$load->getErrorOutput())
-            ->and($load->getOutput())->toContain('standalone-auth-route-cache-refused-11');
+            ->and($load->getOutput())->toContain('standalone-auth-route-cache-refused-15');
     } finally {
         @unlink($payload);
     }
@@ -59,7 +59,7 @@ it('recomputes poisoned authentication middleware for every uncached and compile
     $uncached->run();
 
     expect($uncached->getExitCode())->toBe(0, $uncached->getOutput().$uncached->getErrorOutput())
-        ->and($uncached->getOutput())->toContain("standalone-auth-gate-{$vector}-refused-11");
+        ->and($uncached->getOutput())->toContain("standalone-auth-gate-{$vector}-refused-15");
 
     $payload = sys_get_temp_dir().'/bfc-standalone-auth-memo-cache-'.bin2hex(random_bytes(8)).'.php';
 
@@ -71,7 +71,7 @@ it('recomputes poisoned authentication middleware for every uncached and compile
         $compiled->run();
 
         expect($compiled->getExitCode())->toBe(0, $compiled->getOutput().$compiled->getErrorOutput())
-            ->and($compiled->getOutput())->toContain("standalone-auth-route-cache-{$vector}-refused-11");
+            ->and($compiled->getOutput())->toContain("standalone-auth-route-cache-{$vector}-refused-15");
     } finally {
         @unlink($payload);
     }

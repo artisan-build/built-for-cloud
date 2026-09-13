@@ -337,6 +337,7 @@ final class ManagedTransitions
                 ->map(static fn (object $row): array => (array) $row)
                 ->all();
             $mapping = $this->validateMapping($locked, $mapping);
+            $this->refuseOwnerSlotStranding($locked, $mapping);
             $key = $this->randomKey();
             $body = $this->serialize([
                 'connection_id' => $locked->connection_id,
@@ -388,7 +389,9 @@ final class ManagedTransitions
                 }
 
                 $this->assertOwnerUser($actor, true);
-                $userIds = $this->applyLocalCommit($locked, $this->stagedMapping($locked));
+                $mapping = $this->stagedMapping($locked);
+                $this->refuseOwnerSlotStranding($locked, $mapping);
+                $userIds = $this->applyLocalCommit($locked, $mapping);
 
                 $changed = InstallationAuthority::change(
                     AuthorityState::fromRaw($locked->mode_before, $locked->generation_before),
@@ -414,6 +417,31 @@ final class ManagedTransitions
             return $committed;
         } catch (QueryException $exception) {
             throw new ManagedAuthRefused(previous: $exception);
+        }
+    }
+
+    /** @param list<array<string, mixed>> $mapping */
+    private function refuseOwnerSlotStranding(ManagedTransition $transition, array $mapping): void
+    {
+        if ($transition->direction !== ManagedTransitionDirection::Adopt
+            || ! DB::table('bfc_managed_transition_roster_members')
+                ->where('managed_transition_id', $transition->id)
+                ->where('role', UserRole::Owner->value)
+                ->exists()) {
+            return;
+        }
+
+        $ownerId = User::query()->whereNotNull('owner_slot')->value('id');
+        if ($ownerId === null) {
+            return;
+        }
+
+        foreach ($mapping as $element) {
+            if ($element['local_kind'] === 'user'
+                && $element['local_id'] === (string) $ownerId
+                && $element['disposition'] === 'exclude') {
+                throw ManagedAuthRefused::because(ManagedAuthRefusalReason::OwnerSlotHeldByUnboundIdentity);
+            }
         }
     }
 

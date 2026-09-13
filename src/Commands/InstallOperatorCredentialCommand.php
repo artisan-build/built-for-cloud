@@ -15,7 +15,6 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
-use Illuminate\Console\Command;
 
 /**
  * The installer mint (PRD 1.20): install scaffolds run this instead of
@@ -52,7 +51,7 @@ use Illuminate\Console\Command;
  * clock on it is a scheduled outage (GATE-3); revocation-on-event is the
  * intended end of its life, and `bfc:credential:revoke` reaches it.
  */
-final class InstallOperatorCredentialCommand extends Command
+final class InstallOperatorCredentialCommand extends SystemAuthorityCommand
 {
     use ParsesCredentialVerbInput;
 

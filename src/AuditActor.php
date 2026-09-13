@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Exceptions\SystemAuthorityViolation;
+
 /**
  * A polymorphic-ish actor description on an audit event: type + ref
  * strings, ids only. Absence (a null actor on the event) means the actor
@@ -18,6 +20,11 @@ final readonly class AuditActor
 
     public static function boundUser(string $userId): self
     {
+        if (app()->bound(SystemAuthorityContext::class)
+            && app(SystemAuthorityContext::class)->active()) {
+            throw SystemAuthorityViolation::boundUserActor();
+        }
+
         return new self(AuditActorType::BoundUser, $userId);
     }
 

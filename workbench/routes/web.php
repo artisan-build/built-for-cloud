@@ -16,6 +16,10 @@ Route::middleware('bfc.hmac')->post('/_bfc-harness/p5d-hmac/{user}', static fn (
     'credential_id' => request()->attributes->get('bfc.hmac_credential_id'),
 ])->withoutMiddleware(PreventRequestForgery::class);
 
+Route::middleware('auth:bfc')->get('/_bfc-harness/credential-auth', static fn (): array => [
+    'authenticated' => true,
+]);
+
 Route::get('/_bfc-harness/users/{user}', static function (string $user): array {
     $account = User::query()->findOrFail($user);
 

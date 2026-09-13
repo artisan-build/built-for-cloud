@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleEnter;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\InstallationCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManagedAuthentication;
@@ -37,6 +38,7 @@ final class StandaloneSurfaceInventory
             ConsoleChromeScript::class => false,
             ConsoleEnter::class => false,
             ConsoleVitals::class => false,
+            InstallationCredentials::class => false,
             ManageConsoleKeys::class => false,
             ManageCredentials::class => false,
             ManagedAuthentication::class => false,

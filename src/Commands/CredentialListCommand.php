@@ -7,14 +7,13 @@ namespace ArtisanBuild\BuiltForCloud\Commands;
 use ArtisanBuild\BuiltForCloud\Actions\ListCredentials;
 use ArtisanBuild\BuiltForCloud\Commands\Concerns\ParsesCredentialVerbInput;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
-use Illuminate\Console\Command;
 
 /**
  * The list verb's CLI transport (PRD 1.0 + 1.6). `--json` emits exactly
  * the rows the HTTP transport serves — the same action, the same
  * serialization — which is what the transport-parity suite asserts.
  */
-final class CredentialListCommand extends Command
+final class CredentialListCommand extends SystemAuthorityCommand
 {
     use ParsesCredentialVerbInput;
 

@@ -163,6 +163,10 @@ with the three things that WOULD have moved the major and none of which happened
   an application-declared self-service policy and never from the requesting user, and whose
   mutations are CSRF-protected browser routes. Additive: no existing route, request or response
   shape changes.
+- New installation-credentials routes: `GET /bfc/installation/credentials`,
+  `POST /bfc/installation/credentials`, `POST /bfc/installation/credentials/{id}/rotate` and
+  `DELETE /bfc/installation/credentials/{id}` — the session-authenticated browser surface for
+  installation-owned credentials. Additive: no existing route, request or response shape changes.
 - `GET /bfc/meta` `capabilities` gained `credentials`, and — with the console key surfaces
   below — `console-keys`.
 - `POST /bfc/onboarding/issue` requires `ttl_seconds` (bounds below) and accepts nullable
@@ -456,6 +460,10 @@ server-generated operational text and — per the single-reveal rule above — n
 | `GET /bfc/me/credentials` | `content` | the caller's own summary rows carry free-text names and subject refs, plus the declaration's field lists |
 | `POST /bfc/me/credentials` | `content` | the `delivery` single reveal, plus free-text name/subject fields |
 | `DELETE /bfc/me/credentials/{id}` | `metadata` | empty `204` body |
+| `GET /bfc/installation/credentials` | `content` | installation-owned summary rows carry free-text names and subject refs |
+| `POST /bfc/installation/credentials` | `content` | the `delivery` single reveal, plus free-text name/subject fields |
+| `POST /bfc/installation/credentials/{id}/rotate` | `content` | the `delivery` single reveal, plus a summary row carrying free-text names and subject refs |
+| `DELETE /bfc/installation/credentials/{id}` | `metadata` | empty `204` body |
 | `POST /bfc/console/re-key` | `metadata` | key ids from a bounded charset, a fixed status enum and a timestamp — no free text, and never any key material |
 | `POST /bfc/console/keys/{key_id}/retire` | `metadata` | a key id from a bounded charset, a fixed status enum, a boolean and a timestamp — no free text, and never any key material |
 | `POST /bfc/console/enter` | `content` | its success is a `303`, not a body: the `Set-Cookie` it establishes IS a single reveal of a live delegated session credential, and the `Location` echoes the return path the issuer signed |
@@ -1404,8 +1412,8 @@ gate is also where an offboarded user's surviving session dies (PRD 1.15), so of
 subject both revokes its credentials and closes this screen to them. Every request rides the
 `bfc-personal` limiter (30/min per session principal, 60/min per IP).
 
-**These are BROWSER routes — the only ones in this contract.** Every other surface documented
-here is a credential API that wants no session; these three ride the full browser session stack
+**These are BROWSER routes, as is the installation-credentials surface below.** The operator
+credential APIs want no session; these three ride the full browser session stack
 (cookie encryption, `StartSession`, CSRF validation). Concretely: the package mounts them in the
 host application's own **`web` middleware group** when one is registered — so the app's session
 driver, cookie handling and any CSRF customization apply to its own settings screen — and falls
@@ -1530,6 +1538,53 @@ Revoke one of the caller's own credentials, by id.
 - **403** — `{"message": "..."}`: no resolvable subject, or the declaration's `revoke` verb denies
   it for this subject.
 - **419** — no valid CSRF token.
+
+## The installation-credentials surface (`/bfc/installation/credentials`)
+
+An authenticated Owner, Admin or Member can manage credentials owned by the
+installation rather than by one user. These routes use the host application's browser session
+stack, the `bfc-personal` limiter and CSRF validation on mutations. Issuer attribution is audit
+data only: every recognized role sees and manages the same installation-owned rows. An unknown
+stored role fails closed with **403**.
+
+This surface calls the same unified-store actions described above. Its ownership scope includes
+credentials for `application` and `installation` subjects whose `user_id` is null; personal rows
+are neither listed nor accepted as rotate/revoke targets.
+
+### GET /bfc/installation/credentials
+
+**200** — `{"credentials": [{"…": "a summary row, exactly as on /bfc/credentials"}]}`,
+oldest first. The response includes all installation-owned rows and no personal rows.
+
+### POST /bfc/installation/credentials
+
+Mint an installation-owned credential. `subject_type` is required and must be `application` or
+`installation`; `subject_ref` is required. The optional `kind`, `name`, `abilities`, `expires_at`
+and `code_ttl_seconds` fields have the same validation and delivery semantics as
+[`POST /bfc/credentials`](#post-bfccredentials). Any supplied `user_id` is not read; the persisted
+row is unbound from an individual user.
+
+- **201** — `{"credential": {…}, "delivery": {…}}`, including the single reveal.
+- **403** — the role or declaration denies the operation. **409** — hmac rewrap in progress.
+- **419** — no valid CSRF token. **422** — invalid subject or credential input.
+
+### POST /bfc/installation/credentials/{id}/rotate
+
+Rotate an installation-owned row by id. Request options, preservation, override, cutover and
+delivery behavior match [`POST /bfc/credentials/{id}/rotate`](#post-bfccredentialsidrotate).
+
+- **201** — replacement summary, `superseded_id` and the single-reveal `delivery`.
+- **200** — cutover completion, including `completed_cutover: true` and `delivery.shape: "none"`.
+- **404** — no installation-owned row with that id; personal-row existence is not disclosed.
+- **403**, **409**, **419**, **422** and **500** retain the unified rotate meanings above.
+
+### DELETE /bfc/installation/credentials/{id}
+
+Revoke an installation-owned row by id.
+
+- **204** — revoked, or already dead.
+- **404** — no installation-owned row with that id; personal-row existence is not disclosed.
+- **403** — the role or declaration denies the operation. **419** — no valid CSRF token.
 
 ## Subjects — the offboard verb
 

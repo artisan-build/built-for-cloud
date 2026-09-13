@@ -214,6 +214,31 @@ It also creates one structurally guarded `bfc_authority` row in `standalone` mod
 `InstallationAuthority::change()` is the non-Eloquent write API; it advances that generation with a
 compare-and-set update and returns the exact state it wrote, so stale writers cannot change authority.
 
+### System-authority entries
+
+Built for Cloud commands, queued jobs/listeners, and package-registered schedule callbacks execute in
+a package system-authority context. Commands and queued entries are framed at their own invocation — the
+latter through a bus pipe, so the queue worker, the sync driver and synchronous dispatch are covered by
+one mechanism — and entry identity comes from the dispatched OBJECT: a marker interface, the class a queued-listener wrapper names, or the payload's `commandName`, which the queue writes as the job's class. Never from a display name, which a job can choose. A queued entry's `failed()` handler is inside the frame, as is the middleware a queued entry runs: for a job that is its own `middleware()` method, and for a listener it is the middleware objects that method returns. That framing depends on the entry being POSITIVELY IDENTIFIED: `handle()` is framed by the bus pipe, which reads the dispatched object and never a payload, while `failed()` and the returned middleware are framed by the queue events, which must read the payload — so for one of this package's own entries whose payload cannot be read, those two run outside the frame. Anything the framework calls on an entry while DISPATCHING OR PUSHING it runs in the dispatcher's context, not the entry's, for a job and for a listener alike — a job's `displayName`, `backoff`, `retryUntil` and `tries`, and a listener's `middleware()` method body, `shouldQueue`, `viaConnection`, `viaQueue`, `withDelay`, `messageGroup`, `uniqueId` and the rest are examples rather than the boundary. They are framed only when the code dispatching or pushing the entry is itself framed. While that context is active, human authentication is refused
+through listeners on both `Authenticated` and `Login`, and
+`AuditActor::boundUser()` refuses to synthesize human attribution. The context is always released in `finally` paths. The queue frame is released on `JobAttempted`, which the worker and the sync driver each dispatch from a `finally`, so a long-lived worker does not carry package authority into the next host job. It is deliberately NOT released on `JobProcessed`, `JobFailed` or `JobExceptionOccurred`: each of those fires while package code can still run.
+
+The bound covers any guard that dispatches `Authenticated` or `Login`, not only `SessionGuard`.
+
+The bound is stated as a class rather than as a list of shapes, because naming shapes is how the previous four attempts each missed the next one. **Any package code that runs outside a framed invocation is outside the bound.** Package code must not authenticate a human or synthesize a bound-user actor from any of it. That class includes, and is not limited to: any callback registered for later invocation, such as `defer()`, `app()->terminating()`, a listener registered at runtime, a shutdown function, or a chain or batch `catch`/`finally` callback; and any callback attached to a schedule event, including its `before`/`after` hooks and its `when`/`skip` filters.
+
+Two further limits are part of the same class:
+
+- A queued closure dispatched by package code is never framed. Its declaring file does not survive serialisation, and the scope class that does survive is caller-settable, so its origin cannot be established as identity.
+- In-process tampering switches the bound off: removing the listeners, replacing a guard's event dispatcher, or rebinding the system-authority context. A host that calls `Bus::pipeThrough()` after this package boots also replaces the pipe array and reverts the bound to framing by queue events alone.
+
+Each limit above carries an open `risk=security` debt row, so any future package change that reaches one is reviewed against it.
+
+This boundary covers the package's own derived entry inventories. `RequestGuard`, custom host guards that
+do not dispatch `Authenticated` or `Login`, and host commands, jobs, listeners, or schedules outside those
+inventories are host configuration. The retained source scanner is an advisory tripwire, not the enforcement mechanism;
+its detailed limits are in [`docs/system-authority-instrument-limits.md`](docs/system-authority-instrument-limits.md).
+
 ### Role policy
 
 `RolePolicy` implements only the frozen coarse policy:

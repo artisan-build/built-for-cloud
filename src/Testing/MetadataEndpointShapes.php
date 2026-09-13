@@ -214,6 +214,7 @@ final class MetadataEndpointShapes
                 ],
             ],
             'DELETE /bfc/credentials/{id}' => ['type' => 'empty'],
+            'DELETE /bfc/installation/credentials/{id}' => ['type' => 'empty'],
             'DELETE /bfc/me/credentials/{id}' => ['type' => 'empty'],
         ];
     }

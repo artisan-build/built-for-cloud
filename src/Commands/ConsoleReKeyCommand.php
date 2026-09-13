@@ -13,7 +13,6 @@ use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyFiled;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
-use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Symfony\Component\Console\Input\StreamableInputInterface;
 
@@ -69,7 +68,7 @@ use Symfony\Component\Console\Input\StreamableInputInterface;
  * keyring lives in THIS app's database and this verb reveals nothing, so
  * there is no cloud-wrapped mode to fall back to.
  */
-final class ConsoleReKeyCommand extends Command
+final class ConsoleReKeyCommand extends SystemAuthorityCommand
 {
     use ParsesCredentialVerbInput;
 

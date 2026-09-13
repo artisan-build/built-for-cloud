@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Commands;
 
 use ArtisanBuild\BuiltForCloud\OutboxDrainer;
-use Illuminate\Console\Command;
 
 /**
  * Re-drain the transactional outbox: anything the synchronous post-commit
@@ -13,7 +12,7 @@ use Illuminate\Console\Command;
  * died mid-delivery — stays claimable and is delivered here. Safe to run
  * any time; delivery is idempotent.
  */
-final class OutboxDrainCommand extends Command
+final class OutboxDrainCommand extends SystemAuthorityCommand
 {
     protected $signature = 'bfc:outbox:drain';
 

@@ -18,7 +18,9 @@ final class StandaloneHarnessServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app['config']->set('auth.defaults.guard', 'web');
-        $this->app['config']->set('auth.guards', []);
+        $this->app['config']->set('auth.guards', [
+            'bfc' => ['driver' => 'bfc', 'provider' => 'users'],
+        ]);
         $this->app['config']->set('auth.providers', []);
         $this->app['config']->set('cache.default', 'array');
         $this->app['config']->set('built-for-cloud.surfaces.data_migrations', false);

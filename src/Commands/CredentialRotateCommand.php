@@ -15,7 +15,6 @@ use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\RotationResult;
-use Illuminate\Console\Command;
 
 /**
  * The rotate verb's CLI transport (PRD 1.0 + 1.7): the same
@@ -27,7 +26,7 @@ use Illuminate\Console\Command;
  * exactly once, straight out of the sealed carrier — and accepts no secret
  * input of any kind.
  */
-final class CredentialRotateCommand extends Command
+final class CredentialRotateCommand extends SystemAuthorityCommand
 {
     use ParsesCredentialVerbInput;
 

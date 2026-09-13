@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\Actions\Concerns\ConsultsDeclaration;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialManagementScope;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
@@ -47,12 +48,19 @@ final class RevokeCredential
 
     public function __construct(private readonly LifecycleEventRecorder $recorder) {}
 
-    public function __invoke(string $id, ?AuditActor $actor = null, ?Subject $scope = null): RevokeOutcome
-    {
+    public function __invoke(
+        string $id,
+        ?AuditActor $actor = null,
+        ?Subject $scope = null,
+        ?CredentialManagementScope $managementScope = null,
+    ): RevokeOutcome {
         /** @var RevokeOutcome */
-        return DB::transaction(function () use ($id, $actor, $scope): RevokeOutcome {
+        return DB::transaction(function () use ($id, $actor, $scope, $managementScope): RevokeOutcome {
+            $query = Credential::query()->whereKey($id);
+            $managementScope?->apply($query);
+
             /** @var Credential|null $target */
-            $target = Credential::query()->whereKey($id)->lockForUpdate()->first();
+            $target = $query->lockForUpdate()->first();
 
             if ($target === null) {
                 return RevokeOutcome::NotFound;

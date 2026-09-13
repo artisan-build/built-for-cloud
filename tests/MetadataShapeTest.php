@@ -575,3 +575,29 @@ it('holds the classification on the personal-surface row', function (): void {
         'DELETE /bfc/me/credentials/{id}',
     );
 });
+
+it('holds the classification on the installation-surface row', function (): void {
+    /** @var User $user */
+    $user = User::query()->create([
+        'name' => 'installation-metadata@example.test',
+        'email' => 'installation-metadata@example.test',
+        'password' => bcrypt('secret-'.bin2hex(random_bytes(4))),
+    ]);
+
+    $credential = Credential::query()->create([
+        'kind' => CredentialKind::Bearer,
+        'subject_type' => SubjectType::Installation,
+        'subject_ref' => 'metadata-installation',
+        'user_id' => null,
+        'name' => 'deployment',
+        'status' => CredentialStatus::Active,
+        'secret_hash' => hash('sha256', 'seeded-'.bin2hex(random_bytes(8))),
+    ]);
+
+    $this->assertBuiltForCloudMetadataEndpoint(
+        $this->actingAsVersioned($user)
+            ->deleteJson('/bfc/installation/credentials/'.$credential->id)
+            ->assertNoContent(),
+        'DELETE /bfc/installation/credentials/{id}',
+    );
+});

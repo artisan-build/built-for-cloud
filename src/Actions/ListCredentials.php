@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Actions;
 
 use ArtisanBuild\BuiltForCloud\Actions\Concerns\ConsultsDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialManagementScope;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
@@ -35,8 +36,10 @@ final class ListCredentials
     /**
      * @return list<CredentialSummary>
      */
-    public function __invoke(?Subject $subject = null): array
-    {
+    public function __invoke(
+        ?Subject $subject = null,
+        ?CredentialManagementScope $managementScope = null,
+    ): array {
         $cadence = $this->declaredCadence();
         $unsupported = $this->declaredUnsupportedFields();
 
@@ -46,6 +49,8 @@ final class ListCredentials
             $query->where('subject_type', $subject->type->value)
                 ->where('subject_ref', $subject->ref);
         }
+
+        $managementScope?->apply($query);
 
         return $query
             ->orderBy('created_at')

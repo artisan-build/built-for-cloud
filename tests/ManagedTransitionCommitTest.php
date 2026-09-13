@@ -13,6 +13,7 @@ use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConfirmation;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;
 use ArtisanBuild\BuiltForCloud\ManagedAuthExchange;
+use ArtisanBuild\BuiltForCloud\ManagedAuthRefusalReason;
 use ArtisanBuild\BuiltForCloud\ManagedMembershipResponses;
 use ArtisanBuild\BuiltForCloud\ManagedTransition;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionDirection;
@@ -228,11 +229,15 @@ function p4dCompletedExit(): array
     DB::table('password_reset_tokens')->insert([
         'email' => $excluded->email, 'token' => hash('sha256', 'exit-reset'), 'created_at' => now(),
     ]);
-    Credential::factory()->create([
+    $exitDeploymentSecret = 'exit-deployment-secret';
+    $exitDeployment = Credential::factory()->create([
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'transition-installation',
         'name' => 'exit-deployment-survives',
+        'secret_hash' => hash('sha256', $exitDeploymentSecret),
     ]);
+    expect(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $exitDeploymentSecret)?->id)
+        ->toBe($exitDeployment->id);
     DB::table('bfc_managed_handoffs')->insert([
         'state_hash' => hash('sha256', 'exit-state'),
         'session_nonce_hash' => hash('sha256', 'exit-nonce'),
@@ -324,11 +329,15 @@ it('atomically applies every adoption disposition and invalidates local authorit
             $excludedCredential = $credential;
         }
     }
+    $deploymentSecret = 'adopt-deployment-secret';
     $deployment = Credential::factory()->create([
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'transition-installation',
         'name' => 'deployment-survives',
+        'secret_hash' => hash('sha256', $deploymentSecret),
     ]);
+    expect(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $deploymentSecret)?->id)
+        ->toBe($deployment->id);
     DB::table('bfc_managed_handoffs')->insert([
         'state_hash' => hash('sha256', 'state'),
         'session_nonce_hash' => hash('sha256', 'nonce'),
@@ -406,6 +415,7 @@ it('atomically applies every adoption disposition and invalidates local authorit
         ->and(DB::table('password_reset_tokens')->count())->toBe(0)
         ->and(Credential::query()->whereNotNull('user_id')->whereNull('revoked_at')->count())->toBe(0)
         ->and($deployment->refresh()->revoked_at)->toBeNull()
+        ->and(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $deploymentSecret)?->id)->toBe($deployment->id)
         ->and(DB::table('bfc_managed_handoffs')->whereNull('consumed_at')->count())->toBe(0)
         ->and(array_column($fixture->calls, 'leg'))->toBe(['T1', 'T2', 'T3', 'T4']);
 
@@ -413,6 +423,77 @@ it('atomically applies every adoption disposition and invalidates local authorit
         expect(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $secret))->toBeNull();
     }
     $this->get(route('bfc.members.index', absolute: false))->assertNotFound();
+});
+
+it('refuses adoption with a distinct reason when an excluded standalone Owner would strand the installation slot', function (): void {
+    $roster = [[
+        'scalpels_id' => 'incoming-owner',
+        'membership_status' => 'active',
+        'role' => 'owner',
+        'display_name' => 'Incoming Owner',
+        'contact_email' => 'incoming-owner@example.test',
+        'contact_email_verified' => true,
+    ]];
+    [$owner] = p4dConfigure(ManagedTransitionDirection::Adopt, $roster);
+    $transition = p4dProposed($owner, ManagedTransitionDirection::Adopt, [
+        [
+            'scalpels_id' => 'incoming-owner', 'local_kind' => null, 'local_id' => null,
+            'role' => null, 'disposition' => 'defer_to_managed_jit', 'final_email' => null,
+        ],
+        [
+            'scalpels_id' => null, 'local_kind' => 'user', 'local_id' => (string) $owner->getKey(),
+            'role' => null, 'disposition' => 'exclude', 'final_email' => null,
+        ],
+    ]);
+    $refusal = null;
+
+    try {
+        app(ManagedTransitions::class)->complete($owner, $transition);
+    } catch (ManagedAuthRefused $exception) {
+        $refusal = $exception;
+    }
+
+    expect($refusal)->toBeInstanceOf(ManagedAuthRefused::class)
+        ->and($refusal?->getMessage())->toBe('managed_owner_slot_held_by_unbound_identity')
+        ->and($refusal?->reason)->toBe(ManagedAuthRefusalReason::OwnerSlotHeldByUnboundIdentity)
+        // The adopt-side condition runs before commit, so it exposes the
+        // problem without leaving the installation in the stranded state.
+        ->and(InstallationAuthority::current()->mode)->toBe(AuthorityMode::Standalone)
+        ->and($owner->refresh()->status)->toBe('active')
+        ->and($owner->owner_slot)->toBe('owner');
+});
+
+it('keeps the Owner slot installation-wide regardless of authority issuer or connection', function (): void {
+    $first = User::query()->create(['name' => 'First Owner', 'email' => 'first-owner@example.test']);
+    $first->forceFill([
+        'role' => 'owner',
+        'status' => 'active',
+        'scalpels_issuer' => 'https://first-issuer.example.test',
+        'scalpels_connection_id' => 'first-connection',
+        'scalpels_id' => 'first-owner',
+    ])->save();
+
+    $second = User::query()->create(['name' => 'Second Owner', 'email' => 'second-owner@example.test']);
+
+    expect(function () use ($second): void {
+        $second->forceFill([
+            'role' => 'owner',
+            'status' => 'active',
+            'scalpels_issuer' => 'https://second-issuer.example.test',
+            'scalpels_connection_id' => 'second-connection',
+            'scalpels_id' => 'second-owner',
+        ])->save();
+    })->toThrow(QueryException::class)
+        ->and(User::query()->whereNotNull('owner_slot')->count())->toBe(1);
+});
+
+it('uses the default database connection for both users and transition transactions', function (): void {
+    $user = new User;
+
+    expect($user->getConnectionName())->toBeNull()
+        ->and($user->getConnection()->getName())->toBe((string) config('database.default'))
+        ->and(DB::connection()->getName())->toBe($user->getConnection()->getName())
+        ->and(config('built-for-cloud.database.user_connection'))->toBeNull();
 });
 
 it('rejects an invalid exact-generation tuple before any protected effect', function (): void {
@@ -691,6 +772,8 @@ it('establishes an accessible standalone Owner and applies every exit dispositio
         ->and(DB::table('password_reset_tokens')->count())->toBe(0)
         ->and(Credential::query()->whereNotNull('user_id')->whereNull('revoked_at')->count())->toBe(0)
         ->and(Credential::query()->where('name', 'exit-deployment-survives')->value('revoked_at'))->toBeNull()
+        ->and(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, 'exit-deployment-secret')?->id)
+        ->toBe(Credential::query()->where('name', 'exit-deployment-survives')->value('id'))
         ->and((array) $authorityFreshness)->toBe(array_fill_keys([
             'managed_connection_status',
             'managed_connection_generation',
@@ -1198,6 +1281,16 @@ it('retains authority and retry records through removed entitlement state and lo
     ]];
     [$owner, $fixture] = p4dConfigure($direction, $roster);
     $service = app(ManagedTransitions::class);
+    $propose = static fn (ManagedTransition $candidate): ManagedTransition => $direction === ManagedTransitionDirection::Adopt
+        ? $service->propose($candidate, [[
+            'scalpels_id' => 'owner-subject',
+            'local_kind' => 'user',
+            'local_id' => (string) $owner->getKey(),
+            'role' => 'owner',
+            'disposition' => 'link',
+            'final_email' => 'p4d-owner@example.test',
+        ]])
+        : $service->proposeDefault($candidate);
     if ($phase === 'preparing') {
         $fixture->crashAfterExecution = 'T1';
         expect(fn () => $service->prepare($owner, $direction))->toThrow(ManagedAuthRefused::class);
@@ -1209,7 +1302,7 @@ it('retains authority and retry records through removed entitlement state and lo
         $transition = $service->fetchRoster($transition);
     }
     if (in_array($phase, ['proposed', 'staging', 'staged'], true)) {
-        $transition = $service->proposeDefault($transition);
+        $transition = $propose($transition);
     }
     if ($phase === 'staging') {
         $fixture->crashBeforeExecution = 'T3';
@@ -1276,7 +1369,7 @@ it('retains authority and retry records through removed entitlement state and lo
         $recovered = $service->fetchRoster($recovered);
     }
     if ($recovered->status === ManagedTransitionStatus::Rostered) {
-        $recovered = $service->proposeDefault($recovered);
+        $recovered = $propose($recovered);
     }
     $completed = $service->complete($owner->refresh(), $recovered);
     $authorityAfter = (array) DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->sole();

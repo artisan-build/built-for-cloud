@@ -37,6 +37,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleEnter;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\InstallationCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManagedAuthentication;
@@ -65,10 +66,15 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\VerifyHmacSignature;
 use ArtisanBuild\BuiltForCloud\Listeners\EvictConsolePrincipal;
 use ArtisanBuild\BuiltForCloud\Listeners\QueueOwnershipWebhook;
+use ArtisanBuild\BuiltForCloud\Listeners\RefuseSystemAuthorityAuthentication;
+use ArtisanBuild\BuiltForCloud\Listeners\SystemAuthorityQueueScope;
 use Illuminate\Auth\AuthManager;
+use Illuminate\Auth\Events\Authenticated;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Auth\SessionGuard;
+use Illuminate\Bus\Dispatcher as BusDispatcher;
 use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Contracts\Bus\Dispatcher as BusDispatcherContract;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Contracts\Session\Session;
@@ -77,6 +83,8 @@ use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Http\Request;
+use Illuminate\Queue\Events\JobAttempted;
+use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Routing\Events\RouteMatched;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
@@ -88,6 +96,7 @@ use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 use Livewire\LivewireManager;
+use ReflectionProperty;
 use RuntimeException;
 use Throwable;
 
@@ -101,6 +110,8 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         );
 
         $this->app->singleton(UsageReporter::class, NullUsageReporter::class);
+        $this->app->singleton(SystemAuthorityContext::class);
+        $this->app->singleton(SystemAuthorityQueueScope::class);
 
         // P5b's forward-only carry: exchange has one durable destination.
         $this->app->bind(DurableCredentialMinter::class, UnifiedStoreCredentialMinter::class);
@@ -123,6 +134,12 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     public function boot(): void
     {
         HumanAuthConfiguration::apply($this->app->make(Repository::class));
+
+        Event::listen(Authenticated::class, [RefuseSystemAuthorityAuthentication::class, 'handle']);
+        Event::listen(Login::class, [RefuseSystemAuthorityAuthentication::class, 'handle']);
+        $this->frameQueueEntriesByInvocation();
+        Event::listen(JobProcessing::class, [SystemAuthorityQueueScope::class, 'processing']);
+        Event::listen(JobAttempted::class, [SystemAuthorityQueueScope::class, 'finished']);
 
         if ($this->app->resolved('auth')) {
             HumanAuthConfiguration::assertEffectiveProvider($this->app->make('auth'));
@@ -290,6 +307,38 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         }
     }
 
+    /**
+     * Frames every package queue entry at its INVOCATION by appending a bus pipe.
+     *
+     * Appended rather than set: `Dispatcher::pipeThrough()` REPLACES the pipe array,
+     * so writing it blind would drop any pipe a host app or another package
+     * registered first. The existing pipes are read and preserved.
+     *
+     * KNOWN CEILING, disclosed rather than papered over: a host that calls
+     * `Bus::pipeThrough()` AFTER this provider boots replaces the array again and
+     * removes this frame. That is the same exposure any package has with this API.
+     * The queue-event listeners are kept alongside as a second, independent
+     * mechanism so the two cover each other.
+     */
+    private function frameQueueEntriesByInvocation(): void
+    {
+        $dispatcher = $this->app->make(BusDispatcherContract::class);
+
+        if (! $dispatcher instanceof BusDispatcher) {
+            return;
+        }
+
+        $pipes = (new ReflectionProperty(BusDispatcher::class, 'pipes'))->getValue($dispatcher);
+        $pipes = is_array($pipes) ? $pipes : [];
+
+        if (in_array(SystemAuthorityBusFrame::class, $pipes, true)) {
+            return;
+        }
+
+        $pipes[] = SystemAuthorityBusFrame::class;
+        $dispatcher->pipeThrough($pipes);
+    }
+
     private function surfaceEnabled(string $surface): bool
     {
         return (bool) config('built-for-cloud.surfaces.'.$surface, true);
@@ -402,13 +451,12 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // Fixed `/bfc/` path, part of the routes family, like every
         // other package surface.
         //
-        // These are BROWSER routes, and the only ones the package mounts
-        // (rework Fix 1). Every other /bfc/* surface is a token API that
-        // wants no session; these three ride the full session stack —
-        // see personalSessionMiddleware() — so cookie sessions actually
-        // start, and so the MUTATING verbs are CSRF-protected. Without
-        // it a session-riding forgery on a logged-in user's browser
-        // could mint or revoke their credentials.
+        // Personal and installation credential management are BROWSER
+        // routes. They ride the full session stack — see
+        // browserSessionMiddleware() — so cookie sessions actually start,
+        // and so the MUTATING verbs are CSRF-protected. Without it a
+        // session-riding forgery on a logged-in user's browser could mint,
+        // rotate or revoke credentials.
         $personal = $this->browserSessionMiddleware($router);
 
         $router->get('/bfc/managed/login', [ManagedAuthentication::class, 'create'])
@@ -520,9 +568,20 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $personalCredentialRoutes[] = $router->delete('/bfc/me/credentials/{id}', [PersonalCredentials::class, 'destroy'])
             ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
 
+        $installationCredentialRoutes = [];
+        $installationCredentialRoutes[] = $router->get('/bfc/installation/credentials', [InstallationCredentials::class, 'index'])
+            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
+        $installationCredentialRoutes[] = $router->post('/bfc/installation/credentials', [InstallationCredentials::class, 'store'])
+            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
+        $installationCredentialRoutes[] = $router->post('/bfc/installation/credentials/{id}/rotate', [InstallationCredentials::class, 'rotate'])
+            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
+        $installationCredentialRoutes[] = $router->delete('/bfc/installation/credentials/{id}', [InstallationCredentials::class, 'destroy'])
+            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
+
         $packageMiddlewareRoutes = StandaloneRouteOwnership::packageMiddlewareInventory([
             ...$standaloneRoutes,
             ...$personalCredentialRoutes,
+            ...$installationCredentialRoutes,
         ]);
 
         $this->app->booted(function () use ($packageMiddlewareRoutes, $router, $standaloneRoutes): void {

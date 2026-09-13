@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialManagementScope;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
@@ -106,9 +107,15 @@ final class RotateCredential
      * Returns null when no row carries the id (the transports' 404); every
      * other failure is a typed refusal or the two-phase contract above.
      */
-    public function __invoke(string $id, RotateOptions $options, ?AuditActor $actor = null): ?RotationResult
-    {
-        $phaseOne = fn (): ?RotationResult => DB::transaction(fn (): ?RotationResult => $this->mintReplacement($id, $options, $actor));
+    public function __invoke(
+        string $id,
+        RotateOptions $options,
+        ?AuditActor $actor = null,
+        ?CredentialManagementScope $managementScope = null,
+    ): ?RotationResult {
+        $phaseOne = fn (): ?RotationResult => DB::transaction(
+            fn (): ?RotationResult => $this->mintReplacement($id, $options, $actor, $managementScope),
+        );
 
         // The writer barrier (SEC-V3-08, check-through-commit): an
         // UNSTAMPED hmac source mints a fresh ciphertext, so its whole
@@ -119,11 +126,19 @@ final class RotateCredential
         // a stamped source takes the completion path, which writes no
         // ciphertext and deliberately stays available mid-rewrap (an
         // emergency kill must never wait on a sweep).
+        $peek = Credential::query()->whereKey($id);
+
+        $managementScope?->apply($peek);
+
         /** @var Credential|null $peeked */
-        $peeked = Credential::query()->whereKey($id)->first(['id', 'kind', 'rotated_at']);
+        $peeked = $peek->first(['id', 'kind', 'rotated_at']);
+
+        if ($peeked === null) {
+            return null;
+        }
 
         /** @var RotationResult|null $result */
-        $result = ($peeked?->kind === CredentialKind::Hmac && $peeked->rotated_at === null)
+        $result = ($peeked->kind === CredentialKind::Hmac && $peeked->rotated_at === null)
             ? app(HmacWriterBarrier::class)->exclusive('rotation', $phaseOne)
             : $phaseOne();
 
@@ -183,10 +198,17 @@ final class RotateCredential
      * Phase 1, inside the caller's transaction: every refusal, the
      * replacement mint, the `rotated_at` stamp, and both audit events.
      */
-    private function mintReplacement(string $id, RotateOptions $options, ?AuditActor $actor): ?RotationResult
-    {
+    private function mintReplacement(
+        string $id,
+        RotateOptions $options,
+        ?AuditActor $actor,
+        ?CredentialManagementScope $managementScope,
+    ): ?RotationResult {
+        $query = Credential::query()->whereKey($id);
+        $managementScope?->apply($query);
+
         /** @var Credential|null $source */
-        $source = Credential::query()->whereKey($id)->lockForUpdate()->first();
+        $source = $query->lockForUpdate()->first();
 
         if ($source === null) {
             return null;
@@ -255,6 +277,12 @@ final class RotateCredential
         // (exact preservation) deliberately skips this: preserving what
         // already exists is not a grant.
         if ($override) {
+            $refusedAbility = $managementScope?->firstExcludedAbility($abilities);
+
+            if ($refusedAbility !== null) {
+                throw CredentialVerbRefused::abilityWidening($refusedAbility);
+            }
+
             $this->refuseWideningPastCeilings($source->subject(), $abilities, $expiresAt);
         }
 

@@ -11,6 +11,7 @@ use ArtisanBuild\BuiltForCloud\ManagedAuthClient;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConfirmation;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;
 use ArtisanBuild\BuiltForCloud\ManagedAuthExchange;
+use ArtisanBuild\BuiltForCloud\ManagedAuthRefusalReason;
 use ArtisanBuild\BuiltForCloud\ManagedHandoff;
 use ArtisanBuild\BuiltForCloud\ManagedMembershipResponses;
 use ArtisanBuild\BuiltForCloud\ManagedOwnershipStatement;
@@ -158,6 +159,35 @@ function p4aStatement(
         new DateTimeImmutable('2026-09-11T12:00:00+00:00'),
     );
 }
+
+it('surfaces the typed reason when an incoming managed Owner finds a stranded local slot', function (): void {
+    p4aConfigureAuthority();
+    $orphan = User::query()->create([
+        'name' => 'Excluded standalone Owner',
+        'email' => 'excluded-standalone-owner@example.test',
+    ]);
+    $orphan->forceFill([
+        'role' => 'owner',
+        'status' => 'inactive',
+        'deactivated_at' => now(),
+    ])->save();
+    $refusal = null;
+
+    try {
+        app(ManagedMembershipResponses::class)->applyExchange(
+            p4aConnection(),
+            p4aExchange('incoming-owner', 'active', 'owner'),
+        );
+    } catch (ManagedAuthRefused $exception) {
+        $refusal = $exception;
+    }
+
+    expect($refusal)->toBeInstanceOf(ManagedAuthRefused::class)
+        ->and($refusal?->reason)->toBe(ManagedAuthRefusalReason::OwnerSlotHeldByUnboundIdentity)
+        ->and($refusal?->getMessage())->toBe(ManagedAuthRefusalReason::OwnerSlotHeldByUnboundIdentity->value)
+        ->and(User::query()->whereNotNull('owner_slot')->sole()->is($orphan))->toBeTrue()
+        ->and(User::query()->where('scalpels_id', 'incoming-owner')->exists())->toBeFalse();
+});
 
 /** @return array<string, list<array<string, mixed>>> */
 function p4aProtectedState(): array

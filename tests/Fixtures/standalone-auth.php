@@ -152,7 +152,7 @@ $case = new class('testProbe') extends TestCase
                 && ! str_starts_with((string) $route->getName(), 'bfc.transitions.'),
         ));
 
-        if (count($routes) !== 11) {
+        if (count($routes) !== 15) {
             fwrite(STDERR, 'standalone-auth-route-count-'.count($routes).PHP_EOL);
 
             return false;
@@ -212,11 +212,11 @@ $case = new class('testProbe') extends TestCase
         Notification::assertNothingSent();
 
         $allRefused = $memoPoisoning
-            ? count(array_filter($statuses, static fn (int $status): bool => $status < 200 || $status >= 300)) === 11
-            : $statuses === array_fill(0, 11, 500);
+            ? count(array_filter($statuses, static fn (int $status): bool => $status < 200 || $status >= 300)) === 15
+            : $statuses === array_fill(0, 15, 500);
 
         return $allRefused
-            && (! $memoPoisoning || ($poisonedStacks === 11 && ! in_array(false, $recomputed, true)))
+            && (! $memoPoisoning || ($poisonedStacks === 15 && ! in_array(false, $recomputed, true)))
             && ! in_array(true, $disclosed, true)
             && BfcStandaloneAuthGateState::$paths === []
             && Invitation::query()->count() === 0
@@ -250,7 +250,7 @@ if ($ordering !== 'match' || ! $valid) {
 }
 
 if (in_array($vector, ['memo-set-action', 'memo-property'], true)) {
-    fwrite(STDOUT, "standalone-auth-gate-{$vector}-refused-11\n");
+    fwrite(STDOUT, "standalone-auth-gate-{$vector}-refused-15\n");
 } else {
-    fwrite(STDOUT, "standalone-auth-gate-match-refused-11\n");
+    fwrite(STDOUT, "standalone-auth-gate-match-refused-15\n");
 }
