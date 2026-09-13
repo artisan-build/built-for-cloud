@@ -368,15 +368,40 @@ final class LegacyRemovalInventory
     /** @return array<string, string> */
     private static function documentMarkers(): array
     {
+        $markers = [];
+
+        foreach (self::legacyFileNames() as $fileName) {
+            $symbol = pathinfo($fileName, PATHINFO_FILENAME);
+
+            if (preg_match('/^[A-Z][A-Za-z0-9_]*$/', $symbol) === 1) {
+                $markers['class:'.$symbol] = $symbol;
+            }
+        }
+
+        return [...$markers, ...self::removedDocumentForms()];
+    }
+
+    /** @return array<string, string> */
+    private static function removedDocumentForms(): array
+    {
+        $ownerTokenId = implode('_', ['owner', 'token', 'id']);
+        $durableTokenId = implode('_', ['durable', 'token', 'id']);
+        $durableStore = implode('_', ['durable', 'store']);
+        $legacyTable = implode('_', ['api', 'tokens']);
+        $fallbackConfig = implode('_', ['fallback', 'token']);
+        $fallbackEnv = implode('_', ['FALLBACK', 'TOKEN']);
+        $credentialApi = implode('_', ['credential', 'api']);
+        $adminAlias = implode('.', ['bfc', 'token', 'admin']);
+
         return [
-            'legacy-store' => implode('_', ['api', 'tokens']),
-            'fallback-env' => implode('_', ['FALLBACK', 'TOKEN']),
-            'fallback-config' => implode('_', ['fallback', 'token']),
-            'credential-api-config' => implode('_', ['credential', 'api']),
-            'credential-api-route' => '/api/'.implode('', ['credentials']),
-            'legacy-admin-actor' => implode('_', ['admin', 'token']),
-            'legacy-app-actor' => implode('_', ['legacy', 'api', 'token']),
-            'legacy-registry' => self::joined('Token', 'Registry'),
+            'alias:'.$adminAlias => $adminAlias,
+            'column:'.$ownerTokenId => $ownerTokenId,
+            'column:'.$durableTokenId => $durableTokenId,
+            'column:'.$durableStore => $durableStore,
+            'table:'.$legacyTable => $legacyTable,
+            'config:'.$fallbackConfig => $fallbackConfig,
+            'env:'.$fallbackEnv => $fallbackEnv,
+            'config:'.$credentialApi => $credentialApi,
             ...self::commandMarkers(),
         ];
     }

@@ -646,8 +646,8 @@ the claim-time countersigning-key exchange — see
 
 - **201** — `{"owner_token": "...", "webhook_secret": "...", "product": "..."}` — the single
   reveal of both secrets. The owner token authenticates a unified-store `operator` credential
-  holding `credential:admin` with no expiry; `ownership.owner_credential_id` links that row and
-  `owner_token_id` remains null. Ownership transfer, not a clock, ends its life. A claim that
+  holding `credential:admin` with no expiry; `ownership.owner_credential_id` is the sole link to
+  that row. Ownership transfer, not a clock, ends its life. A claim that
   carried `console_key`
   additionally answers with the `console_key` object documented below; a claim that did not
   carries no such field (absent, never null).
@@ -3289,8 +3289,8 @@ documented in their own sections above.
     local session user. A delegated actor has no personal credentials in this app. On a
     REFUSED console session they answer `401` and `403` respectively, and never resolve the
     local user.
-  - The token gates (`bfc.token.admin`, `bfc.credential.admin`, `bfc.ability`) are unchanged:
-    they never consult a session principal.
+  - The credential gates (`bfc.credential.admin`, `bfc.ability`) never consult a session
+    principal.
   **This is an AMENDMENT to the v3.1 matrix invariant SEC-V3-10, not an additive slot-in**, and it
   is recorded as one deliberately rather than left to read as an accident. SEC-V3-10 shipped as a
   token-vs-session rule over a SINGLE `built-for-cloud.credentials.session_guard` name; the Console

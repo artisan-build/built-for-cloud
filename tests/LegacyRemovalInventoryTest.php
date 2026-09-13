@@ -225,7 +225,32 @@ it('reports legacy migration config route and public-document controls at their 
         'config/built-for-cloud.php:2 [config:built-for-cloud.'.$configKey.']',
         'src/LegacyRoute.php:2 [config:built-for-cloud.'.$configKey.']',
     )->and(LegacyRemovalInventory::publicDocumentOffences($root))->toContain(
-        'README.md:1 [legacy-store]',
+        'README.md:1 [table:'.$table.']',
+    );
+});
+
+it('derives document markers for every removed inventory form at file and line', function (): void {
+    $root = removalControlTree();
+    $class = implode('', ['Ensure', 'Admin', 'Token']);
+    $alias = implode('.', ['bfc', 'token', 'admin']);
+    $column = implode('_', ['owner', 'token', 'id']);
+    $config = implode('_', ['fallback', 'token']);
+    $command = implode(':', ['token', 'create']);
+
+    file_put_contents($root.'/README.md', implode("\n", [
+        "Removed class {$class}.",
+        "Removed alias {$alias}.",
+        "Removed column {$column}.",
+        "Removed config {$config}.",
+        "Removed command {$command}.",
+    ])."\n");
+
+    expect(LegacyRemovalInventory::publicDocumentOffences($root))->toContain(
+        'README.md:1 [class:'.$class.']',
+        'README.md:2 [alias:'.$alias.']',
+        'README.md:3 [column:'.$column.']',
+        'README.md:4 [config:'.$config.']',
+        'README.md:5 [command-token-create]',
     );
 });
 
