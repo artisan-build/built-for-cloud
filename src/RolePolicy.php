@@ -26,6 +26,11 @@ final class RolePolicy
         return self::role($role) === UserRole::Owner;
     }
 
+    public static function canManageInstallationCredentials(UserRole|string|null $role): bool
+    {
+        return self::canUseProduct($role);
+    }
+
     public static function canManage(UserRole|string|null $role, UserRole|string|null $target): bool
     {
         return match (self::role($target)) {

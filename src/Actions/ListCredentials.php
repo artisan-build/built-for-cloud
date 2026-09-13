@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Actions;
 
 use ArtisanBuild\BuiltForCloud\Actions\Concerns\ConsultsDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialOwnership;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
@@ -35,7 +36,7 @@ final class ListCredentials
     /**
      * @return list<CredentialSummary>
      */
-    public function __invoke(?Subject $subject = null): array
+    public function __invoke(?Subject $subject = null, ?CredentialOwnership $ownership = null): array
     {
         $cadence = $this->declaredCadence();
         $unsupported = $this->declaredUnsupportedFields();
@@ -45,6 +46,12 @@ final class ListCredentials
         if ($subject !== null) {
             $query->where('subject_type', $subject->type->value)
                 ->where('subject_ref', $subject->ref);
+        }
+
+        if ($ownership !== null) {
+            $ownership === CredentialOwnership::Installation
+                ? $query->whereNull('user_id')
+                : $query->whereNotNull('user_id');
         }
 
         return $query

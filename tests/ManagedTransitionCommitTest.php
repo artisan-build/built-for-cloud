@@ -228,11 +228,15 @@ function p4dCompletedExit(): array
     DB::table('password_reset_tokens')->insert([
         'email' => $excluded->email, 'token' => hash('sha256', 'exit-reset'), 'created_at' => now(),
     ]);
-    Credential::factory()->create([
+    $exitDeploymentSecret = 'exit-deployment-secret';
+    $exitDeployment = Credential::factory()->create([
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'transition-installation',
         'name' => 'exit-deployment-survives',
+        'secret_hash' => hash('sha256', $exitDeploymentSecret),
     ]);
+    expect(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $exitDeploymentSecret)?->id)
+        ->toBe($exitDeployment->id);
     DB::table('bfc_managed_handoffs')->insert([
         'state_hash' => hash('sha256', 'exit-state'),
         'session_nonce_hash' => hash('sha256', 'exit-nonce'),
@@ -324,11 +328,15 @@ it('atomically applies every adoption disposition and invalidates local authorit
             $excludedCredential = $credential;
         }
     }
+    $deploymentSecret = 'adopt-deployment-secret';
     $deployment = Credential::factory()->create([
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'transition-installation',
         'name' => 'deployment-survives',
+        'secret_hash' => hash('sha256', $deploymentSecret),
     ]);
+    expect(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $deploymentSecret)?->id)
+        ->toBe($deployment->id);
     DB::table('bfc_managed_handoffs')->insert([
         'state_hash' => hash('sha256', 'state'),
         'session_nonce_hash' => hash('sha256', 'nonce'),
@@ -406,6 +414,7 @@ it('atomically applies every adoption disposition and invalidates local authorit
         ->and(DB::table('password_reset_tokens')->count())->toBe(0)
         ->and(Credential::query()->whereNotNull('user_id')->whereNull('revoked_at')->count())->toBe(0)
         ->and($deployment->refresh()->revoked_at)->toBeNull()
+        ->and(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $deploymentSecret)?->id)->toBe($deployment->id)
         ->and(DB::table('bfc_managed_handoffs')->whereNull('consumed_at')->count())->toBe(0)
         ->and(array_column($fixture->calls, 'leg'))->toBe(['T1', 'T2', 'T3', 'T4']);
 
@@ -691,6 +700,8 @@ it('establishes an accessible standalone Owner and applies every exit dispositio
         ->and(DB::table('password_reset_tokens')->count())->toBe(0)
         ->and(Credential::query()->whereNotNull('user_id')->whereNull('revoked_at')->count())->toBe(0)
         ->and(Credential::query()->where('name', 'exit-deployment-survives')->value('revoked_at'))->toBeNull()
+        ->and(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, 'exit-deployment-secret')?->id)
+        ->toBe(Credential::query()->where('name', 'exit-deployment-survives')->value('id'))
         ->and((array) $authorityFreshness)->toBe(array_fill_keys([
             'managed_connection_status',
             'managed_connection_generation',

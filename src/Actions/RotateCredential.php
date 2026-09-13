@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialOwnership;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
@@ -106,9 +107,16 @@ final class RotateCredential
      * Returns null when no row carries the id (the transports' 404); every
      * other failure is a typed refusal or the two-phase contract above.
      */
-    public function __invoke(string $id, RotateOptions $options, ?AuditActor $actor = null): ?RotationResult
+    public function __invoke(
+        string $id,
+        RotateOptions $options,
+        ?AuditActor $actor = null,
+        ?CredentialOwnership $ownership = null,
+    ): ?RotationResult
     {
-        $phaseOne = fn (): ?RotationResult => DB::transaction(fn (): ?RotationResult => $this->mintReplacement($id, $options, $actor));
+        $phaseOne = fn (): ?RotationResult => DB::transaction(
+            fn (): ?RotationResult => $this->mintReplacement($id, $options, $actor, $ownership),
+        );
 
         // The writer barrier (SEC-V3-08, check-through-commit): an
         // UNSTAMPED hmac source mints a fresh ciphertext, so its whole
@@ -183,12 +191,21 @@ final class RotateCredential
      * Phase 1, inside the caller's transaction: every refusal, the
      * replacement mint, the `rotated_at` stamp, and both audit events.
      */
-    private function mintReplacement(string $id, RotateOptions $options, ?AuditActor $actor): ?RotationResult
+    private function mintReplacement(
+        string $id,
+        RotateOptions $options,
+        ?AuditActor $actor,
+        ?CredentialOwnership $ownership,
+    ): ?RotationResult
     {
         /** @var Credential|null $source */
         $source = Credential::query()->whereKey($id)->lockForUpdate()->first();
 
         if ($source === null) {
+            return null;
+        }
+
+        if ($ownership !== null && $source->ownership() !== $ownership) {
             return null;
         }
 

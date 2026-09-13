@@ -37,6 +37,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleEnter;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\InstallationCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManagedAuthentication;
@@ -520,9 +521,20 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $personalCredentialRoutes[] = $router->delete('/bfc/me/credentials/{id}', [PersonalCredentials::class, 'destroy'])
             ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
 
+        $installationCredentialRoutes = [];
+        $installationCredentialRoutes[] = $router->get('/bfc/installation/credentials', [InstallationCredentials::class, 'index'])
+            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
+        $installationCredentialRoutes[] = $router->post('/bfc/installation/credentials', [InstallationCredentials::class, 'store'])
+            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
+        $installationCredentialRoutes[] = $router->post('/bfc/installation/credentials/{id}/rotate', [InstallationCredentials::class, 'rotate'])
+            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
+        $installationCredentialRoutes[] = $router->delete('/bfc/installation/credentials/{id}', [InstallationCredentials::class, 'destroy'])
+            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
+
         $packageMiddlewareRoutes = StandaloneRouteOwnership::packageMiddlewareInventory([
             ...$standaloneRoutes,
             ...$personalCredentialRoutes,
+            ...$installationCredentialRoutes,
         ]);
 
         $this->app->booted(function () use ($packageMiddlewareRoutes, $router, $standaloneRoutes): void {

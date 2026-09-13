@@ -244,6 +244,13 @@ final class Credential extends Model implements Authenticatable
         return new Subject($this->subject_type, $this->subject_ref);
     }
 
+    public function ownership(): CredentialOwnership
+    {
+        return $this->user_id === null
+            ? CredentialOwnership::Installation
+            : CredentialOwnership::Account;
+    }
+
     /**
      * Rows a presented secret may authenticate as: active status, not
      * revoked, not expired. Pending rows never authenticate.
