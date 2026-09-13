@@ -424,6 +424,76 @@ it('atomically applies every adoption disposition and invalidates local authorit
     $this->get(route('bfc.members.index', absolute: false))->assertNotFound();
 });
 
+it('refuses adoption with a distinct reason when an excluded standalone Owner would strand the installation slot', function (): void {
+    $roster = [[
+        'scalpels_id' => 'incoming-owner',
+        'membership_status' => 'active',
+        'role' => 'owner',
+        'display_name' => 'Incoming Owner',
+        'contact_email' => 'incoming-owner@example.test',
+        'contact_email_verified' => true,
+    ]];
+    [$owner] = p4dConfigure(ManagedTransitionDirection::Adopt, $roster);
+    $transition = p4dProposed($owner, ManagedTransitionDirection::Adopt, [
+        [
+            'scalpels_id' => 'incoming-owner', 'local_kind' => null, 'local_id' => null,
+            'role' => null, 'disposition' => 'defer_to_managed_jit', 'final_email' => null,
+        ],
+        [
+            'scalpels_id' => null, 'local_kind' => 'user', 'local_id' => (string) $owner->getKey(),
+            'role' => null, 'disposition' => 'exclude', 'final_email' => null,
+        ],
+    ]);
+    $refusal = null;
+
+    try {
+        app(ManagedTransitions::class)->complete($owner, $transition);
+    } catch (ManagedAuthRefused $exception) {
+        $refusal = $exception;
+    }
+
+    expect($refusal)->toBeInstanceOf(ManagedAuthRefused::class)
+        ->and($refusal?->getMessage())->toBe('managed_owner_slot_held_by_unbound_identity')
+        // The adopt-side condition runs before commit, so it exposes the
+        // problem without leaving the installation in the stranded state.
+        ->and(InstallationAuthority::current()->mode)->toBe(AuthorityMode::Standalone)
+        ->and($owner->refresh()->status)->toBe('active')
+        ->and($owner->owner_slot)->toBe('owner');
+});
+
+it('keeps the Owner slot installation-wide regardless of authority issuer or connection', function (): void {
+    $first = User::query()->create(['name' => 'First Owner', 'email' => 'first-owner@example.test']);
+    $first->forceFill([
+        'role' => 'owner',
+        'status' => 'active',
+        'scalpels_issuer' => 'https://first-issuer.example.test',
+        'scalpels_connection_id' => 'first-connection',
+        'scalpels_id' => 'first-owner',
+    ])->save();
+
+    $second = User::query()->create(['name' => 'Second Owner', 'email' => 'second-owner@example.test']);
+
+    expect(function () use ($second): void {
+        $second->forceFill([
+            'role' => 'owner',
+            'status' => 'active',
+            'scalpels_issuer' => 'https://second-issuer.example.test',
+            'scalpels_connection_id' => 'second-connection',
+            'scalpels_id' => 'second-owner',
+        ])->save();
+    })->toThrow(QueryException::class)
+        ->and(User::query()->whereNotNull('owner_slot')->count())->toBe(1);
+});
+
+it('uses the default database connection for both users and transition transactions', function (): void {
+    $user = new User;
+
+    expect($user->getConnectionName())->toBeNull()
+        ->and($user->getConnection()->getName())->toBe((string) config('database.default'))
+        ->and(DB::connection()->getName())->toBe($user->getConnection()->getName())
+        ->and(config('built-for-cloud.database.user_connection'))->toBeNull();
+});
+
 it('rejects an invalid exact-generation tuple before any protected effect', function (): void {
     $roster = [[
         'scalpels_id' => 'owner-subject', 'membership_status' => 'active', 'role' => 'owner',
