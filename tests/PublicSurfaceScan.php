@@ -6,6 +6,9 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ReflectionClass;
 use ReflectionMethod;
+use ReflectionNamedType;
+use ReflectionType;
+use ReflectionUnionType;
 
 /**
  * The second half of the minting guarantee: **no new PUBLIC METHOD may
@@ -79,5 +82,63 @@ final class PublicSurfaceScan
     public static function missingFrom(string $class, array $expected): array
     {
         return array_values(array_diff($expected, self::of($class)));
+    }
+
+    /** @return list<string> */
+    public static function declaredBy(string $class): array
+    {
+        $methods = array_map(
+            static fn (ReflectionMethod $method): string => $method->getName(),
+            array_filter(
+                (new ReflectionClass($class))->getMethods(ReflectionMethod::IS_PUBLIC),
+                static fn (ReflectionMethod $method): bool => $method->getDeclaringClass()->getName() === $class,
+            ),
+        );
+        sort($methods);
+
+        return array_values($methods);
+    }
+
+    /** @return list<string> */
+    public static function canonicalUserBindings(string $class): array
+    {
+        $bindings = [];
+
+        foreach ((new ReflectionClass($class))->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
+            if ($method->getDeclaringClass()->getName() !== $class) {
+                continue;
+            }
+
+            foreach ($method->getParameters() as $parameter) {
+                if (self::containsCanonicalUser($parameter->getType())) {
+                    $bindings[] = $class.'::'.$method->getName().'($'.$parameter->getName().')';
+                }
+            }
+
+            if (self::containsCanonicalUser($method->getReturnType())) {
+                $bindings[] = $class.'::'.$method->getName().'():return';
+            }
+        }
+
+        sort($bindings);
+
+        return $bindings;
+    }
+
+    private static function containsCanonicalUser(?ReflectionType $type): bool
+    {
+        if ($type instanceof ReflectionNamedType) {
+            return $type->getName() === 'ArtisanBuild\\BuiltForCloud\\User';
+        }
+
+        if ($type instanceof ReflectionUnionType) {
+            foreach ($type->getTypes() as $member) {
+                if (self::containsCanonicalUser($member)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 }
