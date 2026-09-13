@@ -347,7 +347,8 @@ it('does not accept an operator credential in place of a session on the personal
         ->getJson('/bfc/me/credentials')
         ->assertUnauthorized();
 
-    expect(Credential::query()->where('subject_type', '!=', SubjectType::Operator->value)->count())->toBe(0);
+    expect(Credential::query()->pluck('subject_ref')->all())->toBe(['personal-probe'])
+        ->and(Credential::query()->count())->toBe(1);
 
     // Sanity: an operator credential does work on the operator listing, so
     // the rejection above is about this surface and not a broken credential.

@@ -42,7 +42,7 @@ function hmacRotationAdminHeaders(): array
 
 function hmacRotationCredentialCount(): int
 {
-    return Credential::query()->where('subject_type', '!=', SubjectType::Operator->value)->count();
+    return Credential::query()->where('subject_ref', 'webhook-client')->count();
 }
 
 function hmacRotationSubject(string $ref = 'webhook-client'): Subject

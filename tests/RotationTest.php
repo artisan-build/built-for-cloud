@@ -48,7 +48,7 @@ function rotationAdminHeaders(): array
 
 function rotationCredentialCount(): int
 {
-    return Credential::query()->where('subject_type', '!=', SubjectType::Operator->value)->count();
+    return Credential::query()->where('subject_ref', 'acme')->count();
 }
 
 /**
@@ -992,7 +992,8 @@ it('refuses to rotate revoked, expired and pending rows with a 409 naming the st
 
     $this->postJson('/bfc/credentials/no-such-id/rotate', [], $headers)->assertNotFound();
 
-    expect(rotationCredentialCount())->toBe(3);
+    expect(Credential::query()->whereKey([$revoked->id, $expired->id, $pending->id])->count())->toBe(3)
+        ->and(Credential::query()->count())->toBe(4);
 });
 
 // ------------------------------------------------- failure path A (AC 7)
@@ -1054,7 +1055,7 @@ it('leaves the replacement standing when old-row retirement fails, names the lef
         ->and($response->json('delivery'))->toBeNull();
 
     $replacement = Credential::query()
-        ->where('subject_type', '!=', SubjectType::Operator->value)
+        ->where('subject_ref', $source->subject_ref)
         ->whereKeyNot($source->id)
         ->sole();
 
