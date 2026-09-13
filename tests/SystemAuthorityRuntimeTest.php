@@ -10,6 +10,7 @@ use ArtisanBuild\BuiltForCloud\SystemAuthorityContext;
 use ArtisanBuild\BuiltForCloud\SystemAuthoritySchedule;
 use ArtisanBuild\BuiltForCloud\Testing\SystemAuthorityInventory;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostRuntimeAuthQueuedJob;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueEventDispatchingGuard;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueFailThenLoginJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueLabelledMarkerJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RuntimeAuthorityQueuedJob;
@@ -331,20 +332,43 @@ it('pins every published system-authority boundary statement to the code it desc
     }
     expect(str_contains($readme, 'ShouldQueue') || str_contains($readme, 'queued jobs'))->toBeTrue();
 
-    // 3. The host boundary. The listener refuses on the EVENT, with no guard-type
-    //    gate before the throw, which is precisely why the bound depends on the
-    //    guard dispatching Laravel's events — so both documents must say so.
+    // 3. THE CLAIMS, asserted as whole sentences rather than as keywords.
+    //    A keyword pin is defeatable: rewriting the README sentence to invert its
+    //    meaning while keeping every keyword passed the earlier version of this test.
+    //    Each sentence below carries a claim, so inverting or narrowing one changes
+    //    the sentence and reds this. Both published surfaces must state each claim
+    //    IDENTICALLY, which is the other thing that had drifted: the two documents
+    //    previously scoped the bound differently.
+    $claims = [
+        'The bound covers any guard that dispatches `Authenticated` or `Login`, not only `SessionGuard`.',
+        "A queued entry's `failed()` method on the `sync` driver runs after the frame has closed.",
+        'A callback handed to `defer()` runs after the frame has closed.',
+        'A schedule `before` or `after` hook runs outside the wrapped callback.',
+        'A schedule registered directly on `Schedule` rather than through the package wrapper is never framed.',
+        "A queued closure dispatched by package code is never framed: a closure's declaring file does not survive serialisation, so its origin cannot be established once it reaches the queue.",
+        'In-process tampering switches the bound off: removing the listeners, replacing a guard\'s event dispatcher, or rebinding the system-authority context.',
+        'Each of those six carries an open `risk=security` debt row, so any future package change that reaches one is reviewed against it.',
+    ];
+
+    foreach ($claims as $claim) {
+        expect($readme)->toContain($claim)
+            ->and($limits)->toContain($claim);
+    }
+
+    // 4. The broadest claim above is not left as prose: narrowing the listener to
+    //    SessionGuard reds the executed control in this file, so the sentence and the
+    //    behaviour cannot disagree.
+    expect((string) file_get_contents(__FILE__))
+        ->toContain('RogueEventDispatchingGuard');
+
+    // 5. The listener must refuse on the EVENT, with no guard-type gate deciding it.
     $listener = (string) file_get_contents($root.'/src/Listeners/RefuseSystemAuthorityAuthentication.php');
     $beforeThrow = strstr($listener, 'throw SystemAuthorityViolation', true) ?: '';
 
-    // The only early return is the context-inactive check; there must be no
-    // guard-TYPE gate deciding whether to refuse.
     expect($beforeThrow)->not->toContain('instanceof RequestGuard')
-        ->and($beforeThrow)->toContain('context->active()')
-        ->and($readme)->toContain('RequestGuard', 'host configuration')
-        ->and($limits)->toContain('RequestGuard', 'host configuration');
+        ->and($beforeThrow)->toContain('context->active()');
 
-    // 4. The advisory demotion: the scanner must not be described as enforcement.
+    // 6. The advisory demotion: the scanner must not be described as enforcement.
     expect($limits)->toContain('advisory')
         ->and($limits)->toContain('does not carry the runtime authentication');
 });
@@ -393,4 +417,20 @@ it('leaves host queue entries unframed, by object identity rather than by name',
     }));
 
     expect(auth()->guard('web')->id())->toBe($user->getAuthIdentifier());
+});
+
+it('refuses a non-SessionGuard guard that dispatches the events, which is what the published bound says', function (): void {
+    // The limits document states the bound over "a guard that dispatches Authenticated
+    // or Login", not over SessionGuard. Every other control uses SessionGuard, so that
+    // wording rested on an inference. This executes it: narrowing the listener to
+    // SessionGuard reds this test.
+    $user = runtimeAuthorityUser('-rogue-guard');
+    $guard = new RogueEventDispatchingGuard(app('events'));
+
+    expect(fn () => app(SystemAuthorityContext::class)->run(static fn (): mixed => $guard->setUser($user)))
+        ->toThrow(SystemAuthorityViolation::class);
+
+    // Outside the frame the same guard is untouched.
+    $guard->setUser($user);
+    expect($guard->check())->toBeTrue();
 });

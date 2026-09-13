@@ -7,9 +7,6 @@ namespace ArtisanBuild\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Contracts\SystemAuthorityQueueEntry;
 use Closure;
 use Illuminate\Events\CallQueuedListener;
-use Illuminate\Queue\CallQueuedClosure;
-use ReflectionFunction;
-use Throwable;
 
 /**
  * Opens the system-authority frame around a package queue entry's ACTUAL
@@ -60,27 +57,13 @@ final readonly class SystemAuthorityBusFrame
                 && is_a($command->class, SystemAuthorityQueueEntry::class, true);
         }
 
-        // A queued closure has no class to mark, so package origin is established
-        // from where the closure was DECLARED.
-        if ($command instanceof CallQueuedClosure) {
-            return $this->declaredInThisPackage($command);
-        }
-
+        // A queued CLOSURE is deliberately NOT claimed. Origin would have to come
+        // from the closure's declaring file, and that does not survive the queue:
+        // after a serialise round-trip `ReflectionFunction::getFileName()` returns a
+        // synthetic `laravel-serializable-closure://` URI rather than a path, so a
+        // package closure is indistinguishable from a host one by the time this pipe
+        // sees it. Queued closures are disclosed as outside the bound instead of
+        // guessed at, and the package dispatches none.
         return false;
-    }
-
-    private function declaredInThisPackage(CallQueuedClosure $command): bool
-    {
-        try {
-            $closure = $command->closure->getClosure();
-            $file = (new ReflectionFunction($closure))->getFileName();
-        } catch (Throwable) {
-            // Origin could not be established. A package entry that cannot be
-            // identified is treated AS a package entry: this bound fails closed,
-            // the way the schedule inventory reports what it cannot attribute.
-            return true;
-        }
-
-        return is_string($file) && str_starts_with($file, __DIR__.DIRECTORY_SEPARATOR);
     }
 }

@@ -24,7 +24,19 @@ The bus pipe is APPENDED to the dispatcher's existing pipes rather than replacin
 removes the invocation frame. The queue-event frame still applies in that case. This is the same exposure
 any package has with that API.
 
-The runtime authentication bound depends on the guard dispatching Laravel's authentication events.
+The bound covers any guard that dispatches `Authenticated` or `Login`, not only `SessionGuard`.
+
+Six shapes are outside the bound, and package code must not use them to authenticate a human:
+
+- A queued entry's `failed()` method on the `sync` driver runs after the frame has closed.
+- A callback handed to `defer()` runs after the frame has closed.
+- A schedule `before` or `after` hook runs outside the wrapped callback.
+- A schedule registered directly on `Schedule` rather than through the package wrapper is never framed.
+- A queued closure dispatched by package code is never framed: a closure's declaring file does not survive serialisation, so its origin cannot be established once it reaches the queue.
+- In-process tampering switches the bound off: removing the listeners, replacing a guard's event dispatcher, or rebinding the system-authority context.
+
+Each of those six carries an open `risk=security` debt row, so any future package change that reaches one is reviewed against it.
+
 `RequestGuard`, a custom host guard that dispatches neither event, and host code outside the package's
 derived command, queue, and schedule inventories are host configuration rather than package entries.
 
