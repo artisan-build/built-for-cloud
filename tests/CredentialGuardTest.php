@@ -6,7 +6,6 @@ use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
-use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\Auth;
@@ -103,18 +102,6 @@ it('does not distinguish a revoked credential from an unknown one', function ():
 
     expect($revokedResponse->getStatusCode())->toBe($unknownResponse->getStatusCode())
         ->and($revokedResponse->getContent())->toBe($unknownResponse->getContent());
-});
-
-it('denies the fallback token on the bfc guard and resolves no credential', function (): void {
-    config(['built-for-cloud.fallback_token' => 'the-fallback-secret']);
-
-    $this->getJson('/bfc-guarded', ['Authorization' => 'Bearer the-fallback-secret'])
-        ->assertUnauthorized();
-
-    expect(Credential::query()->whereNotNull('last_used_at')->count())->toBe(0);
-
-    // The legacy registry keeps its fallback behaviour for legacy consumers.
-    expect((new TokenRegistry)->resolve('the-fallback-secret'))->toBe(TokenRegistry::FALLBACK);
 });
 
 it('resolves the bound user as the principal for a user-bound credential', function (): void {

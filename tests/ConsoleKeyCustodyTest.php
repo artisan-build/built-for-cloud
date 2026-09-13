@@ -3,7 +3,6 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Actions\FileConsoleKey;
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\BurnMode;
 use ArtisanBuild\BuiltForCloud\Commands\ConsoleReKeyCommand;
@@ -65,7 +64,7 @@ uses(RefreshDatabase::class, WithCredentials::class);
  *  3. **Make-before-break.** A re-key activates a new key and retires
  *     nothing; retirement is a separate, later act, and it sticks.
  *  4. **Atomic.** A refused delivery leaves nothing behind — no row, no
- *     burn, no owner token.
+ *     burn, no owner credential.
  */
 beforeEach(function (): void {
     config([
@@ -140,13 +139,7 @@ function keyCustodyClaimedDeployment(): string
  */
 function keyCustodyOnboardingCode(string $email = 'console@example.test', bool $keyAuthority = false): string
 {
-    $plaintext = 'admin-'.bin2hex(random_bytes(16));
-
-    ApiToken::query()->create([
-        'name' => 'console-issuer-'.bin2hex(random_bytes(4)),
-        'token_hash' => hash('sha256', $plaintext),
-        'abilities' => [Scope::Admin->value],
-    ]);
+    $plaintext = auditOperatorCredential('console-issuer-'.bin2hex(random_bytes(4)));
 
     $response = test()->postJson('/bfc/onboarding/issue', [
         'email' => $email,
@@ -336,8 +329,7 @@ it('leaves both claim envelopes and the issue verb byte-identical when no key is
     // the unified credential linked behind the wire-compatible key.
     $ownership = Ownership::current();
 
-    expect($ownership?->owner_credential_id)->not->toBeNull()
-        ->and($ownership?->owner_token_id)->toBeNull();
+    expect($ownership?->owner_credential_id)->not->toBeNull();
 
     // The onboarding exchange: likewise exactly two keys.
     $exchange = $this->postJson('/bfc/onboarding/exchange', [
@@ -355,13 +347,7 @@ it('leaves both claim envelopes and the issue verb byte-identical when no key is
 });
 
 it('leaves the issue response unchanged unless key-custody authority was granted (AC2)', function (): void {
-    $plaintext = 'admin-'.bin2hex(random_bytes(16));
-
-    ApiToken::query()->create([
-        'name' => 'issuer',
-        'token_hash' => hash('sha256', $plaintext),
-        'abilities' => [Scope::Admin->value],
-    ]);
+    $plaintext = auditOperatorCredential('issuer');
 
     $plain = $this->postJson('/bfc/onboarding/issue', [
         'email' => 'a@b.test',
@@ -431,7 +417,6 @@ it('refuses a console key delivered on a code with no key-custody authority (AC1
     // and before the mint, so an unauthorized attempt costs nothing.
     expect(ConsoleKey::query()->count())->toBe(0)
         ->and($row->consumed_at)->toBeNull()
-        ->and($row->durable_token_id)->toBeNull()
         ->and($row->durable_credential_id)->toBeNull()
         ->and($row->console_key_filed_at)->toBeNull()
         ->and(Credential::query()->count())->toBe($credentialCount);
@@ -490,7 +475,7 @@ it('spends key-custody authority on the first key and refuses a second (AC13)', 
 
 it('cannot be granted key-custody authority through mass assignment (AC13)', function (): void {
     // The flag is not fillable, so nothing a request body reaches can
-    // set it — the same discipline api_tokens.rotated_at uses.
+    // set it — the same discipline credential rotation provenance uses.
     $token = OnboardingToken::query()->create([
         'email' => 'forged@example.test',
         'scope' => Scope::Consume->value,
@@ -575,7 +560,6 @@ it('refuses a half-filled console_key object rather than reading it as absence (
     }
 
     expect(ConsoleKey::query()->count())->toBe(0)
-        ->and(Ownership::current()?->owner_token_id)->toBeNull()
         ->and(Ownership::current()?->owner_credential_id)->toBeNull();
 });
 
@@ -595,10 +579,11 @@ it('rolls the ownership claim back when the delivered key id is already on file 
     $ownerCredentialBefore = $owner?->owner_credential_id;
 
     $release = $this->postJson('/bfc/ownership/release', [], [
-        'Authorization' => 'Bearer '.keyCustodyAdminToken(),
+        'Authorization' => 'Bearer '.keyCustodyOperatorCredential(),
     ]);
 
     $release->assertCreated();
+    $credentialCount = Credential::query()->count();
 
     $successorCode = (string) $release->json('ownership_claim_code');
 
@@ -613,8 +598,7 @@ it('rolls the ownership claim back when the delivered key id is already on file 
     // successor's single-use code is unconsumed and still presentable,
     // and no second keyring row exists.
     expect(Ownership::current()?->owner_credential_id)->toBe($ownerCredentialBefore)
-        ->and(Ownership::current()?->owner_token_id)->toBeNull()
-        ->and(Credential::query()->count())->toBe(1)
+        ->and(Credential::query()->count())->toBe($credentialCount)
         ->and(OwnershipClaim::query()->whereNull('consumed_at')->count())->toBe(1)
         ->and(ConsoleKey::query()->count())->toBe(1);
 
@@ -652,11 +636,10 @@ it('rolls an at-exchange onboarding exchange back when the key id is already on 
     $row = OnboardingToken::query()->where('token_hash', OnboardingToken::hashToken($code))->sole();
 
     expect($row->consumed_at)->toBeNull()
-        ->and($row->durable_token_id)->toBeNull()
+        ->and($row->durable_credential_id)->toBeNull()
         ->and($row->console_key_filed_at)->toBeNull()
         ->and(ConsoleKey::query()->count())->toBe(1)
         // No durable survived the rollback either.
-        ->and(ApiToken::query()->where('name', 'rollback@example.test')->count())->toBe(0)
         ->and(Credential::query()->where('name', 'rollback@example.test')->count())->toBe(0);
 
     $denied = CredentialAuditEvent::query()
@@ -675,22 +658,11 @@ it('rolls an at-exchange onboarding exchange back when the key id is already on 
 });
 
 /**
- * A legacy admin `api_tokens` row's plaintext. The ownership RELEASE
- * verb wants an admin token and does not care which one, so this mints
- * a fresh one rather than pretending to have kept the owner token's
- * single reveal.
+ * A fresh operator credential for the ownership release route.
  */
-function keyCustodyAdminToken(): string
+function keyCustodyOperatorCredential(): string
 {
-    $plaintext = 'admin-'.bin2hex(random_bytes(16));
-
-    ApiToken::query()->create([
-        'name' => 'admin-'.bin2hex(random_bytes(4)),
-        'token_hash' => hash('sha256', $plaintext),
-        'abilities' => [Scope::Admin->value],
-    ]);
-
-    return $plaintext;
+    return auditOperatorCredential('ownership-release-'.bin2hex(random_bytes(4)));
 }
 
 // ----------------------------------------- AC4 — re-key, make-before-break
@@ -740,7 +712,6 @@ it('re-keys an already-claimed deployment without re-onboarding and without reti
     // credential id — compared against a value asserted non-null above, so
     // this cannot pass by both sides being null.
     expect(Ownership::current()?->owner_credential_id)->toBe($ownerCredentialBefore)
-        ->and(Ownership::current()?->owner_token_id)->toBeNull()
         ->and(Ownership::query()->count())->toBe(1)
         // No fresh onboarding code was minted or consumed to do it.
         ->and(OnboardingToken::query()->count())->toBe(0);
@@ -869,20 +840,7 @@ it('gates the re-key verb on its own console:key:write ability (AC14)', function
         'Authorization' => $breakGlass->bearerHeader(),
     ])->assertCreated();
 
-    // …and a legacy admin token, as on every operator surface.
-    $adminPlaintext = 'legacy-admin-'.bin2hex(random_bytes(16));
-
-    ApiToken::query()->create([
-        'name' => 'legacy-admin',
-        'token_hash' => hash('sha256', $adminPlaintext),
-        'abilities' => [Scope::Admin->value],
-    ]);
-
-    $this->postJson('/bfc/console/re-key', ['key_id' => 'legacy', 'public_key' => keyCustodyPublicKey()], [
-        'Authorization' => 'Bearer '.$adminPlaintext,
-    ])->assertCreated();
-
-    expect(ConsoleKey::query()->count())->toBe(3);
+    expect(ConsoleKey::query()->count())->toBe(2);
 });
 
 it('answers every pre-authorization failure with one identical refusal (AC6, AC17)', function (): void {
@@ -943,8 +901,7 @@ it('refuses to key a deployment nobody owns (AC18)', function (): void {
     // alone never proved "already claimed".
     $writer = keyCustodyWriter();
 
-    expect(Ownership::current()?->owner_token_id)->toBeNull()
-        ->and(Ownership::current()?->owner_credential_id)->toBeNull();
+    expect(Ownership::current()?->owner_credential_id)->toBeNull();
 
     $refusal = $this->postJson('/bfc/console/re-key', [
         'key_id' => 'k1',
@@ -1366,15 +1323,13 @@ it('never reveals key material back out of any delivery surface (AC11, A7)', fun
     expect($properties)->toBe(['keyId', 'activatedAt', 'activeKeyIds']);
 });
 
-// ------------------- the legacy-admin boundary, decided rather than drifted
+// ---------------- the owner-credential boundary, decided rather than drifted
 
-it('lets the deployment OWNER re-key with the token its own claim minted (AC14)', function (): void {
-    // This is the case that decides whether legacy admin `api_tokens`
-    // rows should be excluded from `console:key:write`. They should not:
-    // the owner token IS such a row, minted by the current, entirely
-    // undeprecated ownership claim, and its holder is the party a
-    // console key names. Excluding it would lock the deployment owner
-    // out of keying their own deployment.
+it('lets the deployment OWNER re-key with the credential its own claim minted (AC14)', function (): void {
+    // The ownership claim mints a unified operator credential carrying
+    // `credential:admin`, and its holder is the party a console key names.
+    // Excluding that credential from `console:key:write` would lock the
+    // deployment owner out of keying their own deployment.
     $ownerToken = keyCustodyClaimedDeployment();
 
     $this->postJson('/bfc/console/re-key', [
@@ -1384,9 +1339,9 @@ it('lets the deployment OWNER re-key with the token its own claim minted (AC14)'
 
     expect(ConsoleKey::query()->sole()->key_id)->toBe('owner-filed');
 
-    // And the exclusion would be no boundary anyway: an admin
-    // `api_tokens` row can mint itself an operator credential carrying
-    // the ability, in one request, with no further authority.
+    // And the exclusion would be no boundary anyway: the owner credential
+    // can mint itself an operator credential carrying the ability in one
+    // request, with no further authority.
     $minted = $this->postJson('/bfc/credentials', [
         'subject_type' => 'operator',
         'subject_ref' => 'self-granted',

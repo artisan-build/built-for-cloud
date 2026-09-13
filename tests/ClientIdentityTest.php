@@ -21,11 +21,9 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
-use Orchestra\Testbench\Attributes\WithConfig;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 
-#[WithConfig('built-for-cloud.credential_api.enabled', true, false)]
 final class ClientIdentityTest extends TestCase
 {
     use RefreshDatabase;
@@ -292,6 +290,15 @@ final class ClientIdentityTest extends TestCase
     // reproduces that at the driver level without a test double.
     public function test_a_failing_client_identity_write_does_not_break_the_request(): void
     {
+        // Time is frozen because the expectation below is built from a REAL response
+        // and compared with assertExactJson against a second one. Both carry `*_at`
+        // timestamps, so an unfrozen clock rolling over a second between the two
+        // requests fails the assertion for a reason that has nothing to do with the
+        // behaviour under test. Observed twice: round 6 recorded it as an
+        // unexplained ClientIdentityTest flake, and it reappeared on P5c's
+        // lowest-deps lane as 02:03:57 vs 02:03:58.
+        $this->freezeTime();
+
         $headers = $this->adminHeaders();
 
         $expected = $this->getJson('/bfc/credentials', $headers)->assertOk()->json();

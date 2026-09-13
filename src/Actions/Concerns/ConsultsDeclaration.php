@@ -12,7 +12,6 @@ use ArtisanBuild\BuiltForCloud\Contracts\DeclaresUnsupportedSummaryFields;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
 use ArtisanBuild\BuiltForCloud\Subject;
 use Carbon\CarbonInterface;
 use Illuminate\Http\Request;
@@ -21,8 +20,7 @@ use Illuminate\Http\Request;
  * How an action class consults the app's declaration. The declaration is
  * resolved per call, never via the constructor — actions are the shared
  * core of BOTH transports, and a long-lived worker (or a test rebinding
- * the declaration) must always see the current binding (the same stance as
- * {@see ManageTokens}).
+ * the declaration) must always see the current binding.
  */
 trait ConsultsDeclaration
 {

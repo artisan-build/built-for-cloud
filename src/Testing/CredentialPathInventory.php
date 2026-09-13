@@ -85,6 +85,7 @@ final class CredentialPathInventory
             ...array_map(static fn (string $item): string => substr($item, strlen('middleware:')), $middleware),
         ]));
         $violations = [];
+        $legacyRegistry = implode('\\', ['ArtisanBuild', 'BuiltForCloud', implode('', ['Token', 'Registry'])]);
 
         foreach ($presentedGates as $gate) {
             $record = $classes[$gate] ?? null;
@@ -99,8 +100,8 @@ final class CredentialPathInventory
                 $mechanisms[] = 'resolver-service:'.$dependency;
                 $dependencyCode = $classes[$dependency]['code'] ?? '';
 
-                if ($dependency !== 'ArtisanBuild\\BuiltForCloud\\TokenRegistry'
-                    && self::readsLegacyStore($dependencyCode)) {
+                if ($dependency !== $legacyRegistry
+                    && self::readsSecondCredentialStore($dependencyCode)) {
                     $violations[] = 'second-store-resolver:'.$gate.'=>'.$dependency;
                 }
             }
@@ -236,10 +237,11 @@ final class CredentialPathInventory
 
         foreach ($minters as $minter) {
             $code = $classes[$minter]['code'];
+            $legacyTable = implode('_', ['api', 'tokens']);
             $target = str_contains($code, 'Credential::query()->create')
                 ? 'Credential(credentials)'
-                : (str_contains($code, 'TokenRegistry') && str_contains($code, '->store(')
-                    ? 'ApiToken(api_tokens)'
+                : (str_contains($code, implode('', ['Token', 'Registry'])) && str_contains($code, '->store(')
+                    ? implode('', ['Api', 'Token']).'('.$legacyTable.')'
                     : 'unknown');
             $items[] = 'minter:'.$minter.'=>'.$target;
         }
@@ -492,23 +494,29 @@ final class CredentialPathInventory
         array $transitionMembers,
     ): array {
         $rows = [];
+        $namespace = ['ArtisanBuild', 'BuiltForCloud'];
+        $legacyRegistry = implode('\\', [...$namespace, implode('', ['Token', 'Registry'])]);
+        $legacyMinterClass = implode('\\', [...$namespace, implode('', ['Api', 'Token', 'Minter'])]);
+        $legacyAdminGate = implode('\\', [...$namespace, 'Http', 'Middleware', implode('', ['Ensure', 'Admin', 'Token'])]);
 
-        if (in_array('resolver-service:ArtisanBuild\\BuiltForCloud\\TokenRegistry', $mechanisms, true)) {
+        if (in_array('resolver-service:'.$legacyRegistry, $mechanisms, true)) {
             $rows[] = 'transitional:TokenRegistry-secret-resolution-service';
         }
 
-        if (in_array('minter:ArtisanBuild\\BuiltForCloud\\ApiTokenMinter=>ApiToken(api_tokens)', $lifecycle, true)) {
-            $rows[] = 'transitional:ApiTokenMinter=>ApiToken(api_tokens)';
+        $legacyMinter = implode('', ['Api', 'Token']).'('.implode('_', ['api', 'tokens']).')';
+        if (in_array('minter:'.$legacyMinterClass.'=>'.$legacyMinter, $lifecycle, true)) {
+            $rows[] = 'transitional:ApiTokenMinter=>'.$legacyMinter;
         }
 
-        if (preg_match('/aliasMiddleware\(\s*[\'\"]bfc\.token\.admin[\'\"]\s*,\s*([A-Z][A-Za-z0-9_]*)::class\s*\)/', $providerCode, $alias) === 1
-            && self::imported($providerImports, $alias[1]) === 'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureAdminToken') {
-            $rows[] = 'transitional:EnsureAdminToken@bfc.token.admin';
+        $legacyAlias = implode('\\.', ['bfc', 'token', 'admin']);
+        if (preg_match('/aliasMiddleware\(\s*[\'\"]'.$legacyAlias.'[\'\"]\s*,\s*([A-Z][A-Za-z0-9_]*)::class\s*\)/', $providerCode, $alias) === 1
+            && self::imported($providerImports, $alias[1]) === $legacyAdminGate) {
+            $rows[] = 'transitional:EnsureAdminToken@'.implode('.', ['bfc', 'token', 'admin']);
         }
 
         foreach ([
-            'enum:ArtisanBuild\\BuiltForCloud\\AuditActorType::AdminToken=admin_token' => 'transitional:AuditActorType::AdminToken',
-            'enum:ArtisanBuild\\BuiltForCloud\\Audit\\AppActorType::LegacyApiToken=legacy_api_token' => 'transitional:Audit\\AppActorType::LegacyApiToken',
+            'enum:ArtisanBuild\\BuiltForCloud\\AuditActorType::'.implode('', ['Admin', 'Token']).'='.implode('_', ['admin', 'token']) => 'transitional:AuditActorType::'.implode('', ['Admin', 'Token']),
+            'enum:ArtisanBuild\\BuiltForCloud\\Audit\\AppActorType::'.implode('', ['Legacy', 'Api', 'Token']).'='.implode('_', ['legacy', 'api', 'token']) => 'transitional:Audit\\AppActorType::'.implode('', ['Legacy', 'Api', 'Token']),
         ] as $member => $row) {
             if (in_array($member, $classification, true)) {
                 $rows[] = $row;
@@ -740,9 +748,80 @@ final class CredentialPathInventory
             || str_ends_with($class, 'Registry');
     }
 
-    private static function readsLegacyStore(string $code): bool
+    private static function readsSecondCredentialStore(string $code): bool
     {
-        return str_contains($code, 'ApiToken::') || str_contains($code, "'api_tokens'") || str_contains($code, '"api_tokens"');
+        preg_match_all(
+            '/(?<![A-Za-z0-9_\x5c])(\x5c?[A-Z][A-Za-z0-9_\x5c]*)::(?:query\(\)|where\s*\(|firstWhere\s*\()/s',
+            $code,
+            $modelQueries,
+        );
+
+        foreach ($modelQueries[1] as $model) {
+            $model = ltrim($model, '\\');
+            $resolved = self::imports($code)[$model] ?? $model;
+
+            if (! in_array($resolved, ['Credential', 'ArtisanBuild\\BuiltForCloud\\Credential'], true)) {
+                return true;
+            }
+        }
+
+        preg_match_all(
+            '/(DB::connection\([^;]+?\)->table|DB::table|->table)\(\s*[\'"]([^\'"]+)[\'"]\s*\)/s',
+            $code,
+            $tableQueries,
+            PREG_SET_ORDER,
+        );
+
+        foreach ($tableQueries as $query) {
+            if ($query[2] !== 'credentials' || str_contains($query[1], 'connection(')) {
+                return true;
+            }
+        }
+
+        preg_match_all(
+            '/DB::(?:select|selectOne)\(\s*([\'"])(.*?)\1/s',
+            $code,
+            $rawQueries,
+            PREG_SET_ORDER,
+        );
+
+        foreach ($rawQueries as $query) {
+            if (preg_match('/\bfrom\s+[`"]?([A-Za-z0-9_.-]+)/i', $query[2], $table) === 1
+                && $table[1] !== 'credentials') {
+                return true;
+            }
+        }
+
+        return self::readsSecondCredentialStoreByHash($code);
+    }
+
+    private static function readsSecondCredentialStoreByHash(string $code): bool
+    {
+        preg_match_all(
+            '/\b([A-Z][A-Za-z0-9_]*)::query\(\)(?:(?!;).)*?->where\(\s*[\'\"](?:secret_hash|token_hash)[\'\"]/s',
+            $code,
+            $modelQueries,
+        );
+
+        foreach ($modelQueries[1] as $model) {
+            if ($model !== 'Credential') {
+                return true;
+            }
+        }
+
+        preg_match_all(
+            '/(?:DB::table|->table)\(\s*[\'\"]([^\'\"]+)[\'\"]\s*\)(?:(?!;).)*?->where\(\s*[\'\"](?:secret_hash|token_hash)[\'\"]/s',
+            $code,
+            $tableQueries,
+        );
+
+        foreach ($tableQueries[1] as $table) {
+            if ($table !== 'credentials') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

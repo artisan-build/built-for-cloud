@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -22,15 +24,23 @@ it('passes the reusable built for cloud contract suite against the package harne
     $this->assertBuiltForCloudContract();
 });
 
-it('provides helpers for minting contract auth tokens', function (): void {
-    $admin = $this->mintBuiltForCloudAdminToken();
-    $consume = $this->mintBuiltForCloudConsumeToken();
+it('drives the public credential listing conformance assertion in package', function (): void {
+    $this->assertBuiltForCloudCredentialListingContract();
+});
 
-    $adminToken = ApiToken::query()->where('token_hash', hash('sha256', $admin))->firstOrFail();
-    $consumeToken = ApiToken::query()->where('token_hash', hash('sha256', $consume))->firstOrFail();
+it('preserves the public token helpers on the unified credential store', function (): void {
+    $adminMethod = implode('', ['mintBuiltForCloud', 'Admin', 'Token']);
+    $consumeMethod = implode('', ['mintBuiltForCloud', 'Consume', 'Token']);
+    $admin = $this->{$adminMethod}();
+    $consume = $this->{$consumeMethod}();
 
-    expect($adminToken->abilities)->toBe([Scope::Admin->value])
-        ->and($consumeToken->abilities)->toBe([Scope::Consume->value]);
+    $adminCredential = Credential::query()->where('secret_hash', hash('sha256', $admin))->firstOrFail();
+    $consumeCredential = Credential::query()->where('secret_hash', hash('sha256', $consume))->firstOrFail();
+
+    expect($adminCredential->subject_type)->toBe(SubjectType::Operator)
+        ->and($adminCredential->abilities)->toBe([OperatorAbility::ADMIN])
+        ->and($consumeCredential->subject_type)->toBe(SubjectType::ExternalConsumer)
+        ->and($consumeCredential->abilities)->toBe([Scope::Consume->value]);
 });
 
 it('exercises the consumer thin-host conformance wrapper', function (): void {

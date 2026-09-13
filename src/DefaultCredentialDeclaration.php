@@ -16,8 +16,8 @@ use Illuminate\Http\Request;
  * derivation, authorization defers entirely to the credential's own
  * lifecycle and abilities (which the guard and middleware already enforce),
  * every verb defers to the gates the same way, claim codes burn on first
- * use — the `api_tokens` provider's mode — holder notifications resolve to
- * NOBODY, and no presentation cadence is declared.
+ * use, holder notifications resolve to NOBODY, and no presentation cadence
+ * is declared.
  */
 final class DefaultCredentialDeclaration implements AuthorizesCredentialVerbs, CredentialDeclaration, DeclaresBurnMode, DeclaresHolderResolution, DeclaresPresentationCadence
 {

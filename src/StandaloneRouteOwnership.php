@@ -12,8 +12,6 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
@@ -66,11 +64,6 @@ final class StandaloneRouteOwnership
             ManageOwnership::class.'@release',
             ManageOwnership::class.'@cancelTransfer' => EnsureCredentialAdmin::class.':'.OperatorAbility::OwnershipRelease->value,
             ManageOnboarding::class.'@issue' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialMint->value,
-            ManageTokens::class.'@index',
-            ManageTokens::class.'@store',
-            ManageTokens::class.'@destroy',
-            ManageTokens::class.'@destroyById',
-            ManageTokens::class.'@rotateById' => EnsureAdminToken::class,
             ClientObservations::class => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRead->value,
             ManageCredentials::class.'@index' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRead->value,
             ManageCredentials::class.'@store' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialMint->value,

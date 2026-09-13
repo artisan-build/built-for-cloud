@@ -94,10 +94,8 @@ it('persists an ownership claim as one linked unified owner credential in fresh 
             ->and($inspect['ownership_count'])->toBe(1)
             ->and($inspect['claim_id'])->toBe($claimId)
             ->and($inspect['claim_consumed'])->toBeTrue()
-            ->and($inspect['owner_token_id'])->toBeNull()
             ->and($inspect['owner_credential_id'])->toBe($inspect['credential']['id'])
             ->and($inspect['credential_count'])->toBe(1)
-            ->and($inspect['api_token_count'])->toBe(0)
             ->and($inspect['credential']['kind'])->toBe('bearer')
             ->and($inspect['credential']['subject_type'])->toBe(SubjectType::Operator->value)
             ->and($inspect['credential']['subject_ref'])->toBe('owner')
@@ -119,7 +117,6 @@ it('remints ownership into a new unified row and revokes every prior owner row i
     $ownershipId = '12000000-0000-4000-8000-000000000001';
     $oldId = '12000000-0000-4000-8000-000000000002';
     $otherId = '12000000-0000-4000-8000-000000000003';
-    $legacyId = '12000000-0000-4000-8000-000000000004';
     $newHash = bin2hex(random_bytes(32));
     $webhookSecret = hash('sha256', 'p5b-webhook-state');
 
@@ -129,15 +126,9 @@ it('remints ownership into a new unified row and revokes every prior owner row i
             'webhook_secret' => $webhookSecret,
             'old_owner' => p5bFreshCredential($oldId, bin2hex(random_bytes(32)), SubjectType::Operator->value, 'owner', [EnsureCredentialAdmin::ABILITY]),
             'other_owner' => p5bFreshCredential($otherId, bin2hex(random_bytes(32)), SubjectType::Operator->value, 'owner', [EnsureCredentialAdmin::ABILITY]),
-            'legacy_owner' => [
-                'id' => $legacyId,
-                'name' => 'owner',
-                'token_hash' => bin2hex(random_bytes(32)),
-                'abilities' => [Scope::Admin->value],
-            ],
         ]);
         $command = p5bFreshRun('ownership-remint', 'command', $database, ['new_hash' => $newHash]);
-        $inspect = p5bFreshRun('ownership-remint', 'inspect', $database, ['legacy_id' => $legacyId]);
+        $inspect = p5bFreshRun('ownership-remint', 'inspect', $database);
 
         $old = p5bFreshById($inspect['credentials'], $oldId);
         $other = p5bFreshById($inspect['credentials'], $otherId);
@@ -147,7 +138,6 @@ it('remints ownership into a new unified row and revokes every prior owner row i
         expect($command['exit'])->toBe(0)
             ->and($inspect['ownership_count'])->toBe(1)
             ->and($inspect['ownership_id'])->toBe($ownershipId)
-            ->and($inspect['owner_token_id'])->toBeNull()
             ->and($inspect['owner_credential_id'])->not->toBeIn([$oldId, $otherId])
             ->and($inspect['webhook_secret'])->toBe($webhookSecret)
             ->and($inspect['credentials'])->toHaveCount(3)
@@ -157,10 +147,7 @@ it('remints ownership into a new unified row and revokes every prior owner row i
             ->and($new['subject_type'])->toBe(SubjectType::Operator->value)
             ->and($new['subject_ref'])->toBe('owner')
             ->and($new['abilities'])->toBe([EnsureCredentialAdmin::ABILITY])
-            ->and($new['secret_hash'])->toBe($newHash)
-            ->and($inspect['legacy']['id'])->toBe($legacyId)
-            ->and($inspect['legacy']['revoked_at'])->not->toBeNull()
-            ->and($inspect['legacy']['expires_at'])->not->toBeNull();
+            ->and($new['secret_hash'])->toBe($newHash);
     } finally {
         @unlink($database);
     }
@@ -176,13 +163,11 @@ it('admits only the exact dashboard metadata credential and persists its read au
         'exact' => '13000000-0000-4000-8000-000000000001',
         'non_operator' => '13000000-0000-4000-8000-000000000002',
         'superset' => '13000000-0000-4000-8000-000000000003',
-        'legacy' => '13000000-0000-4000-8000-000000000004',
     ];
     $secrets = [
         'exact' => p5bFreshSecret('p5b-dashboard-exact-'),
         'non_operator' => p5bFreshSecret('p5b-dashboard-non-operator-'),
         'superset' => p5bFreshSecret('p5b-dashboard-superset-'),
-        'legacy' => p5bFreshSecret('p5b-dashboard-legacy-'),
     ];
 
     try {
@@ -192,28 +177,21 @@ it('admits only the exact dashboard metadata credential and persists its read au
                 p5bFreshCredential($ids['non_operator'], hash('sha256', $secrets['non_operator']), SubjectType::Application->value, 'dashboard-application', [OperatorAbility::MetadataRead->value]),
                 p5bFreshCredential($ids['superset'], hash('sha256', $secrets['superset']), SubjectType::Operator->value, 'dashboard-superset', [OperatorAbility::MetadataRead->value, EnsureCredentialAdmin::ABILITY]),
             ],
-            'legacy' => [
-                'id' => $ids['legacy'],
-                'name' => 'legacy-dashboard',
-                'token_hash' => hash('sha256', $secrets['legacy']),
-                'abilities' => [Scope::Admin->value],
-            ],
         ]);
         $request = p5bFreshRun('dashboard', 'request', $database, ['bearers' => $secrets]);
-        $inspect = p5bFreshRun('dashboard', 'inspect', $database, ['legacy_id' => $ids['legacy']]);
+        $inspect = p5bFreshRun('dashboard', 'inspect', $database);
 
         $sensitive = array_values(array_filter($inspect['audit'], static fn (array $event): bool => $event['event'] === LifecycleEventType::SensitiveRead->value));
         $denied = array_values(array_filter($inspect['audit'], static fn (array $event): bool => $event['event'] === LifecycleEventType::DeniedAction->value));
 
         p5bFreshAssertBoundary([$setup, $request, $inspect], ['setup', 'request', 'inspect']);
-        expect($request['statuses'])->toBe(['exact' => 200, 'non_operator' => 403, 'superset' => 403, 'legacy' => 401])
+        expect($request['statuses'])->toBe(['exact' => 200, 'non_operator' => 403, 'superset' => 403])
             ->and(p5bFreshById($inspect['credentials'], $ids['exact'])['last_used'])->toBeTrue()
             ->and($sensitive)->toHaveCount(1)
             ->and($sensitive[0]['credential_id'])->toBe($ids['exact'])
             ->and($sensitive[0]['actor_type'])->toBe(AuditActorType::OperatorIntegration->value)
             ->and($sensitive[0]['actor_ref'])->toBe($ids['exact'])
-            ->and(array_column($denied, 'credential_id'))->toEqualCanonicalizing([$ids['non_operator'], $ids['superset']])
-            ->and($inspect['legacy_request_count'])->toBe(0);
+            ->and(array_column($denied, 'credential_id'))->toEqualCanonicalizing([$ids['non_operator'], $ids['superset']]);
     } finally {
         @unlink($database);
     }
@@ -285,27 +263,18 @@ it('offboards the subject and differently subjected same-user credentials while 
  * only; not PostgreSQL FK behavior, real socket transport, array-mail
  * delivery, or a live rung.
  */
-it('warns for the selected unified expiry while ignoring an eligible legacy row in fresh processes', function (): void {
+it('warns for the selected unified expiry in fresh processes', function (): void {
     $database = p5bFreshDatabase();
     $credentialId = '15000000-0000-4000-8000-000000000001';
-    $legacyId = '15000000-0000-4000-8000-000000000002';
     $expiresAt = gmdate('Y-m-d H:i:s', time() + 86400);
 
     try {
         $setup = p5bFreshRun('expiry', 'setup', $database, [
             'credential' => p5bFreshCredential($credentialId, bin2hex(random_bytes(32)), SubjectType::Application->value, 'p5b-expiring', [], ['expires_at' => $expiresAt]),
-            'legacy' => [
-                'id' => $legacyId,
-                'name' => 'p5b-expiring-legacy',
-                'token_hash' => bin2hex(random_bytes(32)),
-                'abilities' => [Scope::Consume->value],
-                'expires_at' => $expiresAt,
-            ],
         ]);
         $command = p5bFreshRun('expiry', 'command', $database);
         $inspect = p5bFreshRun('expiry', 'inspect', $database, [
             'credential_id' => $credentialId,
-            'legacy_id' => $legacyId,
         ]);
         $expiring = array_values(array_filter($inspect['audit'], static fn (array $event): bool => $event['event'] === LifecycleEventType::Expiring->value));
 
@@ -315,8 +284,7 @@ it('warns for the selected unified expiry while ignoring an eligible legacy row 
             ->and($inspect['expires_at'])->toBe($expiresAt)
             ->and($expiring)->toHaveCount(1)
             ->and($expiring[0]['credential_id'])->toBe($credentialId)
-            ->and($expiring[0]['credential_expires_at'])->toBe($expiresAt)
-            ->and($inspect['legacy_expiring_events'])->toBe(0);
+            ->and($expiring[0]['credential_expires_at'])->toBe($expiresAt);
     } finally {
         @unlink($database);
     }
@@ -507,8 +475,7 @@ it('persists MCP bearer usage and exposes only operator admin attribution throug
             ->and($request['responses']['application_admin']['body']['audit_type'])->toBeNull()
             ->and($request['responses']['operator_admin']['body']['actor_credential_id'])->toBe($ids['operator_admin'])
             ->and($request['responses']['operator_admin']['body']['audit_type'])->toBe(AuditActorType::OperatorIntegration->value)
-            ->and($request['responses']['operator_admin']['body']['audit_ref'])->toBe($ids['operator_admin'])
-            ->and($inspect['admin_token_audit_count'])->toBe(0);
+            ->and($request['responses']['operator_admin']['body']['audit_ref'])->toBe($ids['operator_admin']);
     } finally {
         @unlink($database);
     }

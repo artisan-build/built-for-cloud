@@ -245,7 +245,7 @@ it('delivers a distinct exchange-minted bearer once on both response faces', fun
     $this->assertRevealsSecretExactlyOnce((string) $response->getContent(), $bearer);
 
     $listing = $this->getJson('/bfc/credentials', [
-        'Authorization' => 'Bearer '.auditAdminToken('matrix-list-'.$face),
+        'Authorization' => 'Bearer '.auditOperatorCredential('matrix-list-'.$face),
     ])->assertOk();
 
     $this->assertResponseCarriesNoSecret($listing, $bearer);
@@ -278,7 +278,7 @@ it('delivers an hmac key at exchange without activating or exposing it later', f
         ->and(app(HmacKeyring::class)->decrypt((string) $credential->secret_ciphertext, $credential->secret_key_version))->toBe($signingKey);
 
     $listing = $this->getJson('/bfc/credentials', [
-        'Authorization' => 'Bearer '.auditAdminToken('matrix-hmac-list'),
+        'Authorization' => 'Bearer '.auditOperatorCredential('matrix-hmac-list'),
     ])->assertOk();
 
     $this->assertResponseCarriesNoSecret($listing, $signingKey);

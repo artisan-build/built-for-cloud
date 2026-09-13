@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\Actions\FileConsoleKey;
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyDelivery;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyRefusal;
@@ -150,17 +149,11 @@ final class ManageOwnership extends OperatorRouteController
             if ($isPendingTransfer) {
                 if ($ownership->owner_credential_id !== null) {
                     Credential::query()->whereKey($ownership->owner_credential_id)->update(['revoked_at' => $now]);
-                } elseif ($ownership->owner_token_id !== null) {
-                    ApiToken::query()->whereKey($ownership->owner_token_id)->update([
-                        'expires_at' => $now,
-                        'revoked_at' => $now,
-                    ]);
                 }
             }
 
             $ownership->forceFill([
                 'owner_credential_id' => $ownerCredential->getKey(),
-                'owner_token_id' => null,
                 'notify_callback' => array_key_exists('notify_callback', $validated)
                     ? $validated['notify_callback']
                     : $ownership->notify_callback,

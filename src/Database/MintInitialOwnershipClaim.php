@@ -40,13 +40,8 @@ final class MintInitialOwnershipClaim
             return;
         }
 
-        $claimed = DB::table('ownership')
-            ->whereNotNull('owner_token_id')
-            ->exists();
-
-        if (! $claimed && Schema::hasColumn('ownership', 'owner_credential_id')) {
-            $claimed = DB::table('ownership')->whereNotNull('owner_credential_id')->exists();
-        }
+        $claimed = Schema::hasColumn('ownership', 'owner_credential_id')
+            && DB::table('ownership')->whereNotNull('owner_credential_id')->exists();
 
         if ($claimed || DB::table('ownership_claims')->whereNull('consumed_at')->exists()) {
             return;

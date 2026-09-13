@@ -15,19 +15,12 @@ use ArtisanBuild\BuiltForCloud\Commands\CredentialListCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialMintCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialRevokeCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialRotateCommand;
-use ArtisanBuild\BuiltForCloud\Commands\FallbackTokenGenerateCommand;
 use ArtisanBuild\BuiltForCloud\Commands\HmacRewrapCommand;
 use ArtisanBuild\BuiltForCloud\Commands\InstallOperatorCredentialCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand;
 use ArtisanBuild\BuiltForCloud\Commands\SubjectOffboardCommand;
-use ArtisanBuild\BuiltForCloud\Commands\TokenCreateCommand;
-use ArtisanBuild\BuiltForCloud\Commands\TokenListCommand;
-use ArtisanBuild\BuiltForCloud\Commands\TokenRevokeCommand;
-use ArtisanBuild\BuiltForCloud\Commands\TokenRevokeSelfCommand;
-use ArtisanBuild\BuiltForCloud\Commands\TokenRotateCommand;
-use ArtisanBuild\BuiltForCloud\Commands\TokenUsageCommand;
 use ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
@@ -50,7 +43,6 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ManagedAuthentication;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTransitions;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\PersonalCredentials;
@@ -60,7 +52,6 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneMemberships;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\StandalonePasswordRecovery;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneSessions;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
@@ -245,7 +236,6 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
 
             $router->aliasMiddleware('bfc.auth', EnsureUserIsAuthenticated::class);
             $router->aliasMiddleware('bfc.admin', EnsureUserIsAdmin::class);
-            $router->aliasMiddleware('bfc.token.admin', EnsureAdminToken::class);
             $router->aliasMiddleware('bfc.credential.admin', EnsureCredentialAdmin::class);
             $router->aliasMiddleware('bfc.ability', EnsureCredentialAbility::class);
             // The verify half of the hmac pair (PRD 1.21, SEC-V3-07):
@@ -744,24 +734,6 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $operatorRoutes,
         );
 
-        if ((bool) config('built-for-cloud.credential_api.enabled', false)) {
-            $router->prefix(trim((string) config('built-for-cloud.credential_api.prefix', 'api/credentials'), '/'))
-                ->group(function (Router $router) use (&$operatorRoutes): void {
-                    $this->protectOperatorRoute($router->get('/', [ManageTokens::class, 'index']), $operatorRoutes);
-                    $this->protectOperatorRoute($router->get('/client-observations', ClientObservations::class), $operatorRoutes);
-                    $this->protectOperatorRoute($router->post('/', [ManageTokens::class, 'store']), $operatorRoutes);
-                    // The precise verb rides its own two-segment path, so
-                    // it can never collide with the one-segment name route
-                    // below — a token literally named "id" still deletes
-                    // by name.
-                    $this->protectOperatorRoute($router->delete('/id/{id}', [ManageTokens::class, 'destroyById']), $operatorRoutes);
-                    // Rotation's primary verb on this store too (PRD
-                    // 1.7): by id, on the same collision-proof path.
-                    $this->protectOperatorRoute($router->post('/id/{id}/rotate', [ManageTokens::class, 'rotateById']), $operatorRoutes);
-                    $this->protectOperatorRoute($router->delete('/{name}', [ManageTokens::class, 'destroy']), $operatorRoutes);
-                });
-        }
-
         $this->app->booted(function () use ($operatorRoutes, $router): void {
             StandaloneRouteOwnership::assertOperatorOwned($router, $operatorRoutes);
         });
@@ -887,19 +859,12 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             CredentialMintCommand::class,
             CredentialRevokeCommand::class,
             CredentialRotateCommand::class,
-            FallbackTokenGenerateCommand::class,
             HmacRewrapCommand::class,
             InstallOperatorCredentialCommand::class,
             OutboxDrainCommand::class,
             OwnershipMintClaimCommand::class,
             OwnershipRemintOwnerTokenCommand::class,
             SubjectOffboardCommand::class,
-            TokenCreateCommand::class,
-            TokenListCommand::class,
-            TokenRevokeCommand::class,
-            TokenRevokeSelfCommand::class,
-            TokenRotateCommand::class,
-            TokenUsageCommand::class,
             WarnExpiringCredentialsCommand::class,
         ]);
     }

@@ -2,15 +2,14 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\BuiltForCloudServiceProvider;
 use ArtisanBuild\BuiltForCloud\Credential;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Ownership;
-use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Application;
@@ -104,7 +103,7 @@ if ($mode === 'generate') {
                         && str_contains($contents, 'bfc/ownership/release')
                         && str_contains($contents, 'bfc/console/vitals')
                         && str_contains($contents, 'bfc/console/chrome.js')
-                        && str_contains($contents, 'api/credentials'),
+                        && str_contains($contents, 'bfc/credentials'),
                 ];
             } finally {
                 @unlink($cachePath);
@@ -160,7 +159,6 @@ $case = new class('testProbe') extends TestCase
         $app['config']->set('auth.guards.bfc-console', ['driver' => 'bfc-console-session']);
         $app['config']->set('auth.providers.users', ['driver' => 'eloquent', 'model' => User::class]);
         $app['config']->set('built-for-cloud.console.enabled', true);
-        $app['config']->set('built-for-cloud.credential_api.enabled', true);
         $app['config']->set('built-for-cloud.surfaces.data_migrations', false);
         $app['config']->set('cache.default', 'array');
         $app['config']->set('app.debug', false);
@@ -185,22 +183,23 @@ $case = new class('testProbe') extends TestCase
             return false;
         }
 
-        foreach ([EnsureAdminToken::class, EnsureCredentialAdmin::class, EnsureConsoleSession::class, EnsureDashboardCredential::class] as $gate) {
+        foreach ([EnsureCredentialAdmin::class, EnsureConsoleSession::class, EnsureDashboardCredential::class] as $gate) {
             $router->aliasMiddleware($gate, CachedHostileOperatorGate::class);
         }
 
-        $owner = ApiToken::factory()->create([
+        $owner = Credential::factory()->create([
             'name' => 'cache-owner',
-            'abilities' => [Scope::Admin->value],
+            'subject_type' => SubjectType::Operator,
+            'abilities' => [OperatorAbility::ADMIN],
         ]);
-        $ownership = Ownership::query()->create(['owner_token_id' => $owner->getKey()]);
-        $tokenLookups = 0;
+        $ownership = Ownership::query()->create(['owner_credential_id' => $owner->getKey()]);
+        $credentialLookups = 0;
 
-        DB::listen(static function (QueryExecuted $query) use (&$tokenLookups): void {
+        DB::listen(static function (QueryExecuted $query) use (&$credentialLookups): void {
             $sql = strtolower(ltrim($query->sql));
 
-            if (str_starts_with($sql, 'select') && str_contains($sql, 'api_tokens')) {
-                $tokenLookups++;
+            if (str_starts_with($sql, 'select') && str_contains($sql, 'credentials')) {
+                $credentialLookups++;
             }
         });
 
@@ -219,12 +218,6 @@ $case = new class('testProbe') extends TestCase
             ['GET', '/bfc/console/chrome.js'],
             ['POST', '/bfc/subjects/offboard'],
             ['GET', '/bfc/client-observations'],
-            ['GET', '/api/credentials'],
-            ['GET', '/api/credentials/client-observations'],
-            ['POST', '/api/credentials'],
-            ['DELETE', '/api/credentials/id/missing'],
-            ['POST', '/api/credentials/id/missing/rotate'],
-            ['DELETE', '/api/credentials/missing'],
         ];
         $refusals = 0;
         $this->withoutExceptionHandling();
@@ -245,9 +238,9 @@ $case = new class('testProbe') extends TestCase
 
         return $refusals === count($routes)
             && CachedHostileOperatorGate::$runs === 0
-            && $tokenLookups === 0
+            && $credentialLookups === 0
             && $ownership->refresh()->pending_claim_id === null
-            && Credential::query()->count() === 0;
+            && Credential::query()->count() === 1;
     }
 
     public function test_probe(): void {}

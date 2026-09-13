@@ -16,7 +16,6 @@ return new class extends Migration
             $table->string('email')->index();
             $table->string('scope')->default(Scope::Consume->value);
             $table->string('token_hash', 64)->unique();
-            $table->foreignUuid('durable_token_id')->nullable()->constrained('api_tokens')->nullOnDelete();
             $table->timestamp('consumed_at')->nullable();
             $table->timestamp('expires_at');
             $table->timestamps();

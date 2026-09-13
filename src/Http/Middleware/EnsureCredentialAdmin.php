@@ -12,10 +12,8 @@ use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
-use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\StandaloneRouteOwnership;
 use ArtisanBuild\BuiltForCloud\SubjectType;
-use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -24,9 +22,8 @@ use Throwable;
 
 /**
  * The gate on the unified store's own verb routes (`/bfc/credentials`):
- * accepts EITHER a legacy admin `api_tokens` row (exactly what
- * {@see EnsureAdminToken} accepts, unchanged) OR a unified-store `bearer`
- * credential with the `operator` subject holding the route's REQUIRED
+ * accepts a unified-store `bearer` credential with the `operator` subject
+ * holding the route's REQUIRED
  * ABILITY (GATE-3.7's per-verb-family authority): each route names its
  * verb-family ability as the middleware parameter
  * (`bfc.credential.admin:credential:read`), and the admin-equivalent
@@ -40,10 +37,8 @@ use Throwable;
  * the per-verb parameter a stolen read-only credential would be
  * fleet-admin (SEC-V3-06).
  *
- * Which store authenticated is visible downstream: the legacy branch
- * stashes `bfc.actor_token_id` (audited as an `admin_token` actor), the
- * unified branch `bfc.actor_credential_id` (audited as an
- * `operator_integration` actor).
+ * The accepted row is visible downstream as `bfc.actor_credential_id` and
+ * audited as an `operator_integration` actor.
  *
  * Observability (GATE-3.7): every token-auth FAILURE (401) and every
  * DENIED action (403) on this gate appends a `denied_action` event to the
@@ -51,13 +46,6 @@ use Throwable;
  * never depends on the audit write: containment must hold even while the
  * audit store is down, so the append is best-effort here (denials carry no
  * state transition to keep it transactional with).
- *
- * The FALLBACK token is rejected here EXPLICITLY, with a distinguishable
- * 403, and BEFORE either granting branch — the invariant is absolute even
- * under a config whose fallback bytes collide with a real credential's
- * secret. The env pseudo-credential is deprecated (PRD 1.20) and never
- * operates this surface; silently treating it as unknown would send its
- * holder chasing a typo instead of the real fix.
  */
 final class EnsureCredentialAdmin
 {
@@ -78,7 +66,6 @@ final class EnsureCredentialAdmin
     public const string ABILITY = 'credential:admin';
 
     public function __construct(
-        private readonly TokenRegistry $tokens,
         private readonly CredentialResolver $credentials,
         private readonly CredentialUsageRecorder $usage,
         private readonly ClientIdentityRecorder $clientIdentities,
@@ -104,40 +91,7 @@ final class EnsureCredentialAdmin
             abort(401);
         }
 
-        // The deprecated fallback pseudo-credential is rejected FIRST,
-        // before either granting branch, so "the fallback never operates
-        // this surface" is absolute: even a config whose fallback bytes
-        // collide with a real credential's secret rejects here — nothing
-        // resolves, nothing stamps usage. Distinguishable, so its holder
-        // chases the real fix rather than a typo.
-        if ($this->isFallback($bearer)) {
-            $this->auditDenial($request, 'denied: fallback token on an operator surface', null);
-
-            abort(403, 'Fallback tokens never operate the credential verbs. Mint an operator credential with bfc:install:operator-credential instead.');
-        }
-
-        // Branch 1 — the legacy admin token, byte-for-byte EnsureAdminToken
-        // semantics (client-identity attribution included). An admin
-        // `api_tokens` row is admin-equivalent on every operator verb —
-        // exactly what the public contract's "admin token" auth promises.
-        $token = $this->tokens->resolveModel($bearer);
-
-        if ($token !== null) {
-            $this->tokens->recordClientIdentityFromRequest($request, $token);
-
-            if ($token->hasScope(Scope::Admin)) {
-                $request->attributes->set('bfc.actor_token_id', (string) $token->getKey());
-                StandaloneRouteOwnership::markOperatorGateExecuted($request, self::class.':'.$required);
-
-                return $next($request);
-            }
-
-            $this->auditDenial($request, 'denied: token without admin scope', AuditActor::adminToken((string) $token->getKey()));
-
-            abort(403);
-        }
-
-        // Branch 2 — a unified-store operator credential. Presenting it is
+        // Presenting a unified-store operator credential is
         // a use: the gated recorder both stamps it and re-asserts the row
         // still authenticates (SEC-2). Full account containment (PRD
         // 1.15) needs no check here: an offboarded principal never
@@ -203,18 +157,5 @@ final class EnsureCredentialAdmin
             // The denial response is the containment; losing its audit row
             // must not convert a deny into a 500.
         }
-    }
-
-    /**
-     * The fallback bytes themselves, compared directly — never through a
-     * resolver that could touch rows or record usage.
-     */
-    private function isFallback(string $bearer): bool
-    {
-        $fallback = config('built-for-cloud.fallback_token');
-
-        return is_string($fallback)
-            && $fallback !== ''
-            && hash_equals(hash('sha256', $fallback), hash('sha256', $bearer));
     }
 }

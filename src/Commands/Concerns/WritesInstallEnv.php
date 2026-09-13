@@ -13,7 +13,7 @@ trait WritesInstallEnv
     /**
      * The install scaffold's mint step (PRD 1.20): an app's install
      * command calls this to mint the operator credential a fresh install
-     * needs instead of a `FALLBACK_TOKEN`. It runs
+     * needs instead of an environment pseudo-credential. It runs
      * `bfc:install:operator-credential` in-process (the --local mint
      * action; zero Cloud dependency), with the one-time TTY reveal
      * flowing through the calling command's own output.

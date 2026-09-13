@@ -121,7 +121,7 @@ it('runs artisan commands through the cloud cli and parses json output', functio
         '*' => Process::result('{"output":"remote output","exitCode":7}'),
     ]);
 
-    $result = (new CloudCommandRunner)->run('env-1', 'token:list --execute --json');
+    $result = (new CloudCommandRunner)->run('env-1', 'about --json');
 
     expect($result)->toBe([
         'output' => 'remote output',
@@ -134,7 +134,7 @@ it('runs artisan commands through the cloud cli and parses json output', functio
             'command:run',
             'env-1',
             '--cmd',
-            'php artisan token:list --execute --json',
+            'php artisan about --json',
             '--json',
             '--fields=output,exitCode',
             '--no-interaction',
@@ -169,7 +169,7 @@ it('skips trailing progress lines when the result object is not last', function 
         ])),
     ]);
 
-    $result = (new CloudCommandRunner)->run('env-1', 'token:list --execute --json');
+    $result = (new CloudCommandRunner)->run('env-1', 'about --json');
 
     expect($result)->toBe([
         'output' => "done\n",
@@ -185,7 +185,7 @@ it('throws when cloud command streams only progress lines without a result objec
         ])),
     ]);
 
-    (new CloudCommandRunner)->run('env-1', 'token:list --execute --json');
+    (new CloudCommandRunner)->run('env-1', 'about --json');
 })->throws(RuntimeException::class, 'without a valid exit code');
 
 it('throws when cloud command output is not json at all', function (): void {
@@ -193,7 +193,7 @@ it('throws when cloud command output is not json at all', function (): void {
         '*' => Process::result("not json\nstill not json"),
     ]);
 
-    (new CloudCommandRunner)->run('env-1', 'token:list --execute --json');
+    (new CloudCommandRunner)->run('env-1', 'about --json');
 })->throws(RuntimeException::class, 'invalid JSON');
 
 it('throws when cloud command output has no valid exit code', function (): void {
@@ -201,5 +201,5 @@ it('throws when cloud command output has no valid exit code', function (): void 
         '*' => Process::result('{"output":"remote output"}'),
     ]);
 
-    (new CloudCommandRunner)->run('env-1', 'token:create app --execute --hash='.hash('sha256', 'secret'));
+    (new CloudCommandRunner)->run('env-1', 'about --json');
 })->throws(RuntimeException::class, 'without a valid exit code');

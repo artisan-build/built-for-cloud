@@ -341,17 +341,18 @@ it('rejects the personal surface without a session', function (): void {
 it('does not accept an operator credential in place of a session on the personal surface', function (): void {
     $mine = personalUser('mine@example.test');
 
-    // A perfectly good admin token — the operator surface's own gate —
+    // A perfectly good operator credential for the operator surface's own gate
     // buys nothing here: this surface's gate is the session.
-    $this->withHeader('Authorization', 'Bearer '.auditAdminToken('personal-probe'))
+    $this->withHeader('Authorization', 'Bearer '.auditOperatorCredential('personal-probe'))
         ->getJson('/bfc/me/credentials')
         ->assertUnauthorized();
 
-    expect(Credential::query()->count())->toBe(0);
+    expect(Credential::query()->pluck('subject_ref')->all())->toBe(['personal-probe'])
+        ->and(Credential::query()->count())->toBe(1);
 
-    // Sanity: the same token DOES work on the operator listing, so the
-    // rejection above is about this surface and not a broken token.
-    $this->withHeader('Authorization', 'Bearer '.auditAdminToken('personal-probe-2'))
+    // Sanity: an operator credential does work on the operator listing, so
+    // the rejection above is about this surface and not a broken credential.
+    $this->withHeader('Authorization', 'Bearer '.auditOperatorCredential('personal-probe-2'))
         ->getJson('/bfc/credentials')
         ->assertOk();
 });
@@ -630,7 +631,10 @@ it('mints and uses an account-bound hmac key once the self-service policy opts i
     $this->postJson('/bfc/credentials/'.$keyId.'/activate', [
         'delivery_fingerprint' => $fingerprint,
     ], [
-        'Authorization' => 'Bearer '.auditAdminToken('self-service-hmac-activation'),
+        'Authorization' => 'Bearer '.auditOperatorCredential(
+            'self-service-hmac-activation',
+            [OperatorAbility::CredentialRotate->value],
+        ),
     ])->assertOk()
         ->assertJsonPath('credential.id', $keyId)
         ->assertJsonPath('credential.status', CredentialStatus::Active->value);

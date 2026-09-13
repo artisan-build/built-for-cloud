@@ -61,7 +61,7 @@ function hmacClaimMint(string $subjectRef = 'webhook-client', int $ttl = 3600): 
  */
 function hmacAdminHeaders(): array
 {
-    return ['Authorization' => 'Bearer '.auditAdminToken('hmac-admin-'.bin2hex(random_bytes(4)))];
+    return ['Authorization' => 'Bearer '.auditOperatorCredential('hmac-operator-'.bin2hex(random_bytes(4)))];
 }
 
 function bindBurnMode(BurnMode $mode): void
@@ -99,9 +99,7 @@ it('mints a claim-code delivery when a code ttl is chosen: the key stays undeliv
     /** @var OnboardingToken $code */
     $code = OnboardingToken::query()->where('durable_credential_id', $credential->id)->firstOrFail();
 
-    expect($code->durable_token_id)->toBeNull()
-        ->and($code->durable_store)->toBeNull()
-        ->and($code->consumed_at)->toBeNull();
+    expect($code->consumed_at)->toBeNull();
 });
 
 it('bounds the hmac claim-code ttl exactly like every other claim code', function (): void {

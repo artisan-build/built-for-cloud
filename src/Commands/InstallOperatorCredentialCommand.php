@@ -19,7 +19,7 @@ use Illuminate\Console\Command;
 
 /**
  * The installer mint (PRD 1.20): install scaffolds run this instead of
- * generating a `FALLBACK_TOKEN`. It mints a REAL, revocable,
+ * generating an environment pseudo-credential. It mints a real, revocable,
  * operator-subject credential through the same `--local` mint action every
  * transport uses — in-process, direct database, zero Cloud dependency —
  * and prints the secret exactly once to the TTY (D7). Nothing is written
@@ -62,7 +62,7 @@ final class InstallOperatorCredentialCommand extends Command
         {--abilities='.EnsureCredentialAdmin::ABILITY.' : Comma-separated abilities for the operator credential}
         {--force : Mint even though a live operator credential already exists}';
 
-    protected $description = 'Mint the install-time operator credential (replaces FALLBACK_TOKEN)';
+    protected $description = 'Mint the install-time operator credential';
 
     public function handle(MintCredential $mint): int
     {

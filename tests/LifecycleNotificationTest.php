@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 use ArtisanBuild\BuiltForCloud\Actions\RevokeCredential;
 use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
+use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
@@ -15,7 +16,6 @@ use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ConfigMapHolderDeclaration;
-use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Notifications\AnonymousNotifiable;
 use Illuminate\Support\Facades\Notification;
@@ -130,14 +130,13 @@ it('rejects a resolved address that is not a plain email and notifies nobody ins
     config()->set('built-for-cloud.notifications.policy', ['revoked' => ['holder']]);
     config()->set('built-for-cloud.credentials.declaration', ConfigMapHolderDeclaration::class);
 
-    $registry = app(TokenRegistry::class);
-    $token = $registry->store('bad-address', hash('sha256', 'bad-address-secret'));
+    $credential = Credential::factory()->create(['name' => 'bad-address']);
 
     // The app hook resolves something that is not a deliverable address —
     // header injection, or plain garbage. Rejection IS the nobody path.
-    config()->set('built-for-cloud-tests.holder_map', [$token->id => $hostileAddress]);
+    config()->set('built-for-cloud-tests.holder_map', [$credential->id => $hostileAddress]);
 
-    $registry->revoke('bad-address');
+    app(RevokeCredential::class)($credential->id);
 
     Notification::assertNothingSent();
 
@@ -158,9 +157,8 @@ it('extends per app: a policy row added in config notifies, a removed row stays 
     // nothing else notifies anyone.
     config()->set('built-for-cloud.notifications.policy', ['revoked' => ['issuer']]);
 
-    $registry = app(TokenRegistry::class);
-    $registry->store('policy-target', hash('sha256', 'policy-secret'));
-    $registry->revoke('policy-target');
+    $credential = Credential::factory()->create(['name' => 'policy-target']);
+    app(RevokeCredential::class)($credential->id);
 
     Notification::assertSentOnDemandTimes(CredentialLifecycleNotification::class, 1);
 

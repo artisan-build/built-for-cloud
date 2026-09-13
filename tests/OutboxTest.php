@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
+use ArtisanBuild\BuiltForCloud\Actions\RevokeCredential;
+use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
@@ -11,7 +13,6 @@ use ArtisanBuild\BuiltForCloud\Notifications\CredentialLifecycleNotification;
 use ArtisanBuild\BuiltForCloud\OutboxDrainer;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ConfigMapHolderDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ThrowingHolderDeclaration;
-use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -55,12 +56,11 @@ function revokeWithHolderPolicy(string $declaration): CredentialOutboxEntry
     config()->set('built-for-cloud.notifications.policy', ['revoked' => ['holder']]);
     config()->set('built-for-cloud.credentials.declaration', $declaration);
 
-    $registry = app(TokenRegistry::class);
-    $token = $registry->store('outbox-target', hash('sha256', 'outbox-secret-'.Str::random(8)));
+    $token = Credential::factory()->create(['name' => 'outbox-target']);
 
     config()->set('built-for-cloud-tests.holder_map', [$token->id => 'holder@example.test']);
 
-    $registry->revoke('outbox-target');
+    app(RevokeCredential::class)((string) $token->getKey());
 
     $auditEvent = CredentialAuditEvent::query()
         ->where('event', LifecycleEventType::Revoked->value)
@@ -159,8 +159,7 @@ it('redelivers only to the recipients not yet marked after a partial failure', f
     config()->set('built-for-cloud.notifications.policy', ['revoked' => ['issuer', 'holder']]);
     config()->set('built-for-cloud.credentials.declaration', ConfigMapHolderDeclaration::class);
 
-    $registry = app(TokenRegistry::class);
-    $token = $registry->store('partial-target', hash('sha256', 'partial-secret'));
+    $token = Credential::factory()->create(['name' => 'partial-target']);
 
     config()->set('built-for-cloud-tests.holder_map', [$token->id => 'holder@example.test']);
 
@@ -179,7 +178,7 @@ it('redelivers only to the recipients not yet marked after a partial failure', f
         }
     });
 
-    $registry->revoke('partial-target');
+    app(RevokeCredential::class)((string) $token->getKey());
 
     $entry = CredentialOutboxEntry::query()->latest('created_at')->latest('id')->firstOrFail();
 
@@ -329,8 +328,7 @@ it('stops a stale owner mid-loop after a takeover, sending no further recipients
     config()->set('built-for-cloud.notifications.policy', ['revoked' => ['issuer', 'holder']]);
     config()->set('built-for-cloud.credentials.declaration', ConfigMapHolderDeclaration::class);
 
-    $registry = app(TokenRegistry::class);
-    $token = $registry->store('fence-target', hash('sha256', 'fence-secret'));
+    $token = Credential::factory()->create(['name' => 'fence-target']);
 
     config()->set('built-for-cloud-tests.holder_map', [$token->id => 'holder@example.test']);
 
@@ -357,7 +355,7 @@ it('stops a stale owner mid-loop after a takeover, sending no further recipients
         ]);
     });
 
-    $registry->revoke('fence-target');
+    app(RevokeCredential::class)((string) $token->getKey());
 
     // A's issuer send had already left; nothing further followed it.
     expect($armed)->toBeFalse()

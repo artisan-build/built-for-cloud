@@ -12,7 +12,6 @@ return new class extends Migration
     {
         Schema::create('ownership', function (Blueprint $table): void {
             $table->uuid('id')->primary();
-            $table->foreignUuid('owner_token_id')->nullable()->constrained('api_tokens')->nullOnDelete();
             $table->string('notify_callback')->nullable();
             $table->string('webhook_secret')->nullable();
             $table->foreignUuid('pending_claim_id')->nullable()->constrained('ownership_claims')->nullOnDelete();

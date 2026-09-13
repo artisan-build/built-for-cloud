@@ -19,15 +19,10 @@ use Illuminate\Support\Facades\Process;
 uses(RefreshDatabase::class, DetectsSecretLeaks::class, WithCredentials::class);
 
 // Locked AC 7: the install scaffold path mints a real operator-subject
-// credential printed once; no FALLBACK_TOKEN is written or read on that
-// path; the deprecated command warns.
+// credential printed once and stored only as a digest.
 
-it('mints a real operator-subject credential at install time, printed once, with no fallback anywhere', function (): void {
+it('mints a real operator-subject credential at install time and prints it once', function (): void {
     Process::fake();
-
-    $envPath = $this->app->environmentFilePath();
-
-    expect(config('built-for-cloud.fallback_token'))->toBeNull();
 
     $output = $this->assertNoSecretLeakageOfMinted(
         function (): string {
@@ -67,10 +62,6 @@ it('mints a real operator-subject credential at install time, printed once, with
     // …and it is revocable, which no env pseudo-credential ever was.
     expect(Artisan::call('bfc:credential:revoke', ['id' => $credential->id, '--local' => true]))->toBe(Command::SUCCESS)
         ->and($credential->refresh()->revoked_at)->not->toBeNull();
-
-    // Nothing wrote a FALLBACK_TOKEN, to the env file or the config.
-    expect(is_file($envPath) ? (string) file_get_contents($envPath) : '')->not->toContain('FALLBACK_TOKEN')
-        ->and(config('built-for-cloud.fallback_token'))->toBeNull();
 
     Process::assertNothingRan();
 });
@@ -134,16 +125,6 @@ it('refuses a non-operator unified credential on the /bfc/credentials verbs', fu
     $this->getJson('/bfc/credentials', ['Authorization' => 'Bearer tok_'.str_repeat('0', 64)])->assertUnauthorized();
 });
 
-it('rejects the deprecated fallback token on the credential verbs with a distinguishable 403', function (): void {
-    config(['built-for-cloud.fallback_token' => 'fallback-secret-value']);
-
-    $response = $this->getJson('/bfc/credentials', ['Authorization' => 'Bearer fallback-secret-value']);
-
-    $response->assertForbidden();
-
-    expect((string) $response->json('message'))->toContain('Fallback tokens never operate the credential verbs');
-});
-
 it('skips the mint with a notice when a live operator credential exists, unless forced', function (): void {
     expect(Artisan::call('bfc:install:operator-credential'))->toBe(Command::SUCCESS)
         ->and(Credential::query()->count())->toBe(1);
@@ -196,32 +177,6 @@ it('mints despite an existing operator that lacks the promised ability — mere 
         ->and(Credential::query()->count())->toBe(2);
 });
 
-it('rejects colliding fallback bytes before either granting branch, stamping nothing', function (): void {
-    // A config whose fallback bytes COLLIDE with a real operator
-    // credential's secret: the fallback invariant must win — rejected,
-    // never granted, and the collision never even counts as a use.
-    $operator = $this->mintCredential([
-        'subject_type' => SubjectType::Operator,
-        'subject_ref' => 'collided',
-        'abilities' => [EnsureCredentialAdmin::ABILITY],
-    ]);
-
-    config(['built-for-cloud.fallback_token' => $operator->plaintext()]);
-
-    $response = $this->getJson('/bfc/credentials', ['Authorization' => $operator->bearerHeader()]);
-
-    $response->assertForbidden();
-
-    expect((string) $response->json('message'))->toContain('Fallback tokens never operate the credential verbs')
-        ->and($operator->credential->refresh()->last_used_at)->toBeNull()
-        ->and(CredentialAuditEvent::query()->where('credential_id', $operator->credential->id)->count())->toBe(0);
-
-    // Clearing the collision restores the credential's own authority.
-    config(['built-for-cloud.fallback_token' => null]);
-
-    $this->getJson('/bfc/credentials', ['Authorization' => $operator->bearerHeader()])->assertOk();
-});
-
 it('honours a custom operator ref and abilities', function (): void {
     Artisan::call('bfc:install:operator-credential', [
         '--ref' => 'scalpels',
@@ -234,17 +189,4 @@ it('honours a custom operator ref and abilities', function (): void {
     expect($credential->subject_ref)->toBe('scalpels')
         ->and($credential->name)->toBe('Scalpels control plane')
         ->and($credential->abilities)->toBe(['admin', 'consume']);
-});
-
-it('warns that fallback-token:generate is deprecated while still functioning for 0.4.x apps', function (): void {
-    $path = sys_get_temp_dir().'/bfc-fallback-'.bin2hex(random_bytes(6)).'/.env';
-    mkdir(dirname($path));
-
-    expect(Artisan::call('fallback-token:generate', ['--path' => $path]))->toBe(Command::SUCCESS);
-
-    $output = Artisan::output();
-
-    expect($output)->toContain('DEPRECATED')
-        ->and($output)->toContain('bfc:install:operator-credential')
-        ->and((string) file_get_contents($path))->toContain('FALLBACK_TOKEN=');
 });

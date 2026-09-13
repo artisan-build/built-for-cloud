@@ -93,8 +93,7 @@ final class RotateCredential
 
     /**
      * The grace window (PRD 1.7): how long the superseded row stays
-     * resolvable after a default rotation. The same hour the legacy
-     * `api_tokens` rotation has always granted.
+     * resolvable after a default rotation.
      */
     public const int GRACE_SECONDS = 3600;
 

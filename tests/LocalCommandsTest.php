@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
@@ -10,7 +9,6 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
-use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use Illuminate\Console\Command;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -19,7 +17,7 @@ use Illuminate\Support\Facades\Process;
 
 uses(RefreshDatabase::class, DetectsSecretLeaks::class);
 
-// Locked AC 5: all seven legacy commands run with --local against the local
+// Locked AC 5: the credential commands run with --local against the local
 // database and NO Cloud binary — Process::fake() + assertNothingRan() is
 // the "no Cloud dependency" proof on every path here.
 
@@ -27,11 +25,13 @@ beforeEach(function (): void {
     Process::fake();
 });
 
-it('creates a token locally with --local, printing the secret once and emitting issued', function (): void {
+it('mints a credential locally with --local, printing the secret once and emitting issued', function (): void {
     $output = $this->assertNoSecretLeakageOfMinted(
         function (): string {
-            expect(Artisan::call('token:create', [
-                'name' => 'local-app',
+            expect(Artisan::call('bfc:credential:mint', [
+                'subject-type' => 'application',
+                'subject-ref' => 'local-app',
+                '--name' => 'local-app',
                 '--abilities' => 'consume',
                 '--local' => true,
             ]))->toBe(Command::SUCCESS);
@@ -50,13 +50,12 @@ it('creates a token locally with --local, printing the secret once and emitting 
 
     $this->assertRevealsSecretExactlyOnce($output, $plaintext);
 
-    $token = ApiToken::query()->where('name', 'local-app')->sole();
+    $token = Credential::query()->where('name', 'local-app')->sole();
 
-    expect($token->token_hash)->toBe(hash('sha256', $plaintext))
+    expect($token->secret_hash)->toBe(hash('sha256', $plaintext))
         ->and($token->abilities)->toBe(['consume']);
 
-    // The issued gap, closed (PRD 1.16 ride-along): the legacy mint now
-    // appears in the lifecycle stream.
+    // The mint appears in the lifecycle stream.
     $event = CredentialAuditEvent::query()->where('credential_id', $token->getKey())->sole();
 
     expect($event->event)->toBe(LifecycleEventType::Issued)
@@ -65,45 +64,30 @@ it('creates a token locally with --local, printing the secret once and emitting 
     Process::assertNothingRan();
 });
 
-it('emits issued from the execute half of token:create too', function (): void {
-    $hash = hash('sha256', 'execute-secret');
+it('lists credentials locally with --local', function (): void {
+    Credential::factory()->create(['name' => 'listable']);
 
-    Artisan::call('token:create', ['name' => 'exec-app', '--execute' => true, '--hash' => $hash]);
-
-    $token = ApiToken::query()->where('name', 'exec-app')->sole();
-
-    expect(
-        CredentialAuditEvent::query()
-            ->where('credential_id', $token->getKey())
-            ->where('event', LifecycleEventType::Issued->value)
-            ->exists(),
-    )->toBeTrue();
-});
-
-it('lists tokens locally with --local', function (): void {
-    ApiToken::factory()->create(['name' => 'listable']);
-
-    expect(Artisan::call('token:list', ['--local' => true]))->toBe(Command::SUCCESS)
+    expect(Artisan::call('bfc:credential:list', ['--local' => true]))->toBe(Command::SUCCESS)
         ->and(Artisan::output())->toContain('listable');
 
     Process::assertNothingRan();
 });
 
-it('revokes tokens locally with --local', function (): void {
-    ApiToken::factory()->create(['name' => 'doomed']);
+it('revokes a credential locally with --local', function (): void {
+    $doomed = Credential::factory()->create(['name' => 'doomed']);
 
-    expect(Artisan::call('token:revoke', ['name' => 'doomed', '--local' => true]))->toBe(Command::SUCCESS)
-        ->and(Artisan::output())->toContain('Revoked 1 active row(s) for doomed');
+    expect(Artisan::call('bfc:credential:revoke', ['id' => $doomed->id, '--local' => true]))->toBe(Command::SUCCESS)
+        ->and(Artisan::output())->toContain('Revoked credential');
 
-    expect(ApiToken::query()->where('name', 'doomed')->sole()->revoked_at)->not->toBeNull();
+    expect($doomed->refresh()->revoked_at)->not->toBeNull();
 
     Process::assertNothingRan();
 });
 
-it('rotates a token locally with --local, printing the replacement once with an hour of grace', function (): void {
-    $old = ApiToken::factory()->create(['name' => 'rotating']);
+it('rotates a credential locally with --local, printing the replacement once with an hour of grace', function (): void {
+    $old = Credential::factory()->create(['name' => 'rotating']);
 
-    expect(Artisan::call('token:rotate', ['name' => 'rotating', '--local' => true]))->toBe(Command::SUCCESS);
+    expect(Artisan::call('bfc:credential:rotate', ['id' => $old->id, '--local' => true]))->toBe(Command::SUCCESS);
 
     $output = Artisan::output();
 
@@ -111,22 +95,13 @@ it('rotates a token locally with --local, printing the replacement once with an 
     $plaintext = $matches[1];
 
     expect(substr_count($output, $plaintext))->toBe(1)
-        ->and($output)->toContain('one hour grace');
+        ->and($output)->toContain('grace window (one hour)');
 
-    $replacement = ApiToken::query()->where('token_hash', hash('sha256', $plaintext))->sole();
+    $replacement = Credential::query()->where('secret_hash', hash('sha256', $plaintext))->sole();
 
     expect($replacement->name)->toBe('rotating')
         ->and($old->refresh()->rotated_at)->not->toBeNull()
         ->and($old->expires_at->timestamp)->toBeGreaterThan(now()->addMinutes(55)->timestamp);
-
-    Process::assertNothingRan();
-});
-
-it('reports token usage locally with --local', function (): void {
-    ApiToken::factory()->create(['name' => 'busy', 'request_count' => 7]);
-
-    expect(Artisan::call('token:usage', ['--local' => true]))->toBe(Command::SUCCESS)
-        ->and(Artisan::output())->toContain('busy');
 
     Process::assertNothingRan();
 });
@@ -146,8 +121,8 @@ it('mints an ownership claim locally with --local, printing the claim token once
 });
 
 it('refuses to mint a claim locally when ownership is already claimed', function (): void {
-    $token = ApiToken::factory()->create(['name' => 'owner', 'abilities' => [Scope::Admin->value]]);
-    Ownership::query()->create(['owner_token_id' => $token->getKey()]);
+    $credential = Credential::factory()->create(['name' => 'owner']);
+    Ownership::query()->create(['owner_credential_id' => $credential->getKey()]);
 
     expect(Artisan::call('bfc:ownership:mint-claim', ['--local' => true]))->toBe(Command::FAILURE)
         ->and(Artisan::output())->toContain('already claimed');
@@ -155,9 +130,9 @@ it('refuses to mint a claim locally when ownership is already claimed', function
     Process::assertNothingRan();
 });
 
-it('remints the owner token locally with --local, revoking the previous owner row', function (): void {
-    $old = ApiToken::factory()->create(['name' => 'legacy-linked-owner', 'abilities' => [Scope::Admin->value]]);
-    Ownership::query()->create(['owner_token_id' => $old->getKey()]);
+it('remints the owner credential locally with --local, revoking the previous owner row', function (): void {
+    $old = Credential::factory()->create(['name' => 'linked-owner']);
+    Ownership::query()->create(['owner_credential_id' => $old->getKey()]);
 
     expect(Artisan::call('bfc:ownership:remint-owner-token', ['--local' => true]))->toBe(Command::SUCCESS);
 
@@ -171,7 +146,6 @@ it('remints the owner token locally with --local, revoking the previous owner ro
     expect(substr_count($output, $plaintext))->toBe(1)
         ->and($replacement->abilities)->toBe([EnsureCredentialAdmin::ABILITY])
         ->and(Ownership::query()->sole()->owner_credential_id)->toBe((string) $replacement->getKey())
-        ->and(Ownership::query()->sole()->owner_token_id)->toBeNull()
         ->and($old->refresh()->revoked_at)->not->toBeNull();
 
     Process::assertNothingRan();
@@ -179,9 +153,6 @@ it('remints the owner token locally with --local, revoking the previous owner ro
 
 // Locked AC 6: no new or changed command accepts a secret as an argument —
 // the surface itself is tested, not just the behaviour. (The one command
-// with a secret-shaped argument, bfc:token:revoke-self, REFUSES it; that
-// refusal is pinned by its own suite.)
-//
 // LIMITATION, stated honestly: this is a BLACKLIST of secret-shaped input
 // names, so it catches a future option that NAMES itself like a secret,
 // not one that smuggles a secret under an innocent name ("--value",
@@ -194,12 +165,9 @@ it('accepts no secret-bearing argument or option on any new or changed command s
         'bfc:credential:mint',
         'bfc:credential:list',
         'bfc:credential:revoke',
+        'bfc:credential:rotate',
+        'bfc:credential:activate',
         'bfc:install:operator-credential',
-        'token:create',
-        'token:list',
-        'token:revoke',
-        'token:rotate',
-        'token:usage',
         'bfc:ownership:mint-claim',
         'bfc:ownership:remint-owner-token',
     ];

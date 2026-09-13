@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
@@ -39,10 +38,10 @@ function p5bOperatorCredential(string $ability, SubjectType $subjectType = Subje
 
 function p5bClaimedOwnership(?OwnershipClaim $pending = null): Ownership
 {
-    $legacyOwner = ApiToken::factory()->create();
+    $owner = p5bOperatorCredential(OperatorAbility::ADMIN)['credential'];
 
     return Ownership::query()->create([
-        'owner_token_id' => $legacyOwner->id,
+        'owner_credential_id' => $owner->id,
         'pending_claim_id' => $pending?->id,
     ]);
 }

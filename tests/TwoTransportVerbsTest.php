@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesCredentialVerbs;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
+use ArtisanBuild\BuiltForCloud\Contracts\DeclaresPresentationCadence;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
@@ -34,7 +34,21 @@ uses(RefreshDatabase::class, DetectsSecretLeaks::class);
  */
 function transportAdminHeaders(string $name = 'transport-admin'): array
 {
-    return ['Authorization' => 'Bearer '.auditAdminToken($name.'-'.bin2hex(random_bytes(4)))];
+    return ['Authorization' => 'Bearer '.auditOperatorCredential($name.'-'.bin2hex(random_bytes(4)))];
+}
+
+function transportCredentialCount(string ...$subjectRefs): int
+{
+    return Credential::query()->whereIn('subject_ref', $subjectRefs)->count();
+}
+
+/** @param list<array<string, mixed>> $rows */
+function transportCredentialRows(array $rows, string ...$subjectRefs): array
+{
+    return array_values(array_filter(
+        $rows,
+        static fn (array $row): bool => in_array($row['subject_ref'], $subjectRefs, true),
+    ));
 }
 
 function bindDenyingMatrix(CredentialVerb $denied): void
@@ -133,7 +147,7 @@ it('refuses to run the unified verbs without --local, pointing at the HTTP contr
         'subject-ref' => 'acme',
     ]))->toBe(1)
         ->and(Artisan::output())->toContain('--local')
-        ->and(Credential::query()->count())->toBe(0);
+        ->and(transportCredentialCount('acme'))->toBe(0);
 
     expect(Artisan::call('bfc:credential:list'))->toBe(1);
     expect(Artisan::call('bfc:credential:revoke', ['id' => 'nope']))->toBe(1);
@@ -212,7 +226,7 @@ it('requires a bounded code ttl for the asymmetric kind on both transports, with
     // The ONE bounds rule, enforced in the action: the same message on
     // both transports.
     expect($cliMessage)->toContain((string) $response->json('message'))
-        ->and(Credential::query()->count())->toBe(0);
+        ->and(transportCredentialCount('reel-app-8'))->toBe(0);
 });
 
 it('rejects a non-integer code ttl identically on both transports — 60junk is junk, never 60', function (): void {
@@ -238,7 +252,7 @@ it('rejects a non-integer code ttl identically on both transports — 60junk is 
     expect($httpMessage)->toContain('whole number')
         ->and($cliMessage)->toContain($httpMessage)
         // Nothing was minted from the junk — neither a row nor a code.
-        ->and(Credential::query()->count())->toBe(0)
+        ->and(transportCredentialCount('reel-junk'))->toBe(0)
         ->and(OnboardingToken::query()->count())->toBe(0);
 });
 
@@ -264,7 +278,7 @@ it('converges a negative code ttl onto the same bounds error on both transports'
     // hit the one bounds error — not a divergent "not an integer".
     expect($cliMessage)->toBe((string) $response->json('message'))
         ->and($cliMessage)->toContain('between 60 and 604800')
-        ->and(Credential::query()->count())->toBe(0);
+        ->and(transportCredentialCount('reel-negative'))->toBe(0);
 });
 
 it('bounds the abilities count identically on both transports', function (): void {
@@ -287,7 +301,7 @@ it('bounds the abilities count identically on both transports', function (): voi
 
     expect($cliMessage)->toBe((string) $response->json('message'))
         ->and($cliMessage)->toContain('at most 32 abilities')
-        ->and(Credential::query()->count())->toBe(0);
+        ->and(transportCredentialCount('greedy'))->toBe(0);
 });
 
 it('bounds the ability entry length identically on both transports', function (): void {
@@ -310,7 +324,7 @@ it('bounds the ability entry length identically on both transports', function ()
 
     expect($cliMessage)->toBe((string) $response->json('message'))
         ->and($cliMessage)->toContain('at most 128 characters')
-        ->and(Credential::query()->count())->toBe(0);
+        ->and(transportCredentialCount('verbose'))->toBe(0);
 });
 
 it('normalizes an empty abilities list to null identically on both transports', function (): void {
@@ -336,7 +350,7 @@ it('normalizes an empty abilities list to null identically on both transports', 
 
     Artisan::call('bfc:credential:list', ['--json' => true, '--local' => true]);
 
-    foreach (json_decode(trim(Artisan::output()), true) as $row) {
+    foreach (transportCredentialRows(json_decode(trim(Artisan::output()), true), 'empty-http', 'empty-cli') as $row) {
         expect($row['abilities'])->toBeNull();
     }
 });
@@ -409,12 +423,12 @@ it('mints a bearer credential via HTTP, revealing the secret once in the respons
     expect($credential->secret_hash)->toBe(hash('sha256', $secret))
         ->and(eventsFor($credential->id))->toBe([LifecycleEventType::Issued->value]);
 
-    // The HTTP transport's honest actor: the admin token the gate
+    // The HTTP transport's honest actor: the operator credential the gate
     // authenticated.
     $event = CredentialAuditEvent::query()->where('credential_id', $credential->id)->sole();
 
-    expect($event->actor_type)->toBe(AuditActorType::AdminToken)
-        ->and(ApiToken::query()->whereKey($event->actor_ref)->exists())->toBeTrue();
+    expect($event->actor_type)->toBe(AuditActorType::OperatorIntegration)
+        ->and(Credential::query()->whereKey($event->actor_ref)->exists())->toBeTrue();
 });
 
 it('mints a basic credential via HTTP with the auth.json pair in the delivery', function (): void {
@@ -447,13 +461,13 @@ it('mints an asymmetric enrollment via HTTP delivering the enrollment code', fun
         ->and($code->token_hash)->toBe(hash('sha256', (string) $response->json('delivery.enrollment_code')));
 });
 
-it('gates the HTTP verbs behind the admin token', function (): void {
+it('gates the HTTP verbs behind an operator credential', function (): void {
     $this->getJson('/bfc/credentials')->assertUnauthorized();
     $this->postJson('/bfc/credentials', [])->assertUnauthorized();
     $this->deleteJson('/bfc/credentials/some-id')->assertUnauthorized();
 
-    $consume = auditAdminToken('not-admin-'.bin2hex(random_bytes(4)));
-    ApiToken::query()->where('token_hash', hash('sha256', $consume))->update(['abilities' => [Scope::Consume->value]]);
+    $consume = auditOperatorCredential('not-admin-'.bin2hex(random_bytes(4)));
+    Credential::query()->where('secret_hash', hash('sha256', $consume))->update(['abilities' => [Scope::Consume->value]]);
 
     $this->getJson('/bfc/credentials', ['Authorization' => 'Bearer '.$consume])->assertForbidden();
 });
@@ -479,7 +493,7 @@ it('refuses ability widening past the declared ceiling on both transports', func
         'expires_at' => now()->addMinutes(30)->toIso8601String(),
     ], transportAdminHeaders())->assertForbidden();
 
-    expect(Credential::query()->count())->toBe(0);
+    expect(transportCredentialCount('ceiling'))->toBe(0);
 });
 
 it('refuses lifetime widening — a later expiry OR no expiry at all — past the declared ceiling on both transports', function (): void {
@@ -506,7 +520,7 @@ it('refuses lifetime widening — a later expiry OR no expiry at all — past th
         'subject_ref' => 'immortal',
     ], transportAdminHeaders())->assertForbidden();
 
-    expect(Credential::query()->count())->toBe(0);
+    expect(transportCredentialCount('long-lived', 'immortal'))->toBe(0);
 
     // Within the ceiling: minted.
     expect(Artisan::call('bfc:credential:mint', [
@@ -534,7 +548,7 @@ it('refuses the mint on both transports when the declaration denies the issue ve
         'subject_ref' => 'denied',
     ], transportAdminHeaders())->assertForbidden();
 
-    expect(Credential::query()->count())->toBe(0);
+    expect(transportCredentialCount('denied'))->toBe(0);
 });
 
 // ------------------------------------------------- declared-unsupported (AC4)
@@ -548,8 +562,8 @@ it('round-trips the declared-unsupported discrimination through both transports'
 
     expect(Artisan::call('bfc:credential:list', ['--json' => true, '--local' => true]))->toBe(0);
 
-    $cliRows = json_decode(trim(Artisan::output()), true);
-    $httpRows = $this->getJson('/bfc/credentials', transportAdminHeaders())->assertOk()->json();
+    $cliRows = transportCredentialRows(json_decode(trim(Artisan::output()), true), 'plain');
+    $httpRows = transportCredentialRows($this->getJson('/bfc/credentials', transportAdminHeaders())->assertOk()->json(), 'plain');
 
     expect($cliRows)->toBe($httpRows);
 
@@ -587,10 +601,54 @@ it('refuses a mint that sets a declared-unsupported field, on both transports', 
         'abilities' => ['consume'],
     ], transportAdminHeaders())->assertForbidden();
 
-    expect(Credential::query()->count())->toBe(0);
+    expect(transportCredentialCount('reel-app'))->toBe(0);
 });
 
 // ------------------------------------------------------------------- list
+
+it('omits presentation cadence when the default declaration declares none', function (): void {
+    Credential::factory()->create(['subject_ref' => 'default-cadence']);
+
+    $response = $this->getJson('/bfc/credentials', transportAdminHeaders())->assertOk();
+
+    $response->assertHeaderMissing('BFC-Presentation-Cadence');
+
+    expect(array_values(array_unique(array_column(
+        $response->json(),
+        'presentation_cadence_seconds',
+    ))))->toBe([null]);
+});
+
+it('lists a declared presentation cadence per row and in the response header', function (): void {
+    app()->bind(CredentialDeclaration::class, static fn (): CredentialDeclaration => new class implements CredentialDeclaration, DeclaresPresentationCadence
+    {
+        public function resolveSubject(Request $request): ?Subject
+        {
+            return null;
+        }
+
+        public function authorize(Credential $credential, ?string $ability, Request $request): bool
+        {
+            return true;
+        }
+
+        public function presentationCadenceSeconds(): ?int
+        {
+            return 604800;
+        }
+    });
+
+    Credential::factory()->create(['subject_ref' => 'declared-cadence']);
+
+    $response = $this->getJson('/bfc/credentials', transportAdminHeaders())->assertOk();
+
+    $response->assertHeader('BFC-Presentation-Cadence', '604800');
+
+    expect(array_values(array_unique(array_column(
+        $response->json(),
+        'presentation_cadence_seconds',
+    ))))->toBe([604800]);
+});
 
 it('filters the listing per row through the verb matrix on both transports', function (): void {
     Credential::factory()->create(['subject_ref' => 'visible']);
@@ -616,8 +674,8 @@ it('filters the listing per row through the verb matrix on both transports', fun
 
     expect(Artisan::call('bfc:credential:list', ['--json' => true, '--local' => true]))->toBe(0);
 
-    $cliRows = json_decode(trim(Artisan::output()), true);
-    $httpRows = $this->getJson('/bfc/credentials', transportAdminHeaders())->assertOk()->json();
+    $cliRows = transportCredentialRows(json_decode(trim(Artisan::output()), true), 'visible', 'hidden');
+    $httpRows = transportCredentialRows($this->getJson('/bfc/credentials', transportAdminHeaders())->assertOk()->json(), 'visible', 'hidden');
 
     expect($cliRows)->toBe($httpRows)
         ->and(array_column($cliRows, 'subject_ref'))->toBe(['visible']);

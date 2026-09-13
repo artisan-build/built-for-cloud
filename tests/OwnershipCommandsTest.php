@@ -4,14 +4,12 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
-use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
@@ -60,15 +58,13 @@ it('mints a claim that the claim endpoint exchanges for a credential-admin owner
     $ownership = Ownership::current();
     $ownerCredential = Credential::query()->whereKey($ownership?->owner_credential_id)->firstOrFail();
 
-    expect($ownership?->owner_token_id)->toBeNull()
-        ->and($ownerCredential->kind)->toBe(CredentialKind::Bearer)
+    expect($ownerCredential->kind)->toBe(CredentialKind::Bearer)
         ->and($ownerCredential->subject_type)->toBe(SubjectType::Operator)
         ->and($ownerCredential->subject_ref)->toBe('owner')
         ->and($ownerCredential->name)->toBe('owner')
         ->and($ownerCredential->abilities)->toBe([EnsureCredentialAdmin::ABILITY])
         ->and($ownerCredential->status)->toBe(CredentialStatus::Active)
-        ->and($ownerCredential->secret_hash)->toBe(hash('sha256', (string) $response->json('owner_token')))
-        ->and(ApiToken::query()->where('name', 'owner')->count())->toBe(0);
+        ->and($ownerCredential->secret_hash)->toBe(hash('sha256', (string) $response->json('owner_token')));
 
     $this->getJson('/bfc/credentials', ownerCommandHeaders((string) $response->json('owner_token')))
         ->assertOk();
@@ -160,7 +156,6 @@ it('remints the owner token for the current owner and revokes the previous one',
         'name' => 'renamed-owner',
         'abilities' => [EnsureCredentialAdmin::ABILITY],
     ]);
-    $legacyOwnerToken = ApiToken::factory()->create(['name' => 'owner', 'abilities' => [Scope::Admin->value]]);
     $newPlaintext = 'reminted-owner-token';
 
     $exitCode = Artisan::call('bfc:ownership:remint-owner-token', [
@@ -177,7 +172,6 @@ it('remints the owner token for the current owner and revokes the previous one',
 
     expect(Ownership::query()->count())->toBe(1)
         ->and($reminted?->owner_credential_id)->not->toBe($previousCredentialId)
-        ->and($reminted?->owner_token_id)->toBeNull()
         ->and($reminted?->webhook_secret)->toBe($ownership?->webhook_secret)
         ->and($newCredential->subject_type)->toBe(SubjectType::Operator)
         ->and($newCredential->subject_ref)->toBe('owner')
@@ -185,14 +179,13 @@ it('remints the owner token for the current owner and revokes the previous one',
         ->and($newCredential->secret_hash)->toBe(hash('sha256', $newPlaintext))
         ->and($previousCredential->revoked_at)->not->toBeNull()
         ->and($otherOwnerCredential->refresh()->revoked_at)->not->toBeNull()
-        ->and($legacyOwnerToken->refresh()->revoked_at)->not->toBeNull()
         ->and(Credential::query()->where('secret_hash', $newPlaintext)->exists())->toBeFalse();
 
     $this->getJson('/bfc/credentials', ownerCommandHeaders($newPlaintext))->assertOk();
     $this->getJson('/bfc/credentials', ownerCommandHeaders($previousPlaintext))->assertUnauthorized();
 });
 
-it('transfers from an exact unified owner and clears the legacy link', function (): void {
+it('transfers from an exact owner credential', function (): void {
     claimOwnerForCommandTests();
 
     $ownership = Ownership::current();
@@ -208,33 +201,7 @@ it('transfers from an exact unified owner and clears the legacy link', function 
     $transferred = Ownership::current();
 
     expect($transferred?->owner_credential_id)->not->toBe($previousCredentialId)
-        ->and($transferred?->owner_token_id)->toBeNull()
         ->and(Credential::query()->whereKey($previousCredentialId)->sole()->revoked_at)->not->toBeNull();
-
-    $this->getJson('/bfc/credentials', ownerCommandHeaders((string) $response->json('owner_token')))->assertOk();
-});
-
-it('transfers from an exact legacy owner into the unified store', function (): void {
-    $legacy = ApiToken::factory()->create([
-        'name' => 'legacy-owner-with-a-decorative-name',
-        'abilities' => [Scope::Admin->value],
-    ]);
-    $claimPlaintext = 'legacy-transfer-claim';
-    $claim = OwnershipClaim::query()->create([
-        'token_hash' => OwnershipClaim::hashToken($claimPlaintext),
-    ]);
-
-    Ownership::query()->create([
-        'owner_token_id' => $legacy->getKey(),
-        'pending_claim_id' => $claim->getKey(),
-    ]);
-
-    $response = $this->postJson('/bfc/ownership/claim', ['token' => $claimPlaintext])->assertCreated();
-    $transferred = Ownership::current();
-
-    expect($transferred?->owner_credential_id)->not->toBeNull()
-        ->and($transferred?->owner_token_id)->toBeNull()
-        ->and($legacy->refresh()->revoked_at)->not->toBeNull();
 
     $this->getJson('/bfc/credentials', ownerCommandHeaders((string) $response->json('owner_token')))->assertOk();
 });
@@ -247,7 +214,6 @@ it('refuses to remint an owner token when ownership is unclaimed', function (): 
 
     expect($exitCode)->not->toBe(0)
         ->and(Artisan::output())->toContain('Ownership is not claimed.')
-        ->and(ApiToken::query()->count())->toBe(0)
         ->and(Credential::query()->count())->toBe(0)
         ->and(Ownership::query()->count())->toBe(0);
 });
@@ -264,8 +230,7 @@ it('rejects an owner token hash that is not a sha256 digest', function (): void 
 
     expect($exitCode)->not->toBe(0)
         ->and(Ownership::current()?->owner_credential_id)->toBe($ownership?->owner_credential_id)
-        ->and(Credential::query()->count())->toBe(1)
-        ->and(ApiToken::query()->count())->toBe(0);
+        ->and(Credential::query()->count())->toBe(1);
 });
 
 it('runs remint in driver mode without sending plaintext to cloud', function (): void {
@@ -317,8 +282,7 @@ it('persists only hashes for tokens minted by the ownership commands', function 
     expect($claimRows)->toContain(hash('sha256', $claimPlaintext))
         ->and($claimRows)->not->toContain($claimPlaintext)
         ->and($credentialRows)->toContain(hash('sha256', $ownerPlaintext))
-        ->and($credentialRows)->not->toContain($ownerPlaintext)
-        ->and(ApiToken::query()->where('name', 'owner')->count())->toBe(0);
+        ->and($credentialRows)->not->toContain($ownerPlaintext);
 });
 
 function claimOwnerForCommandTests(string $claimToken = 'command-initial-claim'): string

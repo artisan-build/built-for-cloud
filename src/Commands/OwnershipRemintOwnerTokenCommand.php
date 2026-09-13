@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Commands;
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\CloudCommandRunner;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
@@ -77,8 +76,6 @@ final class OwnershipRemintOwnerTokenCommand extends Command
             }
 
             $previousCredentialId = $ownership->owner_credential_id;
-            $previousTokenId = $ownership->owner_token_id;
-
             try {
                 $ownerCredential = $minter->mintFromHash($hash);
             } catch (InvalidArgumentException $e) {
@@ -87,12 +84,10 @@ final class OwnershipRemintOwnerTokenCommand extends Command
                 return self::FAILURE;
             }
 
-            $this->revokePreviousOwnerTokens($previousTokenId);
             $this->revokePreviousOwnerCredentials($previousCredentialId, (string) $ownerCredential->getKey());
 
             $ownership->forceFill([
                 'owner_credential_id' => $ownerCredential->getKey(),
-                'owner_token_id' => null,
             ])->save();
 
             $this->line('Owner token reminted.');
@@ -101,29 +96,6 @@ final class OwnershipRemintOwnerTokenCommand extends Command
         });
 
         return $status;
-    }
-
-    private function revokePreviousOwnerTokens(?string $previousTokenId): void
-    {
-        $now = now();
-
-        if ($previousTokenId !== null) {
-            ApiToken::query()
-                ->whereKey($previousTokenId)
-                ->whereNull('revoked_at')
-                ->update([
-                    'expires_at' => $now,
-                    'revoked_at' => $now,
-                ]);
-        }
-
-        ApiToken::query()
-            ->where('name', 'owner')
-            ->resolvable()
-            ->update([
-                'expires_at' => $now,
-                'revoked_at' => $now,
-            ]);
     }
 
     private function revokePreviousOwnerCredentials(?string $previousCredentialId, string $currentCredentialId): void

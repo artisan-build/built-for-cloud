@@ -12,9 +12,9 @@ enum BurnMode: string
 {
     /**
      * The code burns when the credential it minted is first successfully
-     * presented — hitch's make-before-break rule, honoured by providers
-     * with an observable first authenticated use (`api_tokens`). Redemption
-     * alone does not burn; a dropped exchange response stays harmless.
+     * presented — hitch's make-before-break rule for credentials with an
+     * observable first authenticated use. Redemption alone does not burn;
+     * a dropped exchange response stays harmless.
      */
     case FirstUse = 'first_use';
 

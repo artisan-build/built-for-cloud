@@ -128,11 +128,6 @@ $restatedClaims = [
         'release-notes/console-enter.md',
         'src/Console/AssertionBurn.php',
     ],
-    'consults the subject the row declares never anything the caller supplies sec-v3-07' => [
-        'src/Actions/ActivateCredential.php',
-        'src/Actions/RevokeCredential.php',
-        'src/Actions/RotateCredential.php',
-    ],
     'every bound credential in every lifecycle state active rotation-grace and pending unexchanged enrollments and' => [
         'docs/http-contract.md',
         'release-notes/offboarding.md',
@@ -159,11 +154,6 @@ $restatedClaims = [
         'src/Console/DelegatedActor.php',
         'src/Console/DelegatedActorProvider.php',
     ],
-    'is a token api that wants no session these three' => [
-        'docs/http-contract.md',
-        'release-notes/personal-credentials.md',
-        'src/BuiltForCloudServiceProvider.php',
-    ],
     'is ddl and no row trigger sees it a raw insert' => [
         'database/migrations/2026_08_29_300002_create_bfc_app_action_outbox_table.php',
         'docs/http-contract.md',
@@ -175,11 +165,6 @@ $restatedClaims = [
         'src/Console/ConsoleSession.php',
         'src/Console/DelegatedClaims.php',
         'src/Http/Controllers/ConsoleEnter.php',
-    ],
-    'it means the row structurally cannot carry a usage signal' => [
-        'docs/http-contract.md',
-        'release-notes/subjects-authority.md',
-        'src/ReportedStatus.php',
     ],
     'leaves a contained actor\'s mint unspent so every attempt audits as containment' => [
         'docs/http-contract.md',
@@ -298,11 +283,10 @@ $restatedClaims = [
         'src/Commands/HmacRewrapCommand.php',
         'src/Hmac/HmacWriterBarrier.php',
     ],
-    'the matrix consults the subject the row declares never anything the' => [
+    'the matrix consults the subject the row declares never anything the caller supplies sec-v3-07' => [
         'src/Actions/ActivateCredential.php',
         'src/Actions/RevokeCredential.php',
         'src/Actions/RotateCredential.php',
-        'src/Http/Controllers/ManageTokens.php',
     ],
     'the mint signed it refuses an entry that presents no state at all refuses a mint that signed no state whatever state is presented and refuses a state' => [
         'docs/http-contract.md',
@@ -585,10 +569,10 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1364,
-        'absolute' => 431,
-        'paired' => 114,
-        'unpaired' => 317,
+        'blocks' => 1331,
+        'absolute' => 423,
+        'paired' => 112,
+        'unpaired' => 311,
     ]);
 
     // The surfaces the restatement map runs over are wider than the

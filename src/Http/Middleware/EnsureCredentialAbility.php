@@ -34,9 +34,9 @@ use Throwable;
  * `bfc.ability:mcp:admin` on destructive administration tools. The match
  * is EXACT: no ability implies another here (`credential:admin` included),
  * an ingest-scoped or MCP-read credential is 403 on a destructive tool,
- * and anything the `bfc` guard refuses — a legacy `api_tokens` secret, a
- * `FALLBACK_TOKEN` (the guard has no code path to it), an expired or
- * revoked row — is 401 before abilities are even consulted.
+ * and anything the `bfc` guard refuses — an unknown secret or an expired,
+ * revoked, pending, or offboarded row — is 401 before abilities are
+ * consulted.
  *
  * A denial of an AUTHENTICATED credential is audited as a `denied_action`
  * event (ids only), best-effort — the deny must stand even while the audit

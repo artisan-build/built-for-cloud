@@ -166,15 +166,14 @@ it('runs end to end from a consuming artisan command, minting the operator crede
     // PRD 1.20 through the SCAFFOLD entry point, not the command alone:
     // the install run minted the operator credential and revealed its
     // secret exactly once, through the installer command's own output —
-    // and never wrote a FALLBACK_TOKEN.
+    // without persisting its plaintext.
     $credential = Credential::query()->sole();
 
     preg_match('/shown once: (\S+)/', $output, $matches);
 
     expect($credential->subject_type)->toBe(SubjectType::Operator)
         ->and($credential->secret_hash)->toBe(hash('sha256', $matches[1]))
-        ->and(substr_count($output, $matches[1]))->toBe(1)
-        ->and((string) file_get_contents($envPath))->not->toContain('FALLBACK_TOKEN');
+        ->and(substr_count($output, $matches[1]))->toBe(1);
 });
 
 it('re-runs the install scaffold without silently minting a second operator credential', function (): void {

@@ -12,10 +12,8 @@ use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
 use ArtisanBuild\BuiltForCloud\Subject;
 
 /**
- * The list verb over the unified store (PRD 1.0 + 1.6), consumed by both
- * `bfc:credential:list --local` and `GET /bfc/credentials`. The legacy
- * `api_tokens` listing (`GET /api/credentials`) is a separate, unchanged
- * surface.
+ * The list verb over the credential store (PRD 1.0 + 1.6), consumed by both
+ * `bfc:credential:list --local` and `GET /bfc/credentials`.
  *
  * `list_metadata` granularity is PER ROW: each row the declaration's verb
  * matrix denies drops out of the listing — a blanket deny yields an empty

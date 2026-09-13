@@ -8,7 +8,6 @@ use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuard;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
@@ -33,7 +32,6 @@ function correctedManagedIngressManifest(): array
         EnsureUserIsAdmin::class => 'adapt',
         EnsureConsoleSession::class => 'deferred — resolved by P5 transport consolidation',
         AuthenticateMcp::class => 'deferred — resolved by P5 transport consolidation',
-        EnsureAdminToken::class => 'deferred — resolved by P5 transport consolidation',
         EnsureCredentialAdmin::class => 'adapt',
         EnsureCredentialAbility::class => 'adapt',
         EnsureDashboardCredential::class => 'adapt',
@@ -53,7 +51,7 @@ it('derives exactly the corrected AC17 manifest including class-bound middleware
         ->and($discovered)->toBe($expected)
         ->and(array_count_values($manifest))->toBe([
             'adapt' => 9,
-            'deferred — resolved by P5 transport consolidation' => 5,
+            'deferred — resolved by P5 transport consolidation' => 4,
             'out of scope — authority-mode gate, not an account-bound ingress' => 1,
         ]);
 });

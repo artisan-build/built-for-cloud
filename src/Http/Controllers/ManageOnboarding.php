@@ -6,7 +6,6 @@ namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\Actions\FileConsoleKey;
 use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
@@ -22,7 +21,6 @@ use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
-use ArtisanBuild\BuiltForCloud\DurableStore;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
@@ -65,8 +63,8 @@ final class ManageOnboarding extends OperatorRouteController
     /**
      * Resolved per call, never via the constructor: the router caches
      * controller instances per route, so an injected declaration or minter
-     * would outlive a rebinding in a long-lived worker. ManageTokens and the
-     * guard resolve the same way.
+     * would outlive a rebinding in a long-lived worker. The guard resolves
+     * the same way.
      */
     private function declaration(): CredentialDeclaration
     {
@@ -153,22 +151,12 @@ final class ManageOnboarding extends OperatorRouteController
         });
     }
 
-    /**
-     * The actor an admin surface can honestly attribute: the admin token
-     * that authenticated this request, stashed by the middleware. Null when
-     * nothing was stashed — never guessed.
-     */
+    /** The unified operator credential stashed by the middleware, if any. */
     private function requestActor(Request $request): ?AuditActor
     {
         $credentialId = $request->attributes->get('bfc.actor_credential_id');
 
-        if (is_string($credentialId) && $credentialId !== '') {
-            return AuditActor::operatorIntegration($credentialId);
-        }
-
-        $tokenId = $request->attributes->get('bfc.actor_token_id');
-
-        return is_string($tokenId) && $tokenId !== '' ? AuditActor::adminToken($tokenId) : null;
+        return is_string($credentialId) && $credentialId !== '' ? AuditActor::operatorIntegration($credentialId) : null;
     }
 
     /**
@@ -440,11 +428,7 @@ final class ManageOnboarding extends OperatorRouteController
             $revokedIds = [];
 
             if ($code->durable_credential_id !== null) {
-                $revokedIds[] = $this->revokeDurableById($code->durable_credential_id, DurableStore::Credentials);
-            }
-
-            if ($code->durable_token_id !== null && $code->durableStore() === DurableStore::ApiTokens) {
-                $revokedIds[] = $this->revokeDurableById($code->durable_token_id, DurableStore::ApiTokens);
+                $revokedIds[] = $this->revokeDurableById($code->durable_credential_id);
             }
 
             $name = $code->email ?? 'claim-'.$code->id;
@@ -791,16 +775,11 @@ final class ManageOnboarding extends OperatorRouteController
 
         foreach ($tokens as $token) {
             // A pending code's durable link is a never-used make-before-break
-            // token; superseding the code invalidates it — in the store it
-            // was RECORDED into. A durable that has been USED belongs to a
+            // credential; superseding the code invalidates it. A durable that has been USED belongs to a
             // consumed code and is never touched here.
             if ($token->durable_credential_id !== null
-                && $this->revokeDurableById($token->durable_credential_id, DurableStore::Credentials) !== null) {
+                && $this->revokeDurableById($token->durable_credential_id) !== null) {
                 $revoked[] = [$token->durable_credential_id, $token->id];
-            } elseif ($token->durable_token_id !== null
-                && $token->durableStore() === DurableStore::ApiTokens
-                && $this->revokeDurableById($token->durable_token_id, DurableStore::ApiTokens) !== null) {
-                $revoked[] = [$token->durable_token_id, $token->id];
             }
 
             $token->forceFill(['consumed_at' => now()])->save();
@@ -830,10 +809,9 @@ final class ManageOnboarding extends OperatorRouteController
     /**
      * The unified-store half of the D1d sweep: same exclusions, expressed
      * on `credentials` columns. The tenancy key here is `subject_ref` (the
-     * unified minter sets it from the claim's name), the scope is an
-     * ability, and — exactly as on `api_tokens` — a row superseded by
-     * rotation survives, because the sweep killing it would break the
-     * make-before-break window rotation exists to provide.
+     * minter sets it from the claim's name), the scope is an ability, and a
+     * row superseded by rotation survives because the sweep killing it would
+     * break the make-before-break window rotation exists to provide.
      *
      * The exemption requires the SHAPE the rotate verb actually leaves,
      * not the marker alone ({@see inRotationGrace}): a bare `rotated_at`
@@ -904,52 +882,23 @@ final class ManageOnboarding extends OperatorRouteController
     }
 
     /**
-     * Revoke a linked durable in the store it was RECORDED into (never the
-     * currently declared store — the linkage outlives declaration changes).
-     *
      * @return string|null the revoked durable's id, or null when no row matched
      */
-    private function revokeDurableById(string $tokenId, DurableStore $store): ?string
+    private function revokeDurableById(string $credentialId): ?string
     {
-        if ($store === DurableStore::Credentials) {
-            /** @var Credential|null $credential */
-            $credential = Credential::query()
-                ->whereKey($tokenId)
-                ->lockForUpdate()
-                ->first();
-
-            if ($credential === null) {
-                return null;
-            }
-
-            $credential->forceFill(['revoked_at' => $credential->revoked_at ?? now()])->save();
-
-            return (string) $credential->getKey();
-        }
-
-        /** @var ApiToken|null $token */
-        $token = ApiToken::query()
-            ->whereKey($tokenId)
+        /** @var Credential|null $credential */
+        $credential = Credential::query()
+            ->whereKey($credentialId)
             ->lockForUpdate()
             ->first();
 
-        if ($token === null) {
+        if ($credential === null) {
             return null;
         }
 
-        $this->revokeLockedDurable($token);
+        $credential->forceFill(['revoked_at' => $credential->revoked_at ?? now()])->save();
 
-        return (string) $token->getKey();
-    }
-
-    private function revokeLockedDurable(ApiToken $token): void
-    {
-        $now = now();
-
-        $token->forceFill([
-            'expires_at' => $now,
-            'revoked_at' => $now,
-        ])->save();
+        return (string) $credential->getKey();
     }
 
     /**

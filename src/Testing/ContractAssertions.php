@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Testing;
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
@@ -74,8 +73,8 @@ trait ContractAssertions
 
     public function assertBuiltForCloudOwnershipAuthContract(): void
     {
-        $wrongAbility = $this->mintBuiltForCloudOperatorCredential([OperatorAbility::CredentialMint->value]);
-        $consumeToken = $this->mintBuiltForCloudConsumeToken();
+        $wrongAbility = $this->mintBuiltForCloudOperatorWithAbilities([OperatorAbility::CredentialMint->value]);
+        $consumeToken = $this->mintBuiltForCloudConsumeCredential();
 
         foreach (['/bfc/ownership/release', '/bfc/ownership/cancel-transfer'] as $uri) {
             $this->postJson($uri)->assertUnauthorized();
@@ -94,8 +93,8 @@ trait ContractAssertions
 
     public function assertBuiltForCloudOnboardingAuthContract(): void
     {
-        $wrongAbility = $this->mintBuiltForCloudOperatorCredential([OperatorAbility::CredentialRead->value]);
-        $consumeToken = $this->mintBuiltForCloudConsumeToken();
+        $wrongAbility = $this->mintBuiltForCloudOperatorWithAbilities([OperatorAbility::CredentialRead->value]);
+        $consumeToken = $this->mintBuiltForCloudConsumeCredential();
 
         $this->postJson('/bfc/onboarding/issue', ['email' => 'contract@example.test'])
             ->assertUnauthorized();
@@ -131,10 +130,10 @@ trait ContractAssertions
 
     public function assertBuiltForCloudModelContract(): void
     {
-        foreach ($this->builtForCloudApiTokenColumns() as $column) {
+        foreach ($this->builtForCloudCredentialColumns() as $column) {
             Assert::assertTrue(
-                Schema::hasColumn('api_tokens', $column),
-                sprintf('The api_tokens table is missing the expected %s column.', $column),
+                Schema::hasColumn('credentials', $column),
+                sprintf('The credentials table is missing the expected %s column.', $column),
             );
         }
 
@@ -182,35 +181,32 @@ trait ContractAssertions
     }
 
     /**
-     * The credential-API listing shape (PRD 1.5). NOT part of
-     * assertBuiltForCloudContract(): the credential API is disabled by
-     * default, so this is called only from a test that enables it
-     * (`built-for-cloud.credential_api.enabled` true before boot).
-     *
-     * Asserts every listing row carries the full additive field set — the
-     * pre-PR5 fields AND `id` / `request_count` / `subject_type` /
-     * `subject_ref` / `status` / `presentation_cadence_seconds` — and that
-     * no hash column ever appears.
+     * The unified credential listing shape. Every summary field is present,
+     * while secret material and hashes never appear.
      */
     public function assertBuiltForCloudCredentialListingContract(): void
     {
-        $admin = $this->mintBuiltForCloudAdminToken('contract-listing-admin');
+        $admin = $this->mintBuiltForCloudOperatorCredential('contract-listing-admin');
 
-        $response = $this->getJson('/api/credentials', $this->builtForCloudBearerHeaders($admin));
+        $response = $this->getJson('/bfc/credentials', $this->builtForCloudBearerHeaders($admin));
 
         $response->assertOk()
             ->assertJsonStructure([
                 '*' => [
+                    'id',
+                    'kind',
+                    'subject_type',
+                    'subject_ref',
                     'name',
+                    'abilities',
+                    'status',
+                    'created_at',
                     'last_used_at',
                     'expires_at',
                     'revoked_at',
-                    'abilities',
-                    'client_identity',
-                    'client_identity_last_seen_at',
-                    'id',
-                    'request_count',
-                    'status',
+                    'rotated_at',
+                    'presentation_cadence_seconds',
+                    'unsupported',
                 ],
             ]);
 
@@ -222,17 +218,12 @@ trait ContractAssertions
         foreach ($rows as $row) {
             Assert::assertIsArray($row);
 
-            // Nullable fields assert as PRESENT keys, not truthy values.
-            foreach (['subject_type', 'subject_ref', 'presentation_cadence_seconds'] as $key) {
-                Assert::assertArrayHasKey($key, $row, sprintf('A credential listing row is missing the %s key.', $key));
-            }
-
-            Assert::assertArrayNotHasKey('token_hash', $row);
             Assert::assertArrayNotHasKey('secret_hash', $row);
+            Assert::assertArrayNotHasKey('secret_ciphertext', $row);
         }
 
-        Assert::assertStringNotContainsString('token_hash', (string) $response->getContent());
         Assert::assertStringNotContainsString('secret_hash', (string) $response->getContent());
+        Assert::assertStringNotContainsString('secret_ciphertext', (string) $response->getContent());
     }
 
     /**
@@ -291,7 +282,7 @@ trait ContractAssertions
      */
     public function assertBuiltForCloudMintTransportParity(): bool
     {
-        $admin = $this->mintBuiltForCloudAdminToken('parity-admin');
+        $admin = $this->mintBuiltForCloudOperatorCredential('parity-admin');
 
         $ref = 'parity-mint-'.bin2hex(random_bytes(4));
 
@@ -393,7 +384,7 @@ trait ContractAssertions
      */
     public function assertBuiltForCloudBasicAuthTransportParity(): void
     {
-        $admin = $this->mintBuiltForCloudAdminToken('parity-basic-admin');
+        $admin = $this->mintBuiltForCloudOperatorCredential('parity-basic-admin');
 
         $ref = 'parity-basic-'.bin2hex(random_bytes(4));
 
@@ -457,7 +448,11 @@ trait ContractAssertions
 
     public function assertBuiltForCloudListTransportParity(): void
     {
-        $admin = $this->mintBuiltForCloudAdminToken('parity-list-admin');
+        $admin = $this->mintBuiltForCloudOperatorCredential('parity-list-admin');
+        $adminId = (string) Credential::query()
+            ->where('secret_hash', hash('sha256', $admin))
+            ->sole()
+            ->id;
 
         $cliExit = Artisan::call('bfc:credential:list', ['--json' => true, '--local' => true]);
         Assert::assertSame(0, $cliExit);
@@ -467,6 +462,18 @@ trait ContractAssertions
         $httpRows = $this->getJson('/bfc/credentials', $this->builtForCloudBearerHeaders($admin))
             ->assertOk()
             ->json();
+
+        Assert::assertIsArray($cliRows);
+        Assert::assertIsArray($httpRows);
+
+        // The authenticating credential is an artifact of the HTTP transport
+        // under test, not part of the listing payload being compared.
+        $isActionPayload = static fn (array $row): bool => ($row['id'] ?? null) !== $adminId;
+        $cliRows = array_values(array_filter($cliRows, $isActionPayload));
+        $httpRows = array_values(array_filter($httpRows, $isActionPayload));
+
+        Assert::assertNotEmpty($cliRows, 'The CLI listing carried no action payload after excluding its transport artifact.');
+        Assert::assertNotEmpty($httpRows, 'The HTTP listing carried no action payload after excluding its transport artifact.');
 
         // Identical rows, identical serialization, identical order — the
         // one action serializes for both transports, so this is equality,
@@ -482,7 +489,7 @@ trait ContractAssertions
      */
     public function assertBuiltForCloudRevokeTransportParity(): void
     {
-        $admin = $this->mintBuiltForCloudAdminToken('parity-revoke-admin');
+        $admin = $this->mintBuiltForCloudOperatorCredential('parity-revoke-admin');
 
         $ref = 'parity-revoke-'.bin2hex(random_bytes(4));
 
@@ -558,7 +565,7 @@ trait ContractAssertions
      */
     public function assertBuiltForCloudRotateTransportParity(): void
     {
-        $admin = $this->mintBuiltForCloudAdminToken('parity-rotate-admin');
+        $admin = $this->mintBuiltForCloudOperatorCredential('parity-rotate-admin');
 
         $ref = 'parity-rotate-'.bin2hex(random_bytes(4));
         $expiry = now()->addDays(30)->toIso8601String();
@@ -743,32 +750,46 @@ trait ContractAssertions
 
     public function mintBuiltForCloudAdminToken(string $name = 'contract-admin'): string
     {
-        return $this->mintBuiltForCloudToken($name, [Scope::Admin->value]);
+        return $this->mintBuiltForCloudCredential($name, SubjectType::Operator, [OperatorAbility::ADMIN]);
     }
 
     public function mintBuiltForCloudConsumeToken(string $name = 'contract-consume'): string
     {
-        return $this->mintBuiltForCloudToken($name, [Scope::Consume->value]);
+        return $this->mintBuiltForCloudCredential($name, SubjectType::ExternalConsumer, [Scope::Consume->value]);
+    }
+
+    public function mintBuiltForCloudOperatorCredential(string $name = 'contract-admin'): string
+    {
+        return $this->mintBuiltForCloudAdminToken($name);
+    }
+
+    public function mintBuiltForCloudConsumeCredential(string $name = 'contract-consume'): string
+    {
+        return $this->mintBuiltForCloudConsumeToken($name);
     }
 
     /**
      * @param  list<string>  $abilities
      */
-    private function mintBuiltForCloudToken(string $name, array $abilities): string
+    private function mintBuiltForCloudCredential(string $name, SubjectType $subjectType, array $abilities): string
     {
         $plainTextToken = $name.'-'.bin2hex(random_bytes(16));
 
-        ApiToken::query()->create([
+        Credential::query()->create([
+            'kind' => CredentialKind::Bearer,
+            'subject_type' => $subjectType,
+            'subject_ref' => $name,
             'name' => $name,
-            'token_hash' => hash('sha256', $plainTextToken),
+            'secret_hash' => hash('sha256', $plainTextToken),
             'abilities' => $abilities,
+            'status' => CredentialStatus::Active,
         ]);
 
         return $plainTextToken;
     }
 
     /** @param list<string> $abilities */
-    private function mintBuiltForCloudOperatorCredential(array $abilities): string
+    private function mintBuiltForCloudOperatorWithAbilities(array $abilities): string
     {
         $plaintext = 'contract-operator-'.bin2hex(random_bytes(16));
 
@@ -795,19 +816,31 @@ trait ContractAssertions
     /**
      * @return list<string>
      */
-    private function builtForCloudApiTokenColumns(): array
+    private function builtForCloudCredentialColumns(): array
     {
         return [
             'id',
-            'name',
-            'token_hash',
-            'last_used_at',
-            'request_count',
-            'expires_at',
-            'revoked_at',
-            'abilities',
+            'kind',
             'subject_type',
             'subject_ref',
+            'name',
+            'abilities',
+            'user_id',
+            'secret_hash',
+            'public_key',
+            'status',
+            'revoked_at',
+            'rotated_at',
+            'expires_at',
+            'last_used_at',
+            'client_identity',
+            'client_identity_last_seen_at',
+            'secret_ciphertext',
+            'secret_key_version',
+            'delivered_at',
+            'delivered_generation',
+            'delivery_fingerprint',
+            'activated_at',
             'created_at',
             'updated_at',
         ];

@@ -132,7 +132,6 @@ function p4dStateExceptAttempt(): array
         'password_reset_tokens',
         'credentials',
         'bfc_managed_handoffs',
-        'api_tokens',
         'bfc_delegated_actors',
         'integration_entitlements',
         'integration_events',

@@ -2,15 +2,12 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActor;
-use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\BuiltForCloudServiceProvider;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
-use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
@@ -134,11 +131,9 @@ $case = new class('testProbe') extends TestCase
         return [
             'ownership_count' => Ownership::query()->count(),
             'owner_credential_id' => $ownership->owner_credential_id,
-            'owner_token_id' => $ownership->owner_token_id,
             'claim_id' => $claim->id,
             'claim_consumed' => $claim->consumed_at !== null,
             'credential_count' => Credential::query()->count(),
-            'api_token_count' => ApiToken::query()->count(),
             'credential' => $this->credentialState($credential),
         ];
     }
@@ -148,7 +143,6 @@ $case = new class('testProbe') extends TestCase
         if ($phase === 'setup') {
             $this->createCredential($payload['old_owner']);
             $this->createCredential($payload['other_owner']);
-            ApiToken::query()->create($payload['legacy_owner']);
             Ownership::query()->create([
                 'id' => $payload['ownership_id'],
                 'owner_credential_id' => $payload['old_owner']['id'],
@@ -173,10 +167,8 @@ $case = new class('testProbe') extends TestCase
             'ownership_count' => Ownership::query()->count(),
             'ownership_id' => $ownership->id,
             'owner_credential_id' => $ownership->owner_credential_id,
-            'owner_token_id' => $ownership->owner_token_id,
             'webhook_secret' => $ownership->webhook_secret,
             'credentials' => Credential::query()->orderBy('id')->get()->map(fn (Credential $credential): array => $this->credentialState($credential))->all(),
-            'legacy' => ApiToken::query()->findOrFail($payload['legacy_id'])->only(['id', 'token_hash', 'revoked_at', 'expires_at']),
         ];
     }
 
@@ -186,8 +178,6 @@ $case = new class('testProbe') extends TestCase
             foreach ($payload['credentials'] as $credential) {
                 $this->createCredential($credential);
             }
-
-            ApiToken::query()->create($payload['legacy']);
 
             return ['credential_ids' => array_column($payload['credentials'], 'id')];
         }
@@ -206,7 +196,6 @@ $case = new class('testProbe') extends TestCase
 
         return [
             'credentials' => Credential::query()->orderBy('id')->get()->map(fn (Credential $credential): array => $this->credentialState($credential))->all(),
-            'legacy_request_count' => ApiToken::query()->findOrFail($payload['legacy_id'])->request_count,
             'audit' => $this->auditState(),
         ];
     }
@@ -260,7 +249,6 @@ $case = new class('testProbe') extends TestCase
     {
         if ($phase === 'setup') {
             $this->createCredential($payload['credential']);
-            ApiToken::query()->create($payload['legacy']);
 
             return ['credential_id' => $payload['credential']['id']];
         }
@@ -275,10 +263,6 @@ $case = new class('testProbe') extends TestCase
             'credential_id' => $credential->id,
             'expires_at' => $credential->expires_at?->format('Y-m-d H:i:s'),
             'audit' => $this->auditState(),
-            'legacy_expiring_events' => CredentialAuditEvent::query()
-                ->where('event', LifecycleEventType::Expiring->value)
-                ->where('credential_id', $payload['legacy_id'])
-                ->count(),
         ];
     }
 
@@ -434,9 +418,6 @@ $case = new class('testProbe') extends TestCase
 
         return [
             'credentials' => Credential::query()->orderBy('id')->get()->map(fn (Credential $credential): array => $this->credentialState($credential))->all(),
-            'admin_token_audit_count' => CredentialAuditEvent::query()
-                ->where('actor_type', AuditActorType::AdminToken->value)
-                ->count(),
         ];
     }
 

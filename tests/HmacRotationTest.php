@@ -37,7 +37,12 @@ uses(RefreshDatabase::class, DetectsSecretLeaks::class);
  */
 function hmacRotationAdminHeaders(): array
 {
-    return ['Authorization' => 'Bearer '.auditAdminToken('hmac-rotation-admin-'.bin2hex(random_bytes(4)))];
+    return ['Authorization' => 'Bearer '.auditOperatorCredential('hmac-rotation-operator-'.bin2hex(random_bytes(4)))];
+}
+
+function hmacRotationCredentialCount(): int
+{
+    return Credential::query()->where('subject_ref', 'webhook-client')->count();
 }
 
 function hmacRotationSubject(string $ref = 'webhook-client'): Subject
@@ -282,7 +287,7 @@ it('refuses to re-rotate a stamped source while its replacement awaits activatio
         ->and($cliMessage)->toContain('PENDING activation')
         ->and($cliMessage)->toContain($newId)
         // Nothing minted, nothing retired: the old key still signs.
-        ->and(Credential::query()->count())->toBe(2)
+        ->and(hmacRotationCredentialCount())->toBe(2)
         ->and($old->refresh()->expires_at)->toBeNull();
 });
 
@@ -308,7 +313,7 @@ it('completes a failed hmac cutover through the rotate verb: retirement only, no
     expect($completion->json('completed_cutover'))->toBeTrue()
         ->and($completion->json('credential.id'))->toBe($newId)
         ->and($completion->json('delivery.shape'))->toBe('none')
-        ->and(Credential::query()->count())->toBe(2);
+        ->and(hmacRotationCredentialCount())->toBe(2);
 
     $old->refresh();
 

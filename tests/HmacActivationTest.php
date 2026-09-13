@@ -38,7 +38,7 @@ uses(RefreshDatabase::class, DetectsSecretLeaks::class);
  */
 function activationAdminHeaders(): array
 {
-    return ['Authorization' => 'Bearer '.auditAdminToken('activation-admin-'.bin2hex(random_bytes(4)))];
+    return ['Authorization' => 'Bearer '.auditOperatorCredential('activation-operator-'.bin2hex(random_bytes(4)))];
 }
 
 /**

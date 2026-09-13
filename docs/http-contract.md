@@ -13,9 +13,8 @@ the form `### METHOD /path`.
 One mounting switch exists, and only one: the surface-selection key (PRD 1.14,
 `built-for-cloud.surfaces.routes`) can unmount this **entire HTTP surface as one family** —
 for apps that use the package's store and CLI without serving its HTTP contract. No single
-route is individually configurable, no route ever moves behind a prefix except the legacy
-credential API's documented one, and an instance that serves any of this contract serves all
-of it.
+route is individually configurable, no route moves behind a configurable prefix, and an instance
+that serves any of this contract serves all of it.
 
 ## Platform requirements
 
@@ -115,7 +114,7 @@ because a reader applying rule 1 to their own change needs the real list:
   the app-action emission point serve no new wire shape and change none.
 
 - **Request-scoped delegated MCP authentication ships.** `AuthenticateMcp` accepts either a
-  `TokenRegistry` bearer or a purpose-bound Console assertion, burns assertions before dispatch,
+  unified bearer credential or a purpose-bound Console assertion, burns assertions before dispatch,
   and publishes their delegated actor for that request without writing a session. `GET /bfc/meta`
   gains conditional `mcp-serve` / `mcp-delegated` capabilities and the additive `endpoints` object.
   MCP tools gain the `metadata | content` classification attribute and a reusable delegated-tool
@@ -138,15 +137,6 @@ with the three things that WOULD have moved the major and none of which happened
   `console_key` appears on a claim or exchange response only when the request supplied one; an
   envelope carrying none is unchanged, response keys included.
 
-- `GET /api/credentials` listing rows gained `id`, `request_count`, `subject_type` (nullable),
-  `subject_ref` (nullable), `status`, and `presentation_cadence_seconds` (nullable); the listing
-  gained the `BFC-Presentation-Cadence` response header (present only when the app declares a
-  cadence). *(These fields shipped across 0.4.x while `api_version` incorrectly stayed 1 — the
-  stagnation this rule now forbids.)*
-- New route `DELETE /api/credentials/id/{id}` — revoke-by-id, the precise verb.
-- **Changed (the one non-additive change):** `DELETE /api/credentials/{name}` now returns
-  `200 {"revoked_ids": [...]}` instead of an empty `204`. Callers that checked for any 2xx keep
-  working; callers that assumed an empty body must read the new shape.
 - New unified-store verb routes: `GET /bfc/credentials`, `POST /bfc/credentials`,
   `DELETE /bfc/credentials/{id}`.
 - New `capabilities` entry `app-action-audit-emit`, and the app-action audit stream's schema and
@@ -158,19 +148,14 @@ with the three things that WOULD have moved the major and none of which happened
   D11/D7). Additive: no existing request or response shape changes, and the capability names
   what this deployment SERVES, never that any page of the application renders it. See
   [the console chrome](#the-console-chrome).
-- New rotation routes (PRD 1.7): `POST /bfc/credentials/{id}/rotate` and
-  `POST /api/credentials/id/{id}/rotate` — rotate-by-id, the primary verb, on both stores.
-  Unified-store summary rows gained the nullable `rotated_at` field (rotation provenance).
-  Legacy rotation's replacement now inherits the source row's exact abilities, subject binding
-  and remaining expiry (previously it was minted unscoped and non-expiring — the D6 defect), and
-  name-based rotation refuses whenever more than one resolvable row shares the name. A row
+- New rotation route (PRD 1.7): `POST /bfc/credentials/{id}/rotate` — rotate-by-id on the unified
+  store. Summary rows gained the nullable `rotated_at` field (rotation provenance). A row
   already superseded by rotation never mints again (the lineage never forks): with a live
   successor, re-invoking the rotate route performs the retirement-only **cutover completion**
   (a `200` with `completed_cutover: true` and no secret); without one it refuses. The
-  onboarding exchange sweep spares unified-store rows in rotation grace, as it always has on
-  `api_tokens` — where the exemption requires the shape rotation actually leaves (the stamp
-  plus a grace-bounded expiry), and `rotated_at` is not mass-assignable, so the exemption
-  cannot be forged.
+  onboarding exchange sweep spares rows in rotation grace when they have the shape rotation
+  actually leaves (the stamp plus a grace-bounded expiry), and `rotated_at` is not
+  mass-assignable, so the exemption cannot be forged.
 - New personal-credentials routes (PRD 1.17): `GET /bfc/me/credentials`,
   `POST /bfc/me/credentials` and `DELETE /bfc/me/credentials/{id}` — the session-authenticated
   self-service front to the same unified-store verbs, whose subject is derived server-side from
@@ -306,10 +291,6 @@ API listing shape.
 
 ## Authentication
 
-- **Admin-token routes** (marked *admin token* below) require
-  `Authorization: Bearer <token>` where the token is an `api_tokens` row carrying the `admin`
-  ability — the row minted by the ownership claim, `token:create --local --abilities=admin`, or
-  the credential API. Missing/unknown token → `401`; a valid token without `admin` → `403`.
 - **Public routes** are unauthenticated but rate-limited per IP: `bfc-public` (60/min) and
   `bfc-claim` (10/min), returning `429` beyond the limit.
 - **Operator-route refusals are NOT uniform, deliberately.** Missing, unknown, expired and
@@ -322,8 +303,8 @@ API listing shape.
   split would reveal is worth more to an attacker than the diagnostic is to an operator; each
   answers one uniform `403` to every pre-authorization failure alike.
 - **Operator routes** (the `/bfc/credentials`, `/bfc/subjects`, ownership release,
-  onboarding issue, and client-observation verbs)
-  additionally accept a unified-store `operator` credential, authorized **per verb family**
+  onboarding issue, and client-observation verbs) accept a unified-store `operator` credential,
+  authorized **per verb family**
   (GATE-3.7 least privilege). The ability vocabulary: `credential:read` (the listing — an
   audited sensitive read), `credential:mint` (credential minting), `credential:rotate`
   (rotate + the hmac activate cutover, same family), `credential:revoke`, `subject:offboard`,
@@ -365,28 +346,6 @@ API listing shape.
     their order, and the spelled count — so the document and that method cannot disagree. It
     pins nothing else; see that test's own docblock for what it deliberately does not cover.
 
-  **A legacy admin `api_tokens` row already in place remains admin-equivalent on these routes,
-  console key custody included — deliberately.** New ownership claims do not mint such a row:
-  they return a unified-store `operator` credential holding `credential:admin`, linked from
-  `ownership.owner_credential_id` while `owner_token_id` remains null. That compatibility is
-  transitional only: existing legacy rows remain valid during this slice and are removed in a
-  later slice. Excluding a legacy admin row would also be no boundary — **in an app that
-  declares no mint ceiling**, it can mint itself an operator credential carrying
-  `console:key:write` in one request, and exclusion would be incoherent with the CLI transport,
-  which already treats host access as
-  sufficient for this verb. An operator who wants console key custody held by a narrower
-  credential should not mint additional admin `api_tokens` rows; the unified store's
-  per-verb-family abilities are the instrument for that.
-
-  That qualifier does not weaken the decision, and the reason is worth stating rather than
-  leaving to be reconstructed. A declared mint ceiling is **not** a check on who is asking:
-  `refuseWideningPastCeilings` consults the declaration and the subject only, never the
-  credential that authorized the request. So under a ceiling omitting `console:key:write`, the
-  ability is unmintable by EVERYONE — admin token, break-glass and narrow operator credential
-  alike — and there is no privilege the legacy row holds that excluding it would take away.
-  The "exclusion buys nothing" argument therefore holds where there is no ceiling, and is moot
-  where there is one. Neither case produces a reason to exclude the legacy admin row.
-
   **Caveat — an app with a declared mint ceiling cannot mint `console:key:write` until it
   edits its own declaration.** This affects one specific kind of app: one whose credential
   declaration implements `ConstrainsMintedCredentials` and returns a NON-NULL
@@ -418,8 +377,7 @@ API listing shape.
   **Two paths work meanwhile, neither of which needs a deploy:**
 
   1. the unified owner credential from [`POST /bfc/ownership/claim`](#post-bfcownershipclaim),
-     any other operator credential holding `credential:admin`, or any legacy admin `api_tokens`
-     row already in place — each is admin-equivalent on this route (see the paragraph above); or
+     or any other operator credential holding `credential:admin`; or
   2. the CLI transports, `bfc:console:re-key --local` and `bfc:console:retire-key --local`,
      whose authority is host access and which consult no ability at all.
 
@@ -489,13 +447,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `GET /bfc/me/sessions` | `content` | package-owned HTML containing caller-owned session metadata |
 | `DELETE /bfc/me/sessions/others` | `metadata` | redirect after caller-owned session deletion |
 | `DELETE /bfc/me/sessions/{session}` | `metadata` | redirect after one caller-owned session deletion |
-| `GET /api/credentials` | `content` | rows carry free-text names, subject refs and client identities |
 | `GET /bfc/client-observations` | `content` | client-claimed free-text identities |
-| `GET /api/credentials/client-observations` | `content` | client-claimed free-text identities |
-| `POST /api/credentials` | `content` | single reveal of the minted plaintext, plus the free-text name |
-| `DELETE /api/credentials/id/{id}` | `metadata` | empty `204` body |
-| `POST /api/credentials/id/{id}/rotate` | `content` | single reveal of the replacement plaintext |
-| `DELETE /api/credentials/{name}` | `metadata` | `revoked_ids` only — bounded opaque identifiers |
 | `GET /bfc/credentials` | `content` | summary rows carry free-text names and subject refs |
 | `POST /bfc/credentials` | `content` | the `delivery` single reveal, plus free-text name/subject fields |
 | `DELETE /bfc/credentials/{id}` | `metadata` | empty `204` body |
@@ -595,11 +547,9 @@ plane holds this instance.
 name nobody can act on. The four original entries — **`tokens`**, **`ownership`**, **`onboarding`**
 and **`webhooks`** — are UNCONDITIONAL: every install of the package reports all four, whatever it
 is configured to serve. They name the package's four original feature families, and they are not
-predicates about this deployment. One of them reads like one and is not: **`tokens` does not say the
-legacy credential API is mounted.** That surface is gated on `built-for-cloud.credential_api.enabled`
-(default `false`) and **no capability reports it** — an instance reporting `tokens` may answer `404`
-to every route under [the legacy credential API](#the-legacy-credential-api-api_tokens-store). The
-entries below are the ones that do carry a predicate, and each states it.
+predicates about this deployment. **`tokens` is a historical family name retained for wire
+stability; it names the credential family now served solely by the unified store.** The entries
+below are the ones that do carry a predicate, and each states it.
 
 `console-keys` means this instance serves the countersigning-key DELIVERY surfaces below: the
 optional claim-time key exchange and `POST /bfc/console/re-key`. It deliberately does **not** say
@@ -696,8 +646,8 @@ the claim-time countersigning-key exchange — see
 
 - **201** — `{"owner_token": "...", "webhook_secret": "...", "product": "..."}` — the single
   reveal of both secrets. The owner token authenticates a unified-store `operator` credential
-  holding `credential:admin` with no expiry; `ownership.owner_credential_id` links that row and
-  `owner_token_id` remains null. Ownership transfer, not a clock, ends its life. A claim that
+  holding `credential:admin` with no expiry; `ownership.owner_credential_id` is the sole link to
+  that row. Ownership transfer, not a clock, ends its life. A claim that
   carried `console_key`
   additionally answers with the `console_key` object documented below; a claim that did not
   carries no such field (absent, never null).
@@ -872,13 +822,9 @@ through the staged cutover window — it only reads through the keyring — thou
 delivery briefly answers the same retryable `server_error`: deliveries and the sweep's
 completion verification share one lock, so no write can straddle the verified zero-count.
 
-Every newly exchanged durable lands in a unified `credentials` row: `DurableCredentialMinter`
-is unconditionally backed by `UnifiedStoreCredentialMinter`, and a `DeclaresDurableStore`
-declaration no longer selects the exchange target. Each new code records the row through
-`durable_credential_id`. Existing legacy `api_tokens` rows and `durable_token_id` links remain
-valid during this transitional slice and are removed in a later slice; make-before-break
-always revokes a code's previously linked durable from whichever transitional link records it
-before minting the replacement in `credentials`.
+Every newly exchanged durable lands in a unified `credentials` row. Each code records that row
+through `durable_credential_id`, and make-before-break revokes the previously linked credential
+before minting its replacement.
 
 ### POST /bfc/onboarding/verify
 
@@ -1109,160 +1055,33 @@ callback regenerates the session and redirects to `/`.
 
 ---
 
-## The legacy credential API (`api_tokens` store)
-
-Disabled by default; an app enables it with `BUILT_FOR_CLOUD_CREDENTIAL_API_ENABLED=true`. Its
-prefix is configurable (`BUILT_FOR_CLOUD_CREDENTIAL_API_PREFIX`); this document uses the default
-`api/credentials`. All routes: *admin token*.
-
-### GET /api/credentials
-
-List every `api_tokens` row. Rows the app's declaration denies `list_metadata` for are filtered
-out (a blanket deny is an empty `200 []`, not a `403`).
-
-**200** — an array (bare, unenveloped — pinned for compatibility) of:
-
-```json
-{
-  "name": "ci",
-  "last_used_at": "2026-08-28T12:00:00.000000Z",
-  "expires_at": null,
-  "revoked_at": null,
-  "abilities": ["consume"],
-  "client_identity": "client-a" ,
-  "client_identity_last_seen_at": null,
-  "id": "9d3f...",
-  "request_count": 12,
-  "subject_type": "external_consumer",
-  "subject_ref": "acme",
-  "status": "active",
-  "presentation_cadence_seconds": null
-}
-```
-
-`subject_type`/`subject_ref` are null on rows that predate subjects — never guessed. `status` is
-`active` / `expired` / `revoked` / `unknown`; **`unknown` never escalates to a failure state** (it
-means the row structurally cannot carry a usage signal), and the instance-reported status is an
-input to the consumer's own health mapper, never a verdict. `presentation_cadence_seconds` is the
-app's declared presentation rhythm (null = none declared); when declared it is also sent once as
-the `BFC-Presentation-Cadence` response header.
-
 ### GET /bfc/client-observations
 
 Identities claimed on requests that presented **no valid credential**. Advisory and spoofable by
 design — the payload says so itself. Requires a unified operator credential with
 `credential:read`, or `credential:admin` break-glass. The fixed route is always registered with
-the HTTP surface and is not controlled by the legacy credential API flag or prefix.
+the HTTP surface.
 
 **200** — `{"enabled": bool, "advisory": true, "spoofable": true, "note": "...",
 "at_capacity": bool, "max_observations": 100, "observations": [{"client_identity": "...",
 "first_seen_at": "...", "last_seen_at": "...", "observation_count": 3}]}`. `observations` is
 `[]` while the feature is disabled (`enabled` distinguishes "off" from "on and quiet").
 
-### GET /api/credentials/client-observations
-
-Transitional configurable-prefix alias for `GET /bfc/client-observations`. It has the same unified
-`credential:read` gate and response while the legacy credential route family remains mounted.
-
-### POST /api/credentials
-
-Mint an `api_tokens` row.
-
-**Request** — `{"name": "ci", "expires_at": "2027-01-01T00:00:00Z" | null,
-"abilities": ["consume" | "admin" | "onboard"] | null}`. The name `fallback` is reserved
-(`422`). A declaration denying the `issue` verb → `403`.
-
-- **201** — `{"name": "ci", "plaintext": "tok_...", "expires_at": ..., "abilities": [...]}` —
-  the single reveal. Emits an `issued` audit event.
-
-### DELETE /api/credentials/id/{id}
-
-Revoke exactly one row — the precise verb. A same-named sibling (a rotation-grace row, another
-install's credential) survives.
-
-- **204** — revoked, or already dead (idempotent — one death, one audit event).
-- **404** — no such id. **403** — the declaration denies `revoke` for the row's subject.
-
-### POST /api/credentials/id/{id}/rotate
-
-Rotate exactly one row — the primary rotation verb on this store. Make-before-break: the
-replacement is minted FIRST, inheriting the source row's **exact abilities, subject binding and
-remaining expiry**; the old row is stamped `rotated_at` and stays resolvable through a one-hour
-grace window (unless its own expiry comes sooner — rotation never extends a lifetime), then dies
-by its own expiry. No reaper is involved.
-
-**Request** — `{"emergency": false}`. `emergency: true` collapses the grace window: the old row
-dies immediately.
-
-- **201** — `{"id": "...", "name": "ci", "plaintext": "tok_...", "expires_at": ...,
-  "abilities": [...], "superseded_id": "..."}` — the single reveal, plus the supersession
-  lineage. Emits `issued` (replacement) and `rotated` (old row, carrying old → new lineage)
-  audit events in the mint's own transaction.
-- **404** — no such id. **403** — the declaration denies `rotate` for the row's subject.
-- **200 — cutover completion.** Invoking this route on a row already superseded by rotation
-  (`rotated_at` set) whose lineage-recorded successor still resolves never mints again — it
-  retires the stamped row (immediately with `emergency: true`) under the `rotate` verb's own
-  authority, audited with reason `cutover_completion`. The body names the standing successor
-  and carries **no `plaintext`** (nothing was minted):
-  `{"id": "<successor>", "name": ..., "expires_at": ..., "abilities": [...],
-  "superseded_id": "<retired row>", "completed_cutover": true}`.
-- **409** — `{"message": "..."}`: the row no longer resolves (revoked or expired) — there is
-  nothing to rotate; mint a replacement instead — or it was already superseded by rotation and
-  its successor no longer resolves: nothing to complete, and re-rotating would fork the
-  lineage; mint a fresh credential.
-- **500** — `{"message": "..."}`: the replacement was minted but the old row could not be
-  retired. The message names both ids: the old row is STILL LIVE (listed, `rotated_at`
-  stamped). Recovery needs no authority beyond the rotation itself: invoke this route on the
-  stamped row again (the 200 completion above), or `DELETE /api/credentials/id/{id}` where
-  revoke is authorized; no plaintext was delivered, so rotate the standing replacement for a
-  fresh delivery, or revoke it by id if unneeded.
-
-Name-based rotation survives only as the `token:rotate` CLI convenience, and it now **refuses
-whenever more than one resolvable row shares the name** — it never picks one. Rotate by id here
-instead.
-
-**Names are byte-exact identifiers.** Everywhere a name selects rows — this store's name-based
-revoke and the CLI's name-based rotation alike — the match is on the exact bytes stored:
-nothing is trimmed, and no case normalization is applied, so `CI` and `ci` are two different
-names to the package. One caveat rides on the consuming app's database: a case-insensitive
-column collation (MySQL's `utf8mb4_0900_ai_ci` default among them) makes the DATABASE compare
-names the package treats as distinct as equal, which can only widen a name's match set — and a
-widened set trips the refuse-on-ambiguity rule rather than touching an unintended row.
-
-### DELETE /api/credentials/{name}
-
-Revoke EVERY resolvable row of the name — the CLI-compatibility verb. Fails closed against the
-declaration: if any resolvable row of the name is denied, nothing is revoked.
-
-- **200** — `{"revoked_ids": ["..."]}` — the ids that actually died (a name can resolve to
-  several rows, or to fewer than assumed under a narrowing declaration).
-- **403** — some row of the name is denied.
-
-The two-segment `/id/{id}` path exists so a token literally named `id` still deletes by name here.
-
----
-
 ## The unified credential store (`/bfc/credentials`)
 
 The two-transport verbs (PRD 1.0): each of these routes runs the **same action class** as its
-`--local` artisan command (`bfc:credential:mint` / `list` / `revoke`), so the two transports
-cannot diverge. Always mounted, at a fixed path. Rotation for this store ships in a later
-release.
+`--local` artisan command (`bfc:credential:mint` / `list` / `rotate` / `activate` / `revoke`),
+so the two transports cannot diverge. Always mounted, at a fixed path.
 
-**Authentication on these routes** accepts either credential shape:
-
-- a legacy **admin `api_tokens` token** (exactly what every other admin route accepts —
-  admin-equivalent on every verb), or
-- a **unified-store `operator` credential** holding the route's **verb-family ability**
+**Authentication on these routes** requires a unified-store `operator` credential holding the
+route's **verb-family ability**
   (see [Authentication](#authentication)): `credential:read` for the listing,
   `credential:mint` for mint, `credential:rotate` for rotate AND activate,
   `credential:revoke` for revoke — or the explicit admin-equivalent `credential:admin`,
   which is what `bfc:install:operator-credential` mints at install time, so a fresh install
   can manage its credentials with the one secret it was handed. A valid unified credential
-  without the verb's authority is `403` (and the denial is audited); the deprecated
-  `FALLBACK_TOKEN` is explicitly rejected with a distinguishable `403` message. Audit actors
-  reflect the store that authenticated (`admin_token` vs `operator_integration`). Write
-  verbs ride the `bfc-operator-write` limiter.
+without the verb's authority is `403` and the denial is audited. Write verbs ride the
+`bfc-operator-write` limiter.
 
 **The scope of the transport-parity guarantee:** parity is defined over the verb's own inputs —
 the subject, the options, the abilities, the target row. The declaration's `authorizeVerb` hook
@@ -1310,8 +1129,8 @@ expiry passes.
 
 ### GET /bfc/credentials
 
-**200** — an array of summary rows, oldest first. Per-row `list_metadata` filtering as in the
-legacy listing; `BFC-Presentation-Cadence` header when a cadence is declared.
+**200** — an array of summary rows, oldest first. Per-row `list_metadata` filtering applies;
+`BFC-Presentation-Cadence` is included when a cadence is declared.
 
 ### POST /bfc/credentials
 
@@ -1577,7 +1396,7 @@ Consequently, and each of these is a named negative test in the package's suite:
   **404**, the same answer an id that never existed gets. This is deliberate: a `403` would
   confirm that another user's credential exists, which is a disclosure a `404` does not make.
 
-**Authentication on these routes is the application's session**, not an admin token and not an
+**Authentication on these routes is the application's session**, not an operator credential or
 operator ability. The package mounts them behind its `bfc.auth` gate, which the consuming
 application's authenticated human already passes; an unauthenticated request is `401` (or a
 redirect to the app's `login` route when it has one and the request does not expect JSON). That
@@ -1586,7 +1405,7 @@ subject both revokes its credentials and closes this screen to them. Every reque
 `bfc-personal` limiter (30/min per session principal, 60/min per IP).
 
 **These are BROWSER routes — the only ones in this contract.** Every other surface documented
-here is a token API that wants no session; these three ride the full browser session stack
+here is a credential API that wants no session; these three ride the full browser session stack
 (cookie encryption, `StartSession`, CSRF validation). Concretely: the package mounts them in the
 host application's own **`web` middleware group** when one is registered — so the app's session
 driver, cookie handling and any CSRF customization apply to its own settings screen — and falls
@@ -1716,15 +1535,14 @@ Revoke one of the caller's own credentials, by id.
 
 ### POST /bfc/subjects/offboard
 
-*Admin token or operator credential holding `subject:offboard`* (its own verb-family
+*Operator credential holding `subject:offboard`* (its own verb-family
 ability — the widest verb, deliberately not granted by `credential:mint` or
 `credential:revoke`); the same two-transport rule (`bfc:subject:offboard --local` runs the
 identical action). Rate-limited via `bfc-operator-write`.
 
 **Full account containment** (PRD 1.15, SEC-V3-04). Deactivates a subject and, in one
 action: revokes EVERY bound credential in EVERY lifecycle state (active, rotation-grace,
-and pending — unexchanged enrollments and pending hmac signing keys included, in both the
-unified store and subject-stamped `api_tokens` rows); consumes the principal's outstanding
+and pending — unexchanged enrollments and pending hmac signing keys included); consumes the principal's outstanding
 claim codes (and their never-used make-before-break durables); cancels the principal's
 pending invitations; deletes the principal's password-reset tokens; invalidates sessions;
 and writes the containment registry on which the `bfc` guard — and the auth-foundation
@@ -1864,9 +1682,9 @@ so each surface answers "who may do this" explicitly:
 |---|---|
 | `POST /bfc/ownership/claim` | the ownership claim code itself. Presenting it already yields an admin owner token in the same response, so naming the console key escalates nothing the holder is not already getting. |
 | `POST /bfc/onboarding/exchange` | the code must have been issued with `console_key_authority` (below), and must not have spent it. A routine `scope=consume` code carries none. |
-| `POST /bfc/console/re-key` | an operator credential holding **`console:key:write`**, or the `credential:admin` break-glass, or a legacy admin token. `credential:rotate` is **not** sufficient. An app with a declared mint ceiling cannot mint that ability until it names it — see the caveat under [Authentication](#authentication); the owner/admin token and the CLI verb both work meanwhile. |
+| `POST /bfc/console/re-key` | an operator credential holding **`console:key:write`**, or the `credential:admin` break-glass. `credential:rotate` is **not** sufficient. An app with a declared mint ceiling cannot mint that ability until it names it — see the caveat under [Authentication](#authentication); the owner credential and the CLI verb both work meanwhile. |
 | `bfc:console:re-key --local` | **host access.** No credential check — see the CLI paragraph below. |
-| `POST /bfc/console/keys/{key_id}/retire` | the same as the re-key: an operator credential holding **`console:key:write`**, the `credential:admin` break-glass, or a legacy admin token. |
+| `POST /bfc/console/keys/{key_id}/retire` | the same as the re-key: an operator credential holding **`console:key:write`** or the `credential:admin` break-glass. |
 | `bfc:console:retire-key --local` | **host access.** No credential check. |
 
 **Retiring is gated the same as filing, and that is a decision.** Ending a signing authority
@@ -1928,7 +1746,7 @@ before retiring the outgoing key.
 
 ### POST /bfc/console/re-key
 
-*Admin token or operator credential carrying `console:key:write`* — rate-limited as an operator
+*Operator credential carrying `console:key:write` or `credential:admin`* — rate-limited as an operator
 write (`bfc-operator-write`). File and activate a countersigning key on an **already-claimed**
 deployment, without re-onboarding it. This is the retrofit path: the claim-time exchange only
 helps a deployment that has not claimed yet, and a fleet in service has already claimed.
@@ -1996,7 +1814,7 @@ route. Nothing about this transport's shape should be copied to a verb that hand
 
 ### POST /bfc/console/keys/{key_id}/retire
 
-*Admin token or operator credential carrying `console:key:write`* — rate-limited as an operator
+*Operator credential carrying `console:key:write` or `credential:admin`* — rate-limited as an operator
 write (`bfc-operator-write`). Stop trusting one filed key, permanently. This is the second half of
 a make-before-break rotation: the re-key files and activates the incoming key and retires nothing,
 and this verb ends the outgoing one once every assertion minted under it has expired.
@@ -2118,22 +1936,10 @@ behind the vendor's fleet dashboard (Console PRD D9).
 describes the dashboard credential as least-privilege, read-audited and **unable to touch
 content-classified or mutating surfaces**, and forbids using the ownership/admin credential for
 any dashboard read path. That is EXCLUSIVITY, not membership, and this route enforces it as
-three separate conditions:
+four separate conditions:
 
-1. **The presented bytes are not ALSO something else.** Before anything resolves, the bearer is
-   compared against the configured `FALLBACK_TOKEN` and against the legacy `api_tokens` store;
-   a match is a `401`. This is not belt-and-braces: the `bfc` guard has no path to either store,
-   so neither can authenticate here — but set `FALLBACK_TOKEN` to the plaintext of a real
-   dashboard credential (or file the same bytes as a legacy admin token) and the dashboard read
-   succeeds while the same bytes stay admin-equivalent on the legacy surfaces, which is exactly
-   the "unable to touch mutating surfaces" clause failing. Every legacy row counts, revoked
-   included: the question is not whether those bytes can act elsewhere *today*.
-
-   The refusal is byte-identical to any other `401` and writes nothing. The code paths are **not
-   time-equalised** — a fallback collision returns before any query, a legacy one after a single
-   `exists()`, an ordinary unknown bearer continues into store resolution — and that is accepted
-   rather than closed: reading the difference requires already holding the bearer, and anyone
-   holding it can present it on a legacy surface and learn the same fact directly.
+1. **The credential authenticates through the unified `bfc` guard.** Missing, unknown, expired,
+   revoked, and offboarded credentials all receive the same `401` and write no audit event.
 2. **The credential holds `metadata:read`** — and the app's own declaration authorizes it for
    that ability. Unlike every operator verb route, this one is not mounted behind the operator
    gate, because that gate grants a break-glass credential whatever ability a route names; a
@@ -2150,9 +1956,7 @@ middleware enforces a strict subset of the above, so it never changed an answer,
 denial audit drained the delivery outbox — reintroducing on the refusal path the amplification
 this route is hardened against.
 
-Nothing else opens it. Not an admin `api_tokens` token — the `bfc` guard authenticates the
-unified credential store and has no path to the legacy store, so a legacy admin secret is a
-`401` here. Not `FALLBACK_TOKEN`, for the same structural reason.
+Nothing else opens it. The route authenticates only through the unified credential guard.
 
 **What this does NOT do:** it does not stop such a credential being MINTED. A combined
 credential can still be issued and still operates every other surface it names; what it cannot
@@ -2307,10 +2111,8 @@ would make a dashboard poll a database and mail amplifier. The outbox row is sti
 the same transaction and is delivered by the next drain (`bfc:outbox:drain`, or the next
 mutating request).
 
-- **401** — no credential, an unknown one, an expired or revoked one, an offboarded principal's,
-  a legacy `api_tokens` secret, `FALLBACK_TOKEN`, or a bearer whose bytes are ALSO the
-  configured fallback token or a row in the legacy `api_tokens` store. All indistinguishable
-  from one another, and **none of them is audited** — this route is reachable without a
+- **401** — no credential, an unknown one, an expired or revoked one, or an offboarded principal's.
+  All are indistinguishable from one another, and **none of them is audited** — this route is reachable without a
   credential, and auditing anonymous refusals would hand a stranger a database-write amplifier
   on the one branch they can reach. (An earlier revision said the audit stream kept the
   distinction. It does not; that claim was stronger than the code.)
@@ -2338,9 +2140,9 @@ The only carrier is `Authorization: Bearer <credential>`. Dispatch is exclusive 
 
 - A bearer beginning with `v4.public.` is handled only as a Console assertion. A signature,
   keyring, issuer, audience, clock, TTL, purpose, replay, or containment failure never falls
-  through to `TokenRegistry`.
-- Every other bearer is handled only by `TokenRegistry::resolveModel()`. An unknown or expired
-  registry token never falls through to assertion verification.
+  through to credential resolution.
+- Every other bearer is handled only by `CredentialResolver::resolve()`. An unknown or expired
+  credential never falls through to assertion verification.
 
 A deployment whose `built-for-cloud.token_prefix` is configured as `v4.public.` creates a carrier
 collision: generated registry tokens would select the assertion path. That is an invalid
@@ -2383,7 +2185,7 @@ Assertion-path refusals append `denied_action` to the credential lifecycle strea
 reason and no presented bytes. The refusal is fail-closed: if that audit transaction cannot commit,
 the request answers `500`, not an unaudited `401`. This is the same availability trade as Console
 entry; a deployment whose database is unwritable could not commit the assertion burn either.
-Registry-token refusals are not audited here because an application-chosen public MCP route must
+Credential refusals are not audited here because an application-chosen public MCP route must
 not turn anonymous bearer noise into a database-write amplifier.
 
 The middleware removes the credential from the framework request before validation: the
@@ -3189,9 +2991,9 @@ The event columns, all of them:
 | `action` | the backing value of a case from the app's own compile-time action enum, a bounded identifier |
 | `action_vocabulary` | the enum class that case came from, so two apps' identical slugs stay distinguishable |
 | `reason` | one member of the closed vocabulary below |
-| `actor_type` | `local_user`, `api_token`, `legacy_api_token` or `delegated_actor` |
-| `actor_ref` | the principal's identifier; for `legacy_api_token`, the model key in the legacy `api_tokens` id space; for a delegated actor, the TYPE-QUALIFIED `bfc-console:{id}` form |
-| `on_behalf_of` | the agency a delegated operator acts for (D4), or null; never present for the other three actor types |
+| `actor_type` | `local_user`, `api_token` or `delegated_actor` |
+| `actor_ref` | the principal's identifier; for `api_token`, the unified credential id; for a delegated actor, the TYPE-QUALIFIED `bfc-console:{id}` form |
+| `on_behalf_of` | the agency a delegated operator acts for (D4), or null; never present for the other two actor types |
 | `occurred_at`, `created_at` | timestamps |
 
 **No column is designated for arbitrary app content.** The schema carries no `note` and nothing of
@@ -3232,15 +3034,13 @@ can store an agency beside a `local_user`. **Escape it at every sink.**
 
 ### The actor vocabulary
 
-The four principals D17 names, and it is a **separate** vocabulary from the credential stream's
+The three principals D17 names, and it is a **separate** vocabulary from the credential stream's
 `actor_type`. The two sets are disjoint on purpose: the credential stream has no delegated actor
 and never will, and an app action is never performed by a CLI operator or a credential holder. A
 shared enum would hand a reader of either stream members that stream cannot produce.
 
 - `local_user` — the host application's own authenticated human, named by the app's own primary key.
 - `api_token` — a credential acting on its own behalf, named by its opaque credential id.
-- `legacy_api_token` — a token from the legacy `api_tokens` store, named by its model key in that
-  store's UUID id space.
 - `delegated_actor` — a delegated human admitted through the Console door, named by the
   type-qualified `bfc-console:{id}` form and never the bare integer. `bfc_delegated_actors` is an
   ordinary auto-increment table in the same id space `users` occupies, so a bare `7` would read as
@@ -3489,8 +3289,8 @@ documented in their own sections above.
     local session user. A delegated actor has no personal credentials in this app. On a
     REFUSED console session they answer `401` and `403` respectively, and never resolve the
     local user.
-  - The token gates (`bfc.token.admin`, `bfc.credential.admin`, `bfc.ability`) are unchanged:
-    they never consult a session principal.
+  - The credential gates (`bfc.credential.admin`, `bfc.ability`) never consult a session
+    principal.
   **This is an AMENDMENT to the v3.1 matrix invariant SEC-V3-10, not an additive slot-in**, and it
   is recorded as one deliberately rather than left to read as an accident. SEC-V3-10 shipped as a
   token-vs-session rule over a SINGLE `built-for-cloud.credentials.session_guard` name; the Console

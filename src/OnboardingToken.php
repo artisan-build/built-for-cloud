@@ -14,9 +14,7 @@ use Illuminate\Database\Eloquent\Model;
  * @property string|null $email
  * @property string $scope
  * @property string $token_hash
- * @property string|null $durable_token_id
  * @property string|null $durable_credential_id
- * @property DurableStore|null $durable_store
  * @property CarbonInterface|null $consumed_at
  * @property bool $console_key_authority
  * @property CarbonInterface|null $console_key_filed_at
@@ -37,7 +35,7 @@ final class OnboardingToken extends Model
      * `console_key_filed_at` (rework B1). Key-custody authority is set
      * server-side by the admin-gated issue verb through `forceFill`, and
      * spent server-side by the exchange — exactly the discipline
-     * `api_tokens.rotated_at` uses, and for the same reason: an
+     * credential rotation metadata uses, and for the same reason: an
      * authority that request input can mass-assign is not an authority.
      *
      * @var list<string>
@@ -47,9 +45,7 @@ final class OnboardingToken extends Model
         'email',
         'scope',
         'token_hash',
-        'durable_token_id',
         'durable_credential_id',
-        'durable_store',
         'consumed_at',
         'expires_at',
     ];
@@ -60,23 +56,11 @@ final class OnboardingToken extends Model
     protected function casts(): array
     {
         return [
-            'durable_store' => DurableStore::class,
             'consumed_at' => 'datetime',
             'console_key_authority' => 'boolean',
             'console_key_filed_at' => 'datetime',
             'expires_at' => 'datetime',
         ];
-    }
-
-    /**
-     * The store the linked durable was minted into. NULL backfills to
-     * `api_tokens` — the only store that existed before the seam toggle —
-     * so a pre-toggle linkage is never re-interpreted by whatever the
-     * CURRENT declaration targets.
-     */
-    public function durableStore(): DurableStore
-    {
-        return $this->durable_store ?? DurableStore::ApiTokens;
     }
 
     /**

@@ -2,14 +2,15 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\BuiltForCloudServiceProvider;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
-use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SelfServicePolicyDeclaration;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Foundation\Application;
@@ -79,10 +80,14 @@ $case = new class('testProbe') extends TestCase
             ]);
             $adminToken = 'personal-hmac-admin-'.bin2hex(random_bytes(16));
 
-            ApiToken::query()->create([
+            Credential::query()->create([
+                'kind' => CredentialKind::Bearer,
+                'subject_type' => SubjectType::Operator,
+                'subject_ref' => 'personal-hmac-activation',
                 'name' => 'personal-hmac-activation',
-                'token_hash' => hash('sha256', $adminToken),
-                'abilities' => [Scope::Admin->value],
+                'secret_hash' => hash('sha256', $adminToken),
+                'status' => CredentialStatus::Active,
+                'abilities' => [OperatorAbility::CredentialRotate->value],
             ]);
 
             return [

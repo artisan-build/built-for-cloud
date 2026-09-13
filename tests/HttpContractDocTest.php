@@ -10,14 +10,12 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Route;
-use Orchestra\Testbench\Attributes\WithConfig;
 
 /**
  * Locked AC 9: the HTTP surface is a versioned public contract, and the
  * contract doc is verified MECHANICALLY, not trusted as prose — every
  * registered package route appears in docs/http-contract.md, and every
- * route the doc names is real. The credential API is enabled here so its
- * flag-gated routes register and get checked too.
+ * route the doc names is real.
  *
  * RECOGNITION CAVEAT: package routes are recognized by their action's
  * class name (the ArtisanBuild\BuiltForCloud namespace prefix). A package
@@ -26,7 +24,6 @@ use Orchestra\Testbench\Attributes\WithConfig;
  * and any future closure route must either become one or be added to the
  * exclusion list with a reason.
  */
-#[WithConfig('built-for-cloud.credential_api.enabled', true, false)]
 final class HttpContractDocTest extends TestCase
 {
     use RefreshDatabase;

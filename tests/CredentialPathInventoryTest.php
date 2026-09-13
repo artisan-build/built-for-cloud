@@ -56,14 +56,12 @@ function frozenTransitionalRows(): array
 function frozenCredentialClassification(): array
 {
     return sortedCredentialInventory([
-        'enum:ArtisanBuild\BuiltForCloud\AuditActorType::AdminToken=admin_token',
         'enum:ArtisanBuild\BuiltForCloud\AuditActorType::BoundUser=bound_user',
         'enum:ArtisanBuild\BuiltForCloud\AuditActorType::CliOperator=cli_operator',
         'enum:ArtisanBuild\BuiltForCloud\AuditActorType::CredentialHolder=credential_holder',
         'enum:ArtisanBuild\BuiltForCloud\AuditActorType::OperatorIntegration=operator_integration',
         'enum:ArtisanBuild\BuiltForCloud\Audit\AppActorType::ApiToken=api_token',
         'enum:ArtisanBuild\BuiltForCloud\Audit\AppActorType::DelegatedActor=delegated_actor',
-        'enum:ArtisanBuild\BuiltForCloud\Audit\AppActorType::LegacyApiToken=legacy_api_token',
         'enum:ArtisanBuild\BuiltForCloud\Audit\AppActorType::LocalUser=local_user',
         'enum:ArtisanBuild\BuiltForCloud\SubjectType::Application=application',
         'enum:ArtisanBuild\BuiltForCloud\SubjectType::ExternalConsumer=external_consumer',
@@ -78,40 +76,33 @@ function frozenCredentialClassification(): array
         'command:ArtisanBuild\BuiltForCloud\Commands\CredentialMintCommand=bfc:credential:mint',
         'command:ArtisanBuild\BuiltForCloud\Commands\CredentialRevokeCommand=bfc:credential:revoke',
         'command:ArtisanBuild\BuiltForCloud\Commands\CredentialRotateCommand=bfc:credential:rotate',
-        'command:ArtisanBuild\BuiltForCloud\Commands\FallbackTokenGenerateCommand=fallback-token:generate',
         'command:ArtisanBuild\BuiltForCloud\Commands\HmacRewrapCommand=bfc:hmac:rewrap',
         'command:ArtisanBuild\BuiltForCloud\Commands\InstallOperatorCredentialCommand=bfc:install:operator-credential',
         'command:ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand=bfc:outbox:drain',
         'command:ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand=bfc:ownership:mint-claim',
         'command:ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand=bfc:ownership:remint-owner-token',
         'command:ArtisanBuild\BuiltForCloud\Commands\SubjectOffboardCommand=bfc:subject:offboard',
-        'command:ArtisanBuild\BuiltForCloud\Commands\TokenCreateCommand=token:create',
-        'command:ArtisanBuild\BuiltForCloud\Commands\TokenListCommand=token:list',
-        'command:ArtisanBuild\BuiltForCloud\Commands\TokenRevokeCommand=token:revoke',
-        'command:ArtisanBuild\BuiltForCloud\Commands\TokenRevokeSelfCommand=bfc:token:revoke-self',
-        'command:ArtisanBuild\BuiltForCloud\Commands\TokenRotateCommand=token:rotate',
-        'command:ArtisanBuild\BuiltForCloud\Commands\TokenUsageCommand=token:usage',
         'command:ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand=bfc:credentials:warn-expiring',
     ]);
 }
 
 /**
- * P5-AC1's oracle is Part 1.1's seven discoverable path identities plus
- * Part 1.2b, while the independently
+ * P5-AC12's oracle is Part 1.1's seven discoverable path identities with
+ * every Part 1.2b row undiscovered, while the independently
  * asserted root inventories keep row classification from hiding a newly
  * discovered mechanism. CredentialPathInventory documents the static-only
  * limits and the unenforced, non-discovered device binding that bound this
  * proof.
  */
-it('derives the seven discoverable paths plus exactly six transitional rows from all five roots', function (): void {
+it('derives the seven discoverable paths with no transitional rows from all five roots', function (): void {
     $inventory = CredentialPathInventory::discover(dirname(__DIR__).'/src');
-    $expectedRows = sortedCredentialInventory([...frozenCredentialPathRows(), ...frozenTransitionalRows()]);
+    $expectedRows = frozenCredentialPathRows();
     $derivedRows = sortedCredentialInventory([...$inventory['paths'], ...$inventory['transitional']]);
 
     expect($inventory['violations'])->toBe([])
         ->and($derivedRows)->toBe($expectedRows)
         ->and($inventory['paths'])->toHaveCount(7)
-        ->and($inventory['transitional'])->toHaveCount(6)
+        ->and($inventory['transitional'])->toBe([])
         ->and($inventory['mechanisms'])->toBe(sortedCredentialInventory([
             'authenticator:ArtisanBuild\BuiltForCloud\Auth\BasicAuthenticator',
             'authenticator:ArtisanBuild\BuiltForCloud\Auth\BearerAuthenticator',
@@ -120,7 +111,6 @@ it('derives the seven discoverable paths plus exactly six transitional rows from
             'key-sink:ArtisanBuild\BuiltForCloud\Hmac\HmacSigner',
             'key-sink:ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp',
-            'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureAdminToken',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin',
@@ -135,7 +125,6 @@ it('derives the seven discoverable paths plus exactly six transitional rows from
             'resolver-service:ArtisanBuild\BuiltForCloud\Auth\CredentialResolver',
             'resolver-service:ArtisanBuild\BuiltForCloud\Console\AssertionVerifier',
             'resolver-service:ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier',
-            'resolver-service:ArtisanBuild\BuiltForCloud\TokenRegistry',
             'resolver:ArtisanBuild\BuiltForCloud\Auth\CredentialResolver',
         ]))
         ->and($inventory['lifecycle'])->toBe(sortedCredentialInventory([
@@ -147,7 +136,6 @@ it('derives the seven discoverable paths plus exactly six transitional rows from
             'action:ArtisanBuild\BuiltForCloud\Actions\RevokeCredential::__invoke',
             'action:ArtisanBuild\BuiltForCloud\Actions\RotateCredential::__invoke',
             'action:ArtisanBuild\BuiltForCloud\Actions\RotateCredential::idForName',
-            'minter:ArtisanBuild\BuiltForCloud\ApiTokenMinter=>ApiToken(api_tokens)',
             'minter:ArtisanBuild\BuiltForCloud\UnifiedStoreCredentialMinter=>Credential(credentials)',
         ]))
         ->and($inventory['enrollment'])->toBe(sortedCredentialInventory([
@@ -172,15 +160,8 @@ it('derives the seven discoverable paths plus exactly six transitional rows from
             'choke-point:ArtisanBuild\BuiltForCloud\Auth\CredentialResolver::resolve',
             'choke-point:ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier::verify',
         ])
-        ->and($inventory['transition_members'])->toBe(sortedCredentialInventory([
-            'command:ArtisanBuild\BuiltForCloud\Commands\FallbackTokenGenerateCommand=fallback-token:generate',
-            'command:ArtisanBuild\BuiltForCloud\Commands\TokenCreateCommand=token:create',
-            'command:ArtisanBuild\BuiltForCloud\Commands\TokenListCommand=token:list',
-            'command:ArtisanBuild\BuiltForCloud\Commands\TokenRevokeCommand=token:revoke',
-            'command:ArtisanBuild\BuiltForCloud\Commands\TokenRevokeSelfCommand=bfc:token:revoke-self',
-            'command:ArtisanBuild\BuiltForCloud\Commands\TokenRotateCommand=token:rotate',
-            'command:ArtisanBuild\BuiltForCloud\Commands\TokenUsageCommand=token:usage',
-        ]));
+        ->and($inventory['transition_members'])->toBe([])
+        ->and(array_intersect($inventory['transitional'], frozenTransitionalRows()))->toBe([]);
 });
 
 it('reports all four deliberate controls through their assigned derivation roots', function (): void {
@@ -209,3 +190,54 @@ it('reports all four deliberate controls through their assigned derivation roots
         ->and($unexpectedMiddleware)->toBe(['middleware:'.ClassBoundCredentialGate::class])
         ->and($devicePaths)->toBe([]);
 });
+
+it('reports a second credential store across query forms', function (string $query): void {
+    $root = sys_get_temp_dir().'/bfc-second-store-control-'.bin2hex(random_bytes(8));
+    $namespace = 'ArtisanBuild\\BuiltForCloud\\Tests\\SecondStoreControl';
+
+    mkdir($root, 0777, true);
+    file_put_contents($root.'/ProbeAuthenticator.php', <<<PHP
+<?php
+namespace {$namespace};
+use ArtisanBuild\BuiltForCloud\Contracts\CredentialAuthenticator;
+use ArtisanBuild\BuiltForCloud\Credential;
+use Illuminate\Http\Request;
+final class ProbeAuthenticator implements CredentialAuthenticator
+{
+    public function __construct(private ProbeResolver \$resolver) {}
+    public function credential(Request \$request): ?Credential
+    {
+        \$this->resolver->resolve(\$request->bearerToken() ?? '');
+        return null;
+    }
+}
+PHP);
+    file_put_contents($root.'/ProbeResolver.php', <<<PHP
+<?php
+namespace {$namespace};
+final class ProbeResolver
+{
+    public function resolve(string \$secret): mixed
+    {
+        \$hash = hash('sha256', \$secret);
+        return {$query};
+    }
+}
+PHP);
+
+    $inventory = CredentialPathInventory::discover(dirname(__DIR__).'/src', [$root]);
+
+    expect($inventory['violations'])->toContain(
+        'second-store-resolver:'.$namespace.'\\ProbeAuthenticator=>'.$namespace.'\\ProbeResolver',
+    );
+})->with([
+    'model query and where' => "OtherStoreRecord::query()->where('token_hash', \$hash)->first()",
+    'direct model where' => "OtherStoreRecord::where('token_hash', \$hash)->first()",
+    'model firstWhere' => "OtherStoreRecord::query()->firstWhere('token_hash', \$hash)",
+    'different hash column' => "OtherStoreRecord::query()->where('hash', \$hash)->first()",
+    'raw select' => "DB::selectOne('select * from other_store where token_hash = ?', [\$hash])",
+    'qualified credential model' => "\\Vendor\\Legacy\\Credential::query()->where('token_hash', \$hash)->first()",
+    'named connection' => "DB::connection('legacy')->table('credentials')->where('secret_hash', \$hash)->first()",
+    'array where' => "OtherStoreRecord::query()->where(['token_hash' => \$hash])->first()",
+    'query builder table' => "DB::table('other_store')->where('token_hash', \$hash)->first()",
+]);

@@ -58,7 +58,6 @@ it('claims ownership normally on a headless app with no auth guard', function ()
         ->assertJsonStructure(['owner_token']);
 
     expect(Ownership::query()->whereNotNull('owner_credential_id')->exists())->toBeTrue()
-        ->and(Ownership::query()->whereNotNull('owner_token_id')->exists())->toBeFalse()
         ->and(Credential::query()->where('name', 'owner')->exists())->toBeTrue();
 });
 

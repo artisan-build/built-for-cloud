@@ -64,8 +64,8 @@ it('does not read a subject-conditional declaration as transport divergence — 
     $this->assertBuiltForCloudTransportParityContract();
 
     // The suite's own refs name no transport, so the conditional matrix
-    // allowed both legs and real rows were minted and revoked.
-    expect(Credential::query()->count())->toBeGreaterThan(0);
+    // allowed both legs and the issue action left its exact HTTP row.
+    expect(Credential::query()->where('subject_ref', 'like', 'parity-mint-%')->count())->toBe(1);
 });
 
 it('asserts refusal parity when the declaration denies the issue verb', function (): void {
@@ -89,7 +89,12 @@ it('asserts refusal parity when the declaration denies the issue verb', function
 
     $this->assertBuiltForCloudTransportParityContract();
 
-    expect(Credential::query()->count())->toBe(0);
+    // These are the contract's own authenticating holders, created by the
+    // helper rather than by the refused issue verb. Anything else is a leak.
+    $fixtureRefs = ['parity-admin', 'parity-list-admin'];
+
+    expect(Credential::query()->orderBy('subject_ref')->pluck('subject_ref')->all())->toBe($fixtureRefs)
+        ->and(Credential::query()->count())->toBe(count($fixtureRefs));
 });
 
 it('asserts rotate refusal parity when the declaration denies rotate but allows issue', function (): void {
@@ -117,7 +122,12 @@ it('asserts rotate refusal parity when the declaration denies rotate but allows 
 
     $this->assertBuiltForCloudTransportParityContract();
 
-    // Rows were minted (issue is allowed) and none was ever rotated.
-    expect(Credential::query()->count())->toBeGreaterThan(0)
-        ->and(Credential::query()->whereNotNull('rotated_at')->count())->toBe(0);
+    // Exclude the contract's exact authenticating holder; the remaining two
+    // rows are the action-created rotate targets, and neither was stamped.
+    $rotateTargets = Credential::query()
+        ->where('subject_ref', 'like', 'parity-rotate-%')
+        ->where('subject_ref', '!=', 'parity-rotate-admin');
+
+    expect((clone $rotateTargets)->count())->toBe(2)
+        ->and((clone $rotateTargets)->whereNotNull('rotated_at')->count())->toBe(0);
 });

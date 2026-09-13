@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\BurnMode;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
@@ -19,7 +18,6 @@ use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
-use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use ArtisanBuild\BuiltForCloud\UnifiedStoreCredentialMinter;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -380,22 +378,6 @@ it('sweeps a crafted same-name short-TTL token that only mimics rotation', funct
         ->and(resolveUnifiedClaimDurable((string) $exchange->json('durable_token'))?->name)->toBe('person@example.test');
 });
 
-it('stamps rotated_at on the outgoing row for normal and emergency rotation', function (): void {
-    $registry = app(TokenRegistry::class);
-
-    $normalPlaintext = mintLegacyBurnToken('normal-rotation', Scope::Consume);
-    $registry->rotate('normal-rotation', hash('sha256', 'n-'.bin2hex(random_bytes(8))));
-
-    $emergencyPlaintext = mintLegacyBurnToken('emergency-rotation', Scope::Consume);
-    $registry->rotate('emergency-rotation', hash('sha256', 'e-'.bin2hex(random_bytes(8))), emergency: true);
-
-    $normalRow = ApiToken::query()->where('token_hash', hash('sha256', $normalPlaintext))->firstOrFail();
-    $emergencyRow = ApiToken::query()->where('token_hash', hash('sha256', $emergencyPlaintext))->firstOrFail();
-
-    expect($normalRow->rotated_at)->not->toBeNull()
-        ->and($emergencyRow->rotated_at)->not->toBeNull();
-});
-
 it('fails authentication when an already-used durable dies after the resolving read', function (): void {
     [, $durable] = burnExchange('fastpath@example.test');
 
@@ -619,19 +601,6 @@ function mintUnifiedClaimDurable(
         'abilities' => [$scope->value],
         'secret_hash' => hash('sha256', $secret),
         'expires_at' => $expiresAt,
-    ]);
-
-    return $secret;
-}
-
-function mintLegacyBurnToken(string $name, Scope $scope): string
-{
-    $secret = 'legacy-'.bin2hex(random_bytes(16));
-
-    ApiToken::query()->create([
-        'name' => $name,
-        'token_hash' => hash('sha256', $secret),
-        'abilities' => [$scope->value],
     ]);
 
     return $secret;

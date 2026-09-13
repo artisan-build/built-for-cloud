@@ -31,7 +31,6 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Testing\TestResponse;
 use ParagonIE\Paseto\Keys\Version4\AsymmetricSecretKey;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
-use Throwable;
 
 uses(RefreshDatabase::class);
 
@@ -364,7 +363,10 @@ it('gives a non-admin unified bearer no admin attribution', function (): void {
         ->assertJsonPath('audit_type', null)
         ->assertJsonPath('audit_ref', null);
 
-    expect(CredentialAuditEvent::query()->where('actor_type', AuditActorType::AdminToken->value)->count())->toBe(0);
+    expect(CredentialAuditEvent::query()
+        ->where('credential_id', $credential->id)
+        ->where('event', LifecycleEventType::FirstUsed->value)
+        ->count())->toBe(1);
 });
 
 it('attributes only an operator credential with credential admin ability', function (): void {
@@ -380,7 +382,7 @@ it('attributes only an operator credential with credential admin ability', funct
         ->assertJsonPath('audit_type', AuditActorType::OperatorIntegration->value)
         ->assertJsonPath('audit_ref', $credential->id);
 
-    expect(CredentialAuditEvent::query()->where('actor_type', AuditActorType::AdminToken->value)->count())->toBe(0);
+    expect(CredentialAuditEvent::query()->where('actor_type', AuditActorType::OperatorIntegration->value)->count())->toBe(0);
 });
 
 it('gives a non-operator with credential admin ability no admin attribution', function (): void {
@@ -396,7 +398,10 @@ it('gives a non-operator with credential admin ability no admin attribution', fu
         ->assertJsonPath('audit_type', null)
         ->assertJsonPath('audit_ref', null);
 
-    expect(CredentialAuditEvent::query()->where('actor_type', AuditActorType::AdminToken->value)->count())->toBe(0);
+    expect(CredentialAuditEvent::query()
+        ->where('credential_id', $credential->id)
+        ->where('event', LifecycleEventType::FirstUsed->value)
+        ->count())->toBe(1);
 });
 
 it('never falls through between store bearer and assertion authentication paths', function (): void {

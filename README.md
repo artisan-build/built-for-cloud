@@ -5,7 +5,7 @@ Shared building blocks for administering **cloud-first Laravel applications from
 
 These are the pieces that several Artisan Build apps (Matte, Hone, …) need in common: things you
 manage by running an Artisan command in your production environment and reading its output back on
-your machine. The package started with **API token management** and now also provides a shared
+your machine. The package started with **credential management** and now also provides a shared
 **auth foundation** for apps that need an identical user/admin/invitation story.
 
 > **Status:** the initial `0.x` release is being finalised. The package follows semantic versioning;
@@ -31,28 +31,19 @@ more robust session store is needed. The package refuses to boot with `database`
 they are intended for local development and hobby sites and cannot safely store delegated Console
 actor identifiers in Laravel's numeric `sessions.user_id` column.
 
-## API tokens
+## Credentials
 
-Tokens are stored **hashed** in an `api_tokens` table (this package ships the migration). A token
-resolves only while it is unexpired; everything else about it — usage counts, rotation, revocation —
-is metadata around that one rule.
+Credentials live in the package's unified `credentials` store. Bearer and Basic secrets are stored
+as SHA-256 digests; HMAC key material is encrypted at rest; asymmetric rows hold public material
+only. Resolution also enforces lifecycle state, expiry, revocation, subject containment, and managed
+account freshness.
 
 | Concept | Behaviour |
 | --- | --- |
-| **Resolution** | A presented bearer token matches a row by `sha256` hash and resolves only when `expires_at` is `null` or in the future. That single check is the whole gate. |
-| **Rotation** | Issues a new secret for the same logical token and lets the old one keep working for a **1‑hour grace window** (zero-downtime). `--emergency` kills the old secret immediately. |
-| **Revocation** | Stops a token resolving immediately and records *why* (`revoked_at`) for the audit trail. |
-| **Usage** | Each token tracks `last_used_at` and a request counter. Consuming apps can attribute their own records (e.g. jobs) to the resolving token. |
-
-### The fallback token
-
-A single plaintext **fallback token** can be read straight from the environment (`FALLBACK_TOKEN`).
-Any caller presenting it authenticates without a database row — handy for bootstrapping a fresh
-install or wiring up internal apps quickly.
-
-It is deliberately low-ceremony and **not meant for production workloads**: delete it from the
-environment to disable it, and provision per-app database tokens instead. When `FALLBACK_TOKEN` is
-absent, fallback authentication is off entirely.
+| **Resolution** | A presented bearer or Basic secret resolves through the package credential guard; HMAC uses its server-derived subject and key id. Pending, expired, revoked, and offboarded rows do not authenticate. |
+| **Rotation** | Mints the replacement before retiring the source. Bearer and Basic rows receive a one-hour grace window unless emergency cutover is requested; HMAC activation is a separate confirmed step. |
+| **Revocation** | Stops a credential resolving immediately and records the lifecycle event. |
+| **Usage** | Successful presentations update `last_used_at`; first use consumes an associated claim code in the same transaction. |
 
 ### Client identity
 
@@ -79,14 +70,14 @@ Swoole, RoadRunner); under PHP-FPM or Apache, repeated header lines are folded i
 comma-joined value before PHP sees it, and that folded value is stored as the opaque string it
 arrives as.
 
-It is **forward-only**: the migration adds nullable columns and backfills nothing. Existing tokens
+It is **forward-only**: the migration adds nullable columns and backfills nothing. Existing credentials
 stay `null` until a client actually presents a header, and a request without the header leaves a
 stored identity untouched.
 
 ### Observing clients with no working credential
 
 The Yellow state: **something calling itself client X is reaching us and its credential does not
-work** — expired, revoked, wrong, or absent entirely. When enabled, a request to a token-guarded
+work** — expired, revoked, wrong, or absent entirely. When enabled, a request to a credential-guarded
 route that presents a contract-valid `X-BfC-Client-Id` and **authenticates nothing** records that
 claimed identity in `bfc_client_identity_observations`.
 
@@ -96,19 +87,19 @@ claimed identity in `bfc_client_identity_observations`.
 > authentication. The endpoint says so in its own payload so a consumer cannot miss it.
 
 **It is off by default, deliberately.** This is a database write driven by an *unauthenticated*
-request, and the `bfc.token.admin` routes carry no `throttle:` middleware. A provider opts in with
+request. A provider opts in with
 `BUILT_FOR_CLOUD_OBSERVE_UNAUTHENTICATED=true`; no consuming app inherits it by upgrading.
 
 **Know what you are turning on.** With observation enabled, a claim with no bearer token costs about
 three extra database operations (a keyed update that matches nothing, a count against the cap, an
-insert), and a claim with an unknown bearer about five in total once token resolution is included —
-on routes that carry **no `throttle:` middleware**. Put rate limiting in front of these routes before
+insert), and a claim with an unknown bearer about five in total once credential resolution is included.
+Put rate limiting in front of custom routes before
 enabling this in production.
 
 | Rule | Behaviour |
 | --- | --- |
 | **What counts** | Only the genuine no-credential paths: no bearer token, or a bearer that resolves to nothing (unknown, expired, revoked). |
-| **What does not** | A `403` — that caller *has* a working credential and merely lacks the admin scope. Nor the fallback token, which authenticates. Neither is observed. |
+| **What does not** | A `403` — that caller has a working credential and merely lacks the required ability. |
 | **Malformed headers** | A contract-violating value — too long, CR/LF/NUL, invalid UTF-8, empty — is dropped and never observed, and deliberately **not logged** on this path, since it is unauthenticated and unthrottled. |
 | **Repeat claims** | Increment `observation_count` and bump `last_seen_at`. `first_seen_at` never moves — it is the earliest signal. |
 | **The cap** | `BUILT_FOR_CLOUD_MAX_OBSERVATIONS` (default `100`) caps the number of **distinct** identities stored. It is enforced **per request, not atomically** — concurrent requests can each pass the check and briefly overshoot it. An approximate ceiling, not an exact one. |
@@ -126,9 +117,8 @@ arrives as. There is no correct behaviour available at the PHP layer.
 #### `GET /bfc/client-observations`
 
 Always present with the BfC HTTP surface and guarded by an operator credential carrying exactly
-`credential:read` (or `credential:admin` break-glass). Rows are ordered by `last_seen_at`, **most
-recent first**. The configurable `{prefix}/client-observations` route remains a transitional alias
-while the legacy credential API is enabled, but uses the same unified gate.
+`credential:read` (or `credential:admin` break-glass). This is the sole client-observation route.
+Rows are ordered by `last_seen_at`, **most recent first**.
 
 ```json
 {
@@ -155,48 +145,25 @@ and nothing seen"**. `at_capacity` tells it **"no new clients are being recorded
 new clients exist"** — silent truncation otherwise reads as complete data. The identity is the same
 opaque, attacker-controlled text as everywhere else: escape it before rendering.
 
-### Listing tokens
+### Listing credentials
 
-`GET {prefix}/` — where `{prefix}` is `built-for-cloud.credential_api.prefix`, default
-`api/credentials` — returns a JSON array of token rows, **ordered by `created_at`, oldest first**.
-The endpoint is guarded by the `bfc.token.admin` middleware: no bearer token is `401`, a token
-without the admin scope is `403`.
-
-Every row has exactly these seven keys, always present:
-
-| Key | Type | Notes |
-| --- | --- | --- |
-| `name` | `string` | The logical token name. |
-| `last_used_at` | `string\|null` | ISO-8601 with microseconds, UTC — e.g. `2026-08-24T10:28:08.000000Z`. |
-| `expires_at` | `string\|null` | Same format. `null` means it never expires. |
-| `revoked_at` | `string\|null` | Same format. |
-| `abilities` | `string[]` | `[]` when the token has none — never `null`. |
-| `client_identity` | `string\|null` | The opaque client identity, **verbatim**. `null` means no client has ever presented this token. |
-| `client_identity_last_seen_at` | `string\|null` | Same format as the other timestamps. `null` whenever `client_identity` is `null`. |
-
-The secret never appears: neither the plaintext token nor its `token_hash` is part of a row.
-
-The two `client_identity` fields are **additive and nullable** — they were added after the first
-five. A consumer validating this response strictly should permit them rather than reject the row,
-and must treat `null` as meaningful (no client has ever presented that token) rather than coercing
-it to an empty string.
+`GET /bfc/credentials` returns unified credential summaries ordered by creation time. It requires
+`credential:read` or `credential:admin`. Summaries include kind, subject, lifecycle, abilities,
+rotation provenance and presentation cadence; they never include plaintext, hashes, or encrypted
+secret material. See [the HTTP contract](docs/http-contract.md#get-bfccredentials) for the exact shape.
 
 ## Administering from the Cloud CLI
 
-Token administration is designed to be driven from your machine against your deployed environment.
-Each command resolves the target environment by asking Cloud for the application's environment list
-(using a single one automatically, prompting when there is more than one), then runs the work in
-production via the Cloud CLI and brings the output back to you.
-
-Secrets never leave your machine: a new token's plaintext is generated locally and shown once — only
-its hash is sent to production, so plaintext never lands in retained command output.
+Credential administration uses the same action classes as the fixed HTTP routes. These local-only
+commands require `--local`; run them inside the intended environment. Newly generated material is
+shown once and cannot be read back later.
 
 ```
-php artisan token:create <name>      # issue a new per-app token (plaintext shown once)
-php artisan token:rotate <name>       # rotate, with a 1h grace window (--emergency to cut over now)
-php artisan token:revoke <name>       # revoke immediately
-php artisan token:list                # list tokens and their status
-php artisan token:usage [<name>]      # show usage for a token (or all)
+php artisan bfc:credential:mint <subject-type> <subject-ref> --local
+php artisan bfc:credential:list --local
+php artisan bfc:credential:rotate <id> --local
+php artisan bfc:credential:activate <id> --fingerprint=<fingerprint> --local
+php artisan bfc:credential:revoke <id> --local
 ```
 
 ### Ownership bootstrap and recovery
@@ -204,7 +171,7 @@ php artisan token:usage [<name>]      # show usage for a token (or all)
 An unclaimed environment mints a one-time ownership claim token during migration and writes the
 plaintext to the log exactly once. When that log line is gone — or a still-owning control plane has
 lost its admin owner token — these two commands are the way back in. Both follow the same
-driver/execute split as the token commands: the plaintext is generated and shown on your machine,
+driver/execute split as the ownership commands: the plaintext is generated and shown on your machine,
 and only its hash travels to production.
 
 ```
@@ -354,11 +321,9 @@ consumer-facing assertion wrapper so a scanner that visits nothing cannot report
 
 ### Foundation boundary
 
-This slice does not implement managed Scalpels HTTP exchange, email collision allocation,
-five/thirty-minute freshness calls, transition orchestration, or unified credential replacement.
-Existing `api_tokens`, fallback-token, ownership, delegated Console actor/guard, and app-specific
-credential declaration surfaces remain separate contracts; they are not evidence that those later
-unified-auth behaviors exist.
+The package now uses one credential store and lifecycle across its bearer, Basic, HMAC, operator,
+claim-exchange and personal-credential surfaces. Managed authority transitions and delegated Console
+sessions remain distinct protocols with the boundaries documented in the HTTP contract.
 
 ## Installer scaffold
 
@@ -412,7 +377,7 @@ local install command helpers.
 ## Contract conformance
 
 Consuming apps can run the package contract kit in CI to prove their installed app still exposes the
-Built for Cloud routes, auth gates, token model shape, and scope vocabulary expected by the shared
+Built for Cloud routes, auth gates, credential model shape, and scope vocabulary expected by the shared
 contract. Add a test in the consuming app's own suite after the package migrations are available:
 
 ```php
@@ -431,7 +396,7 @@ it('satisfies the Built for Cloud contract', function (): void {
 
 The trait is shipped under the package's normal PSR-4 autoload (`src/Testing`), so downstream tests can
 import it directly from `ArtisanBuild\BuiltForCloud\Testing\ContractAssertions`. It includes helpers
-for minting admin and consume-scoped API tokens when an app wants to assert individual contract areas.
+for minting unified operator and consume-capable credentials when an app wants to assert individual contract areas.
 
 ## Contributing
 
