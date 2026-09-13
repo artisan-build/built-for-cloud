@@ -1147,6 +1147,65 @@ it('enforces authoritative denial through the converged operator ingress', funct
     expect($credential->refresh()->revoked_at)->not->toBeNull();
 });
 
+it('resets the MCP store bearer grace deadline on success and enforces its exact 1799 1800 boundary', function (): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    $fixture = p3cConfigureAuthority();
+    $user = p3cUser('mcp-store-boundary');
+    $secret = 'mcp-store-boundary-secret';
+    $credential = p3cAccountCredential($user, $secret, subjectType: SubjectType::Application);
+    Route::middleware('bfc.mcp')->post('/managed-ingress/mcp-store-boundary', static fn (): string => 'allowed');
+    $fixture->confirmationResponder = static fn (): mixed => Http::response([
+        'contract_version' => 'managed-auth-v1',
+        'error' => 'server_error',
+    ], 503);
+
+    CarbonImmutable::setTestNow('2026-09-10T12:05:00+00:00');
+    $this->postJson('/managed-ingress/mcp-store-boundary', [], [
+        'Authorization' => 'Bearer '.$secret,
+    ])->assertOk();
+    expect($user->fresh()->membership_confirmed_at?->toAtomString())->toBe('2026-09-10T12:00:00+00:00');
+
+    $fixture->confirmationResponder = null;
+    CarbonImmutable::setTestNow('2026-09-10T12:10:00+00:00');
+    $this->postJson('/managed-ingress/mcp-store-boundary', [], [
+        'Authorization' => 'Bearer '.$secret,
+    ])->assertOk();
+    expect($user->fresh()->membership_confirmed_at?->toAtomString())->toBe('2026-09-10T12:10:00+00:00');
+
+    $fixture->confirmationResponder = static fn (): mixed => Http::response([
+        'contract_version' => 'managed-auth-v1',
+        'error' => 'server_error',
+    ], 503);
+    CarbonImmutable::setTestNow('2026-09-10T12:39:59+00:00');
+    $this->postJson('/managed-ingress/mcp-store-boundary', [], [
+        'Authorization' => 'Bearer '.$secret,
+    ])->assertOk();
+    $lastUsedAt = $credential->fresh()->last_used_at?->toAtomString();
+
+    CarbonImmutable::setTestNow('2026-09-10T12:40:00+00:00');
+    $this->postJson('/managed-ingress/mcp-store-boundary', [], [
+        'Authorization' => 'Bearer '.$secret,
+    ])->assertUnauthorized();
+    expect($credential->refresh()->last_used_at?->toAtomString())->toBe($lastUsedAt);
+});
+
+it('enforces authoritative denial through the existing MCP store bearer branch', function (): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    $fixture = p3cConfigureAuthority();
+    $user = p3cUser('mcp-store-authoritative');
+    $secret = 'mcp-store-authoritative-secret';
+    $credential = p3cAccountCredential($user, $secret, subjectType: SubjectType::Application);
+    Route::middleware('bfc.mcp')->post('/managed-ingress/mcp-store-authoritative', static fn (): string => 'allowed');
+
+    $fixture->confirmationOverrides = ['membership_status' => 'removed'];
+    CarbonImmutable::setTestNow('2026-09-10T12:05:00+00:00');
+    $this->postJson('/managed-ingress/mcp-store-authoritative', [], [
+        'Authorization' => 'Bearer '.$secret,
+    ])->assertUnauthorized();
+
+    expect($credential->refresh()->revoked_at)->not->toBeNull();
+});
+
 it('enforces deadline and authoritative denial through EnsureDashboardCredential', function (string $outcome): void {
     CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
     $fixture = p3cConfigureAuthority();
