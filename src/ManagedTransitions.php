@@ -388,7 +388,8 @@ final class ManagedTransitions
                 }
 
                 $this->assertOwnerUser($actor, true);
-                $userIds = $this->applyLocalCommit($locked, $this->stagedMapping($locked));
+                $mapping = $this->stagedMapping($locked);
+                $userIds = $this->applyLocalCommit($locked, $mapping);
 
                 $changed = InstallationAuthority::change(
                     AuthorityState::fromRaw($locked->mode_before, $locked->generation_before),
@@ -401,6 +402,31 @@ final class ManagedTransitions
                 }
 
                 $this->assertLocalAuthority($locked, true, false);
+                if ($locked->direction === ManagedTransitionDirection::Adopt) {
+                    $owner = User::query()->whereNotNull('owner_slot')->first();
+                    $ownerWasExcluded = false;
+
+                    if ($owner instanceof User) {
+                        foreach ($mapping as $element) {
+                            if ($element['local_kind'] === 'user'
+                                && $element['local_id'] === (string) $owner->getKey()
+                                && $element['disposition'] === 'exclude') {
+                                $ownerWasExcluded = true;
+
+                                break;
+                            }
+                        }
+                    }
+
+                    if ($owner instanceof User
+                        && $ownerWasExcluded
+                        && DB::table('bfc_managed_transition_roster_members')
+                            ->where('managed_transition_id', $locked->id)
+                            ->where('role', UserRole::Owner->value)
+                            ->exists()) {
+                        throw ManagedAuthRefused::because(ManagedAuthRefusalReason::OwnerSlotHeldByUnboundIdentity);
+                    }
+                }
                 $locked->forceFill([
                     'status' => ManagedTransitionStatus::Committed,
                     'local_commit_receipt' => $this->randomKey(),

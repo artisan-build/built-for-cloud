@@ -13,6 +13,7 @@ use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConfirmation;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;
 use ArtisanBuild\BuiltForCloud\ManagedAuthExchange;
+use ArtisanBuild\BuiltForCloud\ManagedAuthRefusalReason;
 use ArtisanBuild\BuiltForCloud\ManagedMembershipResponses;
 use ArtisanBuild\BuiltForCloud\ManagedTransition;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionDirection;
@@ -454,6 +455,7 @@ it('refuses adoption with a distinct reason when an excluded standalone Owner wo
 
     expect($refusal)->toBeInstanceOf(ManagedAuthRefused::class)
         ->and($refusal?->getMessage())->toBe('managed_owner_slot_held_by_unbound_identity')
+        ->and($refusal?->reason)->toBe(ManagedAuthRefusalReason::OwnerSlotHeldByUnboundIdentity)
         // The adopt-side condition runs before commit, so it exposes the
         // problem without leaving the installation in the stranded state.
         ->and(InstallationAuthority::current()->mode)->toBe(AuthorityMode::Standalone)
@@ -1279,6 +1281,16 @@ it('retains authority and retry records through removed entitlement state and lo
     ]];
     [$owner, $fixture] = p4dConfigure($direction, $roster);
     $service = app(ManagedTransitions::class);
+    $propose = static fn (ManagedTransition $candidate): ManagedTransition => $direction === ManagedTransitionDirection::Adopt
+        ? $service->propose($candidate, [[
+            'scalpels_id' => 'owner-subject',
+            'local_kind' => 'user',
+            'local_id' => (string) $owner->getKey(),
+            'role' => 'owner',
+            'disposition' => 'link',
+            'final_email' => 'p4d-owner@example.test',
+        ]])
+        : $service->proposeDefault($candidate);
     if ($phase === 'preparing') {
         $fixture->crashAfterExecution = 'T1';
         expect(fn () => $service->prepare($owner, $direction))->toThrow(ManagedAuthRefused::class);
@@ -1290,7 +1302,7 @@ it('retains authority and retry records through removed entitlement state and lo
         $transition = $service->fetchRoster($transition);
     }
     if (in_array($phase, ['proposed', 'staging', 'staged'], true)) {
-        $transition = $service->proposeDefault($transition);
+        $transition = $propose($transition);
     }
     if ($phase === 'staging') {
         $fixture->crashBeforeExecution = 'T3';
@@ -1357,7 +1369,7 @@ it('retains authority and retry records through removed entitlement state and lo
         $recovered = $service->fetchRoster($recovered);
     }
     if ($recovered->status === ManagedTransitionStatus::Rostered) {
-        $recovered = $service->proposeDefault($recovered);
+        $recovered = $propose($recovered);
     }
     $completed = $service->complete($owner->refresh(), $recovered);
     $authorityAfter = (array) DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->sole();

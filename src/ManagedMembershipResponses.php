@@ -51,7 +51,7 @@ final class ManagedMembershipResponses
                 $connectionAccepted = $this->connectionAccepted($authority, $connection, $response);
 
                 $this->assertRecognizedRole($response->role);
-                $this->ownershipOutcome($user, $response, $membershipAccepted, false);
+                $this->ownershipOutcome($connection, $user, $response, $membershipAccepted, false);
 
                 if ($connectionAccepted) {
                     $this->storeConnectionDimension($response, $connection);
@@ -152,7 +152,7 @@ final class ManagedMembershipResponses
             $connectionAccepted = $this->connectionAccepted($authority, $connection, $response);
 
             $this->assertRecognizedRole($response->role);
-            $this->ownershipOutcome($user, $response, $membershipAccepted, $mayPullOwnership);
+            $this->ownershipOutcome($connection, $user, $response, $membershipAccepted, $mayPullOwnership);
             $receipt = CarbonImmutable::now();
 
             if ($connectionAccepted) {
@@ -599,6 +599,7 @@ final class ManagedMembershipResponses
     }
 
     private function ownershipOutcome(
+        ManagedAuthConnection $connection,
         ?User $subject,
         ManagedAuthConfirmation|ManagedAuthExchange $response,
         bool $membershipAccepted,
@@ -633,30 +634,40 @@ final class ManagedMembershipResponses
                 return ManagedOwnershipOutcome::OwnerReaffirm;
             }
 
-            $this->refuseOwnerTransition($subject, $response, $mayPullOwnership);
+            $this->refuseOwnerTransition($connection, $subject, $response, $mayPullOwnership);
         }
 
         if (! $heldBySubject) {
             return ManagedOwnershipOutcome::OwnershipNeutral;
         }
 
-        $this->refuseOwnerTransition($subject, $response, false);
+        $this->refuseOwnerTransition($connection, $subject, $response, false);
     }
 
     private function refuseOwnerTransition(
+        ManagedAuthConnection $connection,
         ?User $subject,
         ManagedAuthConfirmation|ManagedAuthExchange $response,
         bool $pullOwnership,
     ): never {
 
+        $reason = $response->role === UserRole::Owner->value
+            && $this->ownerSlotHeldByUnboundIdentity($connection)
+                ? ManagedAuthRefusalReason::OwnerSlotHeldByUnboundIdentity
+                : null;
+
         try {
             Log::warning('Built for Cloud refused a managed response that would change the Owner.', [
-                'reason_code' => 'managed_owner_transition_refused',
+                'reason_code' => $reason->value ?? 'managed_owner_transition_refused',
                 'user_id' => $subject?->getKey(),
                 'scalpels_id' => $response->scalpelsId,
             ]);
         } catch (Throwable) {
             // The typed refusal below remains observable even if the logger is unavailable.
+        }
+
+        if ($reason !== null) {
+            throw ManagedAuthRefused::because($reason);
         }
 
         if ($pullOwnership
@@ -667,6 +678,17 @@ final class ManagedMembershipResponses
         }
 
         throw new ManagedAuthRefused('managed_owner_transition_refused');
+    }
+
+    private function ownerSlotHeldByUnboundIdentity(ManagedAuthConnection $connection): bool
+    {
+        $owner = User::query()->whereNotNull('owner_slot')->first();
+
+        return $owner instanceof User
+            && ($owner->scalpels_issuer !== $connection->issuer
+                || $owner->scalpels_connection_id !== $connection->connectionId
+                || ! is_string($owner->scalpels_id)
+                || $owner->scalpels_id === '');
     }
 
     private function seatedOwnerScalpelsId(): ?string
