@@ -60,7 +60,7 @@ final class HmacVerifier
 {
     public function __construct(
         private readonly HmacKeyring $keyring,
-        private readonly ManagedAccountAccess $managedAccess,
+        private readonly ?ManagedAccountAccess $managedAccess = null,
     ) {}
 
     /**
@@ -120,7 +120,7 @@ final class HmacVerifier
         // authority and persist its answer. Only an authenticated holder may
         // trigger those effects, and containment still precedes nonce/rate
         // consumption, usage stamping and route admission.
-        if (! $this->managedAccess->allowsCredential($credential)) {
+        if (! $this->managedAccess()->allowsCredential($credential)) {
             throw HmacVerificationFailed::unusableKey();
         }
 
@@ -196,5 +196,10 @@ final class HmacVerifier
         }
 
         return $configured;
+    }
+
+    private function managedAccess(): ManagedAccountAccess
+    {
+        return $this->managedAccess ?? app(ManagedAccountAccess::class);
     }
 }
