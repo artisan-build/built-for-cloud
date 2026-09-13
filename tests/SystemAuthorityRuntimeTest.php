@@ -14,15 +14,19 @@ use ArtisanBuild\BuiltForCloud\SystemAuthoritySchedule;
 use ArtisanBuild\BuiltForCloud\Testing\SystemAuthorityInventory;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostCopycatQueuedJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostEncryptedListener;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostLateKeyListener;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostLegacyPayloadListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostRuntimeAuthQueuedJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueEncryptedMarkedListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueEventDispatchingGuard;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueFailedHandlerJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueFailThenLoginJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueLabelledMarkerJob;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueLegacyEvent;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueListenerEvent;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMarkedFailingListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMarkedMiddlewareListener;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMarkedPushTimeJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMarkedQueuedListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMiddlewareLoginJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueRestorationProbe;
@@ -374,12 +378,12 @@ it('pins every published system-authority boundary statement to the code it desc
         'any callback registered for later invocation, such as `defer()`, `app()->terminating()`, a listener registered at runtime, a shutdown function, or a chain or batch `catch`/`finally` callback; and any callback attached to a schedule event, including its `before`/`after` hooks and its `when`/`skip` filters.',
         'A queued closure dispatched by package code is never framed. Its declaring file does not survive serialisation, and the scope class that does survive is caller-settable, so its origin cannot be established as identity.',
         "In-process tampering switches the bound off: removing the listeners, replacing a guard's event dispatcher, or rebinding the system-authority context. A host that calls `Bus::pipeThrough()` after this package boots also replaces the pipe array and reverts the bound to framing by queue events alone.",
-        // Narrowed after the delta-7 judge showed a LISTENER's middleware() method body
-        // is called at dispatch, not at execution, so it is framed only when the
-        // dispatching code is. The middleware OBJECTS it returns are framed, which the
-        // listener grid proves.
-        "A queued entry's `failed()` handler is inside the frame, as is the middleware a queued entry runs: for a job that is its own `middleware()` method, and for a listener it is the middleware objects that method returns.",
-        "A listener's `middleware()` method body is NOT",
+        // Stated as a RULE, not a list. The previous version enumerated dispatch-time
+        // methods for listeners only, which implied a job's were framed — they are not —
+        // and the listener list was itself incomplete. The reviewer's line is the lesson:
+        // a list that is incomplete for a boundary is a weaker instrument than a rule.
+        "Anything the framework calls on an entry while DISPATCHING OR PUSHING it runs in the dispatcher's context, not the entry's, for a job and for a listener alike",
+        'are examples rather than the boundary',
         // Pinned because the stale version of this sentence — naming processed, failed
         // and exception as the release events — stayed live and green after the release
         // moved to JobAttempted.
@@ -658,10 +662,14 @@ it('never constructs anything nested while reading a queued listener\'s class', 
 
     RogueRestorationProbe::$constructed = 0;
 
+    // BOTH halves are asserted, because either alone is vacuous: a read that returned
+    // false for every payload would also leave the probe at zero, and a probe that was
+    // never serialised would too. So: the marked class WAS positively identified, AND
+    // nothing nested was woken to identify it.
     expect($decide->invoke(app(SystemAuthorityQueueScope::class), ['data' => ['command' => serialize($wrapper)]]))->toBeTrue()
-        // The marked class was read...
-        ->and(RogueRestorationProbe::$constructed)->toBe(0);
-    // ...and nothing nested was woken while reading it.
+        ->and(RogueRestorationProbe::$constructed)->toBe(0)
+        // And the probe really is in the payload — otherwise the zero above means nothing.
+        ->and(serialize($wrapper))->toContain(RogueRestorationProbe::class);
 });
 it('reads an encrypted queued listener the way the framework does, framing ours and leaving the host alone', function (
     string $listener, string $marker, bool $framed
@@ -691,22 +699,73 @@ it('reads an encrypted queued listener the way the framework does, framing ours 
     "the host's is not" => [HostEncryptedListener::class, 'host-encrypted-ran', false],
 ]);
 
-it('frames an entry whose class cannot be read at all, rather than assuming it is the host\'s', function (
+it('frames an entry only on positive identification, never on a payload it could not read', function (
     string $label, string $command
 ): void {
-    // Rule 4 of the authorised repair: if the marked class cannot be established, the
-    // entry is FRAMED. Nothing exercised this until now — with the decrypt branch in
-    // place the catch is unreachable through the queue, so reverting fail-closed to
-    // fail-open left the suite green. That is a branch carrying a security decision
-    // with no control, so it gets one directly.
+    // The frame opens ONLY when the payload positively identifies one of our listeners.
+    // This assertion was the other way round one ruling ago, and it was wrong: three
+    // separate fail-closed doors each framed HOST work — ciphertext this listener cannot
+    // decrypt, a nested object implementing only the legacy Serializable interface, and
+    // restoration that depends on host JobProcessing state. In each case the framework
+    // reads the payload unrestricted a moment later and runs the entry fine, so refusing
+    // it was a false refusal on host code, which ranks above a package gap. The residue
+    // is disclosed under the class statement and carries a security debt row.
     $scope = app(SystemAuthorityQueueScope::class);
-    $decide = (new ReflectionMethod(SystemAuthorityQueueScope::class, 'wrappedListenerIsOurs'));
+    $decide = new ReflectionMethod(SystemAuthorityQueueScope::class, 'wrappedListenerIsOurs');
     $decide->setAccessible(true);
 
-    expect($decide->invoke($scope, ['data' => ['command' => $command]]))->toBeTrue($label);
+    expect($decide->invoke($scope, ['data' => ['command' => $command]]))->toBeFalse($label);
 })->with([
     'corrupt serialised payload' => ['corrupt', 'O:not-actually-serialised'],
-    'ciphertext that will not decrypt' => ['undecryptable', 'eyJpdiI6Im5vcGUifQ=='],
+    'ciphertext this listener cannot decrypt' => ['undecryptable', 'eyJpdiI6Im5vcGUifQ=='],
     'empty command' => ['empty', ''],
     'a plain string' => ['plain', 'nonsense'],
+    'a wrapper naming a class that does not exist' => ['missing class', 'O:36:"Illuminate\\Events\\CallQueuedListener":1:{s:5:"class";s:20:"No\\Such\\Class\\AtAll";}'],
 ]);
+
+it('leaves a host queued entry unframed whenever its identity cannot be established', function (
+    string $listener, string $event, string $marker
+): void {
+    // Brain's rule, arrived at after three fail-closed doors each falsely framed host
+    // work: frame only on POSITIVE identification. Each cell here is a host entry whose
+    // payload this listener cannot read, for a different reason, and each must run and
+    // authenticate exactly as it would with no package installed.
+    config([
+        'auth.guards.web' => ['driver' => 'session', 'provider' => 'users'],
+        'queue.default' => 'sync',
+    ]);
+    $user = runtimeAuthorityUser('-unframed-'.$marker);
+    Event::listen($event, $listener);
+
+    Event::dispatch(new $event((string) $user->getKey(), 'sync'));
+
+    // Liveness first, then that it was NOT refused.
+    expect(Cache::get('bfc-test.'.$marker.'.'.$user->getKey()))->toBeTrue()
+        ->and(auth()->guard('web')->id())->toBe($user->getAuthIdentifier());
+})->with([
+    'an event carrying a legacy Serializable object' => [HostLegacyPayloadListener::class, RogueLegacyEvent::class, 'host-legacy-ran'],
+    'ciphertext this listener cannot read' => [HostLateKeyListener::class, RogueListenerEvent::class, 'host-late-key-ran'],
+]);
+
+it('treats what the framework calls while pushing an entry as the dispatcher\'s context, for a job too', function (): void {
+    // The published rule, made behavioural. displayName() is called by the queue while
+    // PUSHING, so it is outside the frame when the pushing code is — and inside it when
+    // the pushing code is framed. Both directions are asserted, because the first alone
+    // would also be true of a hook that never ran.
+    config(['auth.guards.web' => ['driver' => 'session', 'provider' => 'users'], 'queue.default' => 'database']);
+    $unframed = runtimeAuthorityUser('-push-unframed');
+
+    Queue::connection('database')->push(new RogueMarkedPushTimeJob((string) $unframed->getKey()));
+
+    expect(Cache::get('bfc-test.push-time-ran.'.$unframed->getKey()))->toBeTrue()
+        ->and(auth()->guard('web')->id())->toBe($unframed->getAuthIdentifier());
+
+    // Pushed from inside a frame, the same hook is refused.
+    auth()->guard('web')->logout();
+    $framed = runtimeAuthorityUser('-push-framed');
+
+    expect(fn () => app(SystemAuthorityContext::class)->run(
+        fn (): mixed => Queue::connection('database')->push(new RogueMarkedPushTimeJob((string) $framed->getKey())),
+    ))->toThrow(SystemAuthorityViolation::class)
+        ->and(auth()->guard('web')->guest())->toBeTrue();
+});

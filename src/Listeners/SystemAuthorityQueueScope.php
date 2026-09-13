@@ -82,44 +82,68 @@ final class SystemAuthorityQueueScope
     }
 
     /** @param array<string, mixed> $payload */
+    /**
+     * Whether the wrapper's payload POSITIVELY identifies one of our listeners.
+     *
+     * The frame opens only on positive identification. Any failure to establish
+     * identity — ciphertext this listener cannot decrypt, a nested object implementing
+     * only the legacy `Serializable` interface, a model deleted since dispatch, a
+     * corrupt payload, a class that cannot be loaded — leaves the entry UNFRAMED.
+     *
+     * That is a ruling, and it was made the hard way. Three separate fail-closed doors
+     * each falsely framed HOST work: an encrypted payload, restoration that depends on
+     * host `JobProcessing` state, and a legacy-serialisable object in the event. In every
+     * case a host listener ran and its own legitimate authentication was silently
+     * refused, while the framework — which reads the payload unrestricted, a moment
+     * later, after any host listener has configured what it needs — would have run it
+     * perfectly well. A false refusal on host code ranks above a package gap, so the
+     * residue is disclosed under the class statement and carries a security debt row
+     * rather than being guessed at.
+     *
+     * @param  array<string, mixed>  $payload
+     */
     private function wrappedListenerIsOurs(array $payload): bool
     {
         $serialised = $payload['data']['command'] ?? null;
 
         if (! is_string($serialised)) {
-            return true;
+            return false;
         }
 
         try {
-            // Read it the way the framework reads it. `CallQueuedHandler::getCommand()`
-            // treats a payload starting `O:` as plain serialised and DECRYPTS anything
-            // else, because a `ShouldBeEncrypted` entry's command is ciphertext. Without
-            // that branch every encrypted entry failed to unserialise and fell to the
-            // fail-closed path, which framed HOST work and silently refused a host
-            // listener's own legitimate authentication.
             $plain = str_starts_with($serialised, 'O:')
                 ? $serialised
                 : $this->encrypter()->decrypt($serialised);
+        } catch (Throwable) {
+            return false;
+        }
 
-            // `allowed_classes` restricted to the wrapper is what makes reading this
-            // safe. The wrapper's `class` is a plain string, so it survives, while
-            // everything nested becomes __PHP_Incomplete_Class — so the LISTENER IS
-            // NEVER CONSTRUCTED AND ITS MODELS ARE NEVER RESTORED. That removes the
-            // whole hazard of reading a payload here: no database queries, no __wakeup,
-            // no ModelNotFoundException for a row deleted since dispatch, and no
-            // duplicate model loads before CallQueuedHandler does its own read.
+        // `allowed_classes` restricted to the wrapper keeps this read inert: the
+        // wrapper's `class` is a plain string so it survives, while everything nested
+        // becomes __PHP_Incomplete_Class. THE LISTENER IS NEVER CONSTRUCTED AND ITS
+        // MODELS ARE NEVER RESTORED — no queries, no __wakeup, no
+        // ModelNotFoundException, and no duplicate model loads before
+        // `CallQueuedHandler` does its own read.
+        //
+        // The error handler is scoped and restored in `finally`, never `@`: restricting
+        // a legacy-serialisable nested object makes PHP warn that
+        // __PHP_Incomplete_Class has no unserialiser, and under the application's
+        // handler that warning becomes an exception. `@` happens to work only because
+        // Laravel's handler consults error_reporting(), which is an interaction between
+        // two behaviours rather than a guarantee.
+        set_error_handler(static fn (): bool => true);
+
+        try {
             $command = unserialize($plain, ['allowed_classes' => [CallQueuedListener::class]]);
         } catch (Throwable) {
-            // Fail CLOSED, and silently: the entry is framed, and a restoration failure
-            // stays the framework's to handle.
-            return true;
+            return false;
+        } finally {
+            restore_error_handler();
         }
 
-        if (! $command instanceof CallQueuedListener || ! is_string($command->class)) {
-            return true;
-        }
-
-        return is_a($command->class, SystemAuthorityQueueEntry::class, true);
+        return $command instanceof CallQueuedListener
+            && is_string($command->class)
+            && is_a($command->class, SystemAuthorityQueueEntry::class, true);
     }
 
     private function encrypter(): Encrypter
