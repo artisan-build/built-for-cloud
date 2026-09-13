@@ -8,7 +8,6 @@ use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
-use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
@@ -250,6 +249,7 @@ $case = new class('testProbe') extends TestCase
     {
         if ($phase === 'setup') {
             $this->createCredential($payload['credential']);
+
             return ['credential_id' => $payload['credential']['id']];
         }
 

@@ -249,7 +249,6 @@ final class LegacyRemovalInventory
 
     /**
      * @param  list<array{int, string, int}|string>  $tokens
-     * @return int|null
      */
     private static function previousCodeTokenIndex(array $tokens, int $index): ?int
     {
