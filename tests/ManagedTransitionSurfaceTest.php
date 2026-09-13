@@ -20,6 +20,7 @@ use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ViewErrorBag;
 
@@ -434,6 +435,45 @@ it('executes completion through the Owner route and ends the stale standalone se
 
     $this->assertGuest();
     expect($transition->refresh()->status)->toBe(ManagedTransitionStatus::Acknowledged);
+});
+
+it('explains and logs the correction required by an Owner-stranding default adoption proposal before staging', function (): void {
+    [$owner, $fixture] = p4cConfigure();
+    $fixture->rosterPages['NULL'][0]['role'] = UserRole::Owner->value;
+    $transition = p4cBegin($this, $owner, ManagedTransitionDirection::Adopt);
+    $edit = route('bfc.transitions.edit', $transition, false);
+    $message = 'The current Owner would be left unlinked while managed authority has an Owner. Link the current Owner to the incoming Owner-role identity, then retry.';
+    Log::spy();
+
+    $this->actingAsVersioned($owner)
+        ->from($edit)
+        ->post(route('bfc.transitions.complete', $transition, false))
+        ->assertRedirect($edit)
+        ->assertSessionHasErrors(['transition' => $message]);
+
+    Log::shouldHaveReceived('warning')
+        ->once()
+        ->withArgs(static fn (string $logged, array $context): bool => $logged === 'Built for Cloud refused a managed transition.'
+            && $context['reason_code'] === 'managed_owner_slot_held_by_unbound_identity'
+            && $context['transition_id'] === $transition->id);
+    expect($transition->refresh()->status)->toBe(ManagedTransitionStatus::Proposed)
+        ->and(collect($fixture->calls)->where('leg', 'T3'))->toHaveCount(0);
+
+    $this->actingAsVersioned($owner)->put(route('bfc.transitions.update', $transition, false), [
+        'roster' => [[
+            'scalpels_id' => 'direct-member',
+            'choice' => 'link:user:'.$owner->getKey(),
+        ]],
+        'locals' => [[
+            'local_kind' => 'user',
+            'local_id' => (string) $owner->getKey(),
+        ]],
+    ])->assertRedirect($edit);
+    $this->post(route('bfc.transitions.complete', $transition, false))
+        ->assertRedirect(route('bfc.managed.login'));
+
+    expect($transition->refresh()->status)->toBe(ManagedTransitionStatus::Acknowledged)
+        ->and($owner->refresh()->scalpels_id)->toBe('direct-member');
 });
 
 it('keeps interrupted completion states available on the same retry URL', function (ManagedTransitionStatus $status): void {

@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\Invitation;
+use ArtisanBuild\BuiltForCloud\ManagedAuthRefusalReason;
 use ArtisanBuild\BuiltForCloud\ManagedTransition;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionDirection;
 use ArtisanBuild\BuiltForCloud\ManagedTransitions as TransitionService;
@@ -18,7 +19,9 @@ use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
 final class ManageTransitions
 {
@@ -89,12 +92,25 @@ final class ManageTransitions
 
         try {
             $completed = $transitions->complete($actor, $transition);
-        } catch (ManagedAuthRefused) {
+        } catch (ManagedAuthRefused $refused) {
             if (InstallationAuthority::current()->generation !== $transition->generation_before) {
                 StandaloneAccess::endCurrentSession($request, auth()->guard());
             }
 
-            throw ValidationException::withMessages(['transition' => 'The transition could not be completed. Retry the same transition.']);
+            try {
+                Log::warning('Built for Cloud refused a managed transition.', [
+                    'reason_code' => $refused->reason->value ?? 'managed_transition_refused',
+                    'transition_id' => $transition->id,
+                ]);
+            } catch (Throwable) {
+                // The operator-visible typed refusal remains available if logging fails.
+            }
+
+            $message = $refused->reason === ManagedAuthRefusalReason::OwnerSlotHeldByUnboundIdentity
+                ? 'The current Owner would be left unlinked while managed authority has an Owner. Link the current Owner to the incoming Owner-role identity, then retry.'
+                : 'The transition could not be completed. Retry the same transition.';
+
+            throw ValidationException::withMessages(['transition' => $message]);
         }
 
         StandaloneAccess::endCurrentSession($request, auth()->guard());

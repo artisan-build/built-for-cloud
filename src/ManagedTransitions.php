@@ -337,6 +337,7 @@ final class ManagedTransitions
                 ->map(static fn (object $row): array => (array) $row)
                 ->all();
             $mapping = $this->validateMapping($locked, $mapping);
+            $this->refuseOwnerSlotStranding($locked, $mapping);
             $key = $this->randomKey();
             $body = $this->serialize([
                 'connection_id' => $locked->connection_id,
@@ -389,6 +390,7 @@ final class ManagedTransitions
 
                 $this->assertOwnerUser($actor, true);
                 $mapping = $this->stagedMapping($locked);
+                $this->refuseOwnerSlotStranding($locked, $mapping);
                 $userIds = $this->applyLocalCommit($locked, $mapping);
 
                 $changed = InstallationAuthority::change(
@@ -402,31 +404,6 @@ final class ManagedTransitions
                 }
 
                 $this->assertLocalAuthority($locked, true, false);
-                if ($locked->direction === ManagedTransitionDirection::Adopt) {
-                    $owner = User::query()->whereNotNull('owner_slot')->first();
-                    $ownerWasExcluded = false;
-
-                    if ($owner instanceof User) {
-                        foreach ($mapping as $element) {
-                            if ($element['local_kind'] === 'user'
-                                && $element['local_id'] === (string) $owner->getKey()
-                                && $element['disposition'] === 'exclude') {
-                                $ownerWasExcluded = true;
-
-                                break;
-                            }
-                        }
-                    }
-
-                    if ($owner instanceof User
-                        && $ownerWasExcluded
-                        && DB::table('bfc_managed_transition_roster_members')
-                            ->where('managed_transition_id', $locked->id)
-                            ->where('role', UserRole::Owner->value)
-                            ->exists()) {
-                        throw ManagedAuthRefused::because(ManagedAuthRefusalReason::OwnerSlotHeldByUnboundIdentity);
-                    }
-                }
                 $locked->forceFill([
                     'status' => ManagedTransitionStatus::Committed,
                     'local_commit_receipt' => $this->randomKey(),
@@ -440,6 +417,31 @@ final class ManagedTransitions
             return $committed;
         } catch (QueryException $exception) {
             throw new ManagedAuthRefused(previous: $exception);
+        }
+    }
+
+    /** @param list<array<string, mixed>> $mapping */
+    private function refuseOwnerSlotStranding(ManagedTransition $transition, array $mapping): void
+    {
+        if ($transition->direction !== ManagedTransitionDirection::Adopt
+            || ! DB::table('bfc_managed_transition_roster_members')
+                ->where('managed_transition_id', $transition->id)
+                ->where('role', UserRole::Owner->value)
+                ->exists()) {
+            return;
+        }
+
+        $ownerId = User::query()->whereNotNull('owner_slot')->value('id');
+        if ($ownerId === null) {
+            return;
+        }
+
+        foreach ($mapping as $element) {
+            if ($element['local_kind'] === 'user'
+                && $element['local_id'] === (string) $ownerId
+                && $element['disposition'] === 'exclude') {
+                throw ManagedAuthRefused::because(ManagedAuthRefusalReason::OwnerSlotHeldByUnboundIdentity);
+            }
         }
     }
 
