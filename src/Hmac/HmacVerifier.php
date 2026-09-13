@@ -99,15 +99,10 @@ final class HmacVerifier
             ->active()
             ->first();
 
-        // Full account containment (PRD 1.15, SEC-V3-04): a key whose
-        // subject — or bound user — is offboarded is NOT SELECTABLE, with
-        // the same indistinct answer as any other selection miss (rule 5:
-        // no oracle). The registry check rides key selection because this
-        // verifier resolves credentials directly rather than via the bfc
-        // guard, and containment must hold at every authentication point.
+        // Pure local containment remains part of key selection. It has no
+        // observable side effects when reached by an unauthenticated caller.
         if ($credential === null
-            || OffboardedSubject::rejects($credential)
-            || ! $this->managedAccess->allowsCredential($credential)) {
+            || OffboardedSubject::rejects($credential)) {
             throw HmacVerificationFailed::unusableKey();
         }
 
@@ -119,6 +114,14 @@ final class HmacVerifier
 
         if (! hash_equals($expected, $signature)) {
             throw HmacVerificationFailed::invalidSignature();
+        }
+
+        // Managed freshness can take a lock, charge retry state, call the
+        // authority and persist its answer. Only an authenticated holder may
+        // trigger those effects, and containment still precedes nonce/rate
+        // consumption, usage stamping and route admission.
+        if (! $this->managedAccess->allowsCredential($credential)) {
+            throw HmacVerificationFailed::unusableKey();
         }
 
         // One replay window for the nonce entries AND the rate counter:

@@ -35,9 +35,11 @@ use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Route as RoutingRoute;
 use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
 use Symfony\Component\Process\Process;
 
@@ -785,6 +787,47 @@ it('uses the K5 minted hmac credential through grace reset and the exact managed
     $this->travelTo('2026-09-10T12:40:00+00:00');
     p5dSendPersonalHmac($user, $delivery)->assertUnauthorized();
     expect(Credential::query()->findOrFail($delivery['key_id'])->last_used_at?->toAtomString())->toBe($lastUsedAt);
+});
+
+it('rejects a stale-membership bad hmac without authority calls retry charge or freshness mutation', function (): void {
+    $this->travelTo('2026-09-10T12:00:00+00:00');
+    $user = personalUser('p5d-bad-signature@example.test');
+    $delivery = p5dMintActivatedPersonalHmac($user);
+    $fixture = p5dConfigureManagedPersonalUser($user);
+    Route::post('/p5d-personal-hmac/{user}', static fn (): array => ['verified' => true])->middleware('bfc.hmac');
+    $fixture->confirmationResponder = static fn (): mixed => Http::response([
+        'contract_version' => 'managed-auth-v1',
+        'error' => 'server_error',
+    ], 503);
+
+    $userBefore = $user->fresh()->getAttributes();
+    $authorityBefore = (array) DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->first();
+    $credentialBefore = Credential::query()->findOrFail($delivery['key_id'])->getAttributes();
+    $refreshKey = hash('sha256', implode("\0", [
+        'https://issuer.example.test',
+        'connection-fixture',
+        'p5d-personal-subject',
+    ]));
+    $attemptKey = 'bfc:managed-refresh-attempt:'.$refreshKey;
+
+    $this->travelTo('2026-09-10T12:29:59+00:00');
+    $badSignature = p5dSendPersonalHmac($user, [
+        'key_id' => $delivery['key_id'],
+        'signing_key' => bin2hex(random_bytes(32)),
+    ])->assertUnauthorized();
+
+    expect($fixture->calls)->toBe([])
+        ->and(Cache::has($attemptKey))->toBeFalse()
+        ->and($user->fresh()->getAttributes())->toBe($userBefore)
+        ->and((array) DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->first())->toBe($authorityBefore)
+        ->and(Credential::query()->findOrFail($delivery['key_id'])->getAttributes())->toBe($credentialBefore);
+
+    $unusableKey = p5dSendPersonalHmac($user, [
+        'key_id' => (string) Str::uuid(),
+        'signing_key' => bin2hex(random_bytes(32)),
+    ])->assertUnauthorized();
+
+    expect($badSignature->getContent())->toBe($unusableKey->getContent());
 });
 
 it('denies and revokes the K5 minted hmac credential on authoritative removal', function (): void {
