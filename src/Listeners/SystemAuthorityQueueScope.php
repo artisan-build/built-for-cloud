@@ -58,12 +58,14 @@ final class SystemAuthorityQueueScope
      * A queued LISTENER is executed inside `CallQueuedListener`, so for those
      * `commandName` names the wrapper and the marked class sits on the wrapper's own
      * `class` property. Reading it means unserialising the command, which is what
-     * `CallQueuedHandler` does moments later anyway — but doing it here is not free:
-     * `SerializesModels` restores models during unserialisation, so a job whose model
-     * has since been deleted throws. If that escaped this listener it would turn a job
-     * the framework would quietly delete under `deleteWhenMissingModels` into a
-     * failure. So: unserialise ONLY for the wrapper, never let anything out, and frame
-     * the entry when its class cannot be read.
+     * `CallQueuedHandler` does moments later anyway — but doing it here is not free.
+     * An unrestricted read would let `SerializesModels` restore models, so an entry
+     * whose model has since been deleted would throw, turning a job the framework
+     * would quietly delete under `deleteWhenMissingModels` into a failure. So:
+     * unserialise ONLY for the wrapper, never let anything out, and — by the ruling in
+     * `wrappedListenerIsOurs()` — leave the entry UNFRAMED when its class cannot be
+     * read. An earlier version of this sentence said the opposite, and framing on an
+     * unreadable payload is what falsely framed host work three times.
      */
     private function shouldFrame(Job $job): bool
     {
@@ -81,14 +83,15 @@ final class SystemAuthorityQueueScope
         return $this->wrappedListenerIsOurs($payload);
     }
 
-    /** @param array<string, mixed> $payload */
     /**
      * Whether the wrapper's payload POSITIVELY identifies one of our listeners.
      *
      * The frame opens only on positive identification. Any failure to establish
      * identity — ciphertext this listener cannot decrypt, a nested object implementing
-     * only the legacy `Serializable` interface, a model deleted since dispatch, a
-     * corrupt payload, a class that cannot be loaded — leaves the entry UNFRAMED.
+     * only the legacy `Serializable` interface, a corrupt payload, a class that cannot
+     * be loaded — leaves the entry UNFRAMED. A model deleted since dispatch is NOT in
+     * that list: the restricted read never restores it, so identity is established from
+     * the wrapper's plain `class` string with no query and the verdict is unaffected.
      *
      * That is a ruling, and it was made the hard way. Three separate fail-closed doors
      * each falsely framed HOST work: an encrypted payload, restoration that depends on

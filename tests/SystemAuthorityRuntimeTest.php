@@ -14,8 +14,8 @@ use ArtisanBuild\BuiltForCloud\SystemAuthoritySchedule;
 use ArtisanBuild\BuiltForCloud\Testing\SystemAuthorityInventory;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostCopycatQueuedJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostEncryptedListener;
-use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostLateKeyListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostLegacyPayloadListener;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostModelListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostRuntimeAuthQueuedJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueEncryptedMarkedListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueEventDispatchingGuard;
@@ -25,10 +25,13 @@ use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueLabelledMarkerJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueLegacyEvent;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueListenerEvent;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMarkedFailingListener;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMarkedLegacyPayloadListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMarkedMiddlewareListener;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMarkedModelListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMarkedPushTimeJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMarkedQueuedListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMiddlewareLoginJob;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueModelEvent;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueRestorationProbe;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RuntimeAuthorityQueuedJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RuntimeAuthorityServiceProvider;
@@ -43,6 +46,7 @@ use Illuminate\Bus\Dispatcher as IlluminateBusDispatcher;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Auth\Factory as AuthFactory;
 use Illuminate\Contracts\Bus\Dispatcher as BusDispatcher;
+use Illuminate\Contracts\Encryption\Encrypter;
 use Illuminate\Events\CallQueuedListener;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Queue\CallQueuedClosure;
@@ -52,6 +56,7 @@ use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Queue;
@@ -392,6 +397,11 @@ it('pins every published system-authority boundary statement to the code it desc
         // claimed identity could come from a queued closure's declaring file, after the
         // closure branch had been withdrawn.
         'Never from a display name, which a job can choose.',
+        // Pinned because both documents stated failed() and the returned middleware as
+        // unconditionally inside the frame, which the fail-open identification rule
+        // contradicts: those two are framed by the queue events, which must read a
+        // payload, so an unreadable one leaves them outside.
+        'That framing depends on the entry being POSITIVELY IDENTIFIED: `handle()` is framed by the bus pipe, which reads the dispatched object and never a payload, while `failed()` and the returned middleware are framed by the queue events, which must read the payload',
         'Each limit above carries an open `risk=security` debt row, so any future package change that reaches one is reviewed against it.',
     ];
 
@@ -647,13 +657,14 @@ it('never constructs anything nested while reading a queued listener\'s class', 
     // no model is restored, no __wakeup runs, nothing queries the database, and
     // CallQueuedHandler's own later read is the first and only construction.
     //
-    // I originally tried to prove this with a deleted-model scenario and got it wrong
-    // twice over: the assertion read `failed_jobs`, which is unusable as evidence here
-    // because `queue.failed.database` is a separate :memory: connection with no such
-    // table; and the fixture carried no model at all. A queued listener cannot even
-    // produce that restoration — the listener instance is never serialised, only its
-    // class name, so SerializesModels on it never applies. Proving the property beats
-    // staging a scenario that does not occur.
+    // I twice got the deleted-model version of this wrong: the assertion read
+    // `failed_jobs`, which is unusable as evidence here because `queue.failed.database`
+    // is a separate :memory: connection with no such table; and the fixture carried no
+    // model at all. I then claimed the scenario CANNOT occur, which is false — the
+    // listener instance is never serialised, but the EVENT it is called with is, and a
+    // `SerializesModels` event (the `make:event` stub's default) puts a ModelIdentifier
+    // in the wrapper's payload. That scenario is executed against a real queued payload
+    // in the deleted-model control below; this test proves the structural property.
     $probe = new RogueRestorationProbe;
     $wrapper = new CallQueuedListener(RogueMarkedFailingListener::class, 'handle', [$probe]);
 
@@ -679,8 +690,14 @@ it('reads an encrypted queued listener the way the framework does, framing ours 
     // CallQueuedHandler::getCommand() does, by testing for the `O:` prefix first.
     // Without that branch every encrypted entry fell to the fail-closed path: a host
     // encrypted listener was framed and its own legitimate authentication silently
-    // refused. Treating unreadable as host instead would have let a PACKAGE encrypted
-    // listener escape. Both halves are asserted here.
+    // refused. Both halves are asserted here.
+    //
+    // The superseded argument this comment used to carry — that treating unreadable as
+    // host would let a package encrypted listener escape — is now the RULING: it does
+    // let one escape, deliberately, because a false refusal on host code ranks above a
+    // package gap. What closes the gap is decrypting when the key IS available, which
+    // these cells cover; the residue when it is not is asserted separately, in the
+    // late-key control, and carries a security debt row.
     config([
         'auth.guards.web' => ['driver' => 'session', 'provider' => 'users'],
         'queue.default' => 'database',
@@ -700,7 +717,7 @@ it('reads an encrypted queued listener the way the framework does, framing ours 
 ]);
 
 it('frames an entry only on positive identification, never on a payload it could not read', function (
-    string $label, string $command
+    string $label, mixed $command
 ): void {
     // The frame opens ONLY when the payload positively identifies one of our listeners.
     // This assertion was the other way round one ruling ago, and it was wrong: three
@@ -720,7 +737,17 @@ it('frames an entry only on positive identification, never on a payload it could
     'ciphertext this listener cannot decrypt' => ['undecryptable', 'eyJpdiI6Im5vcGUifQ=='],
     'empty command' => ['empty', ''],
     'a plain string' => ['plain', 'nonsense'],
-    'a wrapper naming a class that does not exist' => ['missing class', 'O:36:"Illuminate\\Events\\CallQueuedListener":1:{s:5:"class";s:20:"No\\Such\\Class\\AtAll";}'],
+    // Serialised by PHP, not hand-written: my hand-written version declared s:20 for a
+    // 19-byte string, so unserialize() rejected it outright and the missing-class exit
+    // it was supposed to cover was never reached.
+    'a wrapper naming a class that does not exist' => ['missing class', serialize(new CallQueuedListener('No\\Such\\Class\\AtAll', 'handle', []))],
+    // The two type exits, which nothing reached before. Note honestly: only the first
+    // is behaviourally load-bearing. Dropping `is_string($command->class)` from the
+    // source leaves all seven cells GREEN, because is_a() takes mixed and returns false
+    // for a non-string — that conjunct narrows the type for PHPStan rather than guarding
+    // anything at runtime. This cell covers the branch's outcome, not the conjunct.
+    'a command that is not a string' => ['non-string command', null],
+    'a wrapper whose class is not a string' => ['non-string class', serialize(new CallQueuedListener(['not', 'a', 'string'], 'handle', []))],
 ]);
 
 it('leaves a host queued entry unframed whenever its identity cannot be established', function (
@@ -744,7 +771,6 @@ it('leaves a host queued entry unframed whenever its identity cannot be establis
         ->and(auth()->guard('web')->id())->toBe($user->getAuthIdentifier());
 })->with([
     'an event carrying a legacy Serializable object' => [HostLegacyPayloadListener::class, RogueLegacyEvent::class, 'host-legacy-ran'],
-    'ciphertext this listener cannot read' => [HostLateKeyListener::class, RogueListenerEvent::class, 'host-late-key-ran'],
 ]);
 
 it('treats what the framework calls while pushing an entry as the dispatcher\'s context, for a job too', function (): void {
@@ -769,3 +795,148 @@ it('treats what the framework calls while pushing an entry as the dispatcher\'s 
     ))->toThrow(SystemAuthorityViolation::class)
         ->and(auth()->guard('web')->guest())->toBeTrue();
 });
+
+it('pins the scoped error handler: it must be installed, and it must be restored', function (): void {
+    // The handler had ZERO pins. Two distinct regressions were both invisible:
+    //
+    //   deleting it — restricting a legacy-`Serializable` nested object makes PHP warn
+    //   that __PHP_Incomplete_Class has no unserialiser, the application's handler
+    //   raises that, and one of OUR listeners is then silently NOT framed;
+    //
+    //   not restoring it — a swallow-everything handler leaks for the rest of the
+    //   worker's life, hiding HOST errors. That is the worse half.
+    config([
+        'auth.guards.web' => ['driver' => 'session', 'provider' => 'users'],
+        'queue.default' => 'sync',
+    ]);
+    $user = runtimeAuthorityUser('-marked-legacy');
+    Event::listen(RogueLegacyEvent::class, RogueMarkedLegacyPayloadListener::class);
+
+    try {
+        Event::dispatch(new RogueLegacyEvent((string) $user->getKey(), 'sync'));
+    } catch (SystemAuthorityViolation) {
+        // sync surfaces the refusal to the dispatching caller.
+    }
+
+    // INSTALLED: the marked listener's failed() ran and was refused, which is only
+    // possible if the payload read survived the warning.
+    expect(Cache::get('bfc-test.marked-legacy-ran.'.$user->getKey()))->toBeTrue()
+        ->and(auth()->guard('web')->guest())->toBeTrue();
+
+    // RESTORED: a deliberate warning must still reach the application's handler. If the
+    // swallow-everything handler leaked, nothing would be raised here.
+    expect(static fn () => (new class
+    {
+        public function warn(): void
+        {
+            /** @phpstan-ignore-next-line deliberate warning */
+            $undefined = [];
+            // @phpstan-ignore-next-line
+            echo $undefined['missing'];
+        }
+    })->warn())->toThrow(ErrorException::class);
+});
+
+it('reads a queued listener whose event carries a DELETED model without restoring it', function (
+    string $listener, bool $identified
+): void {
+    // The scenario I said could not exist. A `SerializesModels` event carrying a model
+    // is queued through the framework, the model is then deleted, and the decision is
+    // taken against the payload the framework itself wrote to the jobs table.
+    //
+    // Two things must hold. The read must reach its verdict from the wrapper's plain
+    // `class` string alone — no query, so a model that is gone stays gone and the read
+    // cannot fail on its absence. And the verdict must still be correct: ours
+    // identified, the host's not.
+    config([
+        'auth.guards.web' => ['driver' => 'session', 'provider' => 'users'],
+        'queue.default' => 'database',
+    ]);
+    $user = runtimeAuthorityUser('-delmodel-'.($identified ? 'ours' : 'host'));
+    $id = $user->getKey();
+    Event::listen(RogueModelEvent::class, $listener);
+    Event::dispatch(new RogueModelEvent($user));
+
+    // The real payload, as the framework wrote it — not one built by hand.
+    $payload = json_decode((string) DB::table('jobs')->value('payload'), true);
+    expect($payload['data']['command'])->toContain('ModelIdentifier');
+
+    $user->forceDelete();
+    expect(User::query()->whereKey($id)->exists())->toBeFalse();
+
+    $queries = 0;
+    DB::listen(function () use (&$queries): void {
+        $queries++;
+    });
+
+    $decide = new ReflectionMethod(SystemAuthorityQueueScope::class, 'wrappedListenerIsOurs');
+    $decide->setAccessible(true);
+    $verdict = $decide->invoke(app(SystemAuthorityQueueScope::class), $payload);
+
+    expect($verdict)->toBe($identified)
+        // No restoration was attempted: not one query, and the model is still deleted.
+        ->and($queries)->toBe(0)
+        ->and(User::query()->whereKey($id)->exists())->toBeFalse();
+})->with([
+    'ours is identified' => [RogueMarkedModelListener::class, true],
+    "the host's is not" => [HostModelListener::class, false],
+]);
+
+it('leaves a marked encrypted entry unframed when the key only arrives from a later host listener', function (
+    bool $keyIsLate
+): void {
+    // J10-4. The cell this replaces was labelled "ciphertext this listener cannot read"
+    // and decrypted perfectly well: its fixture was an ordinary encrypted host listener,
+    // so nothing about the key was ever late, and being a HOST listener it would have
+    // gone unframed whether the read succeeded or not. It could not fail.
+    //
+    // Decryptability is the variable here, and the entry is one of OURS, so the two
+    // outcomes differ: with the key in hand the entry is identified and refused; with
+    // the key arriving only from a host JobProcessing listener registered after the
+    // package's, the read fails, the entry goes UNFRAMED by the fail-open rule, and its
+    // authentication stands. That second row is the disclosed security residue, asserted
+    // rather than described.
+    config([
+        'auth.guards.web' => ['driver' => 'session', 'provider' => 'users'],
+        'queue.default' => 'database',
+    ]);
+    $user = runtimeAuthorityUser('-latekey-'.($keyIsLate ? 'late' : 'present'));
+
+    $shipped = config('app.key');
+    $other = 'base64:'.base64_encode(random_bytes(32));
+    $useKey = function (string $key): void {
+        config(['app.key' => $key]);
+        app()->forgetInstance('encrypter');
+        app()->forgetInstance(Encrypter::class);
+    };
+
+    // Pushed under the OTHER key, so the ciphertext is unreadable under the shipped one.
+    $useKey($other);
+    Event::listen(RogueListenerEvent::class, RogueEncryptedMarkedListener::class);
+    Event::dispatch(new RogueListenerEvent((string) $user->getKey(), 'database'));
+
+    if ($keyIsLate) {
+        // Our JobProcessing listener runs with the wrong key; a host one registered
+        // after it — as a host app's own boot would — restores the right one in time
+        // for CallQueuedHandler's read.
+        $useKey($shipped);
+        Event::listen(JobProcessing::class, static function () use ($useKey, $other): void {
+            $useKey($other);
+        });
+    }
+
+    Artisan::call('queue:work', ['connection' => 'database', '--once' => true, '--tries' => 1, '--memory' => 4096]);
+
+    // Liveness first: the entry must actually have run under both keys.
+    expect(Cache::get('bfc-test.encrypted-marked-ran.'.$user->getKey()))->toBeTrue();
+
+    $keyIsLate
+        // The residue: unreadable at decision time means unframed, so OUR entry's own
+        // authentication is not refused.
+        ? expect(auth()->guard('web')->id())->toBe($user->getAuthIdentifier())
+        // Readable at decision time: identified and refused.
+        : expect(auth()->guard('web')->guest())->toBeTrue();
+})->with([
+    'the key is present at decision time' => [false],
+    'the key arrives only later (disclosed residue)' => [true],
+]);
