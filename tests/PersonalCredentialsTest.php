@@ -25,8 +25,8 @@ use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
-use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SelfServiceDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ManagedAuthorityFixture;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SelfServiceDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SelfServicePolicyDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
@@ -38,6 +38,7 @@ use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Testing\TestResponse;
 use Symfony\Component\Process\Process;
 
 /**
@@ -180,7 +181,7 @@ function p5dConfigureManagedPersonalUser(User $user): ManagedAuthorityFixture
 }
 
 /** @param array{key_id: string, signing_key: string} $delivery */
-function p5dSendPersonalHmac(User $user, array $delivery): \Illuminate\Testing\TestResponse
+function p5dSendPersonalHmac(User $user, array $delivery): TestResponse
 {
     $body = '{"event":"p5d-managed-self-service"}';
     $envelope = new HmacEnvelope(
