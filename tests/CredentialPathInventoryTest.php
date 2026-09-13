@@ -160,6 +160,15 @@ it('derives the seven discoverable paths with no transitional rows from all five
             'choke-point:ArtisanBuild\BuiltForCloud\Auth\CredentialResolver::resolve',
             'choke-point:ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier::verify',
         ])
+        ->and($inventory['operator_ingresses'])->toBe(sortedCredentialInventory([
+            'operator-ingress:ArtisanBuild\BuiltForCloud\Auth\BasicAuthenticator=>ArtisanBuild\BuiltForCloud\Auth\CredentialResolver::resolve',
+            'operator-ingress:ArtisanBuild\BuiltForCloud\Auth\BearerAuthenticator=>ArtisanBuild\BuiltForCloud\Auth\CredentialResolver::resolve',
+            'operator-ingress:ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp=>ArtisanBuild\BuiltForCloud\Auth\CredentialResolver::resolve',
+            'operator-ingress:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin=>ArtisanBuild\BuiltForCloud\Auth\CredentialResolver::resolve',
+        ]))
+        ->and($inventory['managed_containment'])->toBe([
+            'managed-containment:ArtisanBuild\BuiltForCloud\Auth\CredentialResolver::resolve=>ArtisanBuild\BuiltForCloud\ManagedAccountAccess::allowsCredential',
+        ])
         ->and($inventory['transition_members'])->toBe([])
         ->and(array_intersect($inventory['transitional'], frozenTransitionalRows()))->toBe([]);
 });
@@ -181,6 +190,7 @@ it('reports all four deliberate controls through their assigned derivation roots
 
     expect($inventory['violations'])->toContain(
         'unchoked-authenticator:'.UnguardedCredentialAuthenticator::class,
+        'unchoked-operator-ingress:'.UnguardedCredentialAuthenticator::class,
         'second-store-resolver:'.UnguardedCredentialAuthenticator::class.'=>'.SecondStoreResolver::class,
         'unlisted-enrollment-route:route:POST /bfc/unlisted-enrollment=>ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding::exchange',
     )

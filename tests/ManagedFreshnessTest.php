@@ -1074,12 +1074,12 @@ it('enforces deadline and authoritative denial through EnsureCredentialAbility',
     expect($credential->refresh()->last_used_at?->toAtomString())->toBe($lastUsedAt);
 })->with(['deadline', 'authoritative']);
 
-it('enforces deadline and authoritative denial through EnsureCredentialAdmin', function (string $outcome): void {
+it('resets an operator ingress grace deadline on success and enforces its exact 1799 1800 boundary', function (): void {
     CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
     $fixture = p3cConfigureAuthority();
     p3cConfigureCredentialGuard();
-    $user = p3cUser('credential-admin-'.$outcome);
-    $secret = 'credential-admin-'.$outcome.'-secret';
+    $user = p3cUser('credential-admin-boundary');
+    $secret = 'credential-admin-boundary-secret';
     $credential = p3cAccountCredential(
         $user,
         $secret,
@@ -1087,28 +1087,65 @@ it('enforces deadline and authoritative denial through EnsureCredentialAdmin', f
         abilities: [OperatorAbility::ADMIN],
     );
     Route::middleware('bfc.credential.admin:'.OperatorAbility::CredentialRead->value)
-        ->get('/managed-ingress/credential-admin-'.$outcome, static fn (): string => 'allowed');
-    $this->getJson('/managed-ingress/credential-admin-'.$outcome, [
+        ->get('/managed-ingress/credential-admin-boundary', static fn (): string => 'allowed');
+    $fixture->confirmationResponder = static fn (): mixed => Http::response([
+        'contract_version' => 'managed-auth-v1',
+        'error' => 'server_error',
+    ], 503);
+
+    CarbonImmutable::setTestNow('2026-09-10T12:05:00+00:00');
+    $this->getJson('/managed-ingress/credential-admin-boundary', [
+        'Authorization' => 'Bearer '.$secret,
+    ])->assertOk();
+    expect($user->fresh()->membership_confirmed_at?->toAtomString())->toBe('2026-09-10T12:00:00+00:00');
+
+    $fixture->confirmationResponder = null;
+    CarbonImmutable::setTestNow('2026-09-10T12:10:00+00:00');
+    $this->getJson('/managed-ingress/credential-admin-boundary', [
+        'Authorization' => 'Bearer '.$secret,
+    ])->assertOk();
+    expect($user->fresh()->membership_confirmed_at?->toAtomString())->toBe('2026-09-10T12:10:00+00:00');
+
+    $fixture->confirmationResponder = static fn (): mixed => Http::response([
+        'contract_version' => 'managed-auth-v1',
+        'error' => 'server_error',
+    ], 503);
+    CarbonImmutable::setTestNow('2026-09-10T12:39:59+00:00');
+    $this->getJson('/managed-ingress/credential-admin-boundary', [
         'Authorization' => 'Bearer '.$secret,
     ])->assertOk();
     $lastUsedAt = $credential->fresh()->last_used_at?->toAtomString();
 
-    if ($outcome === 'deadline') {
-        $fixture->confirmationResponder = static fn (): mixed => Http::response([
-            'contract_version' => 'managed-auth-v1',
-            'error' => 'server_error',
-        ], 503);
-        CarbonImmutable::setTestNow('2026-09-10T12:30:00+00:00');
-    } else {
-        $fixture->confirmationOverrides = ['membership_status' => 'removed'];
-        CarbonImmutable::setTestNow('2026-09-10T12:05:00+00:00');
-    }
-
-    $this->getJson('/managed-ingress/credential-admin-'.$outcome, [
+    CarbonImmutable::setTestNow('2026-09-10T12:40:00+00:00');
+    $this->getJson('/managed-ingress/credential-admin-boundary', [
         'Authorization' => 'Bearer '.$secret,
     ])->assertUnauthorized();
     expect($credential->refresh()->last_used_at?->toAtomString())->toBe($lastUsedAt);
-})->with(['deadline', 'authoritative']);
+});
+
+it('enforces authoritative denial through the converged operator ingress', function (): void {
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    $fixture = p3cConfigureAuthority();
+    p3cConfigureCredentialGuard();
+    $user = p3cUser('credential-admin-authoritative');
+    $secret = 'credential-admin-authoritative-secret';
+    $credential = p3cAccountCredential(
+        $user,
+        $secret,
+        subjectType: SubjectType::Operator,
+        abilities: [OperatorAbility::ADMIN],
+    );
+    Route::middleware('bfc.credential.admin:'.OperatorAbility::CredentialRead->value)
+        ->get('/managed-ingress/credential-admin-authoritative', static fn (): string => 'allowed');
+
+    $fixture->confirmationOverrides = ['membership_status' => 'removed'];
+    CarbonImmutable::setTestNow('2026-09-10T12:05:00+00:00');
+    $this->getJson('/managed-ingress/credential-admin-authoritative', [
+        'Authorization' => 'Bearer '.$secret,
+    ])->assertUnauthorized();
+
+    expect($credential->refresh()->revoked_at)->not->toBeNull();
+});
 
 it('enforces deadline and authoritative denial through EnsureDashboardCredential', function (string $outcome): void {
     CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
