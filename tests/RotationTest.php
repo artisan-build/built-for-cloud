@@ -13,6 +13,8 @@ use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
+use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
+use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
@@ -30,6 +32,16 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Process;
 
 uses(RefreshDatabase::class, DetectsSecretLeaks::class, WithCredentials::class);
+
+it('keeps rotation refusal and incomplete-cutover diagnostics actionable', function (): void {
+    $refused = RotationRefused::ambiguousName('shared', 2);
+    $incomplete = RotationCutoverIncomplete::retirementFailed('old-id', 'new-id');
+
+    expect($refused->getMessage())->toContain('2 resolvable credentials share the name "shared"')
+        ->and($incomplete->supersededId)->toBe('old-id')
+        ->and($incomplete->replacementId)->toBe('new-id')
+        ->and($incomplete->getMessage())->toContain('old-id', 'new-id', 'STILL LIVE');
+});
 
 /**
  * @return array{Authorization: string}

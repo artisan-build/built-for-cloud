@@ -5,6 +5,7 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesCredentialVerbs;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
+use ArtisanBuild\BuiltForCloud\Contracts\DeclaresPresentationCadence;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
@@ -604,6 +605,50 @@ it('refuses a mint that sets a declared-unsupported field, on both transports', 
 });
 
 // ------------------------------------------------------------------- list
+
+it('omits presentation cadence when the default declaration declares none', function (): void {
+    Credential::factory()->create(['subject_ref' => 'default-cadence']);
+
+    $response = $this->getJson('/bfc/credentials', transportAdminHeaders())->assertOk();
+
+    $response->assertHeaderMissing('BFC-Presentation-Cadence');
+
+    expect(array_values(array_unique(array_column(
+        $response->json(),
+        'presentation_cadence_seconds',
+    ))))->toBe([null]);
+});
+
+it('lists a declared presentation cadence per row and in the response header', function (): void {
+    app()->bind(CredentialDeclaration::class, static fn (): CredentialDeclaration => new class implements CredentialDeclaration, DeclaresPresentationCadence
+    {
+        public function resolveSubject(Request $request): ?Subject
+        {
+            return null;
+        }
+
+        public function authorize(Credential $credential, ?string $ability, Request $request): bool
+        {
+            return true;
+        }
+
+        public function presentationCadenceSeconds(): ?int
+        {
+            return 604800;
+        }
+    });
+
+    Credential::factory()->create(['subject_ref' => 'declared-cadence']);
+
+    $response = $this->getJson('/bfc/credentials', transportAdminHeaders())->assertOk();
+
+    $response->assertHeader('BFC-Presentation-Cadence', '604800');
+
+    expect(array_values(array_unique(array_column(
+        $response->json(),
+        'presentation_cadence_seconds',
+    ))))->toBe([604800]);
+});
 
 it('filters the listing per row through the verb matrix on both transports', function (): void {
     Credential::factory()->create(['subject_ref' => 'visible']);

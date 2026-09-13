@@ -94,6 +94,108 @@ final class LegacyRemovalInventory
         return $files;
     }
 
+    /**
+     * Refuse a DELETE disposition when its baseline test is the sole
+     * surviving-test reference to a class-like symbol that still ships.
+     * Method-level references are outside this derivation's named bound.
+     *
+     * @param  array<string, 'migrate'|'delete'|'keep-as-historical'>  $dispositions
+     * @param  array<string, string>  $baselineDeletedTests
+     * @return list<string>
+     */
+    public static function testRemovalDispositionOffences(
+        string $packageRoot,
+        array $dispositions,
+        array $baselineDeletedTests,
+    ): array {
+        $root = self::packageRoot($packageRoot);
+        $markers = self::testFilesWithRemovalMarkers($root);
+        $mixed = self::mixedDeletedTestFiles($root, $baselineDeletedTests);
+        $offences = array_map(
+            static fn (string $file): string => $file.':missing-disposition',
+            array_values(array_diff(array_keys($markers), array_keys($dispositions))),
+        );
+
+        foreach ($dispositions as $file => $disposition) {
+            if ($disposition === 'delete') {
+                if (is_file($root.'/'.$file)) {
+                    $offences[] = $file.':delete-still-present';
+                }
+
+                if (! array_key_exists($file, $baselineDeletedTests)) {
+                    $offences[] = $file.':delete-baseline-missing';
+                }
+
+                foreach ($mixed[$file] ?? [] as $symbol) {
+                    $offences[] = $file.':delete-mixed-symbol='.$symbol;
+                }
+
+                continue;
+            }
+
+            if ($disposition === 'migrate') {
+                if (isset($markers[$file])) {
+                    $offences[] = $file.':migrate-markers='.implode(',', $markers[$file]);
+                }
+
+                continue;
+            }
+
+            if (! isset($markers[$file])) {
+                $offences[] = $file.':historical-marker-missing';
+            }
+        }
+
+        sort($offences);
+
+        return $offences;
+    }
+
+    /**
+     * @param  array<string, string>  $baselineDeletedTests
+     * @return array<string, list<string>>
+     */
+    public static function mixedDeletedTestFiles(string $packageRoot, array $baselineDeletedTests): array
+    {
+        $root = self::packageRoot($packageRoot);
+        $survivingSymbols = [];
+        $survivingTestReferences = [];
+
+        foreach (self::phpFiles($root.'/src') as $file) {
+            foreach (self::declaredClassLikeSymbols(self::contents($file->getPathname())) as $symbol) {
+                $survivingSymbols[$symbol] = true;
+            }
+        }
+
+        foreach (self::phpFiles($root.'/tests') as $file) {
+            foreach (self::classLikeIdentifiers(self::contents($file->getPathname())) as $symbol) {
+                $survivingTestReferences[$symbol] = true;
+            }
+        }
+
+        $mixed = [];
+
+        foreach ($baselineDeletedTests as $file => $contents) {
+            $orphans = [];
+
+            foreach (self::classLikeIdentifiers($contents) as $symbol) {
+                if (isset($survivingSymbols[$symbol]) && ! isset($survivingTestReferences[$symbol])) {
+                    $orphans[$symbol] = true;
+                }
+            }
+
+            if ($orphans !== []) {
+                $symbols = array_keys($orphans);
+                sort($symbols);
+                $mixed[$file] = $symbols;
+            }
+        }
+
+        ksort($mixed);
+
+        return $mixed;
+    }
+
     /** @return list<string> */
     private static function phpOffences(string $path, string $contents): array
     {
@@ -365,6 +467,26 @@ final class LegacyRemovalInventory
         }
 
         return $result;
+    }
+
+    /** @return list<string> */
+    private static function declaredClassLikeSymbols(string $contents): array
+    {
+        preg_match_all(
+            '/^\s*(?:(?:final|abstract|readonly)\s+)*(?:class|interface|trait|enum)\s+([A-Za-z0-9_]+)/m',
+            $contents,
+            $matches,
+        );
+
+        return array_values(array_unique($matches[1]));
+    }
+
+    /** @return list<string> */
+    private static function classLikeIdentifiers(string $contents): array
+    {
+        preg_match_all('/\b[A-Z][A-Za-z0-9_]+\b/', $contents, $matches);
+
+        return array_values(array_unique($matches[0]));
     }
 
     private static function withoutComments(string $contents): string

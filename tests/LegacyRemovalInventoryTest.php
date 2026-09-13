@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
+use Symfony\Component\Process\Process as SymfonyProcess;
 
 uses(RefreshDatabase::class);
 
@@ -109,6 +110,24 @@ function frozenTestRemovalDispositions(): array
         ...array_fill_keys($migrate, 'migrate'),
         'tests/CredentialPathInventoryTest.php' => 'keep-as-historical',
     ];
+}
+
+/** @return array<string, string> */
+function baselineDeletedTestContents(): array
+{
+    $contents = [];
+
+    foreach (frozenTestRemovalDispositions() as $file => $disposition) {
+        if ($disposition !== 'delete') {
+            continue;
+        }
+
+        $process = new SymfonyProcess(['git', 'show', '96a4eab:'.$file], removalPackageRoot());
+        $process->mustRun();
+        $contents[$file] = $process->getOutput();
+    }
+
+    return $contents;
 }
 
 it('reports all six forbidden executable-symbol control kinds at their file and line', function (): void {
@@ -233,38 +252,24 @@ it('reports a bare legacy table-name test control at its file and line', functio
 });
 
 it('enforces the frozen disposition of every test file carrying a removal marker', function (): void {
-    $markers = LegacyRemovalInventory::testFilesWithRemovalMarkers(removalPackageRoot());
-    $dispositions = frozenTestRemovalDispositions();
-    $violations = array_map(
-        static fn (string $file): string => $file.':missing-disposition',
-        array_values(array_diff(array_keys($markers), array_keys($dispositions))),
-    );
+    expect(LegacyRemovalInventory::testRemovalDispositionOffences(
+        removalPackageRoot(),
+        frozenTestRemovalDispositions(),
+        baselineDeletedTestContents(),
+    ))->toBe([]);
+});
 
-    foreach ($dispositions as $file => $disposition) {
-        if ($disposition === 'delete') {
-            if (is_file(removalPackageRoot().'/'.$file)) {
-                $violations[] = $file.':delete-still-present';
-            }
+it('refuses a delete file that solely covers a surviving class-like symbol', function (): void {
+    $root = removalControlTree();
+    $symbol = implode('', ['Surviving', 'Primitive']);
 
-            continue;
-        }
+    file_put_contents($root.'/src/'.$symbol.'.php', "<?php\nfinal class {$symbol} {}\n");
 
-        if ($disposition === 'migrate') {
-            if (isset($markers[$file])) {
-                $violations[] = $file.':migrate-markers='.implode(',', $markers[$file]);
-            }
-
-            continue;
-        }
-
-        if (! isset($markers[$file])) {
-            $violations[] = $file.':historical-marker-missing';
-        }
-    }
-
-    sort($violations);
-
-    expect($violations)->toBe([]);
+    expect(LegacyRemovalInventory::testRemovalDispositionOffences(
+        $root,
+        ['tests/InjectedMixedTest.php' => 'delete'],
+        ['tests/InjectedMixedTest.php' => "<?php\n{$symbol}::exercise();\n"],
+    ))->toContain('tests/InjectedMixedTest.php:delete-mixed-symbol='.$symbol);
 });
 
 it('finds no forbidden production remnants in the installed tree', function (): void {

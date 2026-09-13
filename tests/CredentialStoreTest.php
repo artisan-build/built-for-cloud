@@ -6,11 +6,21 @@ use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\Database\Factories\CredentialFactory;
+use ArtisanBuild\BuiltForCloud\ReportedStatus;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Schema;
 
 uses(RefreshDatabase::class);
+
+it('keeps the reported listing status vocabulary stable', function (): void {
+    expect(array_column(ReportedStatus::cases(), 'value'))->toBe([
+        'active',
+        'expired',
+        'revoked',
+        'unknown',
+    ]);
+});
 
 it('stores rows of every credential kind without schema alteration', function (): void {
     foreach ([CredentialKind::Bearer, CredentialKind::Basic] as $kind) {
