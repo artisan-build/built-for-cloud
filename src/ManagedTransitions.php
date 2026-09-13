@@ -803,12 +803,22 @@ final class ManagedTransitions
                     && (bool) $member->contact_email_verified
                     && StandaloneAccess::normalizeEmail((string) $member->contact_email)
                         === StandaloneAccess::normalizeEmail((string) $element['final_email']);
+                // The authority's verification of THIS address, or null if it does not vouch
+                // for it. A same-email link keeps any local timestamp it already had — that
+                // record is older and more specific — but when there is none it now takes the
+                // authority's word, which is the same trust the changed-email branch has always
+                // given. Withholding it only on the same-email branch stranded the Owner: adopt
+                // nulls every local password, so an Owner with an unverified local email could
+                // neither authenticate nor receive recovery, and the accessible-Owner guard
+                // then refused EVERY later exit. The package's own create-admin command
+                // produces exactly that state, since it never sets email_verified_at.
+                $rosterVerifiedAt = $verifiedByRoster ? $now : null;
                 $user->forceFill([
                     'email' => $element['final_email'],
                     'role' => $element['role'],
                     'status' => 'active',
                     'deactivated_at' => null,
-                    'email_verified_at' => $sameEmail ? $user->email_verified_at : ($verifiedByRoster ? $now : null),
+                    'email_verified_at' => $sameEmail ? ($user->email_verified_at ?? $rosterVerifiedAt) : $rosterVerifiedAt,
                     'email_is_generated' => $sameEmail ? $user->email_is_generated : false,
                     ...($member === null ? [] : [
                         'scalpels_issuer' => $transition->issuer,
