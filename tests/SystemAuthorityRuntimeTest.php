@@ -5,6 +5,7 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\Commands\SystemAuthorityCommand;
 use ArtisanBuild\BuiltForCloud\Contracts\SystemAuthorityQueueEntry;
 use ArtisanBuild\BuiltForCloud\Exceptions\SystemAuthorityViolation;
+use ArtisanBuild\BuiltForCloud\Listeners\RefuseSystemAuthorityAuthentication;
 use ArtisanBuild\BuiltForCloud\SystemAuthorityContext;
 use ArtisanBuild\BuiltForCloud\SystemAuthoritySchedule;
 use ArtisanBuild\BuiltForCloud\Testing\SystemAuthorityInventory;
@@ -15,6 +16,8 @@ use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RuntimeHumanAuthenticator;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SafeRuntimeAuthorityQueuedJob;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
+use Illuminate\Auth\Events\Authenticated;
+use Illuminate\Auth\Events\Login;
 use Illuminate\Auth\SessionGuard;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Auth\Factory as AuthFactory;
@@ -236,4 +239,99 @@ it('refuses remember-me restoration through the Login event and leaves the guard
         ->toThrow(SystemAuthorityViolation::class)
         ->and($guard->guest())->toBeTrue()
         ->and(app(SystemAuthorityContext::class)->active())->toBeFalse();
+});
+
+it('pins every published system-authority boundary statement to the code it describes', function (): void {
+    // A disclosure nothing pins is the defect class this slice kept reproducing: a
+    // document that claims coverage the code does not have, with nothing going red.
+    // So each fact below is DERIVED from the implementation and then required to
+    // appear in both published surfaces.
+    $root = dirname(__DIR__);
+    // Whitespace is normalised because these are wrapped markdown documents: a
+    // phrase that straddles a line break is present to a reader and invisible to a
+    // naive substring match. That exact false negative bit this slice twice.
+    $flatten = static fn (string $path): string => (string) preg_replace(
+        '/\s+/', ' ', (string) file_get_contents($path),
+    );
+    $readme = $flatten($root.'/README.md');
+    $limits = $flatten($root.'/docs/system-authority-instrument-limits.md');
+
+    // 1. The listened events, derived from the listener's own signature and
+    //    confirmed against the booted dispatcher. Adding a third event to the union,
+    //    or registering one the documents do not name, reds this.
+    $parameter = (new ReflectionMethod(RefuseSystemAuthorityAuthentication::class, 'handle'))->getParameters()[0];
+    $type = $parameter->getType();
+    $events = array_map(
+        static fn (ReflectionNamedType $named): string => $named->getName(),
+        $type instanceof ReflectionUnionType ? $type->getTypes() : [$type],
+    );
+
+    expect($events)->toEqualCanonicalizing([Authenticated::class, Login::class]);
+
+    // hasListeners() is NOT enough: another listener on the same event satisfies it
+    // and the refusal registration can be deleted with this test still green. That
+    // false positive was real - Login already carries EvictConsolePrincipal - so
+    // assert THIS listener is registered for each event.
+    $raw = Event::getRawListeners();
+
+    foreach ($events as $event) {
+        $registered = [];
+
+        foreach (($raw[$event] ?? []) as $listener) {
+            if (is_array($listener) && isset($listener[0])) {
+                $registered[] = is_string($listener[0]) ? $listener[0] : $listener[0]::class;
+            } elseif (is_string($listener)) {
+                $registered[] = strstr($listener, '@', true) ?: $listener;
+            }
+        }
+
+        expect($registered)->toContain(RefuseSystemAuthorityAuthentication::class)
+            ->and($readme)->toContain(class_basename($event))
+            ->and($limits)->toContain(class_basename($event));
+    }
+
+    // 2. The entry kinds, derived from every file that OPENS the context. A fourth
+    //    entry kind cannot be added without this failing, which forces the
+    //    documents to describe it.
+    $openers = [];
+    foreach ((new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root.'/src'))) as $file) {
+        if (! $file->isFile() || $file->getExtension() !== 'php') {
+            continue;
+        }
+        $source = (string) file_get_contents($file->getPathname());
+        if (str_contains($source, 'SystemAuthorityContext')
+            && preg_match('/->(?:run|enter)\s*\(/', $source) === 1
+            && $file->getFilename() !== 'SystemAuthorityContext.php') {
+            $openers[] = $file->getBasename('.php');
+        }
+    }
+
+    expect($openers)->toEqualCanonicalizing([
+        'SystemAuthorityCommand',    // package commands
+        'SystemAuthorityQueueScope', // package ShouldQueue jobs and listeners
+        'SystemAuthoritySchedule',   // package-registered schedule callbacks
+    ]);
+
+    foreach (['command', 'schedule'] as $kind) {
+        expect(strtolower($readme))->toContain($kind)
+            ->and(strtolower($limits))->toContain($kind);
+    }
+    expect(str_contains($readme, 'ShouldQueue') || str_contains($readme, 'queued jobs'))->toBeTrue();
+
+    // 3. The host boundary. The listener refuses on the EVENT, with no guard-type
+    //    gate before the throw, which is precisely why the bound depends on the
+    //    guard dispatching Laravel's events — so both documents must say so.
+    $listener = (string) file_get_contents($root.'/src/Listeners/RefuseSystemAuthorityAuthentication.php');
+    $beforeThrow = strstr($listener, 'throw SystemAuthorityViolation', true) ?: '';
+
+    // The only early return is the context-inactive check; there must be no
+    // guard-TYPE gate deciding whether to refuse.
+    expect($beforeThrow)->not->toContain('instanceof RequestGuard')
+        ->and($beforeThrow)->toContain('context->active()')
+        ->and($readme)->toContain('RequestGuard', 'host configuration')
+        ->and($limits)->toContain('RequestGuard', 'host configuration');
+
+    // 4. The advisory demotion: the scanner must not be described as enforcement.
+    expect($limits)->toContain('advisory')
+        ->and($limits)->toContain('does not carry the runtime authentication');
 });
