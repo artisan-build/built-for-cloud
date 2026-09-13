@@ -105,4 +105,4 @@ for pass in 1 2; do
         "${BASE}/_bfc-harness/credential-auth"
 done
 
-printf 'LIVE PASS: one Member session completed issue/list/rotate/revoke plus persisted-row and bearer-authentication proofs twice.\n'
+printf 'LIVE PASS: one Member session completed issue/list/rotate/revoke twice for ONE credential subject (%s), plus persisted-row and bearer-authentication proofs on each pass.\n' 'installation/live-member'
