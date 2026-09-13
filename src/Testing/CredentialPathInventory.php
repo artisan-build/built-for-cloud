@@ -101,7 +101,7 @@ final class CredentialPathInventory
                 $dependencyCode = $classes[$dependency]['code'] ?? '';
 
                 if ($dependency !== $legacyRegistry
-                    && self::readsLegacyStore($dependencyCode)) {
+                    && self::readsSecondCredentialStore($dependencyCode)) {
                     $violations[] = 'second-store-resolver:'.$gate.'=>'.$dependency;
                 }
             }
@@ -748,15 +748,33 @@ final class CredentialPathInventory
             || str_ends_with($class, 'Registry');
     }
 
-    private static function readsLegacyStore(string $code): bool
+    private static function readsSecondCredentialStore(string $code): bool
     {
-        $model = implode('', ['Api', 'Token']);
-        $table = implode('_', ['api', 'tokens']);
+        preg_match_all(
+            '/\b([A-Z][A-Za-z0-9_]*)::query\(\)(?:(?!;).)*?->where\(\s*[\'\"](?:secret_hash|token_hash)[\'\"]/s',
+            $code,
+            $modelQueries,
+        );
 
-        return str_contains($code, $model.'::')
-            || str_contains($code, 'SecondStoreRecord::')
-            || str_contains($code, "'{$table}'")
-            || str_contains($code, '"'.$table.'"');
+        foreach ($modelQueries[1] as $model) {
+            if ($model !== 'Credential') {
+                return true;
+            }
+        }
+
+        preg_match_all(
+            '/(?:DB::table|->table)\(\s*[\'\"]([^\'\"]+)[\'\"]\s*\)(?:(?!;).)*?->where\(\s*[\'\"](?:secret_hash|token_hash)[\'\"]/s',
+            $code,
+            $tableQueries,
+        );
+
+        foreach ($tableQueries[1] as $table) {
+            if ($table !== 'credentials') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

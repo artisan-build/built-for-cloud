@@ -6,13 +6,13 @@ namespace ArtisanBuild\BuiltForCloud\Tests\Fixtures;
 
 final class SecondStoreResolver
 {
-    public function resolve(string $secret): ?SecondStoreRecord
+    public function resolve(string $secret): ?OtherStoreRecord
     {
-        return SecondStoreRecord::query()->where('token_hash', hash('sha256', $secret))->first();
+        return OtherStoreRecord::query()->where('token_hash', hash('sha256', $secret))->first();
     }
 }
 
-final class SecondStoreRecord
+final class OtherStoreRecord
 {
     public static function query(): SecondStoreQuery
     {
@@ -27,7 +27,7 @@ final class SecondStoreQuery
         return $this;
     }
 
-    public function first(): ?SecondStoreRecord
+    public function first(): ?OtherStoreRecord
     {
         return null;
     }
