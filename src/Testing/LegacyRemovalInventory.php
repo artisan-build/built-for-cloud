@@ -23,6 +23,45 @@ use SplFileInfo;
  */
 final class LegacyRemovalInventory
 {
+    /**
+     * @return list<array{rule: string, marker: string, surface: string, removed: string, replacement: string}>
+     */
+    public static function upgradeGuide(): array
+    {
+        $contents = self::contents(__DIR__.'/legacy-removal-inventory.json');
+        $guide = json_decode($contents, true, flags: JSON_THROW_ON_ERROR);
+
+        if (! is_array($guide) || ! array_is_list($guide)) {
+            throw new RuntimeException('The legacy removal upgrade inventory must be a JSON list.');
+        }
+
+        foreach ($guide as $entry) {
+            if (! is_array($entry)
+                || array_keys($entry) !== ['rule', 'marker', 'surface', 'removed', 'replacement']
+                || count(array_filter($entry, 'is_string')) !== 5
+                || in_array('', $entry, true)) {
+                throw new RuntimeException('The legacy removal upgrade inventory contains an invalid entry.');
+            }
+        }
+
+        /** @var list<array{rule: string, marker: string, surface: string, removed: string, replacement: string}> $guide */
+        return $guide;
+    }
+
+    public static function upgradeGuideMarkdown(): string
+    {
+        $rows = array_map(
+            static fn (array $entry): string => "| {$entry['surface']} | `{$entry['removed']}` | `{$entry['replacement']}` |",
+            self::upgradeGuide(),
+        );
+
+        return implode("\n", [
+            '| Surface | Removed in 0.9 | Replacement |',
+            '| --- | --- | --- |',
+            ...$rows,
+        ]);
+    }
+
     /** @return list<string> */
     public static function productionOffences(string $packageRoot): array
     {
@@ -201,16 +240,10 @@ final class LegacyRemovalInventory
     {
         $offences = [];
         $code = self::withoutComments($contents);
-        $forbiddenSymbols = [
-            self::joined('Api', 'Token'),
-            self::joined('Api', 'Token', 'Minter'),
-            self::joined('Token', 'Registry'),
-            self::joined('Durable', 'Store'),
-            self::joined('Declares', 'Durable', 'Store'),
-            self::joined('Ensure', 'Admin', 'Token'),
-            self::joined('Manage', 'Tokens'),
-            self::joined('Legacy', 'Rotation', 'Result'),
-        ];
+        $forbiddenSymbols = array_values(array_map(
+            static fn (array $entry): string => $entry['marker'],
+            array_filter(self::upgradeGuide(), static fn (array $entry): bool => $entry['surface'] === 'Class'),
+        ));
 
         $tokens = token_get_all($contents, TOKEN_PARSE);
 
@@ -385,40 +418,11 @@ final class LegacyRemovalInventory
     {
         $markers = [];
 
-        foreach (self::legacyFileNames() as $fileName) {
-            $symbol = pathinfo($fileName, PATHINFO_FILENAME);
-
-            if (preg_match('/^[A-Z][A-Za-z0-9_]*$/', $symbol) === 1) {
-                $markers['class:'.$symbol] = $symbol;
-            }
+        foreach (self::upgradeGuide() as $entry) {
+            $markers[$entry['rule']] = $entry['marker'];
         }
 
-        return [...$markers, ...self::removedDocumentForms()];
-    }
-
-    /** @return array<string, string> */
-    private static function removedDocumentForms(): array
-    {
-        $ownerTokenId = implode('_', ['owner', 'token', 'id']);
-        $durableTokenId = implode('_', ['durable', 'token', 'id']);
-        $durableStore = implode('_', ['durable', 'store']);
-        $legacyTable = implode('_', ['api', 'tokens']);
-        $fallbackConfig = implode('_', ['fallback', 'token']);
-        $fallbackEnv = implode('_', ['FALLBACK', 'TOKEN']);
-        $credentialApi = implode('_', ['credential', 'api']);
-        $adminAlias = implode('.', ['bfc', 'token', 'admin']);
-
-        return [
-            'alias:'.$adminAlias => $adminAlias,
-            'column:'.$ownerTokenId => $ownerTokenId,
-            'column:'.$durableTokenId => $durableTokenId,
-            'column:'.$durableStore => $durableStore,
-            'table:'.$legacyTable => $legacyTable,
-            'config:'.$fallbackConfig => $fallbackConfig,
-            'env:'.$fallbackEnv => $fallbackEnv,
-            'config:'.$credentialApi => $credentialApi,
-            ...self::commandMarkers(),
-        ];
+        return $markers;
     }
 
     /** @return array<string, string> */
@@ -450,37 +454,27 @@ final class LegacyRemovalInventory
     /** @return array<string, string> */
     private static function commandMarkers(): array
     {
-        return [
-            'command-token-create' => implode(':', ['token', 'create']),
-            'command-token-list' => implode(':', ['token', 'list']),
-            'command-token-revoke' => implode(':', ['token', 'revoke']),
-            'command-token-rotate' => implode(':', ['token', 'rotate']),
-            'command-token-usage' => implode(':', ['token', 'usage']),
-            'command-token-revoke-self' => implode(':', ['bfc', 'token', 'revoke-self']),
-            'command-fallback-generate' => implode(':', ['fallback-token', 'generate']),
-        ];
+        $markers = [];
+
+        foreach (self::upgradeGuide() as $entry) {
+            if ($entry['surface'] === 'Command') {
+                $markers[$entry['rule']] = $entry['marker'];
+            }
+        }
+
+        return $markers;
     }
 
     /** @return list<string> */
     private static function legacyFileNames(): array
     {
+        $classes = array_map(
+            static fn (array $entry): string => $entry['marker'].'.php',
+            array_filter(self::upgradeGuide(), static fn (array $entry): bool => $entry['surface'] === 'Class'),
+        );
+
         return [
-            self::joined('Api', 'Token').'.php',
-            self::joined('Api', 'Token', 'Minter').'.php',
-            self::joined('Token', 'Registry').'.php',
-            self::joined('Legacy', 'Rotation', 'Result').'.php',
-            self::joined('Durable', 'Store').'.php',
-            self::joined('Declares', 'Durable', 'Store').'.php',
-            self::joined('Ensure', 'Admin', 'Token').'.php',
-            self::joined('Manage', 'Tokens').'.php',
-            self::joined('Fallback', 'Token', 'Generate', 'Command').'.php',
-            self::joined('Token', 'Create', 'Command').'.php',
-            self::joined('Token', 'List', 'Command').'.php',
-            self::joined('Token', 'Revoke', 'Command').'.php',
-            self::joined('Token', 'Revoke', 'Self', 'Command').'.php',
-            self::joined('Token', 'Rotate', 'Command').'.php',
-            self::joined('Token', 'Usage', 'Command').'.php',
-            self::joined('Api', 'Token', 'Factory').'.php',
+            ...$classes,
             '0001_01_01_000000_create_'.implode('_', ['api', 'tokens']).'_table.php',
             '2026_07_08_000001_add_abilities_to_'.implode('_', ['api', 'tokens']).'_table.php',
             '2026_08_24_000001_add_client_identity_to_'.implode('_', ['api', 'tokens']).'_table.php',

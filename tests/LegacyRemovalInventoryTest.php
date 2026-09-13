@@ -35,6 +35,17 @@ function transitionCommandSignatures(): array
     ];
 }
 
+function upgradeGuideBlock(string $document): ?string
+{
+    preg_match(
+        '/<!-- legacy-removal-inventory:start -->\R(.*?)\R<!-- legacy-removal-inventory:end -->/s',
+        $document,
+        $matches,
+    );
+
+    return $matches[1] ?? null;
+}
+
 /** @return array<string, 'migrate'|'delete'|'keep-as-historical'> */
 function frozenTestRemovalDispositions(): array
 {
@@ -329,6 +340,21 @@ it('finds no forbidden production remnants in the installed tree', function (): 
 
 it('finds no removed surfaces in installed public documents', function (): void {
     expect(LegacyRemovalInventory::publicDocumentOffences(removalPackageRoot()))->toBe([]);
+});
+
+it('derives the 0.9 upgrade table from the removal inventory without drift', function (): void {
+    $document = file_get_contents(removalPackageRoot().'/docs/upgrade-0.9.md');
+    $guide = LegacyRemovalInventory::upgradeGuide();
+    $credentialApi = 'built-for-cloud.'.implode('_', ['credential', 'api']);
+
+    expect($document)->toBeString()
+        ->and(upgradeGuideBlock($document))->toBe(LegacyRemovalInventory::upgradeGuideMarkdown())
+        ->and(array_values(array_filter($guide, static fn (array $entry): bool => $entry['surface'] === 'Command')))->toHaveCount(7)
+        ->and(array_column($guide, 'removed'))->toContain(
+            $credentialApi,
+            $credentialApi.'.prefix',
+        )
+        ->and(array_filter($guide, static fn (array $entry): bool => $entry['replacement'] === ''))->toBe([]);
 });
 
 it('pins the fresh schema config commands and client-observation route identity', function (): void {
