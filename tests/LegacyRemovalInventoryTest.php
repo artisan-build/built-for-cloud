@@ -38,22 +38,19 @@ function transitionCommandSignatures(): array
 function frozenTestRemovalDispositions(): array
 {
     $delete = [
-        'tests/ClaimCodeBurnTest.php',
         'tests/CredentialApiTest.php',
         'tests/LegacyRotationTest.php',
         'tests/MetadataShapeLegacyApiTest.php',
-        'tests/P5bCarryForwardProcessTest.php',
-        'tests/P5bCarryForwardTest.php',
         'tests/TokenCommandsTest.php',
         'tests/TokenCoreTest.php',
         'tests/TokenRevokeSelfTest.php',
-        'tests/Fixtures/p5b-carry-forward-worker.php',
     ];
     $migrate = [
         'tests/AppActionAuditTest.php',
         'tests/AuditStreamTest.php',
         'tests/AuthenticateMcpTest.php',
         'tests/ClaimExchangeSeamTest.php',
+        'tests/ClaimCodeBurnTest.php',
         'tests/ClaimSurfaceTest.php',
         'tests/ClientIdentityObservationTest.php',
         'tests/ClientIdentityTest.php',
@@ -68,6 +65,7 @@ function frozenTestRemovalDispositions(): array
         'tests/Fixtures/UnifiedStoreDeclaration.php',
         'tests/Fixtures/operator-route-cache.php',
         'tests/Fixtures/personal-hmac-process.php',
+        'tests/Fixtures/p5b-carry-forward-worker.php',
         'tests/Fixtures/unified-claim-process.php',
         'tests/HeadlessThrottleTest.php',
         'tests/HmacActivationTest.php',
@@ -94,6 +92,8 @@ function frozenTestRemovalDispositions(): array
         'tests/OwnershipEndpointsTest.php',
         'tests/OwnershipFoundationTest.php',
         'tests/PackageRouteMiddlewareCollisionTest.php',
+        'tests/P5bCarryForwardProcessTest.php',
+        'tests/P5bCarryForwardTest.php',
         'tests/PersonalCredentialsTest.php',
         'tests/Pest.php',
         'tests/RotationTest.php',
