@@ -11,11 +11,16 @@ use ArtisanBuild\BuiltForCloud\SystemAuthorityBusFrame;
 use ArtisanBuild\BuiltForCloud\SystemAuthorityContext;
 use ArtisanBuild\BuiltForCloud\SystemAuthoritySchedule;
 use ArtisanBuild\BuiltForCloud\Testing\SystemAuthorityInventory;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostCopycatQueuedJob;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostMissingModelListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostRuntimeAuthQueuedJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueEventDispatchingGuard;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueFailedHandlerJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueFailThenLoginJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueLabelledMarkerJob;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueListenerEvent;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMarkedFailingListener;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMarkedMiddlewareListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMarkedQueuedListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMiddlewareLoginJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RuntimeAuthorityQueuedJob;
@@ -40,6 +45,7 @@ use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Queue;
@@ -366,6 +372,10 @@ it('pins every published system-authority boundary statement to the code it desc
         'A queued closure dispatched by package code is never framed. Its declaring file does not survive serialisation, and the scope class that does survive is caller-settable, so its origin cannot be established as identity.',
         "In-process tampering switches the bound off: removing the listeners, replacing a guard's event dispatcher, or rebinding the system-authority context. A host that calls `Bus::pipeThrough()` after this package boots also replaces the pipe array and reverts the bound to framing by queue events alone.",
         "A queued entry's own `middleware()` and its `failed()` handler are inside the frame.",
+        // Pinned because the stale version of this sentence — naming processed, failed
+        // and exception as the release events — stayed live and green after the release
+        // moved to JobAttempted.
+        'It is deliberately NOT released on `JobProcessed`, `JobFailed` or `JobExceptionOccurred`: each of those fires while package code can still run.',
         // Pinned because this sentence carried a FALSE clause at the previous HEAD - it
         // claimed identity could come from a queued closure's declaring file, after the
         // closure branch had been withdrawn.
@@ -510,7 +520,12 @@ it('takes queue identity from the class, so a host job wearing a package display
     config(['auth.guards.web' => ['driver' => 'session', 'provider' => 'users']]);
     $user = runtimeAuthorityUser('-copycat');
 
-    Queue::connection('sync')->push(new HostRuntimeAuthQueuedJob((string) $user->getKey()));
+    // The label is COPIED from a package job, which is what makes this discriminating:
+    // with identity taken from resolveName() the copied name wins and the host job is
+    // framed, so this reds. The earlier version of this control declared no display
+    // name at all and stayed green either way — a control that reported coverage it
+    // did not have.
+    Queue::connection('sync')->push(new HostCopycatQueuedJob((string) $user->getKey()));
 
     expect(auth()->guard('web')->id())->toBe($user->getAuthIdentifier());
 });
@@ -576,3 +591,59 @@ it('frames a queued entry\'s failed() handler on both routes', function (string 
     expect(Cache::get('bfc-test.failed-ran.'.$user->getKey()))->toBeTrue()
         ->and(auth()->guard('web')->guest())->toBeTrue();
 })->with(['sync', 'worker']);
+
+it('frames a package queued LISTENER through the real event queueing path, on both routes', function (
+    string $listener, string $marker, string $connection
+): void {
+    // commandName for every queued listener is the CallQueuedListener WRAPPER, so
+    // reading it alone left the listener's failed() handler and its returned
+    // middleware outside both frames. Driven through Event::listen/Event::dispatch,
+    // which is how the framework actually queues a listener, rather than by building
+    // the wrapper by hand — the earlier control did that and could only see handle().
+    config([
+        'auth.guards.web' => ['driver' => 'session', 'provider' => 'users'],
+        'queue.default' => $connection,
+    ]);
+    $user = runtimeAuthorityUser('-ql-'.$marker.'-'.$connection);
+    Event::listen(RogueListenerEvent::class, $listener);
+
+    try {
+        Event::dispatch(new RogueListenerEvent((string) $user->getKey(), $connection));
+    } catch (Throwable) {
+        // sync surfaces the refusal to the caller; the worker records it instead.
+    }
+
+    if ($connection === 'database') {
+        Artisan::call('queue:work', ['connection' => 'database', '--once' => true, '--tries' => 1, '--memory' => 4096]);
+    }
+
+    // Liveness first: "not authenticated" is also true of code that never ran.
+    expect(Cache::get('bfc-test.'.$marker.'.'.$user->getKey()))->toBeTrue()
+        ->and(auth()->guard('web')->guest())->toBeTrue();
+})->with([
+    'failed() handler, sync' => [RogueMarkedFailingListener::class, 'listener-failed-ran', 'sync'],
+    'failed() handler, real worker' => [RogueMarkedFailingListener::class, 'listener-failed-ran', 'database'],
+    'returned middleware, sync' => [RogueMarkedMiddlewareListener::class, 'listener-mw-ran', 'sync'],
+    'returned middleware, real worker' => [RogueMarkedMiddlewareListener::class, 'listener-mw-ran', 'database'],
+]);
+
+it('leaves a host queued listener whose model was deleted to the framework, deleting it rather than failing it', function (): void {
+    // Reading the wrapper's marked class means unserialising the command, and
+    // SerializesModels restores models while doing it. A model deleted since dispatch
+    // throws there, and if that escaped this listener it would turn a job the
+    // framework deletes under deleteWhenMissingModels into a failure. The unwrap
+    // catches everything and frames the entry when it cannot read the class, so the
+    // framework's own handling is untouched.
+    config(['queue.default' => 'database']);
+    $user = runtimeAuthorityUser('-missing-model');
+    Event::listen(RogueListenerEvent::class, HostMissingModelListener::class);
+
+    Event::dispatch(new RogueListenerEvent((string) $user->getKey(), 'database'));
+    expect(DB::table('jobs')->count())->toBe(1);
+
+    $user->delete();
+    Artisan::call('queue:work', ['connection' => 'database', '--once' => true, '--tries' => 1, '--memory' => 4096]);
+
+    expect(DB::table('failed_jobs')->count())->toBe(0)
+        ->and(DB::table('jobs')->count())->toBe(0);
+});

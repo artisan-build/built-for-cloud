@@ -7,9 +7,11 @@ namespace ArtisanBuild\BuiltForCloud\Listeners;
 use ArtisanBuild\BuiltForCloud\Contracts\SystemAuthorityQueueEntry;
 use ArtisanBuild\BuiltForCloud\SystemAuthorityContext;
 use Illuminate\Contracts\Queue\Job;
+use Illuminate\Events\CallQueuedListener;
 use Illuminate\Queue\Events\JobAttempted;
 use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Queue\Events\JobProcessing;
+use Throwable;
 
 final class SystemAuthorityQueueScope
 {
@@ -20,9 +22,7 @@ final class SystemAuthorityQueueScope
 
     public function processing(JobProcessing $event): void
     {
-        $class = $this->entryClass($event->job);
-
-        if ($class === null || ! is_a($class, SystemAuthorityQueueEntry::class, true)) {
+        if (! $this->shouldFrame($event->job)) {
             return;
         }
 
@@ -47,6 +47,63 @@ final class SystemAuthorityQueueScope
         $this->leave(spl_object_id($event->job));
     }
 
+    /**
+     * Whether this job is one of the package's own queue entries.
+     *
+     * Identity comes from the payload's `commandName`, which `Queue::createObjectPayload()`
+     * writes as `get_class($job)` — never `resolveName()`, which returns the
+     * caller-settable `displayName`.
+     *
+     * A queued LISTENER is executed inside `CallQueuedListener`, so for those
+     * `commandName` names the wrapper and the marked class sits on the wrapper's own
+     * `class` property. Reading it means unserialising the command, which is what
+     * `CallQueuedHandler` does moments later anyway — but doing it here is not free:
+     * `SerializesModels` restores models during unserialisation, so a job whose model
+     * has since been deleted throws. If that escaped this listener it would turn a job
+     * the framework would quietly delete under `deleteWhenMissingModels` into a
+     * failure. So: unserialise ONLY for the wrapper, never let anything out, and frame
+     * the entry when its class cannot be read.
+     */
+    private function shouldFrame(Job $job): bool
+    {
+        $payload = $job->payload();
+        $class = $payload['data']['commandName'] ?? null;
+
+        if (! is_string($class) || $class === '' || ! class_exists($class)) {
+            return false;
+        }
+
+        if ($class !== CallQueuedListener::class) {
+            return is_a($class, SystemAuthorityQueueEntry::class, true);
+        }
+
+        return $this->wrappedListenerIsOurs($payload);
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function wrappedListenerIsOurs(array $payload): bool
+    {
+        $serialised = $payload['data']['command'] ?? null;
+
+        if (! is_string($serialised)) {
+            return true;
+        }
+
+        try {
+            $command = unserialize($serialised);
+        } catch (Throwable) {
+            // Fail CLOSED, and silently: the entry is framed, and a restoration failure
+            // stays the framework's to handle.
+            return true;
+        }
+
+        if (! $command instanceof CallQueuedListener || ! is_string($command->class)) {
+            return true;
+        }
+
+        return is_a($command->class, SystemAuthorityQueueEntry::class, true);
+    }
+
     private function leave(int $jobId): void
     {
         if (! isset($this->tokens[$jobId])) {
@@ -55,25 +112,5 @@ final class SystemAuthorityQueueScope
 
         $this->context->leave($this->tokens[$jobId]);
         unset($this->tokens[$jobId]);
-    }
-
-    /**
-     * The entry's class, taken from the payload's `commandName`.
-     *
-     * NEVER `resolveName()`: that returns the payload's `displayName`, which
-     * `Queue::getDisplayName()` takes from the job's own `displayName()` method, so a
-     * job can choose it. `commandName` is written as `get_class($job)` by
-     * `Queue::createObjectPayload()` and sits beside it in the same payload. Taking
-     * identity from a caller-settable presentation string is the mistake this slice
-     * made twice; this is the second place it had to be undone.
-     *
-     * @return class-string|null
-     */
-    private function entryClass(Job $job): ?string
-    {
-        $payload = $job->payload();
-        $class = $payload['data']['commandName'] ?? null;
-
-        return is_string($class) && $class !== '' && class_exists($class) ? $class : null;
     }
 }

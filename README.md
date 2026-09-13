@@ -221,9 +221,7 @@ a package system-authority context. Commands and queued entries are framed at th
 latter through a bus pipe, so the queue worker, the sync driver and synchronous dispatch are covered by
 one mechanism — and entry identity comes from the dispatched OBJECT: a marker interface, the class a queued-listener wrapper names, or the payload's `commandName`, which the queue writes as the job's class. Never from a display name, which a job can choose. A queued entry's own `middleware()` and its `failed()` handler are inside the frame. While that context is active, human authentication is refused
 through listeners on both `Authenticated` and `Login`, and
-`AuditActor::boundUser()` refuses to synthesize human attribution. The context is always released in
-`finally` paths; queue processed, failed, and exception events remove the queue frame so a long-lived
-worker does not carry package authority into the next host job.
+`AuditActor::boundUser()` refuses to synthesize human attribution. The context is always released in `finally` paths. The queue frame is released on `JobAttempted`, which the worker and the sync driver each dispatch from a `finally`, so a long-lived worker does not carry package authority into the next host job. It is deliberately NOT released on `JobProcessed`, `JobFailed` or `JobExceptionOccurred`: each of those fires while package code can still run.
 
 The bound covers any guard that dispatches `Authenticated` or `Login`, not only `SessionGuard`.
 
