@@ -449,6 +449,10 @@ trait ContractAssertions
     public function assertBuiltForCloudListTransportParity(): void
     {
         $admin = $this->mintBuiltForCloudOperatorCredential('parity-list-admin');
+        $adminId = (string) Credential::query()
+            ->where('secret_hash', hash('sha256', $admin))
+            ->sole()
+            ->id;
 
         $cliExit = Artisan::call('bfc:credential:list', ['--json' => true, '--local' => true]);
         Assert::assertSame(0, $cliExit);
@@ -458,6 +462,18 @@ trait ContractAssertions
         $httpRows = $this->getJson('/bfc/credentials', $this->builtForCloudBearerHeaders($admin))
             ->assertOk()
             ->json();
+
+        Assert::assertIsArray($cliRows);
+        Assert::assertIsArray($httpRows);
+
+        // The authenticating credential is an artifact of the HTTP transport
+        // under test, not part of the listing payload being compared.
+        $isActionPayload = static fn (array $row): bool => ($row['id'] ?? null) !== $adminId;
+        $cliRows = array_values(array_filter($cliRows, $isActionPayload));
+        $httpRows = array_values(array_filter($httpRows, $isActionPayload));
+
+        Assert::assertNotEmpty($cliRows, 'The CLI listing carried no action payload after excluding its transport artifact.');
+        Assert::assertNotEmpty($httpRows, 'The HTTP listing carried no action payload after excluding its transport artifact.');
 
         // Identical rows, identical serialization, identical order — the
         // one action serializes for both transports, so this is equality,
