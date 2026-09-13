@@ -23,11 +23,12 @@ use Throwable;
  * `bfc.hmac`: put it in front of any route that consumes signed messages.
  * The subject comes from the app's declaration
  * ({@see ResolvesHmacSubjects}) — server-derived per request, never from
- * the header — and every failure is ONE uniform 401: a declaration that
- * cannot derive a subject, a missing header, and every verifier reason
- * are indistinguishable to the caller, so nothing on this surface is an
- * oracle. On success the verified credential's id (never any material)
- * rides the request attributes as `bfc.hmac_credential_id`.
+ * the header. A declaration that cannot derive a subject, a missing
+ * header, and every verifier failure return identical status, body and
+ * headers. Response timing is not equalized: a known active key performs
+ * decryption and MAC computation that a selection miss does not. On
+ * success the verified credential's id (never any material) rides the
+ * request attributes as `bfc.hmac_credential_id`.
  */
 final class VerifyHmacSignature
 {
