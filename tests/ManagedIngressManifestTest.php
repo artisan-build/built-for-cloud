@@ -24,18 +24,18 @@ function correctedManagedIngressManifest(): array
 {
     return [
         CredentialGuard::class => 'adapt',
-        ConsoleGuard::class => 'deferred — resolved by P5 transport consolidation',
+        ConsoleGuard::class => 'wontfix — not account-bound; residue 1',
         BasicAuthenticator::class => 'adapt',
         BearerAuthenticator::class => 'adapt',
         CredentialResolver::class => 'adapt',
         EnsureUserIsAuthenticated::class => 'adapt',
         EnsureUserIsAdmin::class => 'adapt',
-        EnsureConsoleSession::class => 'deferred — resolved by P5 transport consolidation',
-        AuthenticateMcp::class => 'deferred — resolved by P5 transport consolidation',
+        EnsureConsoleSession::class => 'wontfix — not account-bound; residue 1',
+        AuthenticateMcp::class => 'cleared — store bearer converged; assertion wontfix — not account-bound; residue 1',
         EnsureCredentialAdmin::class => 'adapt',
         EnsureCredentialAbility::class => 'adapt',
         EnsureDashboardCredential::class => 'adapt',
-        VerifyHmacSignature::class => 'deferred — resolved by P5 transport consolidation',
+        VerifyHmacSignature::class => 'cleared — managed account containment added',
         EnsureStandaloneAuthority::class => 'out of scope — authority-mode gate, not an account-bound ingress',
     ];
 }
@@ -49,9 +49,15 @@ it('derives exactly the corrected AC17 manifest including class-bound middleware
     expect(ManagedIngressManifest::unexpected($discovered, $manifest))->toBe([])
         ->and(ManagedIngressManifest::missing($discovered, $manifest))->toBe([])
         ->and($discovered)->toBe($expected)
+        ->and(array_filter(
+            $manifest,
+            static fn (string $disposition): bool => str_contains($disposition, 'deferred'),
+        ))->toBe([])
         ->and(array_count_values($manifest))->toBe([
             'adapt' => 9,
-            'deferred — resolved by P5 transport consolidation' => 4,
+            'wontfix — not account-bound; residue 1' => 2,
+            'cleared — store bearer converged; assertion wontfix — not account-bound; residue 1' => 1,
+            'cleared — managed account containment added' => 1,
             'out of scope — authority-mode gate, not an account-bound ingress' => 1,
         ]);
 });
