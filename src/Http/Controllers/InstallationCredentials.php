@@ -37,6 +37,12 @@ final class InstallationCredentials
 {
     use RevealsDelivery;
 
+    /** @var list<string> */
+    private const array SUBJECT_TYPES = [
+        SubjectType::Application->value,
+        SubjectType::Installation->value,
+    ];
+
     public function index(Request $request, ListCredentials $list): JsonResponse
     {
         $this->actor($request);
@@ -44,7 +50,10 @@ final class InstallationCredentials
         return response()->json([
             'credentials' => array_map(
                 static fn (CredentialSummary $summary): array => $summary->toArray(),
-                $list(ownership: CredentialOwnership::Installation),
+                $list(
+                    ownership: CredentialOwnership::Installation,
+                    subjectTypes: self::SUBJECT_TYPES,
+                ),
             ),
         ]);
     }
@@ -53,10 +62,7 @@ final class InstallationCredentials
     {
         /** @var array{subject_type: string, subject_ref: string} $validated */
         $validated = $request->validate([
-            'subject_type' => ['required', 'string', Rule::in([
-                SubjectType::Application->value,
-                SubjectType::Installation->value,
-            ])],
+            'subject_type' => ['required', 'string', Rule::in(self::SUBJECT_TYPES)],
             'subject_ref' => ['required', 'string'],
         ]);
 
@@ -100,6 +106,7 @@ final class InstallationCredentials
                 ])),
                 $this->actor($request),
                 CredentialOwnership::Installation,
+                self::SUBJECT_TYPES,
             );
         } catch (InvalidCredentialInput $invalid) {
             return response()->json(['message' => $invalid->getMessage()], 422);
@@ -129,6 +136,7 @@ final class InstallationCredentials
                 $id,
                 $this->actor($request),
                 ownership: CredentialOwnership::Installation,
+                subjectTypes: self::SUBJECT_TYPES,
             );
         } catch (CredentialVerbRefused $refused) {
             return response()->json(['message' => $refused->getMessage()], 403);

@@ -34,10 +34,14 @@ final class ListCredentials
     use ConsultsDeclaration;
 
     /**
+     * @param  list<string>|null  $subjectTypes
      * @return list<CredentialSummary>
      */
-    public function __invoke(?Subject $subject = null, ?CredentialOwnership $ownership = null): array
-    {
+    public function __invoke(
+        ?Subject $subject = null,
+        ?CredentialOwnership $ownership = null,
+        ?array $subjectTypes = null,
+    ): array {
         $cadence = $this->declaredCadence();
         $unsupported = $this->declaredUnsupportedFields();
 
@@ -52,6 +56,10 @@ final class ListCredentials
             $ownership === CredentialOwnership::Installation
                 ? $query->whereNull('user_id')
                 : $query->whereNotNull('user_id');
+        }
+
+        if ($subjectTypes !== null) {
+            $query->whereIn('subject_type', $subjectTypes);
         }
 
         return $query

@@ -48,14 +48,16 @@ final class RevokeCredential
 
     public function __construct(private readonly LifecycleEventRecorder $recorder) {}
 
+    /** @param list<string>|null $subjectTypes */
     public function __invoke(
         string $id,
         ?AuditActor $actor = null,
         ?Subject $scope = null,
         ?CredentialOwnership $ownership = null,
+        ?array $subjectTypes = null,
     ): RevokeOutcome {
         /** @var RevokeOutcome */
-        return DB::transaction(function () use ($id, $actor, $scope, $ownership): RevokeOutcome {
+        return DB::transaction(function () use ($id, $actor, $scope, $ownership, $subjectTypes): RevokeOutcome {
             /** @var Credential|null $target */
             $target = Credential::query()->whereKey($id)->lockForUpdate()->first();
 
@@ -69,6 +71,10 @@ final class RevokeCredential
             }
 
             if ($ownership !== null && $target->ownership() !== $ownership) {
+                return RevokeOutcome::NotFound;
+            }
+
+            if ($subjectTypes !== null && ! in_array($target->subject_type->value, $subjectTypes, true)) {
                 return RevokeOutcome::NotFound;
             }
 

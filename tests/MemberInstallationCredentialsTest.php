@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\OffboardOptions;
@@ -16,6 +17,7 @@ use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class);
 
@@ -188,6 +190,60 @@ it('keeps installation credentials inaccessible through the personal ownership s
     expect($personal->refresh()->rotated_at)->toBeNull()
         ->and($personal->revoked_at)->toBeNull();
     assertInstallationAuthentication($personalSecret);
+});
+
+it('keeps null-user operator and external-consumer credentials outside the installation surface', function (SubjectType $subjectType): void {
+    $member = installationMember(UserRole::Member);
+    $secret = $subjectType->value.'-secret-'.bin2hex(random_bytes(12));
+    $credential = Credential::query()->create([
+        'kind' => CredentialKind::Bearer,
+        'subject_type' => $subjectType,
+        'subject_ref' => $subjectType->value.'-under-test',
+        'abilities' => $subjectType === SubjectType::Operator ? ['credential:admin'] : null,
+        'secret_hash' => hash('sha256', $secret),
+        'status' => CredentialStatus::Active,
+    ]);
+
+    $listing = $this->actingAsVersioned($member)->getJson('/bfc/installation/credentials')->assertOk();
+    expect($listing->json('credentials.*.id'))->not->toContain($credential->id);
+
+    $this->postJson('/bfc/installation/credentials/'.$credential->id.'/rotate')->assertNotFound();
+    $this->deleteJson('/bfc/installation/credentials/'.$credential->id)->assertNotFound();
+
+    expect($credential->refresh()->rotated_at)->toBeNull()
+        ->and($credential->revoked_at)->toBeNull();
+    assertInstallationAuthentication($secret);
+})->with([
+    'operator' => SubjectType::Operator,
+    'external consumer' => SubjectType::ExternalConsumer,
+]);
+
+it('makes a personal HMAC id indistinguishable from an unknown id during APP_KEY cutover', function (): void {
+    $member = installationMember(UserRole::Member);
+    $oldKey = (string) config('app.key');
+    $encrypted = app(HmacKeyring::class)->encrypt('personal-hmac-secret');
+    $personal = new Credential;
+    $personal->forceFill([
+        'kind' => CredentialKind::Hmac,
+        'subject_type' => SubjectType::UserPrincipal,
+        'subject_ref' => 'user:'.$member->getKey(),
+        'user_id' => (string) $member->getKey(),
+        'secret_ciphertext' => $encrypted->ciphertext,
+        'secret_key_version' => $encrypted->keyVersion,
+        'status' => CredentialStatus::Active,
+    ])->save();
+    config()->set('app.previous_keys', [$oldKey]);
+    config()->set('app.key', 'base64:'.base64_encode(random_bytes(32)));
+
+    expect(app(HmacKeyring::class)->cutoverInProgress())->toBeTrue();
+    $personalResponse = $this->actingAsVersioned($member)
+        ->postJson('/bfc/installation/credentials/'.$personal->id.'/rotate');
+    $unknownResponse = $this->postJson('/bfc/installation/credentials/'.Str::uuid().'/rotate');
+
+    expect($personalResponse->status())->toBe(404)
+        ->and($unknownResponse->status())->toBe($personalResponse->status())
+        ->and($unknownResponse->getContent())->toBe($personalResponse->getContent())
+        ->and($personal->refresh()->rotated_at)->toBeNull();
 });
 
 it('denies an unknown stored role fail closed for every verb without changing rows or authentication', function (string $verb): void {
