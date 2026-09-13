@@ -7,13 +7,16 @@ use ArtisanBuild\BuiltForCloud\Commands\SystemAuthorityCommand;
 use ArtisanBuild\BuiltForCloud\Contracts\SystemAuthorityQueueEntry;
 use ArtisanBuild\BuiltForCloud\Exceptions\SystemAuthorityViolation;
 use ArtisanBuild\BuiltForCloud\Listeners\RefuseSystemAuthorityAuthentication;
+use ArtisanBuild\BuiltForCloud\Listeners\SystemAuthorityQueueScope;
 use ArtisanBuild\BuiltForCloud\SystemAuthorityBusFrame;
 use ArtisanBuild\BuiltForCloud\SystemAuthorityContext;
 use ArtisanBuild\BuiltForCloud\SystemAuthoritySchedule;
 use ArtisanBuild\BuiltForCloud\Testing\SystemAuthorityInventory;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostCopycatQueuedJob;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostEncryptedListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostMissingModelListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostRuntimeAuthQueuedJob;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueEncryptedMarkedListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueEventDispatchingGuard;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueFailedHandlerJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueFailThenLoginJob;
@@ -49,6 +52,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Queue;
+use ReflectionMethod;
 use ReflectionProperty;
 
 uses(RefreshDatabase::class);
@@ -647,3 +651,51 @@ it('leaves a host queued listener whose model was deleted to the framework, dele
     expect(DB::table('failed_jobs')->count())->toBe(0)
         ->and(DB::table('jobs')->count())->toBe(0);
 });
+
+it('reads an encrypted queued listener the way the framework does, framing ours and leaving the host alone', function (
+    string $listener, string $marker, bool $framed
+): void {
+    // A ShouldBeEncrypted entry's command is ciphertext, so the wrapper unwrap has to
+    // decrypt before it can read the marked class — exactly as
+    // CallQueuedHandler::getCommand() does, by testing for the `O:` prefix first.
+    // Without that branch every encrypted entry fell to the fail-closed path: a host
+    // encrypted listener was framed and its own legitimate authentication silently
+    // refused. Treating unreadable as host instead would have let a PACKAGE encrypted
+    // listener escape. Both halves are asserted here.
+    config([
+        'auth.guards.web' => ['driver' => 'session', 'provider' => 'users'],
+        'queue.default' => 'database',
+    ]);
+    $user = runtimeAuthorityUser('-enc-'.$marker);
+    Event::listen(RogueListenerEvent::class, $listener);
+
+    Event::dispatch(new RogueListenerEvent((string) $user->getKey(), 'database'));
+    Artisan::call('queue:work', ['connection' => 'database', '--once' => true, '--tries' => 1, '--memory' => 4096]);
+
+    // Liveness first, then the outcome.
+    expect(Cache::get('bfc-test.'.$marker.'.'.$user->getKey()))->toBeTrue()
+        ->and(auth()->guard('web')->guest())->toBe($framed);
+})->with([
+    'ours is framed' => [RogueEncryptedMarkedListener::class, 'encrypted-marked-ran', true],
+    "the host's is not" => [HostEncryptedListener::class, 'host-encrypted-ran', false],
+]);
+
+it('frames an entry whose class cannot be read at all, rather than assuming it is the host\'s', function (
+    string $label, string $command
+): void {
+    // Rule 4 of the authorised repair: if the marked class cannot be established, the
+    // entry is FRAMED. Nothing exercised this until now — with the decrypt branch in
+    // place the catch is unreachable through the queue, so reverting fail-closed to
+    // fail-open left the suite green. That is a branch carrying a security decision
+    // with no control, so it gets one directly.
+    $scope = app(SystemAuthorityQueueScope::class);
+    $decide = (new ReflectionMethod(SystemAuthorityQueueScope::class, 'wrappedListenerIsOurs'));
+    $decide->setAccessible(true);
+
+    expect($decide->invoke($scope, ['data' => ['command' => $command]]))->toBeTrue($label);
+})->with([
+    'corrupt serialised payload' => ['corrupt', 'O:not-actually-serialised'],
+    'ciphertext that will not decrypt' => ['undecryptable', 'eyJpdiI6Im5vcGUifQ=='],
+    'empty command' => ['empty', ''],
+    'a plain string' => ['plain', 'nonsense'],
+]);

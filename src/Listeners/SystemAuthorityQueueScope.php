@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Listeners;
 
 use ArtisanBuild\BuiltForCloud\Contracts\SystemAuthorityQueueEntry;
 use ArtisanBuild\BuiltForCloud\SystemAuthorityContext;
+use Illuminate\Contracts\Encryption\Encrypter;
 use Illuminate\Contracts\Queue\Job;
 use Illuminate\Events\CallQueuedListener;
 use Illuminate\Queue\Events\JobAttempted;
@@ -90,7 +91,15 @@ final class SystemAuthorityQueueScope
         }
 
         try {
-            $command = unserialize($serialised);
+            // Read it the way the framework reads it. `CallQueuedHandler::getCommand()`
+            // treats a payload starting `O:` as plain serialised and DECRYPTS anything
+            // else, because a `ShouldBeEncrypted` entry's command is ciphertext. Without
+            // that branch every encrypted entry failed to unserialise and fell to the
+            // fail-closed path, which framed HOST work and silently refused a host
+            // listener's own legitimate authentication.
+            $command = str_starts_with($serialised, 'O:')
+                ? unserialize($serialised)
+                : unserialize($this->encrypter()->decrypt($serialised));
         } catch (Throwable) {
             // Fail CLOSED, and silently: the entry is framed, and a restoration failure
             // stays the framework's to handle.
@@ -102,6 +111,11 @@ final class SystemAuthorityQueueScope
         }
 
         return is_a($command->class, SystemAuthorityQueueEntry::class, true);
+    }
+
+    private function encrypter(): Encrypter
+    {
+        return app(Encrypter::class);
     }
 
     private function leave(int $jobId): void
