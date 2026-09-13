@@ -97,9 +97,18 @@ final class SystemAuthorityQueueScope
             // that branch every encrypted entry failed to unserialise and fell to the
             // fail-closed path, which framed HOST work and silently refused a host
             // listener's own legitimate authentication.
-            $command = str_starts_with($serialised, 'O:')
-                ? unserialize($serialised)
-                : unserialize($this->encrypter()->decrypt($serialised));
+            $plain = str_starts_with($serialised, 'O:')
+                ? $serialised
+                : $this->encrypter()->decrypt($serialised);
+
+            // `allowed_classes` restricted to the wrapper is what makes reading this
+            // safe. The wrapper's `class` is a plain string, so it survives, while
+            // everything nested becomes __PHP_Incomplete_Class — so the LISTENER IS
+            // NEVER CONSTRUCTED AND ITS MODELS ARE NEVER RESTORED. That removes the
+            // whole hazard of reading a payload here: no database queries, no __wakeup,
+            // no ModelNotFoundException for a row deleted since dispatch, and no
+            // duplicate model loads before CallQueuedHandler does its own read.
+            $command = unserialize($plain, ['allowed_classes' => [CallQueuedListener::class]]);
         } catch (Throwable) {
             // Fail CLOSED, and silently: the entry is framed, and a restoration failure
             // stays the framework's to handle.

@@ -14,7 +14,6 @@ use ArtisanBuild\BuiltForCloud\SystemAuthoritySchedule;
 use ArtisanBuild\BuiltForCloud\Testing\SystemAuthorityInventory;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostCopycatQueuedJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostEncryptedListener;
-use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostMissingModelListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostRuntimeAuthQueuedJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueEncryptedMarkedListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueEventDispatchingGuard;
@@ -26,6 +25,7 @@ use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMarkedFailingListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMarkedMiddlewareListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMarkedQueuedListener;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMiddlewareLoginJob;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueRestorationProbe;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RuntimeAuthorityQueuedJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RuntimeAuthorityServiceProvider;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RuntimeHumanAuthenticator;
@@ -48,7 +48,6 @@ use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Queue;
@@ -631,27 +630,34 @@ it('frames a package queued LISTENER through the real event queueing path, on bo
     'returned middleware, real worker' => [RogueMarkedMiddlewareListener::class, 'listener-mw-ran', 'database'],
 ]);
 
-it('leaves a host queued listener whose model was deleted to the framework, deleting it rather than failing it', function (): void {
-    // Reading the wrapper's marked class means unserialising the command, and
-    // SerializesModels restores models while doing it. A model deleted since dispatch
-    // throws there, and if that escaped this listener it would turn a job the
-    // framework deletes under deleteWhenMissingModels into a failure. The unwrap
-    // catches everything and frames the entry when it cannot read the class, so the
-    // framework's own handling is untouched.
-    config(['queue.default' => 'database']);
-    $user = runtimeAuthorityUser('-missing-model');
-    Event::listen(RogueListenerEvent::class, HostMissingModelListener::class);
+it('never constructs anything nested while reading a queued listener\'s class', function (): void {
+    // This is the real guarantee, and it is structural rather than scenario-based.
+    //
+    // Reading the marked class off the wrapper restricts `allowed_classes` to the
+    // wrapper itself, so the listener and everything in its data are NOT constructed:
+    // no model is restored, no __wakeup runs, nothing queries the database, and
+    // CallQueuedHandler's own later read is the first and only construction.
+    //
+    // I originally tried to prove this with a deleted-model scenario and got it wrong
+    // twice over: the assertion read `failed_jobs`, which is unusable as evidence here
+    // because `queue.failed.database` is a separate :memory: connection with no such
+    // table; and the fixture carried no model at all. A queued listener cannot even
+    // produce that restoration — the listener instance is never serialised, only its
+    // class name, so SerializesModels on it never applies. Proving the property beats
+    // staging a scenario that does not occur.
+    $probe = new RogueRestorationProbe;
+    $wrapper = new CallQueuedListener(RogueMarkedFailingListener::class, 'handle', [$probe]);
 
-    Event::dispatch(new RogueListenerEvent((string) $user->getKey(), 'database'));
-    expect(DB::table('jobs')->count())->toBe(1);
+    $decide = new ReflectionMethod(SystemAuthorityQueueScope::class, 'wrappedListenerIsOurs');
+    $decide->setAccessible(true);
 
-    $user->delete();
-    Artisan::call('queue:work', ['connection' => 'database', '--once' => true, '--tries' => 1, '--memory' => 4096]);
+    RogueRestorationProbe::$constructed = 0;
 
-    expect(DB::table('failed_jobs')->count())->toBe(0)
-        ->and(DB::table('jobs')->count())->toBe(0);
+    expect($decide->invoke(app(SystemAuthorityQueueScope::class), ['data' => ['command' => serialize($wrapper)]]))->toBeTrue()
+        // The marked class was read...
+        ->and(RogueRestorationProbe::$constructed)->toBe(0);
+    // ...and nothing nested was woken while reading it.
 });
-
 it('reads an encrypted queued listener the way the framework does, framing ours and leaving the host alone', function (
     string $listener, string $marker, bool $framed
 ): void {
