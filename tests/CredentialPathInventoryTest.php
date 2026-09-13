@@ -190,3 +190,54 @@ it('reports all four deliberate controls through their assigned derivation roots
         ->and($unexpectedMiddleware)->toBe(['middleware:'.ClassBoundCredentialGate::class])
         ->and($devicePaths)->toBe([]);
 });
+
+it('reports a second credential store across query forms', function (string $query): void {
+    $root = sys_get_temp_dir().'/bfc-second-store-control-'.bin2hex(random_bytes(8));
+    $namespace = 'ArtisanBuild\\BuiltForCloud\\Tests\\SecondStoreControl';
+
+    mkdir($root, 0777, true);
+    file_put_contents($root.'/ProbeAuthenticator.php', <<<PHP
+<?php
+namespace {$namespace};
+use ArtisanBuild\BuiltForCloud\Contracts\CredentialAuthenticator;
+use ArtisanBuild\BuiltForCloud\Credential;
+use Illuminate\Http\Request;
+final class ProbeAuthenticator implements CredentialAuthenticator
+{
+    public function __construct(private ProbeResolver \$resolver) {}
+    public function credential(Request \$request): ?Credential
+    {
+        \$this->resolver->resolve(\$request->bearerToken() ?? '');
+        return null;
+    }
+}
+PHP);
+    file_put_contents($root.'/ProbeResolver.php', <<<PHP
+<?php
+namespace {$namespace};
+final class ProbeResolver
+{
+    public function resolve(string \$secret): mixed
+    {
+        \$hash = hash('sha256', \$secret);
+        return {$query};
+    }
+}
+PHP);
+
+    $inventory = CredentialPathInventory::discover(dirname(__DIR__).'/src', [$root]);
+
+    expect($inventory['violations'])->toContain(
+        'second-store-resolver:'.$namespace.'\\ProbeAuthenticator=>'.$namespace.'\\ProbeResolver',
+    );
+})->with([
+    'model query and where' => "OtherStoreRecord::query()->where('token_hash', \$hash)->first()",
+    'direct model where' => "OtherStoreRecord::where('token_hash', \$hash)->first()",
+    'model firstWhere' => "OtherStoreRecord::query()->firstWhere('token_hash', \$hash)",
+    'different hash column' => "OtherStoreRecord::query()->where('hash', \$hash)->first()",
+    'raw select' => "DB::selectOne('select * from other_store where token_hash = ?', [\$hash])",
+    'qualified credential model' => "\\Vendor\\Legacy\\Credential::query()->where('token_hash', \$hash)->first()",
+    'named connection' => "DB::connection('legacy')->table('credentials')->where('secret_hash', \$hash)->first()",
+    'array where' => "OtherStoreRecord::query()->where(['token_hash' => \$hash])->first()",
+    'query builder table' => "DB::table('other_store')->where('token_hash', \$hash)->first()",
+]);

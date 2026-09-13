@@ -751,6 +751,53 @@ final class CredentialPathInventory
     private static function readsSecondCredentialStore(string $code): bool
     {
         preg_match_all(
+            '/(?<![A-Za-z0-9_\x5c])(\x5c?[A-Z][A-Za-z0-9_\x5c]*)::(?:query\(\)|where\s*\(|firstWhere\s*\()/s',
+            $code,
+            $modelQueries,
+        );
+
+        foreach ($modelQueries[1] as $model) {
+            $model = ltrim($model, '\\');
+            $resolved = self::imports($code)[$model] ?? $model;
+
+            if (! in_array($resolved, ['Credential', 'ArtisanBuild\\BuiltForCloud\\Credential'], true)) {
+                return true;
+            }
+        }
+
+        preg_match_all(
+            '/(DB::connection\([^;]+?\)->table|DB::table|->table)\(\s*[\'"]([^\'"]+)[\'"]\s*\)/s',
+            $code,
+            $tableQueries,
+            PREG_SET_ORDER,
+        );
+
+        foreach ($tableQueries as $query) {
+            if ($query[2] !== 'credentials' || str_contains($query[1], 'connection(')) {
+                return true;
+            }
+        }
+
+        preg_match_all(
+            '/DB::(?:select|selectOne)\(\s*([\'"])(.*?)\1/s',
+            $code,
+            $rawQueries,
+            PREG_SET_ORDER,
+        );
+
+        foreach ($rawQueries as $query) {
+            if (preg_match('/\bfrom\s+[`"]?([A-Za-z0-9_.-]+)/i', $query[2], $table) === 1
+                && $table[1] !== 'credentials') {
+                return true;
+            }
+        }
+
+        return self::readsSecondCredentialStoreByHash($code);
+    }
+
+    private static function readsSecondCredentialStoreByHash(string $code): bool
+    {
+        preg_match_all(
             '/\b([A-Z][A-Za-z0-9_]*)::query\(\)(?:(?!;).)*?->where\(\s*[\'\"](?:secret_hash|token_hash)[\'\"]/s',
             $code,
             $modelQueries,
