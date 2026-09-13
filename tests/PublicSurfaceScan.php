@@ -4,8 +4,19 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
+use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
+use ArtisanBuild\BuiltForCloud\User;
+use FilesystemIterator;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
 use ReflectionClass;
+use ReflectionIntersectionType;
 use ReflectionMethod;
+use ReflectionNamedType;
+use ReflectionType;
+use ReflectionUnionType;
+use RuntimeException;
+use SplFileInfo;
 
 /**
  * The second half of the minting guarantee: **no new PUBLIC METHOD may
@@ -79,5 +90,206 @@ final class PublicSurfaceScan
     public static function missingFrom(string $class, array $expected): array
     {
         return array_values(array_diff($expected, self::of($class)));
+    }
+
+    /** @return list<string> */
+    public static function declaredBy(string $class): array
+    {
+        $methods = array_map(
+            static fn (ReflectionMethod $method): string => $method->getName(),
+            array_filter(
+                (new ReflectionClass($class))->getMethods(ReflectionMethod::IS_PUBLIC),
+                static fn (ReflectionMethod $method): bool => $method->getDeclaringClass()->getName() === $class,
+            ),
+        );
+        sort($methods);
+
+        return array_values($methods);
+    }
+
+    /**
+     * Derive every declared public method before applying any binding
+     * classification. The source root is never inferred from a class list.
+     *
+     * @param  list<string>  $additionalRoots
+     * @return list<array{class: class-string, method: string, file: string, line: int, parameters: list<array{name: string, types: list<string>}>, returnTypes: list<string>}>
+     */
+    public static function discoverDeclaredPublicMethods(string $sourceRoot, array $additionalRoots = []): array
+    {
+        $packageRoot = dirname($sourceRoot);
+        $surface = [];
+
+        foreach ([$sourceRoot, ...$additionalRoots] as $root) {
+            foreach (self::phpFiles($root) as $file) {
+                $contents = file_get_contents($file->getPathname());
+
+                if (! is_string($contents)) {
+                    throw new RuntimeException("Could not read [{$file->getPathname()}].");
+                }
+
+                if (preg_match('/^namespace\s+([^;]+);/m', $contents, $namespace) !== 1
+                    || preg_match('/^\s*(?:(?:final|abstract|readonly)\s+)*(?:class|interface|trait|enum)\s+([A-Z][A-Za-z0-9_]*)\b/m', $contents, $symbol) !== 1) {
+                    continue;
+                }
+
+                $class = $namespace[1].'\\'.$symbol[1];
+                $reflection = new ReflectionClass($class);
+
+                foreach ($reflection->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
+                    if ($method->getDeclaringClass()->getName() !== $class) {
+                        continue;
+                    }
+
+                    $parameters = [];
+
+                    foreach ($method->getParameters() as $parameter) {
+                        $parameters[] = [
+                            'name' => $parameter->getName(),
+                            'types' => self::typeNames($parameter->getType()),
+                        ];
+                    }
+
+                    $surface[] = [
+                        'class' => $class,
+                        'method' => $method->getName(),
+                        'file' => ltrim(substr($file->getPathname(), strlen($packageRoot)), DIRECTORY_SEPARATOR),
+                        'line' => $method->getStartLine(),
+                        'parameters' => $parameters,
+                        'returnTypes' => self::typeNames($method->getReturnType()),
+                    ];
+                }
+            }
+        }
+
+        usort($surface, static fn (array $left, array $right): int => [
+            $left['class'],
+            $left['method'],
+        ] <=> [
+            $right['class'],
+            $right['method'],
+        ]);
+
+        return $surface;
+    }
+
+    /**
+     * Exact executable predicate: report a public method with two distinct
+     * parameters whose declared types can carry the canonical User and a
+     * DelegatedActor, or a DelegatedActor parameter whose return type can carry
+     * the canonical User. Named union/intersection members, subclasses and
+     * parent interfaces such as Authenticatable are included. Untyped values
+     * and method-body or ORM-relation inference are deliberately outside the
+     * bound.
+     *
+     * @param  list<array{class: class-string, method: string, file: string, line: int, parameters: list<array{name: string, types: list<string>}>, returnTypes: list<string>}>  $surface
+     * @return list<string>
+     */
+    public static function canonicalUserBindings(array $surface): array
+    {
+        $bindings = [];
+
+        foreach ($surface as $method) {
+            $canonical = [];
+            $delegated = [];
+
+            foreach ($method['parameters'] as $index => $parameter) {
+                if (self::typesCarry($parameter['types'], User::class)) {
+                    $canonical[$index] = $parameter['name'];
+                }
+
+                if (self::typesCarry($parameter['types'], DelegatedActor::class)) {
+                    $delegated[$index] = $parameter['name'];
+                }
+            }
+
+            foreach ($canonical as $canonicalIndex => $canonicalName) {
+                $delegatedIndex = array_key_first(array_diff_key($delegated, [$canonicalIndex => true]));
+
+                if ($delegatedIndex === null) {
+                    continue;
+                }
+
+                $bindings[] = sprintf(
+                    '%s:%d [%s::%s($%s,$%s)]',
+                    $method['file'],
+                    $method['line'],
+                    $method['class'],
+                    $method['method'],
+                    $canonicalName,
+                    $delegated[$delegatedIndex],
+                );
+
+                continue 2;
+            }
+
+            if (self::typesCarry($method['returnTypes'], User::class) && $delegated !== []) {
+                $bindings[] = sprintf(
+                    '%s:%d [%s::%s($%s):return]',
+                    $method['file'],
+                    $method['line'],
+                    $method['class'],
+                    $method['method'],
+                    array_values($delegated)[0],
+                );
+            }
+        }
+
+        sort($bindings);
+
+        return $bindings;
+    }
+
+    /** @return list<string> */
+    private static function typeNames(?ReflectionType $type): array
+    {
+        if ($type instanceof ReflectionNamedType) {
+            return [$type->getName()];
+        }
+
+        if ($type instanceof ReflectionUnionType || $type instanceof ReflectionIntersectionType) {
+            $names = [];
+
+            foreach ($type->getTypes() as $member) {
+                array_push($names, ...self::typeNames($member));
+            }
+
+            return array_values(array_unique($names));
+        }
+
+        return [];
+    }
+
+    /** @param list<string> $types */
+    private static function typesCarry(array $types, string $identity): bool
+    {
+        foreach ($types as $type) {
+            if ((class_exists($type) || interface_exists($type))
+                && (is_a($identity, $type, true) || is_a($type, $identity, true))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** @return iterable<SplFileInfo> */
+    private static function phpFiles(string $root): iterable
+    {
+        if (is_file($root)) {
+            yield new SplFileInfo($root);
+
+            return;
+        }
+
+        $files = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
+        );
+
+        /** @var SplFileInfo $file */
+        foreach ($files as $file) {
+            if ($file->isFile() && $file->getExtension() === 'php') {
+                yield $file;
+            }
+        }
     }
 }

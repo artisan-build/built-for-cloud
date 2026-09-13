@@ -90,6 +90,15 @@ it('signs with the active key and verifies through the canonical envelope, stamp
         ->and($verified->refresh()->last_used_at)->not->toBeNull();
 });
 
+it('preserves direct one-argument verifier construction', function (): void {
+    $credential = activeKeyFor('acme');
+    $header = headerSignedBy($credential, 'body');
+
+    $verified = (new HmacVerifier(app(HmacKeyring::class)))->verify(hmacSubject(), $header, 'body');
+
+    expect($verified->id)->toBe($credential->id);
+});
+
 it('leaks no key material while signing: the header carries the key id, never the key', function (): void {
     $signingKey = bin2hex(random_bytes(32));
     activeKeyFor('acme', $signingKey);

@@ -35,6 +35,73 @@ function transitionCommandSignatures(): array
     ];
 }
 
+function upgradeGuideBlock(string $document): ?string
+{
+    preg_match(
+        '/<!-- legacy-removal-inventory:start -->\R(.*?)\R<!-- legacy-removal-inventory:end -->/s',
+        $document,
+        $matches,
+    );
+
+    return $matches[1] ?? null;
+}
+
+/** @return array<string, string> */
+function frozenRemovalInventoryKeys(): array
+{
+    // Encoding keeps this independent oracle from becoming scanner input itself.
+    $compressed = base64_decode(
+        'H4sIAAAAAAACE32UwVLDIBRF/yXrtB/ALtbWhVVntO4606HJS2QkJANE7Tj+uw8IKZDoKrmX8yDwLvnOSk6VIkXPDt07iIxk02uejD0woUEGxGh4znrP0DCl5QWxWHtqDw0tL8+dppp1OKwGrhFetH3N7SDpmcOL7iQgG8mJAXxKUCm7ZPuarVCDhKJqmfC7n1mefaCCNmA9hVwkPbOjnJ9p+W7tOxAgqYZN17ZUVFjz73B0ihsJUeWCGfF7POOEDq2kQx/4SOjYXOBfgNeLNeFAXGd6OVsnMiP+VeGBJnjkpXnc0RK7eQkC6Z08AzG0pBgqpgtjHS49EBI1OmrxFT8ei74Palwug+uRGHnWgn7rKsKUby9CgcgzyhlV5FyXa21K1tSsjFDq5Jk2ESW0ZyftcxYI3H/Hh1aQ7hOj49wTM2eVGBNYudCH6MyawWq8ObE2mKhZQ+pxY24G5BLDHOYH2RX7/U2xuT8dnu63jyb7sTFNV0qoQGhG+Qm3imBi/AGuewk1+5rx3jdlNjUr+1Wr0t4dxK0ko0wpjndmYqxICWkzPzGjnFE25VfKyZQaTLgnyKnl9VYKL5lLDAkXdv61xrdi1Yw/l6A9bkIyjfz8AjuklEL7BQAA',
+        true,
+    );
+    $json = is_string($compressed) ? gzdecode($compressed) : false;
+    $keys = is_string($json) ? json_decode($json, true, flags: JSON_THROW_ON_ERROR) : null;
+
+    if (! is_array($keys)) {
+        throw new RuntimeException('The frozen removal inventory key set could not be decoded.');
+    }
+
+    /** @var array<string, string> $keys */
+    return $keys;
+}
+
+/**
+ * @param  list<array{rule: string, marker: string, surface: string, removed: string, replacement: string}>  $guide
+ * @return list<string>
+ */
+function removalInventoryKeyOffences(array $guide): array
+{
+    $expected = frozenRemovalInventoryKeys();
+    $actual = array_column($guide, 'marker', 'rule');
+    $offences = [];
+
+    if (count($guide) !== count($expected)) {
+        $offences[] = 'cardinality:expected='.count($expected).',actual='.count($guide);
+    }
+
+    foreach (array_diff_key($expected, $actual) as $rule => $_marker) {
+        $offences[] = 'missing:'.$rule;
+    }
+
+    foreach (array_diff_key($actual, $expected) as $rule => $_marker) {
+        $offences[] = 'unexpected:'.$rule;
+    }
+
+    foreach (array_intersect_key($actual, $expected) as $rule => $marker) {
+        if ($marker !== $expected[$rule]) {
+            $offences[] = 'marker:'.$rule.'='.$marker;
+        }
+    }
+
+    if (count($actual) !== count($guide)) {
+        $offences[] = 'duplicate-rule';
+    }
+
+    sort($offences);
+
+    return $offences;
+}
+
 /** @return array<string, 'migrate'|'delete'|'keep-as-historical'> */
 function frozenTestRemovalDispositions(): array
 {
@@ -329,6 +396,36 @@ it('finds no forbidden production remnants in the installed tree', function (): 
 
 it('finds no removed surfaces in installed public documents', function (): void {
     expect(LegacyRemovalInventory::publicDocumentOffences(removalPackageRoot()))->toBe([]);
+});
+
+it('derives the 0.9 upgrade table from the removal inventory without drift', function (): void {
+    $document = file_get_contents(removalPackageRoot().'/docs/upgrade-0.9.md');
+    $guide = LegacyRemovalInventory::upgradeGuide();
+    $credentialApi = 'built-for-cloud.'.implode('_', ['credential', 'api']);
+
+    expect($document)->toBeString()
+        ->and(upgradeGuideBlock($document))->toBe(LegacyRemovalInventory::upgradeGuideMarkdown())
+        ->and(removalInventoryKeyOffences($guide))->toBe([])
+        ->and($guide)->toHaveCount(35)
+        ->and(array_values(array_filter($guide, static fn (array $entry): bool => $entry['surface'] === 'Command')))->toHaveCount(7)
+        ->and(array_column($guide, 'removed'))->toContain(
+            $credentialApi,
+            $credentialApi.'.prefix',
+        )
+        ->and(array_filter($guide, static fn (array $entry): bool => $entry['replacement'] === ''))->toBe([]);
+});
+
+it('reports removal of a frozen non-command non-config inventory row', function (): void {
+    $removedRule = 'class:'.implode('', ['Legacy', 'Rotation', 'Result']);
+    $guide = array_values(array_filter(
+        LegacyRemovalInventory::upgradeGuide(),
+        static fn (array $entry): bool => $entry['rule'] !== $removedRule,
+    ));
+
+    expect(removalInventoryKeyOffences($guide))->toBe([
+        'cardinality:expected=35,actual=34',
+        'missing:'.$removedRule,
+    ]);
 });
 
 it('pins the fresh schema config commands and client-observation route identity', function (): void {

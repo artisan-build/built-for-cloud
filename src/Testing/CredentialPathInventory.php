@@ -44,6 +44,8 @@ final class CredentialPathInventory
      *   classification: list<string>,
      *   key_selection: list<string>,
      *   resolution_choke_points: list<string>,
+     *   operator_ingresses: list<string>,
+     *   managed_containment: list<string>,
      *   paths: list<string>,
      *   transitional: list<string>,
      *   transition_members: list<string>,
@@ -84,6 +86,7 @@ final class CredentialPathInventory
             ...$authenticators,
             ...array_map(static fn (string $item): string => substr($item, strlen('middleware:')), $middleware),
         ]));
+        $operatorIngresses = [];
         $violations = [];
         $legacyRegistry = implode('\\', ['ArtisanBuild', 'BuiltForCloud', implode('', ['Token', 'Registry'])]);
 
@@ -105,6 +108,15 @@ final class CredentialPathInventory
                     $violations[] = 'second-store-resolver:'.$gate.'=>'.$dependency;
                 }
             }
+
+            if (self::presentsStoreSecret($record['code'])) {
+                if (in_array('ArtisanBuild\\BuiltForCloud\\Auth\\CredentialResolver', $dependencies, true)
+                    && ! self::readsCredentialStoreByHash($record['code'])) {
+                    $operatorIngresses[] = 'operator-ingress:'.$gate.'=>ArtisanBuild\\BuiltForCloud\\Auth\\CredentialResolver::resolve';
+                } else {
+                    $violations[] = 'unchoked-operator-ingress:'.$gate;
+                }
+            }
         }
 
         foreach ($authenticators as $authenticator) {
@@ -122,6 +134,7 @@ final class CredentialPathInventory
         $keySelection = self::keySelection($classes);
         $transitionMembers = self::transitionMembers($classification);
         $resolutionChokePoints = [];
+        $managedContainment = [];
 
         foreach ($keySelection as $selection) {
             $mechanisms[] = 'key-sink:'.substr($selection, strlen('key-selection:'));
@@ -133,6 +146,18 @@ final class CredentialPathInventory
             && in_array('resolver-service:'.$credentialResolver, $mechanisms, true)) {
             $mechanisms[] = 'resolver:'.$credentialResolver;
             $resolutionChokePoints[] = 'choke-point:'.$credentialResolver.'::resolve';
+
+            if (preg_match(
+                '/private\s+readonly\s+ManagedAccountAccess\s+\$([A-Za-z_][A-Za-z0-9_]*)/',
+                $classes[$credentialResolver]['code'],
+                $managedAccess,
+            ) === 1
+                && preg_match(
+                    '/\$this->'.preg_quote($managedAccess[1], '/').'->allowsCredential\(\$credential\)/',
+                    $classes[$credentialResolver]['code'],
+                ) === 1) {
+                $managedContainment[] = 'managed-containment:'.$credentialResolver.'::resolve=>ArtisanBuild\\BuiltForCloud\\ManagedAccountAccess::allowsCredential';
+            }
         }
 
         $hmacVerifier = 'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacVerifier';
@@ -178,6 +203,8 @@ final class CredentialPathInventory
         $classification = self::sortedUnique($classification);
         $keySelection = self::sortedUnique($keySelection);
         $resolutionChokePoints = self::sortedUnique($resolutionChokePoints);
+        $operatorIngresses = self::sortedUnique($operatorIngresses);
+        $managedContainment = self::sortedUnique($managedContainment);
         $paths = self::sortedUnique($paths);
         $transitional = self::sortedUnique($transitional);
         $transitionMembers = self::sortedUnique($transitionMembers);
@@ -191,6 +218,8 @@ final class CredentialPathInventory
             'classification' => $classification,
             'key_selection' => $keySelection,
             'resolution_choke_points' => $resolutionChokePoints,
+            'operator_ingresses' => $operatorIngresses,
+            'managed_containment' => $managedContainment,
             'paths' => $paths,
             'transitional' => $transitional,
             'transition_members' => $transitionMembers,
@@ -701,8 +730,24 @@ final class CredentialPathInventory
     {
         return str_contains($code, 'bearerToken()')
             || str_contains($code, "headers->get('Authorization')")
+            || str_contains($code, "header('Authorization')")
             || str_contains($code, 'HmacEnvelope::HEADER')
             || str_contains($code, 'AssertionVerifier::HEADER');
+    }
+
+    private static function presentsStoreSecret(string $code): bool
+    {
+        return str_contains($code, 'bearerToken()')
+            || str_contains($code, "headers->get('Authorization')")
+            || str_contains($code, "header('Authorization')");
+    }
+
+    private static function readsCredentialStoreByHash(string $code): bool
+    {
+        return preg_match(
+            '/(?:Credential::(?:query\(\)|where\s*\()|(?:DB::table|->table)\(\s*[\'\"]credentials[\'\"]\s*\))(?:(?!;).)*?[\'\"]secret_hash[\'\"]/s',
+            $code,
+        ) === 1;
     }
 
     /**

@@ -10,6 +10,8 @@ final class ClassBoundRouteOwnership
     {
         return match ($action) {
             'fixture' => ClassBoundCredentialGate::class,
+            'direct-header' => DirectHeaderCredentialGate::class,
+            'resolver-decoy' => DecoyResolverCredentialGate::class,
             default => ClassBoundCredentialGate::class,
         };
     }
