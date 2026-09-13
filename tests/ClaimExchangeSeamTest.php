@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -26,7 +27,10 @@ function issueScopedClaimCode(Scope $scope, string $email): string
         'email' => $email,
         'scope' => $scope->value,
         'ttl_seconds' => 3600,
-    ], ['Authorization' => 'Bearer '.auditOperatorCredential('scope-'.$scope->value.'-'.bin2hex(random_bytes(4)))])
+    ], ['Authorization' => 'Bearer '.auditOperatorCredential(
+        'scope-'.$scope->value.'-'.bin2hex(random_bytes(4)),
+        [OperatorAbility::CredentialMint->value],
+    )])
         ->assertCreated();
 
     return (string) $response->json('claim_code');

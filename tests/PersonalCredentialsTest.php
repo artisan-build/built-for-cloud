@@ -630,7 +630,10 @@ it('mints and uses an account-bound hmac key once the self-service policy opts i
     $this->postJson('/bfc/credentials/'.$keyId.'/activate', [
         'delivery_fingerprint' => $fingerprint,
     ], [
-        'Authorization' => 'Bearer '.auditOperatorCredential('self-service-hmac-activation'),
+        'Authorization' => 'Bearer '.auditOperatorCredential(
+            'self-service-hmac-activation',
+            [OperatorAbility::CredentialRotate->value],
+        ),
     ])->assertOk()
         ->assertJsonPath('credential.id', $keyId)
         ->assertJsonPath('credential.status', CredentialStatus::Active->value);

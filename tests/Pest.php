@@ -34,9 +34,13 @@ uses(TestCase::class)->in(__DIR__);
 /**
  * Shared helpers for the audit-stream tests (loaded here so any single
  * test file runs standalone).
+ *
+ * @param  list<string>  $abilities
  */
-function auditOperatorCredential(string $name = 'audit-operator'): string
-{
+function auditOperatorCredential(
+    string $name = 'audit-operator',
+    array $abilities = [OperatorAbility::ADMIN],
+): string {
     $plaintext = $name.'-secret-'.bin2hex(random_bytes(8));
 
     Credential::query()->create([
@@ -46,7 +50,7 @@ function auditOperatorCredential(string $name = 'audit-operator'): string
         'name' => $name,
         'secret_hash' => hash('sha256', $plaintext),
         'status' => CredentialStatus::Active,
-        'abilities' => [OperatorAbility::ADMIN],
+        'abilities' => $abilities,
     ]);
 
     return $plaintext;
