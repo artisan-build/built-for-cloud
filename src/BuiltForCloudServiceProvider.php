@@ -403,13 +403,12 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // Fixed `/bfc/` path, part of the routes family, like every
         // other package surface.
         //
-        // These are BROWSER routes, and the only ones the package mounts
-        // (rework Fix 1). Every other /bfc/* surface is a token API that
-        // wants no session; these three ride the full session stack —
-        // see personalSessionMiddleware() — so cookie sessions actually
-        // start, and so the MUTATING verbs are CSRF-protected. Without
-        // it a session-riding forgery on a logged-in user's browser
-        // could mint or revoke their credentials.
+        // Personal and installation credential management are BROWSER
+        // routes. They ride the full session stack — see
+        // browserSessionMiddleware() — so cookie sessions actually start,
+        // and so the MUTATING verbs are CSRF-protected. Without it a
+        // session-riding forgery on a logged-in user's browser could mint,
+        // rotate or revoke credentials.
         $personal = $this->browserSessionMiddleware($router);
 
         $router->get('/bfc/managed/login', [ManagedAuthentication::class, 'create'])

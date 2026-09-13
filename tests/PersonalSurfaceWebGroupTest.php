@@ -69,12 +69,13 @@ final class PersonalSurfaceWebGroupTest extends TestCase
 
     /**
      * Package routes not enumerated below are token APIs and must NOT be dragged
-     * onto the session stack by this change — a bearer-only route that
+     * onto the session stack — a bearer-only route that
      * starts a session and validates CSRF would break every machine
      * caller.
      *
-     * THE ENUMERATION HAS EXACTLY TWO MEMBERS, and each is named here
-     * rather than excluded by a pattern.
+     * Every session-riding package route is named here rather than excluded
+     * by a broad pattern. The installation-credential entries intentionally
+     * join the personal surface on the browser stack.
      *
      * `POST /bfc/console/enter` is a BROWSER route by construction: it
      * exists to create a delegated session, so it cannot do its job
@@ -115,9 +116,11 @@ final class PersonalSurfaceWebGroupTest extends TestCase
         sort($sessioned);
 
         $this->assertSame([
+            'DELETE /bfc/installation/credentials/{id}',
             'DELETE /bfc/members/{user}',
             'GET /bfc/console/chrome.js',
             'GET /bfc/forgot-password',
+            'GET /bfc/installation/credentials',
             'GET /bfc/invitations/accept',
             'GET /bfc/login',
             'GET /bfc/managed/callback',
@@ -128,6 +131,8 @@ final class PersonalSurfaceWebGroupTest extends TestCase
             'GET /bfc/transitions/{direction}/prepare',
             'POST /bfc/console/enter',
             'POST /bfc/forgot-password',
+            'POST /bfc/installation/credentials',
+            'POST /bfc/installation/credentials/{id}/rotate',
             'POST /bfc/invitations/accept',
             'POST /bfc/login',
             'POST /bfc/logout',
