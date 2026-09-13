@@ -82,6 +82,8 @@ function frozenTestRemovalDispositions(): array
         'tests/LocalCommandsTest.php',
         'tests/ManagedIngressManifestTest.php',
         'tests/ManagedNoLocalBypassTest.php',
+        'tests/ManagedTransitionCommitTest.php',
+        'tests/ManagedTransitionTest.php',
         'tests/McpToolGateTest.php',
         'tests/MetadataShapeTest.php',
         'tests/OffboardingTest.php',
@@ -161,6 +163,18 @@ it('reports a test-corpus marker control at its file and line', function (): voi
     expect(LegacyRemovalInventory::testFilesWithRemovalMarkers($root))->toHaveKey('tests/InjectedLegacyTest.php')
         ->and(LegacyRemovalInventory::testFilesWithRemovalMarkers($root)['tests/InjectedLegacyTest.php'])
         ->toContain($symbol.'@2');
+});
+
+it('reports a bare legacy table-name test control at its file and line', function (): void {
+    $root = removalControlTree();
+    $table = implode('_', ['api', 'tokens']);
+    file_put_contents($root.'/tests/InjectedLegacyTableTest.php', "<?php\nDB::table('{$table}')->count();\n");
+
+    $markers = LegacyRemovalInventory::testFilesWithRemovalMarkers($root);
+
+    expect($markers)->toHaveKey('tests/InjectedLegacyTableTest.php')
+        ->and($markers['tests/InjectedLegacyTableTest.php'])
+        ->toContain($table.'@2');
 });
 
 it('enforces the frozen disposition of every test file carrying a removal marker', function (): void {

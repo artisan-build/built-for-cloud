@@ -196,6 +196,8 @@ final class LegacyRemovalInventory
     /** @return array<string, string> */
     private static function testMarkers(): array
     {
+        $legacyTable = implode('_', ['api', 'tokens']);
+
         return [
             self::joined('Api', 'Token') => self::joined('Api', 'Token'),
             self::joined('Api', 'Token', 'Minter') => self::joined('Api', 'Token', 'Minter'),
@@ -212,6 +214,7 @@ final class LegacyRemovalInventory
             implode('_', ['fallback', 'token']) => implode('_', ['fallback', 'token']),
             implode('_', ['FALLBACK', 'TOKEN']) => implode('_', ['FALLBACK', 'TOKEN']),
             implode('_', ['credential', 'api']) => implode('_', ['credential', 'api']),
+            $legacyTable => $legacyTable,
             ...self::commandMarkers(),
         ];
     }
