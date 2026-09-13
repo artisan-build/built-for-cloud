@@ -6,7 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Actions;
 
 use ArtisanBuild\BuiltForCloud\Actions\Concerns\ConsultsDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
-use ArtisanBuild\BuiltForCloud\CredentialOwnership;
+use ArtisanBuild\BuiltForCloud\CredentialManagementScope;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
@@ -34,13 +34,11 @@ final class ListCredentials
     use ConsultsDeclaration;
 
     /**
-     * @param  list<string>|null  $subjectTypes
      * @return list<CredentialSummary>
      */
     public function __invoke(
         ?Subject $subject = null,
-        ?CredentialOwnership $ownership = null,
-        ?array $subjectTypes = null,
+        ?CredentialManagementScope $managementScope = null,
     ): array {
         $cadence = $this->declaredCadence();
         $unsupported = $this->declaredUnsupportedFields();
@@ -52,15 +50,7 @@ final class ListCredentials
                 ->where('subject_ref', $subject->ref);
         }
 
-        if ($ownership !== null) {
-            $ownership === CredentialOwnership::Installation
-                ? $query->whereNull('user_id')
-                : $query->whereNotNull('user_id');
-        }
-
-        if ($subjectTypes !== null) {
-            $query->whereIn('subject_type', $subjectTypes);
-        }
+        $managementScope?->apply($query);
 
         return $query
             ->orderBy('created_at')

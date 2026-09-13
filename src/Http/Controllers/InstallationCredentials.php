@@ -9,7 +9,7 @@ use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
 use ArtisanBuild\BuiltForCloud\Actions\RevokeCredential;
 use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\AuditActor;
-use ArtisanBuild\BuiltForCloud\CredentialOwnership;
+use ArtisanBuild\BuiltForCloud\CredentialManagementScope;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
@@ -18,7 +18,6 @@ use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\Concerns\RevealsDelivery;
 use ArtisanBuild\BuiltForCloud\MintOptions;
-use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\RevokeOutcome;
 use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
@@ -38,12 +37,6 @@ final class InstallationCredentials
 {
     use RevealsDelivery;
 
-    /** @var list<string> */
-    private const array SUBJECT_TYPES = [
-        SubjectType::Application->value,
-        SubjectType::Installation->value,
-    ];
-
     public function index(Request $request, ListCredentials $list): JsonResponse
     {
         $this->actor($request);
@@ -51,19 +44,18 @@ final class InstallationCredentials
         return response()->json([
             'credentials' => array_map(
                 static fn (CredentialSummary $summary): array => $summary->toArray(),
-                $list(
-                    ownership: CredentialOwnership::Installation,
-                    subjectTypes: self::SUBJECT_TYPES,
-                ),
+                $list(managementScope: CredentialManagementScope::memberInstallation()),
             ),
         ]);
     }
 
     public function store(Request $request, MintCredential $mint): JsonResponse
     {
+        $managementScope = CredentialManagementScope::memberInstallation();
+
         /** @var array{subject_type: string, subject_ref: string} $validated */
         $validated = $request->validate([
-            'subject_type' => ['required', 'string', Rule::in(self::SUBJECT_TYPES)],
+            'subject_type' => ['required', 'string', Rule::in($managementScope->subjectTypes())],
             'subject_ref' => ['required', 'string'],
         ]);
 
@@ -71,12 +63,7 @@ final class InstallationCredentials
             $options = MintOptions::fromInput($request->only([
                 'kind', 'name', 'abilities', 'expires_at', 'code_ttl_seconds',
             ]));
-            $operatorAbilities = array_map(
-                static fn (OperatorAbility $ability): string => $ability->value,
-                OperatorAbility::cases(),
-            );
-            $operatorAbilities[] = OperatorAbility::ADMIN;
-            $refusedAbility = array_values(array_intersect($options->abilities ?? [], $operatorAbilities))[0] ?? null;
+            $refusedAbility = $managementScope->firstExcludedAbility($options->abilities);
 
             if ($refusedAbility !== null) {
                 throw CredentialVerbRefused::abilityWidening($refusedAbility);
@@ -117,8 +104,7 @@ final class InstallationCredentials
                     'emergency', 'override', 'abilities', 'expires_at', 'code_ttl_seconds',
                 ])),
                 $this->actor($request),
-                CredentialOwnership::Installation,
-                self::SUBJECT_TYPES,
+                CredentialManagementScope::memberInstallation(),
             );
         } catch (InvalidCredentialInput $invalid) {
             return response()->json(['message' => $invalid->getMessage()], 422);
@@ -147,8 +133,7 @@ final class InstallationCredentials
             $outcome = $revoke(
                 $id,
                 $this->actor($request),
-                ownership: CredentialOwnership::Installation,
-                subjectTypes: self::SUBJECT_TYPES,
+                managementScope: CredentialManagementScope::memberInstallation(),
             );
         } catch (CredentialVerbRefused $refused) {
             return response()->json(['message' => $refused->getMessage()], 403);

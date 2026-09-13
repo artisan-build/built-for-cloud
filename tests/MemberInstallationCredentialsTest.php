@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Actions\OffboardSubject;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
+use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesRotationOverrides;
+use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
@@ -13,10 +15,13 @@ use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\OffboardOptions;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
+use ArtisanBuild\BuiltForCloud\RotationOverride;
+use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Str;
 
@@ -161,6 +166,102 @@ it('refuses every operator-vocabulary ability before a Member can mint a credent
     $abilities[OperatorAbility::ADMIN] = [OperatorAbility::ADMIN];
 
     return $abilities;
+});
+
+it('keeps operator-abilitied application rows outside every Member management verb', function (): void {
+    $member = installationMember(UserRole::Member);
+    $secret = 'operator-application-secret-'.bin2hex(random_bytes(12));
+    $credential = Credential::query()->create([
+        'kind' => CredentialKind::Bearer,
+        'subject_type' => SubjectType::Application,
+        'subject_ref' => 'operator-managed-application',
+        'abilities' => [OperatorAbility::McpAdmin->value],
+        'secret_hash' => hash('sha256', $secret),
+        'status' => CredentialStatus::Active,
+    ]);
+    $before = Credential::query()->count();
+
+    $listing = $this->actingAsVersioned($member)->getJson('/bfc/installation/credentials')->assertOk();
+    expect($listing->json('credentials.*.id'))->not->toContain($credential->id);
+
+    $rotation = $this->postJson('/bfc/installation/credentials/'.$credential->id.'/rotate')->assertNotFound();
+    expect($rotation->json('delivery.secret'))->toBeNull()
+        ->and(Credential::query()->count())->toBe($before)
+        ->and($credential->refresh()->rotated_at)->toBeNull()
+        ->and($credential->revoked_at)->toBeNull();
+
+    $this->deleteJson('/bfc/installation/credentials/'.$credential->id)->assertNotFound();
+    expect($credential->refresh()->rotated_at)->toBeNull()
+        ->and($credential->revoked_at)->toBeNull();
+    assertInstallationAuthentication($secret);
+});
+
+it('refuses an authorized Member rotation override whose effective abilities enter operator vocabulary', function (): void {
+    app()->instance(CredentialDeclaration::class, new class implements AuthorizesRotationOverrides, CredentialDeclaration
+    {
+        public function resolveSubject(Request $request): ?Subject
+        {
+            return null;
+        }
+
+        public function authorize(Credential $credential, ?string $ability, Request $request): bool
+        {
+            return true;
+        }
+
+        public function authorizeRotationOverride(?Subject $subject, RotationOverride $override, Request $request): bool
+        {
+            return true;
+        }
+    });
+
+    $member = installationMember(UserRole::Member);
+    $credential = Credential::query()->create([
+        'kind' => CredentialKind::Bearer,
+        'subject_type' => SubjectType::Application,
+        'subject_ref' => 'member-rotation-override',
+        'abilities' => ['deploy:read'],
+        'secret_hash' => hash('sha256', 'member-rotation-override-secret'),
+        'status' => CredentialStatus::Active,
+    ]);
+    $before = Credential::query()->count();
+
+    $response = $this->actingAsVersioned($member)->postJson(
+        '/bfc/installation/credentials/'.$credential->id.'/rotate',
+        [
+            'override' => true,
+            'abilities' => [OperatorAbility::McpAdmin->value],
+        ],
+    )->assertForbidden();
+
+    expect($response->json('message'))->toContain(OperatorAbility::McpAdmin->value)
+        ->and($response->json('delivery.secret'))->toBeNull()
+        ->and(Credential::query()->count())->toBe($before)
+        ->and($credential->refresh()->rotated_at)->toBeNull()
+        ->and($credential->revoked_at)->toBeNull();
+});
+
+it('keeps a deploy-read application row fully manageable by a Member', function (): void {
+    $member = installationMember(UserRole::Member);
+    $credential = Credential::query()->create([
+        'kind' => CredentialKind::Bearer,
+        'subject_type' => SubjectType::Application,
+        'subject_ref' => 'member-deploy-read',
+        'abilities' => ['deploy:read'],
+        'secret_hash' => hash('sha256', 'member-deploy-read-secret'),
+        'status' => CredentialStatus::Active,
+    ]);
+
+    $listing = $this->actingAsVersioned($member)->getJson('/bfc/installation/credentials')->assertOk();
+    expect($listing->json('credentials.*.id'))->toContain($credential->id);
+
+    $rotation = $this->postJson('/bfc/installation/credentials/'.$credential->id.'/rotate')->assertCreated();
+    $replacement = Credential::query()->findOrFail($rotation->json('credential.id'));
+    expect($replacement->abilities)->toBe(['deploy:read'])
+        ->and($credential->refresh()->rotated_at)->not->toBeNull();
+
+    $this->deleteJson('/bfc/installation/credentials/'.$replacement->id)->assertNoContent();
+    expect($replacement->refresh()->revoked_at)->not->toBeNull();
 });
 
 it('still lets a Member mint and use an application credential with a non-operator ability', function (): void {

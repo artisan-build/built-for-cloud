@@ -163,6 +163,22 @@ enum OperatorAbility: string
     public const string ADMIN = 'credential:admin';
 
     /**
+     * Every ability reserved to an operator-authority credential.
+     *
+     * @return list<string>
+     */
+    public static function vocabulary(): array
+    {
+        $abilities = array_map(
+            static fn (self $ability): string => $ability->value,
+            self::cases(),
+        );
+        $abilities[] = self::ADMIN;
+
+        return $abilities;
+    }
+
+    /**
      * The DECLARED inventory of what `credential:admin` reaches on the
      * operator surfaces — every ability those routes ask for today.
      *

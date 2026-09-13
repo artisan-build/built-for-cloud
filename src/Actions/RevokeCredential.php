@@ -8,7 +8,7 @@ use ArtisanBuild\BuiltForCloud\Actions\Concerns\ConsultsDeclaration;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\Credential;
-use ArtisanBuild\BuiltForCloud\CredentialOwnership;
+use ArtisanBuild\BuiltForCloud\CredentialManagementScope;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
@@ -48,18 +48,19 @@ final class RevokeCredential
 
     public function __construct(private readonly LifecycleEventRecorder $recorder) {}
 
-    /** @param list<string>|null $subjectTypes */
     public function __invoke(
         string $id,
         ?AuditActor $actor = null,
         ?Subject $scope = null,
-        ?CredentialOwnership $ownership = null,
-        ?array $subjectTypes = null,
+        ?CredentialManagementScope $managementScope = null,
     ): RevokeOutcome {
         /** @var RevokeOutcome */
-        return DB::transaction(function () use ($id, $actor, $scope, $ownership, $subjectTypes): RevokeOutcome {
+        return DB::transaction(function () use ($id, $actor, $scope, $managementScope): RevokeOutcome {
+            $query = Credential::query()->whereKey($id);
+            $managementScope?->apply($query);
+
             /** @var Credential|null $target */
-            $target = Credential::query()->whereKey($id)->lockForUpdate()->first();
+            $target = $query->lockForUpdate()->first();
 
             if ($target === null) {
                 return RevokeOutcome::NotFound;
@@ -67,14 +68,6 @@ final class RevokeCredential
 
             if ($scope !== null
                 && ($target->subject_type !== $scope->type || $target->subject_ref !== $scope->ref)) {
-                return RevokeOutcome::NotFound;
-            }
-
-            if ($ownership !== null && $target->ownership() !== $ownership) {
-                return RevokeOutcome::NotFound;
-            }
-
-            if ($subjectTypes !== null && ! in_array($target->subject_type->value, $subjectTypes, true)) {
                 return RevokeOutcome::NotFound;
             }
 

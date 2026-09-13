@@ -12,7 +12,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
-use ArtisanBuild\BuiltForCloud\CredentialOwnership;
+use ArtisanBuild\BuiltForCloud\CredentialManagementScope;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
@@ -106,18 +106,15 @@ final class RotateCredential
     /**
      * Returns null when no row carries the id (the transports' 404); every
      * other failure is a typed refusal or the two-phase contract above.
-     *
-     * @param  list<string>|null  $subjectTypes
      */
     public function __invoke(
         string $id,
         RotateOptions $options,
         ?AuditActor $actor = null,
-        ?CredentialOwnership $ownership = null,
-        ?array $subjectTypes = null,
+        ?CredentialManagementScope $managementScope = null,
     ): ?RotationResult {
         $phaseOne = fn (): ?RotationResult => DB::transaction(
-            fn (): ?RotationResult => $this->mintReplacement($id, $options, $actor, $ownership, $subjectTypes),
+            fn (): ?RotationResult => $this->mintReplacement($id, $options, $actor, $managementScope),
         );
 
         // The writer barrier (SEC-V3-08, check-through-commit): an
@@ -131,15 +128,7 @@ final class RotateCredential
         // emergency kill must never wait on a sweep).
         $peek = Credential::query()->whereKey($id);
 
-        if ($ownership !== null) {
-            $ownership === CredentialOwnership::Installation
-                ? $peek->whereNull('user_id')
-                : $peek->whereNotNull('user_id');
-        }
-
-        if ($subjectTypes !== null) {
-            $peek->whereIn('subject_type', $subjectTypes);
-        }
+        $managementScope?->apply($peek);
 
         /** @var Credential|null $peeked */
         $peeked = $peek->first(['id', 'kind', 'rotated_at']);
@@ -208,28 +197,20 @@ final class RotateCredential
     /**
      * Phase 1, inside the caller's transaction: every refusal, the
      * replacement mint, the `rotated_at` stamp, and both audit events.
-     *
-     * @param  list<string>|null  $subjectTypes
      */
     private function mintReplacement(
         string $id,
         RotateOptions $options,
         ?AuditActor $actor,
-        ?CredentialOwnership $ownership,
-        ?array $subjectTypes,
+        ?CredentialManagementScope $managementScope,
     ): ?RotationResult {
+        $query = Credential::query()->whereKey($id);
+        $managementScope?->apply($query);
+
         /** @var Credential|null $source */
-        $source = Credential::query()->whereKey($id)->lockForUpdate()->first();
+        $source = $query->lockForUpdate()->first();
 
         if ($source === null) {
-            return null;
-        }
-
-        if ($ownership !== null && $source->ownership() !== $ownership) {
-            return null;
-        }
-
-        if ($subjectTypes !== null && ! in_array($source->subject_type->value, $subjectTypes, true)) {
             return null;
         }
 
@@ -296,6 +277,12 @@ final class RotateCredential
         // (exact preservation) deliberately skips this: preserving what
         // already exists is not a grant.
         if ($override) {
+            $refusedAbility = $managementScope?->firstExcludedAbility($abilities);
+
+            if ($refusedAbility !== null) {
+                throw CredentialVerbRefused::abilityWidening($refusedAbility);
+            }
+
             $this->refuseWideningPastCeilings($source->subject(), $abilities, $expiresAt);
         }
 
