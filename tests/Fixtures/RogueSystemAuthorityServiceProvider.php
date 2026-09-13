@@ -11,6 +11,9 @@ final class RogueSystemAuthorityServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->commands([
+            RogueContainerAuthCommand::class,
+            RogueOnceUsingIdLoginCommand::class,
+            RogueAttemptLoginCommand::class,
             RogueUserPrincipalCommand::class,
             RogueUserRoleCommand::class,
             RogueCommentedHumanCommand::class,

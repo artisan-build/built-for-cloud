@@ -20,14 +20,17 @@ use ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand;
 use ArtisanBuild\BuiltForCloud\Jobs\DeliverOwnershipWebhook;
 use ArtisanBuild\BuiltForCloud\Testing\SystemAuthorityInventory;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueAfterCommitQueuedJob;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueAttemptLoginCommand;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueAuthFacadeLoginCommand;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueAuthGuardLoginCommand;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueAuthHelperLoginCommand;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueCommentedHumanCommand;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueConditionalScheduleServiceProvider;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueContainerAuthCommand;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueHumanQueuedJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueInheritedQueuedJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMislabelledScheduleServiceProvider;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueOnceUsingIdLoginCommand;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueRoleExistsCommand;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueScheduleRegistration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueScheduleServiceProvider;
@@ -40,6 +43,8 @@ use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Contracts\Auth\Guard;
+use Illuminate\Contracts\Auth\StatefulGuard;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Hash;
@@ -394,4 +399,57 @@ it('names the unchanged maintenance and install-scaffold behavior instead of exc
     $install = p5eSource(InstallOperatorCredentialCommand::class);
     expect($install)->toContain('AuditActor::cliOperator()', 'MintCredential $mint')
         ->not->toContain('CloudCommandRunner', 'requireLocal()');
+});
+
+it('reports every framework auth operation that establishes a human identity, not a chosen few', function (): void {
+    // The vocabulary is PINNED against the framework's own contracts. When Laravel
+    // adds a method that logs a human in, this test reds and forces a decision in
+    // SystemAuthorityInventory::AUTH_OPERATIONS instead of letting a new spelling
+    // through unnoticed. That is the difference between a bound and a guess: the
+    // previous version listed four of the six and Auth::attempt walked past it.
+    $reflection = new ReflectionClass(SystemAuthorityInventory::class);
+    $operations = $reflection->getConstant('AUTH_OPERATIONS');
+
+    $declared = [];
+    foreach ([StatefulGuard::class, Guard::class] as $contract) {
+        foreach ((new ReflectionClass($contract))->getMethods() as $method) {
+            $declared[] = $method->getName();
+        }
+    }
+
+    // Deliberately excluded, with the reason: these READ or CLEAR the identity
+    // rather than establishing one, and the read members are already covered by
+    // the Auth::user/check principal check.
+    $excluded = ['check', 'guest', 'user', 'id', 'hasUser', 'validate', 'logout', 'viaRemember'];
+
+    expect(array_values(array_diff(array_unique($declared), $excluded)))
+        ->toEqualCanonicalizing($operations);
+});
+
+it('reports an auth operation on a receiver it cannot establish instead of clearing it', function (): void {
+    // app('auth') and resolve('auth') declare no class return type, so the
+    // container can hand back the auth manager with nothing in the signature
+    // saying so. Fail CLOSED, the way an unattributable schedule event is.
+    $inventory = SystemAuthorityInventory::discover(
+        [p5eProvider(), p5eFixtureProvider()],
+        [dirname(__DIR__).'/src', __DIR__.'/Fixtures'],
+    );
+
+    expect($inventory['violations']['commands'])->toContain(
+        'human-principal:'.RogueAttemptLoginCommand::class,
+        'synthesized-human:'.RogueAttemptLoginCommand::class,
+        'human-principal:'.RogueOnceUsingIdLoginCommand::class,
+        'synthesized-human:'.RogueOnceUsingIdLoginCommand::class,
+        'uninspectable-auth:'.RogueContainerAuthCommand::class,
+    );
+});
+
+it('keeps the production inventory clean under the fail-closed auth rule', function (): void {
+    // A fail-closed rule that flagged the package itself would be useless, so the
+    // no-false-positive half is asserted here rather than assumed.
+    $inventory = SystemAuthorityInventory::discover([p5eProvider()], [dirname(__DIR__).'/src']);
+
+    expect($inventory['violations']['commands'])->toBe([])
+        ->and($inventory['violations']['queued'])->toBe([])
+        ->and($inventory['violations']['scheduled'])->toBe([]);
 });

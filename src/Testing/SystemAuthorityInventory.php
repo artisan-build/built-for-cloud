@@ -11,6 +11,7 @@ use Illuminate\Console\Scheduling\Event;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Auth\Factory as AuthFactory;
 use Illuminate\Contracts\Auth\Guard;
+use Illuminate\Contracts\Auth\StatefulGuard;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Support\Facades\Facade;
 use RecursiveDirectoryIterator;
@@ -18,6 +19,7 @@ use RecursiveIteratorIterator;
 use ReflectionFunction;
 use ReflectionNamedType;
 use ReflectionProperty;
+use ReflectionType;
 use ReflectionUnionType;
 use SplFileInfo;
 use Throwable;
@@ -152,7 +154,17 @@ final class SystemAuthorityInventory
         foreach ($entries as $class) {
             $source = $sources[$class] ?? '';
             $authoritySource = self::withoutPermittedUserWriteRoles($source);
-            $authenticatesHuman = self::authenticatesHuman($source);
+            $authentication = self::authenticatesHuman($source);
+            $authenticatesHuman = $authentication === true;
+
+            // A NULL answer means an auth operation sat on a receiver this scanner
+            // could not establish (an untyped container accessor, or a facade root
+            // that would not resolve). Reported, never cleared — the same
+            // fail-closed rule the schedule inventory uses for an event it cannot
+            // attribute.
+            if ($authentication === null) {
+                $violations[] = 'uninspectable-auth:'.$class;
+            }
 
             if ($authenticatesHuman
                 || preg_match('/\bAuth::(?:user|check)\s*\(|\b(?:auth|request)\s*\(\s*\)->user\s*\(/', $source) === 1
@@ -175,7 +187,24 @@ final class SystemAuthorityInventory
         return array_values(array_unique($violations));
     }
 
-    private static function authenticatesHuman(string $source): bool
+    /**
+     * Every method on the framework's own guard contracts that ESTABLISHES an
+     * authenticated human identity. Derived by hand from
+     * {@see StatefulGuard} (attempt, once, login,
+     * loginUsingId, onceUsingId) and {@see Guard}
+     * (setUser), and PINNED against those contracts by
+     * `SystemAuthorityInventoryTest`: when the framework adds a method, that test
+     * reds and forces a decision here rather than letting a new spelling through.
+     * The read-only members (check, guest, user, id, hasUser, validate) and the
+     * clearing members (logout, viaRemember) are deliberately excluded — the read
+     * ones are covered by the `Auth::user|check` principal check in
+     * {@see self::violations()}.
+     *
+     * @var list<string>
+     */
+    private const AUTH_OPERATIONS = ['attempt', 'once', 'login', 'loginUsingId', 'onceUsingId', 'setUser'];
+
+    private static function authenticatesHuman(string $source): ?bool
     {
         $tokens = self::significantTokens($source);
         $imports = self::imports($source);
@@ -184,33 +213,44 @@ final class SystemAuthorityInventory
         foreach ($tokens as $index => $token) {
             if (is_array($token) && $token[0] === T_VARIABLE && ($tokens[$index + 1] ?? null) === '=') {
                 $end = self::expressionEnd($tokens, $index + 2);
-                if (self::authReceiver(array_slice($tokens, $index + 2, $end - $index - 2), $imports, $authVariables)) {
+                if (self::authReceiver(array_slice($tokens, $index + 2, $end - $index - 2), $imports, $authVariables) === true) {
                     $authVariables[$token[1]] = true;
                 }
             }
 
             if (! is_array($token) || $token[0] !== T_STRING
-                || ! in_array($token[1], ['login', 'loginUsingId', 'once', 'setUser'], true)) {
+                || ! in_array($token[1], self::AUTH_OPERATIONS, true)) {
                 continue;
             }
 
             $operator = $tokens[$index - 1] ?? null;
+            $status = null;
+
             if ($operator === '::') {
                 $receiver = $tokens[$index - 2] ?? null;
-                if (is_array($receiver) && self::authClass(self::resolveClass($receiver[1], $imports))) {
-                    return true;
-                }
+                $status = is_array($receiver)
+                    ? self::authClass(self::resolveClass($receiver[1], $imports))
+                    : false;
+            } elseif ($operator === '->') {
+                $start = self::receiverStart($tokens, $index - 2);
+                $status = self::authReceiver(array_slice($tokens, $start, $index - 1 - $start), $imports, $authVariables);
+            } else {
+                continue;
             }
 
-            if ($operator === '->') {
-                $start = self::receiverStart($tokens, $index - 2);
-                if (self::authReceiver(array_slice($tokens, $start, $index - 1 - $start), $imports, $authVariables)) {
-                    return true;
-                }
+            if ($status === true) {
+                return true;
+            }
+
+            // An auth OPERATION on a receiver we could not establish. Remember it
+            // and keep looking for a definite one; if none appears, the caller is
+            // told the source could not be inspected rather than that it is clean.
+            if ($status === null) {
+                $uninspectable = true;
             }
         }
 
-        return false;
+        return ($uninspectable ?? false) ? null : false;
     }
 
     /**
@@ -218,7 +258,7 @@ final class SystemAuthorityInventory
      * @param  array<string, class-string>  $imports
      * @param  array<string, true>  $authVariables
      */
-    private static function authReceiver(array $tokens, array $imports, array $authVariables): bool
+    private static function authReceiver(array $tokens, array $imports, array $authVariables): ?bool
     {
         if ($tokens === []) {
             return false;
@@ -256,19 +296,29 @@ final class SystemAuthorityInventory
         }
 
         if (! function_exists($call)) {
-            return false;
+            // A receiver we cannot resolve at all. We cannot prove it is not the
+            // auth manager, so this is UNINSPECTABLE rather than clean.
+            return null;
         }
 
         $returnType = (new ReflectionFunction($call))->getReturnType();
         $types = $returnType instanceof ReflectionUnionType ? $returnType->getTypes() : [$returnType];
+        $named = array_filter(
+            $types,
+            static fn (?ReflectionType $type): bool => $type instanceof ReflectionNamedType && ! $type->isBuiltin(),
+        );
 
-        foreach ($types as $type) {
-            if ($type instanceof ReflectionNamedType && ! $type->isBuiltin() && self::authClass($type->getName())) {
+        foreach ($named as $type) {
+            if (self::authClass($type->getName())) {
                 return true;
             }
         }
 
-        return false;
+        // `app('auth')`, `resolve('auth')` and friends declare no class return
+        // type, so the container can hand back the auth manager and nothing in
+        // the signature says so. Fail CLOSED: report that the receiver could not
+        // be established, the way an unattributable schedule event is reported.
+        return $named === [] ? null : false;
     }
 
     /** @param array<string, class-string> $imports */
@@ -277,7 +327,7 @@ final class SystemAuthorityInventory
         return $imports[$name] ?? ltrim($name, '\\');
     }
 
-    private static function authClass(string $class): bool
+    private static function authClass(string $class): ?bool
     {
         if (is_a($class, AuthFactory::class, true) || is_a($class, Guard::class, true)) {
             return true;
@@ -289,11 +339,14 @@ final class SystemAuthorityInventory
 
         try {
             $root = $class::getFacadeRoot();
-
-            return $root instanceof AuthFactory || $root instanceof Guard;
         } catch (Throwable) {
-            return false;
+            // The facade root needs a booted application. If it cannot be
+            // resolved we have NOT established that this is not the auth facade,
+            // so say so instead of silently clearing it.
+            return null;
         }
+
+        return $root instanceof AuthFactory || $root instanceof Guard;
     }
 
     /** @param list<array{int, string, int}|string> $tokens */
