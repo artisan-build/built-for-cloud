@@ -374,7 +374,12 @@ it('pins every published system-authority boundary statement to the code it desc
         'any callback registered for later invocation, such as `defer()`, `app()->terminating()`, a listener registered at runtime, a shutdown function, or a chain or batch `catch`/`finally` callback; and any callback attached to a schedule event, including its `before`/`after` hooks and its `when`/`skip` filters.',
         'A queued closure dispatched by package code is never framed. Its declaring file does not survive serialisation, and the scope class that does survive is caller-settable, so its origin cannot be established as identity.',
         "In-process tampering switches the bound off: removing the listeners, replacing a guard's event dispatcher, or rebinding the system-authority context. A host that calls `Bus::pipeThrough()` after this package boots also replaces the pipe array and reverts the bound to framing by queue events alone.",
-        "A queued entry's own `middleware()` and its `failed()` handler are inside the frame.",
+        // Narrowed after the delta-7 judge showed a LISTENER's middleware() method body
+        // is called at dispatch, not at execution, so it is framed only when the
+        // dispatching code is. The middleware OBJECTS it returns are framed, which the
+        // listener grid proves.
+        "A queued entry's `failed()` handler is inside the frame, as is the middleware a queued entry runs: for a job that is its own `middleware()` method, and for a listener it is the middleware objects that method returns.",
+        "A listener's `middleware()` method body is NOT",
         // Pinned because the stale version of this sentence — naming processed, failed
         // and exception as the release events — stayed live and green after the release
         // moved to JobAttempted.
