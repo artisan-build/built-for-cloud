@@ -26,14 +26,17 @@ use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SelfServiceDeclaration;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ManagedAuthorityFixture;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SelfServicePolicyDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Route as RoutingRoute;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
 use Symfony\Component\Process\Process;
 
@@ -105,6 +108,97 @@ function personalCredentialFor(User $user, array $attributes = []): Credential
         'status' => CredentialStatus::Active,
         'secret_hash' => hash('sha256', 'seeded-'.bin2hex(random_bytes(8))),
     ], $attributes));
+}
+
+/** @return array{key_id: string, signing_key: string} */
+function p5dMintActivatedPersonalHmac(User $user): array
+{
+    config(['built-for-cloud.credentials.declaration' => SelfServicePolicyDeclaration::class]);
+    SelfServicePolicyDeclaration::$kinds = [CredentialKind::Bearer, CredentialKind::Hmac];
+
+    $mint = test()->actingAsVersioned($user, 'web')->postJson('/bfc/me/credentials', [
+        'name' => 'p5d-managed-signing',
+        'kind' => CredentialKind::Hmac->value,
+    ])->assertCreated();
+    $keyId = (string) $mint->json('delivery.key_id');
+
+    test()->postJson('/bfc/credentials/'.$keyId.'/activate', [
+        'delivery_fingerprint' => (string) $mint->json('delivery.delivery_fingerprint'),
+    ], [
+        'Authorization' => 'Bearer '.auditOperatorCredential(
+            'p5d-hmac-activation',
+            [OperatorAbility::CredentialRotate->value],
+        ),
+    ])->assertOk();
+
+    return [
+        'key_id' => $keyId,
+        'signing_key' => (string) $mint->json('delivery.signing_key'),
+    ];
+}
+
+function p5dConfigureManagedPersonalUser(User $user): ManagedAuthorityFixture
+{
+    DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
+        'mode' => AuthorityMode::Managed->value,
+        'generation' => 7,
+        'issuer' => 'https://issuer.example.test',
+        'connection_id' => 'connection-fixture',
+        'organization_id' => 'organization-fixture',
+        'installation_id' => 'installation-fixture',
+        'authority_base_url' => 'https://authority.example.test',
+    ]);
+    config(['built-for-cloud.managed.client_secret' => 'fixture-client-secret']);
+    $user->forceFill([
+        'role' => 'member',
+        'status' => 'active',
+        'scalpels_issuer' => 'https://issuer.example.test',
+        'scalpels_connection_id' => 'connection-fixture',
+        'scalpels_id' => 'p5d-personal-subject',
+        'membership_confirmed_at' => now(),
+        'membership_checked_at' => now(),
+        'membership_response_at' => now(),
+        'managed_membership_status' => 'active',
+        'managed_membership_role' => 'member',
+        'managed_membership_generation' => 7,
+        'managed_membership_roster_version' => 13,
+        'managed_membership_response_sequence' => 13,
+        'managed_membership_responded_at' => now(),
+    ])->save();
+    $fixture = new ManagedAuthorityFixture(
+        'https://authority.example.test',
+        'fixture-client-secret',
+        'https://issuer.example.test',
+        'connection-fixture',
+        'organization-fixture',
+        'installation-fixture',
+        7,
+    );
+    Http::fake(fn (ClientRequest $request) => $fixture->respond($request));
+
+    return $fixture;
+}
+
+/** @param array{key_id: string, signing_key: string} $delivery */
+function p5dSendPersonalHmac(User $user, array $delivery): \Illuminate\Testing\TestResponse
+{
+    $body = '{"event":"p5d-managed-self-service"}';
+    $envelope = new HmacEnvelope(
+        keyId: $delivery['key_id'],
+        eventType: 'self-service.test',
+        timestamp: now()->getTimestamp(),
+        nonce: bin2hex(random_bytes(16)),
+        audience: (string) config('built-for-cloud.hmac.audience'),
+    );
+
+    return test()->call('POST', '/p5d-personal-hmac/'.$user->getKey(), server: [
+        'HTTP_'.str_replace('-', '_', strtoupper(HmacEnvelope::HEADER)) => $envelope->headerValue(hash_hmac(
+            'sha256',
+            $envelope->canonical($body),
+            $delivery['signing_key'],
+        )),
+        'CONTENT_TYPE' => 'application/json',
+    ], content: $body);
 }
 
 // ------------------------------------------------------------ AC1: list mine
@@ -657,6 +751,53 @@ it('mints and uses an account-bound hmac key once the self-service policy opts i
         ->assertJsonPath('credential_id', $keyId);
 
     expect($credential->refresh()->last_used_at)->not->toBeNull();
+});
+
+it('uses the K5 minted hmac credential through grace reset and the exact managed 1799 1800 boundary', function (): void {
+    $this->travelTo('2026-09-10T12:00:00+00:00');
+    $user = personalUser('p5d-boundary@example.test');
+    $delivery = p5dMintActivatedPersonalHmac($user);
+    $fixture = p5dConfigureManagedPersonalUser($user);
+    Route::post('/p5d-personal-hmac/{user}', static fn (): array => ['verified' => true])->middleware('bfc.hmac');
+    $fixture->confirmationResponder = static fn (): mixed => Http::response([
+        'contract_version' => 'managed-auth-v1',
+        'error' => 'server_error',
+    ], 503);
+
+    $this->travelTo('2026-09-10T12:05:00+00:00');
+    p5dSendPersonalHmac($user, $delivery)->assertOk()->assertJsonPath('verified', true);
+    expect($user->fresh()->membership_confirmed_at?->toAtomString())->toBe('2026-09-10T12:00:00+00:00');
+
+    $fixture->confirmationResponder = null;
+    $this->travelTo('2026-09-10T12:10:00+00:00');
+    p5dSendPersonalHmac($user, $delivery)->assertOk();
+    expect($user->fresh()->membership_confirmed_at?->toAtomString())->toBe('2026-09-10T12:10:00+00:00');
+
+    $fixture->confirmationResponder = static fn (): mixed => Http::response([
+        'contract_version' => 'managed-auth-v1',
+        'error' => 'server_error',
+    ], 503);
+    $this->travelTo('2026-09-10T12:39:59+00:00');
+    p5dSendPersonalHmac($user, $delivery)->assertOk();
+    $lastUsedAt = Credential::query()->findOrFail($delivery['key_id'])->last_used_at?->toAtomString();
+
+    $this->travelTo('2026-09-10T12:40:00+00:00');
+    p5dSendPersonalHmac($user, $delivery)->assertUnauthorized();
+    expect(Credential::query()->findOrFail($delivery['key_id'])->last_used_at?->toAtomString())->toBe($lastUsedAt);
+});
+
+it('denies and revokes the K5 minted hmac credential on authoritative removal', function (): void {
+    $this->travelTo('2026-09-10T12:00:00+00:00');
+    $user = personalUser('p5d-removal@example.test');
+    $delivery = p5dMintActivatedPersonalHmac($user);
+    $fixture = p5dConfigureManagedPersonalUser($user);
+    Route::post('/p5d-personal-hmac/{user}', static fn (): array => ['verified' => true])->middleware('bfc.hmac');
+    $fixture->confirmationOverrides = ['membership_status' => 'removed'];
+
+    $this->travelTo('2026-09-10T12:05:00+00:00');
+    p5dSendPersonalHmac($user, $delivery)->assertUnauthorized();
+
+    expect(Credential::query()->findOrFail($delivery['key_id'])->revoked_at)->not->toBeNull();
 });
 
 it('persists personal hmac mint activation and middleware verification across fresh standalone processes', function (): void {
