@@ -24,6 +24,10 @@ it('passes the reusable built for cloud contract suite against the package harne
     $this->assertBuiltForCloudContract();
 });
 
+it('drives the public credential listing conformance assertion in package', function (): void {
+    $this->assertBuiltForCloudCredentialListingContract();
+});
+
 it('preserves the public token helpers on the unified credential store', function (): void {
     $adminMethod = implode('', ['mintBuiltForCloud', 'Admin', 'Token']);
     $consumeMethod = implode('', ['mintBuiltForCloud', 'Consume', 'Token']);
