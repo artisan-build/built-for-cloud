@@ -748,14 +748,24 @@ trait ContractAssertions
         return MetadataEndpointShapes::endpoints();
     }
 
-    public function mintBuiltForCloudOperatorCredential(string $name = 'contract-admin'): string
+    public function mintBuiltForCloudAdminToken(string $name = 'contract-admin'): string
     {
         return $this->mintBuiltForCloudCredential($name, SubjectType::Operator, [OperatorAbility::ADMIN]);
     }
 
-    public function mintBuiltForCloudConsumeCredential(string $name = 'contract-consume'): string
+    public function mintBuiltForCloudConsumeToken(string $name = 'contract-consume'): string
     {
         return $this->mintBuiltForCloudCredential($name, SubjectType::ExternalConsumer, [Scope::Consume->value]);
+    }
+
+    public function mintBuiltForCloudOperatorCredential(string $name = 'contract-admin'): string
+    {
+        return $this->mintBuiltForCloudAdminToken($name);
+    }
+
+    public function mintBuiltForCloudConsumeCredential(string $name = 'contract-consume'): string
+    {
+        return $this->mintBuiltForCloudConsumeToken($name);
     }
 
     /**

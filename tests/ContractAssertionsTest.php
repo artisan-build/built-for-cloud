@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -23,14 +24,16 @@ it('passes the reusable built for cloud contract suite against the package harne
     $this->assertBuiltForCloudContract();
 });
 
-it('provides helpers for minting contract credentials', function (): void {
-    $admin = $this->mintBuiltForCloudOperatorCredential();
-    $consume = $this->mintBuiltForCloudConsumeCredential();
+it('preserves the public token helpers on the unified credential store', function (): void {
+    $admin = $this->mintBuiltForCloudAdminToken();
+    $consume = $this->mintBuiltForCloudConsumeToken();
 
     $adminCredential = Credential::query()->where('secret_hash', hash('sha256', $admin))->firstOrFail();
     $consumeCredential = Credential::query()->where('secret_hash', hash('sha256', $consume))->firstOrFail();
 
-    expect($adminCredential->abilities)->toBe([OperatorAbility::ADMIN])
+    expect($adminCredential->subject_type)->toBe(SubjectType::Operator)
+        ->and($adminCredential->abilities)->toBe([OperatorAbility::ADMIN])
+        ->and($consumeCredential->subject_type)->toBe(SubjectType::ExternalConsumer)
         ->and($consumeCredential->abilities)->toBe([Scope::Consume->value]);
 });
 
