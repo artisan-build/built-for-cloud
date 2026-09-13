@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\Console\ConsoleGuard;
+use ArtisanBuild\BuiltForCloud\Console\ActingPrincipal;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleRole;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
@@ -175,11 +175,12 @@ it('has no password or remember-token column', function (): void {
         ->and(Schema::hasColumn('bfc_delegated_actors', 'deactivated_at'))->toBeTrue();
 });
 
-it('enumerates the complete delegated surface with no canonical user binding', function (): void {
+it('derives the complete public surface and pins its sole request-context identity pairing', function (): void {
     $columns = Schema::getColumnListing('bfc_delegated_actors');
     sort($columns);
     $kinds = CredentialKind::values();
     sort($kinds);
+    $surface = PublicSurfaceScan::discoverDeclaredPublicMethods(dirname(__DIR__).'/src');
 
     expect($columns)->toBe([
         'created_at',
@@ -193,53 +194,20 @@ it('enumerates the complete delegated surface with no canonical user binding', f
         'subject',
         'updated_at',
     ])->and($kinds)->toBe(['asymmetric', 'basic', 'bearer', 'hmac'])
-        ->and(PublicSurfaceScan::declaredBy(ConsoleGuard::class))->toBe([
-            '__construct',
-            'actor',
-            'check',
-            'claims',
-            'getName',
-            'guest',
-            'hasUser',
-            'id',
-            'logout',
-            'redeem',
-            'refusalReason',
-            'setUser',
-            'user',
-            'validate',
-        ])->and(PublicSurfaceScan::declaredBy(DelegatedActorProvider::class))->toBe([
-            'isReservedIdentifier',
-            'keyFrom',
-            'rehashPasswordIfRequired',
-            'retrieveByCredentials',
-            'retrieveById',
-            'retrieveByToken',
-            'updateRememberToken',
-            'validateCredentials',
-        ])->and(PublicSurfaceScan::declaredBy(DelegatedActor::class))->toBe([
-            'deactivate',
-            'getAuthIdentifier',
-            'getAuthIdentifierName',
-            'getAuthPassword',
-            'getAuthPasswordName',
-            'getRememberToken',
-            'getRememberTokenName',
-            'identityHash',
-            'isActive',
-            'lockedById',
-            'recordHandoff',
-            'setRememberToken',
-        ])->and([
-            ...PublicSurfaceScan::canonicalUserBindings(ConsoleGuard::class),
-            ...PublicSurfaceScan::canonicalUserBindings(DelegatedActorProvider::class),
-            ...PublicSurfaceScan::canonicalUserBindings(DelegatedActor::class),
-        ])->toBe([]);
+        ->and(PublicSurfaceScan::canonicalUserBindings($surface))->toBe([
+            'src/Console/ActingPrincipal.php:160 ['.ActingPrincipal::class.'::local($user,$delegatedActor)]',
+        ]);
 });
 
-it('reports a fixture that publicly binds a delegated actor to a canonical user', function (): void {
-    expect(PublicSurfaceScan::canonicalUserBindings(DelegatedActorBoundToCanonicalUser::class))->toBe([
-        DelegatedActorBoundToCanonicalUser::class.'::bind($user)',
+it('discovers and reports a fixture that publicly binds a delegated actor to a canonical user', function (): void {
+    $surface = PublicSurfaceScan::discoverDeclaredPublicMethods(
+        dirname(__DIR__).'/src',
+        [__DIR__.'/Fixtures/DelegatedActorBoundToCanonicalUser.php'],
+    );
+
+    expect(PublicSurfaceScan::canonicalUserBindings($surface))->toBe([
+        'src/Console/ActingPrincipal.php:160 ['.ActingPrincipal::class.'::local($user,$delegatedActor)]',
+        'tests/Fixtures/DelegatedActorBoundToCanonicalUser.php:15 ['.DelegatedActorBoundToCanonicalUser::class.'::bind($user,$actor)]',
     ]);
 });
 

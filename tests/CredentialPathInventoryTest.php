@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Testing\CredentialPathInventory;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ClassBoundCredentialGate;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\DecoyResolverCredentialGate;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\DirectHeaderCredentialGate;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SecondStoreResolver;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnguardedCredentialAuthenticator;
 
@@ -173,7 +175,7 @@ it('derives the seven discoverable paths with no transitional rows from all five
         ->and(array_intersect($inventory['transitional'], frozenTransitionalRows()))->toBe([]);
 });
 
-it('reports all four deliberate controls through their assigned derivation roots', function (): void {
+it('reports every deliberate control through its assigned derivation root', function (): void {
     $inventory = CredentialPathInventory::discover(
         dirname(__DIR__).'/src',
         [__DIR__.'/Fixtures'],
@@ -191,13 +193,22 @@ it('reports all four deliberate controls through their assigned derivation roots
     expect($inventory['violations'])->toContain(
         'unchoked-authenticator:'.UnguardedCredentialAuthenticator::class,
         'unchoked-operator-ingress:'.UnguardedCredentialAuthenticator::class,
+        'unchoked-operator-ingress:'.DirectHeaderCredentialGate::class,
+        'unchoked-operator-ingress:'.DecoyResolverCredentialGate::class,
         'second-store-resolver:'.UnguardedCredentialAuthenticator::class.'=>'.SecondStoreResolver::class,
         'unlisted-enrollment-route:route:POST /bfc/unlisted-enrollment=>ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding::exchange',
     )
         ->and($inventory['enrollment'])->toContain(
             'route:POST /bfc/unlisted-enrollment=>ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding::exchange',
         )
-        ->and($unexpectedMiddleware)->toBe(['middleware:'.ClassBoundCredentialGate::class])
+        ->and($unexpectedMiddleware)->toBe([
+            'middleware:'.ClassBoundCredentialGate::class,
+            'middleware:'.DecoyResolverCredentialGate::class,
+            'middleware:'.DirectHeaderCredentialGate::class,
+        ])
+        ->and($inventory['operator_ingresses'])->not->toContain(
+            'operator-ingress:'.DecoyResolverCredentialGate::class.'=>ArtisanBuild\BuiltForCloud\Auth\CredentialResolver::resolve',
+        )
         ->and($devicePaths)->toBe([]);
 });
 

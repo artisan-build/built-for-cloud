@@ -110,7 +110,8 @@ final class CredentialPathInventory
             }
 
             if (self::presentsStoreSecret($record['code'])) {
-                if (in_array('ArtisanBuild\\BuiltForCloud\\Auth\\CredentialResolver', $dependencies, true)) {
+                if (in_array('ArtisanBuild\\BuiltForCloud\\Auth\\CredentialResolver', $dependencies, true)
+                    && ! self::readsCredentialStoreByHash($record['code'])) {
                     $operatorIngresses[] = 'operator-ingress:'.$gate.'=>ArtisanBuild\\BuiltForCloud\\Auth\\CredentialResolver::resolve';
                 } else {
                     $violations[] = 'unchoked-operator-ingress:'.$gate;
@@ -729,6 +730,7 @@ final class CredentialPathInventory
     {
         return str_contains($code, 'bearerToken()')
             || str_contains($code, "headers->get('Authorization')")
+            || str_contains($code, "header('Authorization')")
             || str_contains($code, 'HmacEnvelope::HEADER')
             || str_contains($code, 'AssertionVerifier::HEADER');
     }
@@ -736,7 +738,16 @@ final class CredentialPathInventory
     private static function presentsStoreSecret(string $code): bool
     {
         return str_contains($code, 'bearerToken()')
-            || str_contains($code, "headers->get('Authorization')");
+            || str_contains($code, "headers->get('Authorization')")
+            || str_contains($code, "header('Authorization')");
+    }
+
+    private static function readsCredentialStoreByHash(string $code): bool
+    {
+        return preg_match(
+            '/(?:Credential::(?:query\(\)|where\s*\()|(?:DB::table|->table)\(\s*[\'\"]credentials[\'\"]\s*\))(?:(?!;).)*?[\'\"]secret_hash[\'\"]/s',
+            $code,
+        ) === 1;
     }
 
     /**
