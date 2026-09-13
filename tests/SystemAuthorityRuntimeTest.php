@@ -127,6 +127,11 @@ it('refuses every known authentication shape through a real queue worker and doe
         '--stop-when-empty' => true,
         '--tries' => 1,
         '--sleep' => 0,
+        // queue:work defaults to --memory=128 and returns EXIT_MEMORY_LIMIT (12)
+        // when the HOST process is already past that, which a full-suite run always
+        // is. Without this the worker self-terminates before the leak assertions
+        // below ever execute: green in isolation, vacuous in the suite.
+        '--memory' => 4096,
     ]))->toBe(0)
         ->and($processing)->toHaveCount(count(runtimeAuthenticationShapes()) + 2)
         ->and(array_column($processing, 1))->toBe([
@@ -162,6 +167,7 @@ it('clears queue authority on an exception that will be retried', function (): v
         'connection' => 'database',
         '--once' => true,
         '--tries' => 2,
+        '--memory' => 4096,
     ]))->toBe(0)
         ->and($exceptions)->toBe([[SystemAuthorityViolation::class, true, false]])
         ->and(app(SystemAuthorityContext::class)->active())->toBeFalse();
@@ -203,6 +209,7 @@ it('refuses bound-user actor synthesis through commands, queues, and schedules',
         'connection' => 'database',
         '--once' => true,
         '--tries' => 1,
+        '--memory' => 4096,
     ]);
     expect($violations)->toBe(['A Built for Cloud system-authority entry cannot synthesize a bound-user audit actor.']);
 
