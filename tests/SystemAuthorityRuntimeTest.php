@@ -10,6 +10,8 @@ use ArtisanBuild\BuiltForCloud\SystemAuthorityContext;
 use ArtisanBuild\BuiltForCloud\SystemAuthoritySchedule;
 use ArtisanBuild\BuiltForCloud\Testing\SystemAuthorityInventory;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostRuntimeAuthQueuedJob;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueFailThenLoginJob;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueLabelledMarkerJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RuntimeAuthorityQueuedJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RuntimeAuthorityServiceProvider;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RuntimeHumanAuthenticator;
@@ -21,11 +23,14 @@ use Illuminate\Auth\Events\Login;
 use Illuminate\Auth\SessionGuard;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Auth\Factory as AuthFactory;
+use Illuminate\Contracts\Bus\Dispatcher as BusDispatcher;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Queue\CallQueuedClosure;
 use Illuminate\Queue\Events\JobExceptionOccurred;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Queue;
@@ -314,8 +319,9 @@ it('pins every published system-authority boundary statement to the code it desc
     }
 
     expect($openers)->toEqualCanonicalizing([
-        'SystemAuthorityCommand',    // package commands
-        'SystemAuthorityQueueScope', // package ShouldQueue jobs and listeners
+        'SystemAuthorityCommand',    // package commands, framed at invocation
+        'SystemAuthorityBusFrame',   // package queue entries, framed at invocation
+        'SystemAuthorityQueueScope', // the same entries, framed again from queue events
         'SystemAuthoritySchedule',   // package-registered schedule callbacks
     ]);
 
@@ -341,4 +347,50 @@ it('pins every published system-authority boundary statement to the code it desc
     // 4. The advisory demotion: the scanner must not be described as enforcement.
     expect($limits)->toContain('advisory')
         ->and($limits)->toContain('does not carry the runtime authentication');
+});
+
+it('frames a package queue entry at its invocation, whatever route dispatched it', function (
+    string $fixture, string $shape
+): void {
+    // Each of these three reached a real login before the frame moved from queue
+    // EVENTS to the dispatched invocation. They are the executed controls for that
+    // move, and each names the mechanism that used to let it through.
+    config(['auth.guards.web' => ['driver' => 'session', 'provider' => 'users'], 'queue.default' => 'sync']);
+    $user = runtimeAuthorityUser('-frame-'.$shape);
+
+    expect(auth()->guard('web')->guest())->toBeTrue();
+
+    $job = $fixture === RuntimeAuthorityQueuedJob::class
+        ? new RuntimeAuthorityQueuedJob('facade-login', (string) $user->getKey())
+        : new $fixture((string) $user->getKey());
+
+    expect(fn () => app(BusDispatcher::class)->dispatchSync($job))
+        ->toThrow(SystemAuthorityViolation::class)
+        ->and(auth()->guard('web')->guest())->toBeTrue();
+})->with([
+    // identity used to come from $job->resolveName(), a caller-settable displayName
+    'display name differing from the class' => [RogueLabelledMarkerJob::class, 'label'],
+    // fail() dispatches JobFailed synchronously, then the handler's finally runs
+    'fail() then authenticating in finally' => [RogueFailThenLoginJob::class, 'fail'],
+    // dispatchSync/dispatchNow fire no queue events at all
+    'synchronous dispatch of a marked job' => [RuntimeAuthorityQueuedJob::class, 'sync'],
+]);
+
+it('leaves host queue entries unframed, by object identity rather than by name', function (): void {
+    config(['auth.guards.web' => ['driver' => 'session', 'provider' => 'users'], 'queue.default' => 'sync']);
+    $user = runtimeAuthorityUser('-frame-host');
+
+    // A host job carrying no package marker authenticates freely.
+    app(BusDispatcher::class)->dispatchSync(new HostRuntimeAuthQueuedJob((string) $user->getKey()));
+    expect(auth()->guard('web')->id())->toBe($user->getAuthIdentifier());
+
+    // A closure declared OUTSIDE the package is host work too, even though a queued
+    // closure carries no class to mark.
+    auth()->guard('web')->logout();
+    $id = (string) $user->getKey();
+    app(BusDispatcher::class)->dispatchSync(CallQueuedClosure::create(function () use ($id): void {
+        Auth::guard('web')->loginUsingId($id);
+    }));
+
+    expect(auth()->guard('web')->id())->toBe($user->getAuthIdentifier());
 });

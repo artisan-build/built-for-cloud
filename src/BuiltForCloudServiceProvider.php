@@ -72,7 +72,9 @@ use Illuminate\Auth\AuthManager;
 use Illuminate\Auth\Events\Authenticated;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Auth\SessionGuard;
+use Illuminate\Bus\Dispatcher as BusDispatcher;
 use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Contracts\Bus\Dispatcher as BusDispatcherContract;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Contracts\Session\Session;
@@ -96,6 +98,7 @@ use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 use Livewire\LivewireManager;
+use ReflectionProperty;
 use RuntimeException;
 use Throwable;
 
@@ -136,6 +139,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
 
         Event::listen(Authenticated::class, [RefuseSystemAuthorityAuthentication::class, 'handle']);
         Event::listen(Login::class, [RefuseSystemAuthorityAuthentication::class, 'handle']);
+        $this->frameQueueEntriesByInvocation();
         Event::listen(JobProcessing::class, [SystemAuthorityQueueScope::class, 'processing']);
         Event::listen(JobProcessed::class, [SystemAuthorityQueueScope::class, 'finished']);
         Event::listen(JobExceptionOccurred::class, [SystemAuthorityQueueScope::class, 'finished']);
@@ -305,6 +309,38 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 __DIR__.'/../resources/views' => $this->app->resourcePath('views/vendor/bfc'),
             ], 'built-for-cloud-views');
         }
+    }
+
+    /**
+     * Frames every package queue entry at its INVOCATION by appending a bus pipe.
+     *
+     * Appended rather than set: `Dispatcher::pipeThrough()` REPLACES the pipe array,
+     * so writing it blind would drop any pipe a host app or another package
+     * registered first. The existing pipes are read and preserved.
+     *
+     * KNOWN CEILING, disclosed rather than papered over: a host that calls
+     * `Bus::pipeThrough()` AFTER this provider boots replaces the array again and
+     * removes this frame. That is the same exposure any package has with this API.
+     * The queue-event listeners are kept alongside as a second, independent
+     * mechanism so the two cover each other.
+     */
+    private function frameQueueEntriesByInvocation(): void
+    {
+        $dispatcher = $this->app->make(BusDispatcherContract::class);
+
+        if (! $dispatcher instanceof BusDispatcher) {
+            return;
+        }
+
+        $pipes = (new ReflectionProperty(BusDispatcher::class, 'pipes'))->getValue($dispatcher);
+        $pipes = is_array($pipes) ? $pipes : [];
+
+        if (in_array(SystemAuthorityBusFrame::class, $pipes, true)) {
+            return;
+        }
+
+        $pipes[] = SystemAuthorityBusFrame::class;
+        $dispatcher->pipeThrough($pipes);
     }
 
     private function surfaceEnabled(string $surface): bool

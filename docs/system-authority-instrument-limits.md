@@ -5,14 +5,24 @@ Built for Cloud enforces two rules at runtime while one of its requestless entri
 - A package command, package `ShouldQueue` job/listener, or package-registered schedule callback cannot authenticate a human through a Laravel guard that dispatches `Authenticated` or `Login`.
 - The same entries cannot create a bound-user audit actor through `AuditActor::boundUser()`.
 
-Every package command inherits the context wrapper. Queue membership remains derived with Laravel's
-`ShouldQueue` interface and is pinned to the package queue marker; processed, failed, and exception
-events remove that entry's context frame. Package schedule callbacks are wrapped when registered.
+Every package command inherits the context wrapper, which frames the command's own invocation.
+Package queue entries are framed the same way, at invocation, by a bus pipe: `Dispatcher::dispatchNow()`
+runs commands through the pipes, and the queue worker reaches `dispatchNow()` too, so the worker, the
+sync driver, `dispatchSync()` and `dispatchNow()` are all covered by one mechanism. Entry identity comes
+from the dispatched OBJECT — a marker interface, the class a queued-listener wrapper names, or the file a
+queued closure was declared in — never from a display name, which callers control. The queue-event
+listeners remain alongside as a second, independent frame. Package schedule callbacks are wrapped when
+registered.
 The authentication listener clears `SessionGuard` state before throwing a typed violation. Both
 events are required: session and direct-login paths dispatch `Authenticated`, while remember-me
 recaller restoration dispatches `Login` only.
 
 ## Boundary
+
+The bus pipe is APPENDED to the dispatcher's existing pipes rather than replacing them, but
+`Dispatcher::pipeThrough()` sets that array outright, so a host that calls it after this package boots
+removes the invocation frame. The queue-event frame still applies in that case. This is the same exposure
+any package has with that API.
 
 The runtime authentication bound depends on the guard dispatching Laravel's authentication events.
 `RequestGuard`, a custom host guard that dispatches neither event, and host code outside the package's

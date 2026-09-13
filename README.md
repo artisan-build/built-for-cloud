@@ -217,7 +217,9 @@ compare-and-set update and returns the exact state it wrote, so stale writers ca
 ### System-authority entries
 
 Built for Cloud commands, queued jobs/listeners, and package-registered schedule callbacks execute in
-a package system-authority context. While that context is active, Laravel `SessionGuard`
+a package system-authority context. Commands and queued entries are framed at their own invocation — the
+latter through a bus pipe, so the queue worker, the sync driver and synchronous dispatch are covered by
+one mechanism — and entry identity is taken from the dispatched object rather than from any display name. While that context is active, Laravel `SessionGuard`
 authentication is refused through listeners on both `Authenticated` and `Login`, and
 `AuditActor::boundUser()` refuses to synthesize human attribution. The context is always released in
 `finally` paths; queue processed, failed, and exception events remove the queue frame so a long-lived
