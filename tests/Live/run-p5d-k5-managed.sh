@@ -83,10 +83,33 @@ start_scalpels() {
     fail 'real Scalpels did not become ready'
 }
 
+start_bfc() {
+    "${HARNESS_ENV[@]}" vendor/bin/testbench serve --host=127.0.0.1 --port="${BFC_HTTP_PORT}" >"${APP_LOG}" 2>&1 &
+    APP_PID=$!
+
+    for _ in {1..100}; do
+        BFC_READY="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${BFC_HTTP_PORT}/_bfc-harness/users/${OWNER_ID}" || true)"
+        [[ "${BFC_READY}" == 200 ]] && return
+        kill -0 "${APP_PID}" 2>/dev/null || fail 'BFC application exited before readiness'
+        sleep 0.1
+    done
+    fail 'BFC application did not become ready'
+}
+
 stop_scalpels() {
     kill "${SCALPELS_PID}" 2>/dev/null || true
     wait "${SCALPELS_PID}" 2>/dev/null || true
     unset SCALPELS_PID
+}
+
+stop_bfc() {
+    kill "${APP_PID}" 2>/dev/null || true
+    wait "${APP_PID}" 2>/dev/null || true
+    unset APP_PID
+}
+
+start_clock_second() {
+    php -r '$now = microtime(true); usleep((int) ((ceil($now) - $now + 0.05) * 1_000_000));'
 }
 
 cleanup() {
@@ -102,6 +125,7 @@ trap cleanup EXIT
 [[ -f "${CA}" && -f "${CERT}" && -f "${KEY}" ]] || fail 'the private CA or leaf keypair is missing'
 
 cd "${ROOT}"
+APP_URL="${SCALPELS_BASE}" php "${SCALPELS_ROOT}/artisan" migrate:fresh --force --no-interaction >"${RUN_DIR}/scalpels-migrate.log"
 SCALPELS_SEED="$(APP_URL="${SCALPELS_BASE}" php tests/Live/p5d-k5-seed-real-scalpels.php "${SCALPELS_ROOT}" "${BFC_BASE}")"
 ISSUER="$(printf '%s' "${SCALPELS_SEED}" | json_value issuer)"
 CONNECTION_ID="$(printf '%s' "${SCALPELS_SEED}" | json_value connection_id)"
@@ -137,8 +161,7 @@ OWNER_ID="${SEED%%$'\t'*}"
 OPERATOR_BEARER="${SEED#*$'\t'}"
 
 start_scalpels
-"${HARNESS_ENV[@]}" vendor/bin/testbench serve --host=127.0.0.1 --port="${BFC_HTTP_PORT}" >"${APP_LOG}" 2>&1 &
-APP_PID=$!
+start_bfc
 SCALPELS_HTTP_PORT="${SCALPELS_HTTP_PORT}" SCALPELS_TLS_PORT="${SCALPELS_TLS_PORT}" \
     BFC_HTTP_PORT="${BFC_HTTP_PORT}" BFC_TLS_PORT="${BFC_TLS_PORT}" \
     P5D_K5_TLS_CERT="${CERT}" P5D_K5_TLS_KEY="${KEY}" \
@@ -188,25 +211,49 @@ assert_equal 200 "$(response_status "${ACTIVATION}")" 'unified credential:rotate
     "${SCALPELS_ID}" "${GENERATION}" "${ROSTER_VERSION}" >/dev/null
 
 assert_equal 200 "$(hmac_status)" 'fresh managed HMAC status'
+AUTHORITY_WHILE_FRESH="$(APP_URL="${SCALPELS_BASE}" php tests/Live/p5d-k5-real-scalpels-state.php \
+    "${SCALPELS_ROOT}" "${ORGANIZATION_ID}" "${SCALPELS_ID}" "${CONNECTION_ID}" state)"
+assert_equal 0 "$(printf '%s' "${AUTHORITY_WHILE_FRESH}" | json_value response_sequence)" 'fresh-window authority sequence'
 "${HARNESS_ENV[@]}" php tests/Live/p5d-k5-managed-state.php age "${OWNER_ID}" "${KEY_ID}" 300 >/dev/null
+PACKAGE_BEFORE_SUCCESS="$("${HARNESS_ENV[@]}" php tests/Live/p5d-k5-managed-state.php state "${OWNER_ID}" "${KEY_ID}")"
+assert_equal managed "$(printf '%s' "${PACKAGE_BEFORE_SUCCESS}" | json_value authority)" 'package authority mode before confirmation'
+CONFIRMED_AGE="$(printf '%s' "${PACKAGE_BEFORE_SUCCESS}" | json_value membership_confirmed_age)"
+[[ "${CONFIRMED_AGE}" =~ ^[0-9]+$ && "${CONFIRMED_AGE}" -ge 300 ]] \
+    || fail "package confirmation age before confirmation: expected at least [300], observed [${CONFIRMED_AGE}]"
 assert_equal 200 "$(hmac_status)" 'real-authority confirmation status'
 AUTHORITY_AFTER_SUCCESS="$(APP_URL="${SCALPELS_BASE}" php tests/Live/p5d-k5-real-scalpels-state.php \
     "${SCALPELS_ROOT}" "${ORGANIZATION_ID}" "${SCALPELS_ID}" "${CONNECTION_ID}" state)"
 assert_equal 1 "$(printf '%s' "${AUTHORITY_AFTER_SUCCESS}" | json_value response_sequence)" 'real-authority success sequence'
+PACKAGE_AFTER_SUCCESS="$("${HARNESS_ENV[@]}" php tests/Live/p5d-k5-managed-state.php state "${OWNER_ID}" "${KEY_ID}")"
+assert_equal 1 "$(printf '%s' "${PACKAGE_AFTER_SUCCESS}" | json_value response_sequence)" 'package success sequence'
+assert_equal yes "$(printf '%s' "${PACKAGE_AFTER_SUCCESS}" | json_value confirmation_reset)" 'successful confirmation reset timestamp'
 
 stop_scalpels
+start_clock_second
 "${HARNESS_ENV[@]}" php tests/Live/p5d-k5-managed-state.php age "${OWNER_ID}" "${KEY_ID}" 1799 >/dev/null
+PACKAGE_AT_1799="$("${HARNESS_ENV[@]}" php tests/Live/p5d-k5-managed-state.php state "${OWNER_ID}" "${KEY_ID}")"
+assert_equal 1799 "$(printf '%s' "${PACKAGE_AT_1799}" | json_value membership_confirmed_age)" 'managed grace age before 1799-second request'
 assert_equal 200 "$(hmac_status)" '1799-second managed grace status'
+start_clock_second
 "${HARNESS_ENV[@]}" php tests/Live/p5d-k5-managed-state.php age "${OWNER_ID}" "${KEY_ID}" 1800 >/dev/null
+PACKAGE_AT_1800="$("${HARNESS_ENV[@]}" php tests/Live/p5d-k5-managed-state.php state "${OWNER_ID}" "${KEY_ID}")"
+assert_equal 1800 "$(printf '%s' "${PACKAGE_AT_1800}" | json_value membership_confirmed_age)" 'managed grace age before 1800-second request'
 assert_equal 401 "$(hmac_status)" '1800-second managed grace status'
 
+stop_bfc
+start_bfc
 start_scalpels
 "${HARNESS_ENV[@]}" php tests/Live/p5d-k5-managed-state.php age "${OWNER_ID}" "${KEY_ID}" 300 >/dev/null
 assert_equal 200 "$(hmac_status)" 'restored real-authority confirmation status'
 AUTHORITY_AFTER_RESTORE="$(APP_URL="${SCALPELS_BASE}" php tests/Live/p5d-k5-real-scalpels-state.php \
     "${SCALPELS_ROOT}" "${ORGANIZATION_ID}" "${SCALPELS_ID}" "${CONNECTION_ID}" state)"
 assert_equal 2 "$(printf '%s' "${AUTHORITY_AFTER_RESTORE}" | json_value response_sequence)" 'restored real-authority sequence'
+PACKAGE_AFTER_RESTORE="$("${HARNESS_ENV[@]}" php tests/Live/p5d-k5-managed-state.php state "${OWNER_ID}" "${KEY_ID}")"
+assert_equal 2 "$(printf '%s' "${PACKAGE_AFTER_RESTORE}" | json_value response_sequence)" 'package restored sequence'
+assert_equal yes "$(printf '%s' "${PACKAGE_AFTER_RESTORE}" | json_value confirmation_reset)" 'restored confirmation reset timestamp'
 
+stop_bfc
+start_bfc
 REMOVED="$(APP_URL="${SCALPELS_BASE}" php tests/Live/p5d-k5-real-scalpels-state.php \
     "${SCALPELS_ROOT}" "${ORGANIZATION_ID}" "${SCALPELS_ID}" "${CONNECTION_ID}" remove)"
 assert_equal removed "$(printf '%s' "${REMOVED}" | json_value membership)" 'real Scalpels membership removal'
@@ -214,7 +261,7 @@ assert_equal removed "$(printf '%s' "${REMOVED}" | json_value membership)" 'real
 assert_equal 401 "$(hmac_status)" 'authoritative-removal managed HMAC status'
 PACKAGE_REMOVED="$("${HARNESS_ENV[@]}" php tests/Live/p5d-k5-managed-state.php state "${OWNER_ID}" "${KEY_ID}")"
 assert_equal removed "$(printf '%s' "${PACKAGE_REMOVED}" | json_value membership_status)" 'package authoritative membership state'
-assert_equal revoked "$(printf '%s' "${PACKAGE_REMOVED}" | json_value credential_status)" 'same HMAC credential revocation'
+assert_equal active "$(printf '%s' "${PACKAGE_REMOVED}" | json_value credential_status)" 'same HMAC credential retained lifecycle status'
 assert_equal yes "$(printf '%s' "${PACKAGE_REMOVED}" | json_value credential_revoked)" 'same HMAC credential revoked timestamp'
 
 printf 'P5d K5 managed live-verified against real Scalpels\nstamp: %s\nscalpels_sha: %s\ntransport: private-CA TLS on authority %s and BFC %s\nchecks: same personal HMAC credential fresh=200, real confirmation=200, outage grace 1799=200, outage boundary 1800=401, restored confirmation=200, real Scalpels membership removal=401 and credential revoked\n' \

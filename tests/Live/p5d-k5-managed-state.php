@@ -47,7 +47,7 @@ if ($action === 'bind') {
         'managed_membership_generation' => $managed->generation,
         'managed_membership_roster_version' => (int) ($argv[11] ?? 0),
         'managed_membership_response_sequence' => 0,
-        'managed_membership_responded_at' => now(),
+        'managed_membership_responded_at' => now()->format(DATE_RFC3339_EXTENDED),
     ])->save();
 } elseif ($action === 'age') {
     $seconds = filter_var($argv[4] ?? null, FILTER_VALIDATE_INT);
@@ -63,10 +63,14 @@ if ($action === 'bind') {
 
 $user->refresh();
 $credential->refresh();
+$confirmedAt = $user->membership_confirmed_at;
+$responseAt = $user->membership_response_at;
 fwrite(STDOUT, json_encode([
     'authority' => InstallationAuthority::current()->mode?->value,
     'membership_status' => $user->managed_membership_status,
     'response_sequence' => $user->managed_membership_response_sequence,
+    'membership_confirmed_age' => $confirmedAt === null ? null : now()->getTimestamp() - $confirmedAt->getTimestamp(),
+    'confirmation_reset' => $confirmedAt !== null && $responseAt !== null && $confirmedAt->equalTo($responseAt) ? 'yes' : 'no',
     'credential_status' => $credential->status->value,
     'credential_revoked' => $credential->revoked_at === null ? 'no' : 'yes',
 ], JSON_THROW_ON_ERROR).PHP_EOL);
