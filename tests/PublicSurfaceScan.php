@@ -112,7 +112,7 @@ final class PublicSurfaceScan
      * classification. The source root is never inferred from a class list.
      *
      * @param  list<string>  $additionalRoots
-     * @return list<array{class: class-string, method: string, file: string, line: int, parameters: list<array{name: string, types: list<string>}>}>
+     * @return list<array{class: class-string, method: string, file: string, line: int, parameters: list<array{name: string, types: list<string>}>, returnTypes: list<string>}>
      */
     public static function discoverDeclaredPublicMethods(string $sourceRoot, array $additionalRoots = []): array
     {
@@ -155,6 +155,7 @@ final class PublicSurfaceScan
                         'file' => ltrim(substr($file->getPathname(), strlen($packageRoot)), DIRECTORY_SEPARATOR),
                         'line' => $method->getStartLine(),
                         'parameters' => $parameters,
+                        'returnTypes' => self::typeNames($method->getReturnType()),
                     ];
                 }
             }
@@ -174,11 +175,13 @@ final class PublicSurfaceScan
     /**
      * Exact executable predicate: report a public method with two distinct
      * parameters whose declared types can carry the canonical User and a
-     * DelegatedActor. Named union/intersection members, subclasses and parent
-     * interfaces such as Authenticatable are included. Untyped values and
-     * method-body or ORM-relation inference are deliberately outside the bound.
+     * DelegatedActor, or a DelegatedActor parameter whose return type can carry
+     * the canonical User. Named union/intersection members, subclasses and
+     * parent interfaces such as Authenticatable are included. Untyped values
+     * and method-body or ORM-relation inference are deliberately outside the
+     * bound.
      *
-     * @param  list<array{class: class-string, method: string, file: string, line: int, parameters: list<array{name: string, types: list<string>}>}>  $surface
+     * @param  list<array{class: class-string, method: string, file: string, line: int, parameters: list<array{name: string, types: list<string>}>, returnTypes: list<string>}>  $surface
      * @return list<string>
      */
     public static function canonicalUserBindings(array $surface): array
@@ -216,7 +219,18 @@ final class PublicSurfaceScan
                     $delegated[$delegatedIndex],
                 );
 
-                break;
+                continue 2;
+            }
+
+            if (self::typesCarry($method['returnTypes'], User::class) && $delegated !== []) {
+                $bindings[] = sprintf(
+                    '%s:%d [%s::%s($%s):return]',
+                    $method['file'],
+                    $method['line'],
+                    $method['class'],
+                    $method['method'],
+                    array_values($delegated)[0],
+                );
             }
         }
 

@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActorProvider;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\DelegatedActorBoundToCanonicalUser;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\DelegatedActorReturnedAsCanonicalUser;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
 use ArtisanBuild\BuiltForCloud\Tests\PublicSurfaceScan;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -202,12 +203,18 @@ it('derives the complete public surface and pins its sole request-context identi
 it('discovers and reports a fixture that publicly binds a delegated actor to a canonical user', function (): void {
     $surface = PublicSurfaceScan::discoverDeclaredPublicMethods(
         dirname(__DIR__).'/src',
-        [__DIR__.'/Fixtures/DelegatedActorBoundToCanonicalUser.php'],
+        [
+            __DIR__.'/Fixtures/DelegatedActorBoundToCanonicalUser.php',
+            __DIR__.'/Fixtures/DelegatedActorReturnedAsCanonicalUser.php',
+        ],
     );
 
     expect(PublicSurfaceScan::canonicalUserBindings($surface))->toBe([
         'src/Console/ActingPrincipal.php:160 ['.ActingPrincipal::class.'::local($user,$delegatedActor)]',
         'tests/Fixtures/DelegatedActorBoundToCanonicalUser.php:15 ['.DelegatedActorBoundToCanonicalUser::class.'::bind($user,$actor)]',
+        'tests/Fixtures/DelegatedActorReturnedAsCanonicalUser.php:13 ['.DelegatedActorReturnedAsCanonicalUser::class.'::userFor($actor):return]',
+        'tests/Fixtures/DelegatedActorReturnedAsCanonicalUser.php:15 ['.DelegatedActorReturnedAsCanonicalUser::class.'::authenticatableFor($actor):return]',
+        'tests/Fixtures/DelegatedActorReturnedAsCanonicalUser.php:17 ['.DelegatedActorReturnedAsCanonicalUser::class.'::userOrFalseFor($actor):return]',
     ]);
 });
 
