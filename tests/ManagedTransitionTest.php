@@ -126,7 +126,6 @@ function p4bProtectedState(): array
         'invitations' => DB::table('invitations')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all(),
         'sessions' => DB::table('sessions')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all(),
         'password_resets' => DB::table('password_reset_tokens')->orderBy('email')->get()->map(static fn (object $row): array => (array) $row)->all(),
-        'api_tokens' => DB::table('api_tokens')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all(),
         'credentials' => DB::table('credentials')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all(),
     ];
 }
