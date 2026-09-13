@@ -1247,7 +1247,12 @@ final class ManagedTransitions
 
         if ($transition->direction === ManagedTransitionDirection::Adopt) {
             $expectedSubjects = $roster->keys()->map(static fn (mixed $id): string => (string) $id)->all();
-            $actualSubjects = array_keys($seenSubjects);
+            // Compared as strings on BOTH sides. A real authority sends each subject as a
+            // JSON string of an integer user id, and PHP silently turns a numeric-string
+            // array KEY into an int — so `["1","2"] !== [1,2]` refused every adopt
+            // proposal whose roster used numeric ids. Every package test used non-numeric
+            // subjects, where the coercion never happens, which is why the suite was green.
+            $actualSubjects = array_map('strval', array_keys($seenSubjects));
             sort($expectedSubjects);
             sort($actualSubjects);
             if ($expectedSubjects !== $actualSubjects) {

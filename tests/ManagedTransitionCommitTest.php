@@ -1756,3 +1756,43 @@ it('enumerates every transition HTTP surface in both directions under the frozen
     'exit update retain local' => ['update', ManagedTransitionDirection::Exit, 'retain_local'],
     'exit update exclude' => ['update', ManagedTransitionDirection::Exit, 'exclude'],
 ]);
+
+it('proposes an adoption whose roster subjects are numeric strings, as a real authority sends them', function (): void {
+    // S2c found this in a dry run against real Scalpels: every subject arrives as a JSON
+    // string of an integer user id, PHP coerces such a key to an int in `$seenSubjects`,
+    // and the coverage check compared string expectations against int keys with `!==`.
+    // Every adopt proposal was refused at that check, so adopt could never complete and
+    // neither exit nor rejoin could be reached. Every existing package test uses
+    // non-numeric subjects ('owner-subject', 'created-subject'), where the coercion never
+    // happens — a green suite actively disguised it. The ids here are numeric on purpose.
+    $roster = [
+        [
+            'scalpels_id' => '101', 'membership_status' => 'active', 'role' => 'owner',
+            'display_name' => 'Numeric Owner', 'contact_email' => 'numeric-owner@example.test', 'contact_email_verified' => true,
+        ],
+        [
+            'scalpels_id' => '202', 'membership_status' => 'active', 'role' => 'member',
+            'display_name' => 'Numeric Member', 'contact_email' => 'numeric-member@example.test', 'contact_email_verified' => true,
+        ],
+    ];
+    [$owner] = p4dConfigure(ManagedTransitionDirection::Adopt, $roster);
+    $service = app(ManagedTransitions::class);
+
+    $transition = $service->prepare($owner, ManagedTransitionDirection::Adopt);
+    $transition = $service->fetchRoster($transition);
+    $transition = $service->proposeDefault($transition);
+
+    // Reaching Proposed at all is the fix: before it, this threw ManagedAuthRefused at the
+    // roster-coverage check. The subjects are then asserted to be present in the proposal
+    // and still numeric strings, so a "fix" that dropped or renamed one would not pass.
+    $subjects = DB::table('bfc_managed_transition_mappings')
+        ->where('managed_transition_id', $transition->id)
+        ->whereNotNull('scalpels_id')
+        ->orderBy('scalpels_id')
+        ->pluck('scalpels_id')
+        ->all();
+
+    expect($transition->status)->toBe(ManagedTransitionStatus::Proposed)
+        ->and($subjects)->toBe(['101', '202'])
+        ->and($subjects)->each->toBeString();
+});
