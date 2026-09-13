@@ -134,7 +134,7 @@ it('reports all six forbidden executable-symbol control kinds at their file and 
     );
 });
 
-it('allows only the surviving audit ApiToken case while reporting another ApiToken symbol', function (): void {
+it('allows only the surviving audit actor case while reporting another symbol with the same short name', function (): void {
     $root = removalControlTree();
     $apiToken = implode('', ['Api', 'Token']);
     $auditType = implode('\\', ['ArtisanBuild', 'BuiltForCloud', 'Audit', 'AppActorType']);
@@ -144,6 +144,49 @@ it('allows only the surviving audit ApiToken case while reporting another ApiTok
     expect(LegacyRemovalInventory::productionOffences($root))
         ->not->toContain('src/AuditCases.php:2 [symbol:'.$apiToken.']')
         ->toContain('src/AuditCases.php:3 [symbol:'.$apiToken.']');
+});
+
+it('reports an aliased forbidden enum case at its file and line', function (): void {
+    $root = removalControlTree();
+    $auditType = implode('', ['Audit', 'Actor', 'Type']);
+    $adminToken = implode('', ['Admin', 'Token']);
+
+    file_put_contents($root.'/src/AliasedEnum.php', "<?php\nuse ArtisanBuild\\BuiltForCloud\\{$auditType} as Actor;\nActor::{$adminToken};\n");
+
+    expect(LegacyRemovalInventory::productionOffences($root))
+        ->toContain('src/AliasedEnum.php:3 [enum:'.$auditType.'::'.$adminToken.']');
+});
+
+it('reports forbidden string enum lookups at their file and line', function (): void {
+    $root = removalControlTree();
+    $auditType = implode('', ['Audit', 'Actor', 'Type']);
+    $appActorType = implode('', ['App', 'Actor', 'Type']);
+    $adminValue = implode('_', ['admin', 'token']);
+    $legacyValue = implode('_', ['legacy', 'api', 'token']);
+    $adminToken = implode('', ['Admin', 'Token']);
+    $legacyCase = implode('', ['Legacy', 'Api', 'Token']);
+
+    file_put_contents($root.'/src/StringEnums.php', "<?php\n{$auditType}::from('{$adminValue}');\n{$appActorType}::tryFrom('{$legacyValue}');\n");
+
+    expect(LegacyRemovalInventory::productionOffences($root))->toContain(
+        'src/StringEnums.php:2 [enum:'.$auditType.'::'.$adminToken.']',
+        'src/StringEnums.php:3 [enum:Audit\\'.$appActorType.'::'.$legacyCase.']',
+    );
+});
+
+it('reports forbidden string class names at their file and line', function (): void {
+    $root = removalControlTree();
+    $registry = implode('', ['Token', 'Registry']);
+    $minter = implode('', ['Api', 'Token', 'Minter']);
+    $registryClass = implode('\\', ['ArtisanBuild', 'BuiltForCloud', $registry]);
+    $minterClass = implode('\\', ['ArtisanBuild', 'BuiltForCloud', $minter]);
+
+    file_put_contents($root.'/src/StringClasses.php', "<?php\napp('{$registryClass}');\n\$class = '{$minterClass}';\n");
+
+    expect(LegacyRemovalInventory::productionOffences($root))->toContain(
+        'src/StringClasses.php:2 [symbol:'.$registry.']',
+        'src/StringClasses.php:3 [symbol:'.$minter.']',
+    );
 });
 
 it('reports legacy migration config route and public-document controls at their file and line', function (): void {

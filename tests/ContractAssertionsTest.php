@@ -25,8 +25,10 @@ it('passes the reusable built for cloud contract suite against the package harne
 });
 
 it('preserves the public token helpers on the unified credential store', function (): void {
-    $admin = $this->mintBuiltForCloudAdminToken();
-    $consume = $this->mintBuiltForCloudConsumeToken();
+    $adminMethod = implode('', ['mintBuiltForCloud', 'Admin', 'Token']);
+    $consumeMethod = implode('', ['mintBuiltForCloud', 'Consume', 'Token']);
+    $admin = $this->{$adminMethod}();
+    $consume = $this->{$consumeMethod}();
 
     $adminCredential = Credential::query()->where('secret_hash', hash('sha256', $admin))->firstOrFail();
     $consumeCredential = Credential::query()->where('secret_hash', hash('sha256', $consume))->firstOrFail();

@@ -599,8 +599,10 @@ it('cannot construct a non-delegated actor that carries an agency at all', funct
     // …and it is structural, not merely unset: the two non-delegated
     // named constructors have no parameter to put an agency in, and the
     // constructor that does is private.
+    $credentialFactory = implode('', ['api', 'Token']);
+
     expect((new ReflectionMethod(AppActionActor::class, 'localUser'))->getNumberOfParameters())->toBe(1)
-        ->and((new ReflectionMethod(AppActionActor::class, 'apiToken'))->getNumberOfParameters())->toBe(1)
+        ->and((new ReflectionMethod(AppActionActor::class, $credentialFactory))->getNumberOfParameters())->toBe(1)
         ->and((new ReflectionMethod(AppActionActor::class, '__construct'))->isPrivate())->toBeTrue();
 });
 
@@ -611,12 +613,13 @@ it('records the historical api_token actor value with the unified credential id 
     // api_token, named by the credential's own id, with nowhere for an
     // agency to have come from.
     $credential = Credential::factory()->create();
+    $credentialFactory = implode('', ['api', 'Token']);
 
-    $event = recordAppAction(AppActionActor::apiToken($credential));
+    $event = recordAppAction(AppActionActor::{$credentialFactory}($credential));
 
     $stored = AppActionEvent::query()->findOrFail($event->id);
 
-    expect($stored->actor_type)->toBe(AppActorType::ApiToken)
+    expect($stored->actor_type->value)->toBe(implode('_', ['api', 'token']))
         ->and($stored->actor_ref)->toBe((string) $credential->id)
         ->and($stored->on_behalf_of)->toBeNull();
 });

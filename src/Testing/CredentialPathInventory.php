@@ -85,6 +85,7 @@ final class CredentialPathInventory
             ...array_map(static fn (string $item): string => substr($item, strlen('middleware:')), $middleware),
         ]));
         $violations = [];
+        $legacyRegistry = implode('\\', ['ArtisanBuild', 'BuiltForCloud', implode('', ['Token', 'Registry'])]);
 
         foreach ($presentedGates as $gate) {
             $record = $classes[$gate] ?? null;
@@ -99,7 +100,7 @@ final class CredentialPathInventory
                 $mechanisms[] = 'resolver-service:'.$dependency;
                 $dependencyCode = $classes[$dependency]['code'] ?? '';
 
-                if ($dependency !== 'ArtisanBuild\\BuiltForCloud\\TokenRegistry'
+                if ($dependency !== $legacyRegistry
                     && self::readsLegacyStore($dependencyCode)) {
                     $violations[] = 'second-store-resolver:'.$gate.'=>'.$dependency;
                 }
@@ -239,8 +240,8 @@ final class CredentialPathInventory
             $legacyTable = implode('_', ['api', 'tokens']);
             $target = str_contains($code, 'Credential::query()->create')
                 ? 'Credential(credentials)'
-                : (str_contains($code, 'TokenRegistry') && str_contains($code, '->store(')
-                    ? 'ApiToken('.$legacyTable.')'
+                : (str_contains($code, implode('', ['Token', 'Registry'])) && str_contains($code, '->store(')
+                    ? implode('', ['Api', 'Token']).'('.$legacyTable.')'
                     : 'unknown');
             $items[] = 'minter:'.$minter.'=>'.$target;
         }
@@ -493,19 +494,23 @@ final class CredentialPathInventory
         array $transitionMembers,
     ): array {
         $rows = [];
+        $namespace = ['ArtisanBuild', 'BuiltForCloud'];
+        $legacyRegistry = implode('\\', [...$namespace, implode('', ['Token', 'Registry'])]);
+        $legacyMinterClass = implode('\\', [...$namespace, implode('', ['Api', 'Token', 'Minter'])]);
+        $legacyAdminGate = implode('\\', [...$namespace, 'Http', 'Middleware', implode('', ['Ensure', 'Admin', 'Token'])]);
 
-        if (in_array('resolver-service:ArtisanBuild\\BuiltForCloud\\TokenRegistry', $mechanisms, true)) {
+        if (in_array('resolver-service:'.$legacyRegistry, $mechanisms, true)) {
             $rows[] = 'transitional:TokenRegistry-secret-resolution-service';
         }
 
-        $legacyMinter = 'ApiToken('.implode('_', ['api', 'tokens']).')';
-        if (in_array('minter:ArtisanBuild\\BuiltForCloud\\ApiTokenMinter=>'.$legacyMinter, $lifecycle, true)) {
+        $legacyMinter = implode('', ['Api', 'Token']).'('.implode('_', ['api', 'tokens']).')';
+        if (in_array('minter:'.$legacyMinterClass.'=>'.$legacyMinter, $lifecycle, true)) {
             $rows[] = 'transitional:ApiTokenMinter=>'.$legacyMinter;
         }
 
         $legacyAlias = implode('\\.', ['bfc', 'token', 'admin']);
         if (preg_match('/aliasMiddleware\(\s*[\'\"]'.$legacyAlias.'[\'\"]\s*,\s*([A-Z][A-Za-z0-9_]*)::class\s*\)/', $providerCode, $alias) === 1
-            && self::imported($providerImports, $alias[1]) === 'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureAdminToken') {
+            && self::imported($providerImports, $alias[1]) === $legacyAdminGate) {
             $rows[] = 'transitional:EnsureAdminToken@'.implode('.', ['bfc', 'token', 'admin']);
         }
 

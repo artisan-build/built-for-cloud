@@ -113,7 +113,13 @@ final class LegacyRemovalInventory
         $tokens = token_get_all($contents, TOKEN_PARSE);
 
         foreach ($tokens as $index => $token) {
-            if (! is_array($token) || in_array($token[0], [T_COMMENT, T_DOC_COMMENT, T_CONSTANT_ENCAPSED_STRING], true)) {
+            if (! is_array($token) || in_array($token[0], [T_COMMENT, T_DOC_COMMENT], true)) {
+                continue;
+            }
+
+            if ($token[0] === T_CONSTANT_ENCAPSED_STRING) {
+                array_push($offences, ...self::stringSymbolOffences($path, $token[1], $token[2], $forbiddenSymbols));
+
                 continue;
             }
 
@@ -141,9 +147,11 @@ final class LegacyRemovalInventory
         $fallbackToken = implode('_', ['fallback', 'token']);
         $fallbackEnv = implode('_', ['FALLBACK', 'TOKEN']);
         $credentialApi = implode('_', ['credential', 'api']);
+        $auditActorType = self::enumReferences($code, implode('\\', ['ArtisanBuild', 'BuiltForCloud', 'AuditActorType']));
+        $appActorType = self::enumReferences($code, implode('\\', ['ArtisanBuild', 'BuiltForCloud', 'Audit', 'AppActorType']));
         $lineRules = [
-            'enum:AuditActorType::'.$adminToken => '/\bAuditActorType::'.$adminToken.'\b|\bcase\s+'.$adminToken.'\b/',
-            'enum:Audit\\AppActorType::'.$legacyApiToken => '/\bAppActorType::'.$legacyApiToken.'\b|\bcase\s+'.$legacyApiToken.'\b/',
+            'enum:AuditActorType::'.$adminToken => '/(?:'.$auditActorType.')::'.$adminToken.'\b|\bcase\s+'.$adminToken.'\b|::(?:from|tryFrom)\s*\(\s*[\'\"]'.implode('_', ['admin', 'token']).'[\'\"]\s*\)/',
+            'enum:Audit\\AppActorType::'.$legacyApiToken => '/(?:'.$appActorType.')::'.$legacyApiToken.'\b|\bcase\s+'.$legacyApiToken.'\b|::(?:from|tryFrom)\s*\(\s*[\'\"]'.implode('_', ['legacy', 'api', 'token']).'[\'\"]\s*\)/',
             'identifier:'.$ownerTokenId => '/\b'.$ownerTokenId.'\b/',
             'identifier:'.$durableTokenId => '/\b'.$durableTokenId.'\b/',
             'identifier:'.$durableStore => '/\b'.$durableStore.'\b/',
@@ -168,6 +176,43 @@ final class LegacyRemovalInventory
         }
 
         return $offences;
+    }
+
+    /**
+     * @param  list<string>  $forbiddenSymbols
+     * @return list<string>
+     */
+    private static function stringSymbolOffences(string $path, string $literal, int $line, array $forbiddenSymbols): array
+    {
+        if (! str_contains($literal, '\\')) {
+            return [];
+        }
+
+        $offences = [];
+
+        foreach ($forbiddenSymbols as $symbol) {
+            if (preg_match('/(?:^|\\\\+)'.preg_quote($symbol, '/').'(?:$|[^A-Za-z0-9_\\\\])/', trim($literal, "'\"")) === 1) {
+                $offences[] = "{$path}:{$line} [symbol:{$symbol}]";
+            }
+        }
+
+        return $offences;
+    }
+
+    private static function enumReferences(string $code, string $class): string
+    {
+        $short = substr($class, strrpos($class, '\\') + 1);
+        $references = [$short, $class, '\\'.$class];
+
+        preg_match_all('/^use\s+([^;\s]+)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*;/mi', $code, $imports, PREG_SET_ORDER);
+
+        foreach ($imports as $import) {
+            if (ltrim($import[1], '\\') === $class) {
+                $references[] = $import[2] ?? $short;
+            }
+        }
+
+        return implode('|', array_map(static fn (string $reference): string => preg_quote($reference, '/'), array_unique($references)));
     }
 
     /** @param list<array{int, string, int}|string> $tokens */
