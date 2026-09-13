@@ -83,9 +83,7 @@ use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Http\Request;
-use Illuminate\Queue\Events\JobExceptionOccurred;
-use Illuminate\Queue\Events\JobFailed;
-use Illuminate\Queue\Events\JobProcessed;
+use Illuminate\Queue\Events\JobAttempted;
 use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Routing\Events\RouteMatched;
 use Illuminate\Routing\Route;
@@ -141,9 +139,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         Event::listen(Login::class, [RefuseSystemAuthorityAuthentication::class, 'handle']);
         $this->frameQueueEntriesByInvocation();
         Event::listen(JobProcessing::class, [SystemAuthorityQueueScope::class, 'processing']);
-        Event::listen(JobProcessed::class, [SystemAuthorityQueueScope::class, 'finished']);
-        Event::listen(JobExceptionOccurred::class, [SystemAuthorityQueueScope::class, 'finished']);
-        Event::listen(JobFailed::class, [SystemAuthorityQueueScope::class, 'finished']);
+        Event::listen(JobAttempted::class, [SystemAuthorityQueueScope::class, 'finished']);
 
         if ($this->app->resolved('auth')) {
             HumanAuthConfiguration::assertEffectiveProvider($this->app->make('auth'));

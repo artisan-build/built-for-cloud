@@ -8,11 +8,12 @@ Built for Cloud enforces two rules at runtime while one of its requestless entri
 Every package command inherits the context wrapper, which frames the command's own invocation.
 Package queue entries are framed the same way, at invocation, by a bus pipe: `Dispatcher::dispatchNow()`
 runs commands through the pipes, and the queue worker reaches `dispatchNow()` too, so the worker, the
-sync driver, `dispatchSync()` and `dispatchNow()` are all covered by one mechanism. Entry identity comes
-from the dispatched OBJECT — a marker interface, the class a queued-listener wrapper names, or the file a
-queued closure was declared in — never from a display name, which callers control. The queue-event
-listeners remain alongside as a second, independent frame. Package schedule callbacks are wrapped when
-registered.
+sync driver, `dispatchSync()` and `dispatchNow()` are all covered by one mechanism. Entry identity comes from the dispatched OBJECT: a marker interface, the class a queued-listener wrapper names, or the payload's `commandName`, which the queue writes as the job's class. Never from a display name, which a job can choose. The queue-event listeners remain alongside as a second
+frame, and the two fail for genuinely different reasons: the invocation frame is absent when nothing runs
+through the bus dispatcher, while the queue-event frame is absent when no queue events fire, as on a direct
+`dispatchNow()`. Neither shares the other's blind spot. Both take identity from the class, so neither can be
+redirected by a display name. A queued entry's own `middleware()` and its `failed()` handler are inside the frame.
+Package schedule callbacks are wrapped when registered.
 The authentication listener clears `SessionGuard` state before throwing a typed violation. Both
 events are required: session and direct-login paths dispatch `Authenticated`, while remember-me
 recaller restoration dispatches `Login` only.
@@ -21,21 +22,19 @@ recaller restoration dispatches `Login` only.
 
 The bus pipe is APPENDED to the dispatcher's existing pipes rather than replacing them, but
 `Dispatcher::pipeThrough()` sets that array outright, so a host that calls it after this package boots
-removes the invocation frame. The queue-event frame still applies in that case. This is the same exposure
-any package has with that API.
+removes the invocation frame and reverts the bound to framing by queue events alone. That is host
+configuration, and it is the same exposure any package has with that API.
 
 The bound covers any guard that dispatches `Authenticated` or `Login`, not only `SessionGuard`.
 
-Six shapes are outside the bound, and package code must not use them to authenticate a human:
+The bound is stated as a class rather than as a list of shapes, because naming shapes is how the previous four attempts each missed the next one. **Any package code that runs outside a framed invocation is outside the bound.** Package code must not authenticate a human or synthesize a bound-user actor from any of it. That class includes, and is not limited to: any callback registered for later invocation, such as `defer()`, `app()->terminating()`, a listener registered at runtime, a shutdown function, or a chain or batch `catch`/`finally` callback; and any callback attached to a schedule event, including its `before`/`after` hooks and its `when`/`skip` filters.
 
-- A queued entry's `failed()` method on the `sync` driver runs after the frame has closed.
-- A callback handed to `defer()` runs after the frame has closed.
-- A schedule `before` or `after` hook runs outside the wrapped callback.
-- A schedule registered directly on `Schedule` rather than through the package wrapper is never framed.
-- A queued closure dispatched by package code is never framed: a closure's declaring file does not survive serialisation, so its origin cannot be established once it reaches the queue.
-- In-process tampering switches the bound off: removing the listeners, replacing a guard's event dispatcher, or rebinding the system-authority context.
+Two further limits are part of the same class:
 
-Each of those six carries an open `risk=security` debt row, so any future package change that reaches one is reviewed against it.
+- A queued closure dispatched by package code is never framed. Its declaring file does not survive serialisation, and the scope class that does survive is caller-settable, so its origin cannot be established as identity.
+- In-process tampering switches the bound off: removing the listeners, replacing a guard's event dispatcher, or rebinding the system-authority context. A host that calls `Bus::pipeThrough()` after this package boots also replaces the pipe array and reverts the bound to framing by queue events alone.
+
+Each limit above carries an open `risk=security` debt row, so any future package change that reaches one is reviewed against it.
 
 `RequestGuard`, a custom host guard that dispatches neither event, and host code outside the package's
 derived command, queue, and schedule inventories are host configuration rather than package entries.

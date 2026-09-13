@@ -219,7 +219,7 @@ compare-and-set update and returns the exact state it wrote, so stale writers ca
 Built for Cloud commands, queued jobs/listeners, and package-registered schedule callbacks execute in
 a package system-authority context. Commands and queued entries are framed at their own invocation — the
 latter through a bus pipe, so the queue worker, the sync driver and synchronous dispatch are covered by
-one mechanism — and entry identity is taken from the dispatched object rather than from any display name. While that context is active, human authentication is refused
+one mechanism — and entry identity comes from the dispatched OBJECT: a marker interface, the class a queued-listener wrapper names, or the payload's `commandName`, which the queue writes as the job's class. Never from a display name, which a job can choose. A queued entry's own `middleware()` and its `failed()` handler are inside the frame. While that context is active, human authentication is refused
 through listeners on both `Authenticated` and `Login`, and
 `AuditActor::boundUser()` refuses to synthesize human attribution. The context is always released in
 `finally` paths; queue processed, failed, and exception events remove the queue frame so a long-lived
@@ -227,16 +227,14 @@ worker does not carry package authority into the next host job.
 
 The bound covers any guard that dispatches `Authenticated` or `Login`, not only `SessionGuard`.
 
-Six shapes are outside the bound, and package code must not use them to authenticate a human:
+The bound is stated as a class rather than as a list of shapes, because naming shapes is how the previous four attempts each missed the next one. **Any package code that runs outside a framed invocation is outside the bound.** Package code must not authenticate a human or synthesize a bound-user actor from any of it. That class includes, and is not limited to: any callback registered for later invocation, such as `defer()`, `app()->terminating()`, a listener registered at runtime, a shutdown function, or a chain or batch `catch`/`finally` callback; and any callback attached to a schedule event, including its `before`/`after` hooks and its `when`/`skip` filters.
 
-- A queued entry's `failed()` method on the `sync` driver runs after the frame has closed.
-- A callback handed to `defer()` runs after the frame has closed.
-- A schedule `before` or `after` hook runs outside the wrapped callback.
-- A schedule registered directly on `Schedule` rather than through the package wrapper is never framed.
-- A queued closure dispatched by package code is never framed: a closure's declaring file does not survive serialisation, so its origin cannot be established once it reaches the queue.
-- In-process tampering switches the bound off: removing the listeners, replacing a guard's event dispatcher, or rebinding the system-authority context.
+Two further limits are part of the same class:
 
-Each of those six carries an open `risk=security` debt row, so any future package change that reaches one is reviewed against it.
+- A queued closure dispatched by package code is never framed. Its declaring file does not survive serialisation, and the scope class that does survive is caller-settable, so its origin cannot be established as identity.
+- In-process tampering switches the bound off: removing the listeners, replacing a guard's event dispatcher, or rebinding the system-authority context. A host that calls `Bus::pipeThrough()` after this package boots also replaces the pipe array and reverts the bound to framing by queue events alone.
+
+Each limit above carries an open `risk=security` debt row, so any future package change that reaches one is reviewed against it.
 
 This boundary covers the package's own derived entry inventories. `RequestGuard`, custom host guards that
 do not dispatch `Authenticated` or `Login`, and host commands, jobs, listeners, or schedules outside those

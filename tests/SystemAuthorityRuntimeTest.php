@@ -2,17 +2,22 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\BuiltForCloudServiceProvider;
 use ArtisanBuild\BuiltForCloud\Commands\SystemAuthorityCommand;
 use ArtisanBuild\BuiltForCloud\Contracts\SystemAuthorityQueueEntry;
 use ArtisanBuild\BuiltForCloud\Exceptions\SystemAuthorityViolation;
 use ArtisanBuild\BuiltForCloud\Listeners\RefuseSystemAuthorityAuthentication;
+use ArtisanBuild\BuiltForCloud\SystemAuthorityBusFrame;
 use ArtisanBuild\BuiltForCloud\SystemAuthorityContext;
 use ArtisanBuild\BuiltForCloud\SystemAuthoritySchedule;
 use ArtisanBuild\BuiltForCloud\Testing\SystemAuthorityInventory;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\HostRuntimeAuthQueuedJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueEventDispatchingGuard;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueFailedHandlerJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueFailThenLoginJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueLabelledMarkerJob;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMarkedQueuedListener;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMiddlewareLoginJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RuntimeAuthorityQueuedJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RuntimeAuthorityServiceProvider;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RuntimeHumanAuthenticator;
@@ -22,9 +27,11 @@ use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Auth\Events\Authenticated;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Auth\SessionGuard;
+use Illuminate\Bus\Dispatcher as IlluminateBusDispatcher;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Auth\Factory as AuthFactory;
 use Illuminate\Contracts\Bus\Dispatcher as BusDispatcher;
+use Illuminate\Events\CallQueuedListener;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Queue\CallQueuedClosure;
 use Illuminate\Queue\Events\JobExceptionOccurred;
@@ -32,9 +39,11 @@ use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Queue;
+use ReflectionProperty;
 
 uses(RefreshDatabase::class);
 
@@ -175,7 +184,15 @@ it('clears queue authority on an exception that will be retried', function (): v
         '--tries' => 2,
         '--memory' => 4096,
     ]))->toBe(0)
-        ->and($exceptions)->toBe([[SystemAuthorityViolation::class, true, false]])
+        // The frame is deliberately STILL ACTIVE at JobExceptionOccurred: that event
+        // fires while package code can still run — the stack unwinds back through the
+        // job's own middleware afterwards, and a fail() inside handle() dispatches its
+        // event and returns to the handler. Releasing there was delta-4's A2 defect.
+        // Release happens on JobAttempted, which Worker::process and
+        // SyncQueue::executeJob both dispatch from a `finally`.
+        ->and($exceptions)->toBe([[SystemAuthorityViolation::class, true, true]])
+        // And it IS released by the time the worker returns, so nothing leaks into the
+        // next job.
         ->and(app(SystemAuthorityContext::class)->active())->toBeFalse();
 });
 
@@ -341,13 +358,19 @@ it('pins every published system-authority boundary statement to the code it desc
     //    previously scoped the bound differently.
     $claims = [
         'The bound covers any guard that dispatches `Authenticated` or `Login`, not only `SessionGuard`.',
-        "A queued entry's `failed()` method on the `sync` driver runs after the frame has closed.",
-        'A callback handed to `defer()` runs after the frame has closed.',
-        'A schedule `before` or `after` hook runs outside the wrapped callback.',
-        'A schedule registered directly on `Schedule` rather than through the package wrapper is never framed.',
-        "A queued closure dispatched by package code is never framed: a closure's declaring file does not survive serialisation, so its origin cannot be established once it reaches the queue.",
-        'In-process tampering switches the bound off: removing the listeners, replacing a guard\'s event dispatcher, or rebinding the system-authority context.',
-        'Each of those six carries an open `risk=security` debt row, so any future package change that reaches one is reviewed against it.',
+        // The CLASS sentence. Four attempts each disclosed shapes and missed the next
+        // one, so the published bound is stated over the class and this pins that
+        // wording, not a list.
+        '**Any package code that runs outside a framed invocation is outside the bound.**',
+        'any callback registered for later invocation, such as `defer()`, `app()->terminating()`, a listener registered at runtime, a shutdown function, or a chain or batch `catch`/`finally` callback; and any callback attached to a schedule event, including its `before`/`after` hooks and its `when`/`skip` filters.',
+        'A queued closure dispatched by package code is never framed. Its declaring file does not survive serialisation, and the scope class that does survive is caller-settable, so its origin cannot be established as identity.',
+        "In-process tampering switches the bound off: removing the listeners, replacing a guard's event dispatcher, or rebinding the system-authority context. A host that calls `Bus::pipeThrough()` after this package boots also replaces the pipe array and reverts the bound to framing by queue events alone.",
+        "A queued entry's own `middleware()` and its `failed()` handler are inside the frame.",
+        // Pinned because this sentence carried a FALSE clause at the previous HEAD - it
+        // claimed identity could come from a queued closure's declaring file, after the
+        // closure branch had been withdrawn.
+        'Never from a display name, which a job can choose.',
+        'Each limit above carries an open `risk=security` debt row, so any future package change that reaches one is reviewed against it.',
     ];
 
     foreach ($claims as $claim) {
@@ -355,7 +378,14 @@ it('pins every published system-authority boundary statement to the code it desc
             ->and($limits)->toContain($claim);
     }
 
-    // 4. The broadest claim above is not left as prose: narrowing the listener to
+    // 4. LIMIT OF THIS PIN, stated rather than implied: it asserts that each claim is
+    //    PRESENT and that both documents agree. It cannot detect a CONTRADICTING
+    //    sentence added elsewhere in either file — a judge drift proved that by adding
+    //    "Package queued closures are framed by the same pipe." and staying green.
+    //    Presence matching cannot carry that; the executed controls below are what
+    //    keep the behavioural claims honest.
+    //
+    //    The broadest claim above is not left as prose: narrowing the listener to
     //    SessionGuard reds the executed control in this file, so the sentence and the
     //    behaviour cannot disagree.
     expect((string) file_get_contents(__FILE__))
@@ -434,3 +464,115 @@ it('refuses a non-SessionGuard guard that dispatches the events, which is what t
     $guard->setUser($user);
     expect($guard->check())->toBeTrue();
 });
+
+it('frames package code that runs outside handle(): the job\'s own middleware, on both routes', function (
+    string $when, bool $spoof, string $route
+): void {
+    // CallQueuedHandler pipes a job through its own middleware() and only calls
+    // dispatchNow() in that pipeline's `then`, so middleware runs one layer outside
+    // the invocation the bus pipe wraps. `before` was reachable by spoofing the
+    // display name the queue frame used for identity; `after` needed no label at all,
+    // because handle() had returned and released the invocation frame. Both are now
+    // covered by identifying on the payload's commandName and releasing on
+    // JobAttempted.
+    config(['auth.guards.web' => ['driver' => 'session', 'provider' => 'users']]);
+    $user = runtimeAuthorityUser('-mw-'.$when.($spoof ? '-spoof' : '').'-'.$route);
+    $job = new RogueMiddlewareLoginJob((string) $user->getKey(), $when, $spoof);
+
+    if ($route === 'sync') {
+        try {
+            Queue::connection('sync')->push($job);
+        } catch (SystemAuthorityViolation) {
+            // The sync driver rethrows to the caller; the worker records it instead.
+        }
+    } else {
+        config(['queue.default' => 'database']);
+        Queue::connection('database')->push($job);
+        Artisan::call('queue:work', ['connection' => 'database', '--once' => true, '--tries' => 1, '--memory' => 4096]);
+    }
+
+    // The liveness marker is asserted FIRST: without it, "not authenticated" would
+    // also be true of a job that never ran.
+    expect(Cache::get('bfc-test.middleware-ran.'.$user->getKey()))->toBeTrue()
+        ->and(auth()->guard('web')->guest())->toBeTrue()
+        ->and(app(SystemAuthorityContext::class)->active())->toBeFalse();
+})->with([
+    'before next, display name spoofed, sync queue' => ['before', true, 'sync'],
+    'before next, display name spoofed, real worker' => ['before', true, 'worker'],
+    'after next, no display name, sync queue' => ['after', false, 'sync'],
+    'after next, no display name, real worker' => ['after', false, 'worker'],
+]);
+
+it('takes queue identity from the class, so a host job wearing a package display name stays unframed', function (): void {
+    // The mirror of the control above: identity must come from the payload's
+    // commandName, so copying a package job's display name onto host work must not
+    // pull that work into the package's bound.
+    config(['auth.guards.web' => ['driver' => 'session', 'provider' => 'users']]);
+    $user = runtimeAuthorityUser('-copycat');
+
+    Queue::connection('sync')->push(new HostRuntimeAuthQueuedJob((string) $user->getKey()));
+
+    expect(auth()->guard('web')->id())->toBe($user->getAuthIdentifier());
+});
+
+it('frames a package queued listener through the wrapper the framework executes it in', function (): void {
+    // Deleting the CallQueuedListener unwrap in the pipe must red this: the marker is
+    // on the listener, never on the wrapper.
+    config(['auth.guards.web' => ['driver' => 'session', 'provider' => 'users']]);
+    $user = runtimeAuthorityUser('-queued-listener');
+    $event = new stdClass;
+    $event->userId = (string) $user->getKey();
+
+    expect(fn () => app(BusDispatcher::class)->dispatchSync(
+        new CallQueuedListener(RogueMarkedQueuedListener::class, 'handle', [$event]),
+    ))->toThrow(SystemAuthorityViolation::class)
+        ->and(auth()->guard('web')->guest())->toBeTrue();
+});
+
+it('appends its bus pipe, preserving one an earlier provider registered', function (): void {
+    // The limits document says the pipe is APPENDED rather than replacing the
+    // dispatcher's pipes. Nothing executed that before, so replacing append with a
+    // bare pipeThrough() passed every test.
+    $dispatcher = app(BusDispatcher::class);
+    $pipes = (new ReflectionProperty(IlluminateBusDispatcher::class, 'pipes'))->getValue($dispatcher);
+
+    expect($pipes)->toContain(SystemAuthorityBusFrame::class);
+
+    // Set a sentinel WITHOUT the package pipe, so the registration path actually runs
+    // rather than short-circuiting on its idempotence guard. Registering blind with
+    // pipeThrough([self]) drops the sentinel and reds this.
+    $dispatcher->pipeThrough(['coord.sentinel.pipe']);
+    (function (): void {
+        $this->frameQueueEntriesByInvocation();
+    })->call(app()->getProvider(BuiltForCloudServiceProvider::class));
+
+    $after = (new ReflectionProperty(IlluminateBusDispatcher::class, 'pipes'))->getValue($dispatcher);
+
+    expect($after)->toContain('coord.sentinel.pipe')
+        ->and($after)->toContain(SystemAuthorityBusFrame::class);
+});
+
+it('frames a queued entry\'s failed() handler on both routes', function (string $route): void {
+    // Releasing on JobAttempted rather than on JobFailed brought failed() inside the
+    // frame, which RETIRED a disclosure rather than adding one. It is a claimed
+    // property now, so it carries a control — with a liveness marker, because "not
+    // authenticated" is also true of a handler that never ran.
+    config(['auth.guards.web' => ['driver' => 'session', 'provider' => 'users']]);
+    $user = runtimeAuthorityUser('-failed-'.$route);
+    $job = new RogueFailedHandlerJob((string) $user->getKey());
+
+    if ($route === 'sync') {
+        try {
+            Queue::connection('sync')->push($job);
+        } catch (Throwable) {
+            // sync rethrows to the caller
+        }
+    } else {
+        config(['queue.default' => 'database']);
+        Queue::connection('database')->push($job);
+        Artisan::call('queue:work', ['connection' => 'database', '--once' => true, '--tries' => 1, '--memory' => 4096]);
+    }
+
+    expect(Cache::get('bfc-test.failed-ran.'.$user->getKey()))->toBeTrue()
+        ->and(auth()->guard('web')->guest())->toBeTrue();
+})->with(['sync', 'worker']);
