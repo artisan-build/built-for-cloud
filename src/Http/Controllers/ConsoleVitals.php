@@ -29,13 +29,6 @@ use Illuminate\Support\Facades\DB;
  * included, and a summary that drifts from it is worth less than a
  * pointer that cannot.
  *
- * One thing worth repeating, because the obvious version of it is beside
- * the point: a legacy `api_tokens` secret and a `FALLBACK_TOKEN` cannot
- * authenticate here — the `bfc` guard has no path to either store — and
- * that is NOT what protects this route. The danger runs the other way,
- * and the gate refuses a bearer whose bytes are ALSO one of those
- * things, before anything resolves.
- *
  * There is deliberately no `bfc.ability` layer in front of it. One
  * revision had that composition; it enforced a strict subset, so it
  * never changed an answer, and its own denial audit drained the
@@ -44,9 +37,8 @@ use Illuminate\Support\Facades\DB;
  * reach at will.
  *
  * The route is consequently reachable by one thing: a live
- * operator-subject unified-store credential whose abilities list is
- * exactly `metadata:read`, whose bytes are not also the fallback token
- * or a legacy row, and which the app's own declaration authorizes —
+ * operator-subject credential whose abilities list is exactly
+ * `metadata:read` and which the app's own declaration authorizes —
  * presented to an app that has registered the `bfc` guard.
  *
  * THE AUDIT IS TRANSACTIONAL, NOT BEST-EFFORT, and it runs BEFORE the

@@ -809,10 +809,9 @@ final class ManageOnboarding extends OperatorRouteController
     /**
      * The unified-store half of the D1d sweep: same exclusions, expressed
      * on `credentials` columns. The tenancy key here is `subject_ref` (the
-     * unified minter sets it from the claim's name), the scope is an
-     * ability, and — exactly as on `api_tokens` — a row superseded by
-     * rotation survives, because the sweep killing it would break the
-     * make-before-break window rotation exists to provide.
+     * minter sets it from the claim's name), the scope is an ability, and a
+     * row superseded by rotation survives because the sweep killing it would
+     * break the make-before-break window rotation exists to provide.
      *
      * The exemption requires the SHAPE the rotate verb actually leaves,
      * not the marker alone ({@see inRotationGrace}): a bare `rotated_at`

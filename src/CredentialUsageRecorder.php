@@ -7,9 +7,7 @@ namespace ArtisanBuild\BuiltForCloud;
 use Illuminate\Support\Facades\DB;
 
 /**
- * The unified store's usage transition — the same SEC-2 shape
- * {@see TokenRegistry} gives `api_tokens`, so the claim-code burn stays
- * intact when the exchange seam mints `credentials` rows (PRD 1.0):
+ * The credential store's usage transition and claim-code burn (PRD 1.0):
  *
  * - Returns whether the authentication STANDS: every write is gated on
  *   affected rows carrying the full active predicate, so a row revoked or
@@ -44,10 +42,8 @@ final class CredentialUsageRecorder
     private function burnFirstUse(Credential $credential): bool
     {
         return (bool) DB::transaction(function () use ($credential): bool {
-            // Code-then-durable lock order, matching exchange — see
-            // TokenRegistry::burnFirstUse for why. Only unified links are
-            // considered here; legacy api_tokens links remain that
-            // registry's responsibility.
+            // Code-then-credential lock order matches exchange, preventing
+            // the first-use and exchange paths from deadlocking each other.
             /** @var list<OnboardingToken> $pendingCodes */
             $pendingCodes = OnboardingToken::query()
                 ->where('durable_credential_id', $credential->getKey())

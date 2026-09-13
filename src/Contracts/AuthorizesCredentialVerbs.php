@@ -28,9 +28,8 @@ use Illuminate\Http\Request;
  * otherwise-valid admin token. It can never widen past the guard or the
  * credential's abilities, because those are checked first.
  *
- * `$subject` is the TARGET row's declared subject — null when the row
- * predates subjects (declare-don't-guess) or when the verb has no single
- * target row (`issue` against the legacy store). It is an INPUT to the
+ * `$subject` is the TARGET row's declared subject — null when the verb has
+ * no single target row. It is an INPUT to the
  * decision, never the check itself: no permission is ever inferred from
  * `subject_type`, from `subject_ref`, or from possession of a credential
  * name, and a client-supplied subject in any request input must never reach

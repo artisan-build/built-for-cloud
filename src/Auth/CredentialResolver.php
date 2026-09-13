@@ -13,9 +13,8 @@ use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 /**
  * Hash lookup against the unified store. A presented secret resolves only a
  * row of the presenting kind that is active, unrevoked, unexpired and not
- * pending. There is deliberately NO fallback-token path here: the env
- * pseudo-credential is a legacy `TokenRegistry` concern the new guard never
- * consults.
+ * pending. Only persisted credentials participate; there is no environment
+ * pseudo-credential path.
  *
  * THE CONTAINMENT CHOKE POINT (PRD 1.15, SEC-V3-04, rework 3 Fix 1): the
  * offboarded-registry rejection lives HERE, in the one method every

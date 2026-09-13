@@ -18,11 +18,9 @@ namespace ArtisanBuild\BuiltForCloud;
  * - `Revoked` is asked before expiry: a row that is both revoked and
  *   expired reports `revoked`, because revocation is the deliberate act.
  *
- * On the `api_tokens` store every row structurally carries the usage
- * signal (`last_used_at` / `request_count` exist on every row), so this
- * provider never emits `Unknown` — the case is RESERVED in the vocabulary
- * for stores whose rows cannot carry it (an asymmetric build-time
- * credential, for one), not invented here.
+ * Every listed row currently carries the usage signal, so this provider
+ * never emits `Unknown` — the case is RESERVED in the vocabulary for a
+ * future source whose rows cannot carry it, not invented here.
  */
 enum ReportedStatus: string
 {

@@ -41,8 +41,7 @@ use Throwable;
  *
  * - revoke EVERY bound credential in EVERY lifecycle state — active,
  *   rotation-grace, and pending (unexchanged enrollments and pending
- *   hmac signing keys included), in BOTH stores (`credentials` and
- *   subject-stamped `api_tokens` rows);
+ *   hmac signing keys included);
  * - consume the outstanding claim codes and cancel the pending
  *   invitations addressed to the principal (and, for an
  *   integration-driven offboard, its namespace+subject history);
