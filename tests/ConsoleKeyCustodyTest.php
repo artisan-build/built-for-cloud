@@ -1323,15 +1323,13 @@ it('never reveals key material back out of any delivery surface (AC11, A7)', fun
     expect($properties)->toBe(['keyId', 'activatedAt', 'activeKeyIds']);
 });
 
-// ------------------- the legacy-admin boundary, decided rather than drifted
+// ---------------- the owner-credential boundary, decided rather than drifted
 
-it('lets the deployment OWNER re-key with the token its own claim minted (AC14)', function (): void {
-    // This is the case that decides whether legacy admin `api_tokens`
-    // rows should be excluded from `console:key:write`. They should not:
-    // the owner token IS such a row, minted by the current, entirely
-    // undeprecated ownership claim, and its holder is the party a
-    // console key names. Excluding it would lock the deployment owner
-    // out of keying their own deployment.
+it('lets the deployment OWNER re-key with the credential its own claim minted (AC14)', function (): void {
+    // The ownership claim mints a unified operator credential carrying
+    // `credential:admin`, and its holder is the party a console key names.
+    // Excluding that credential from `console:key:write` would lock the
+    // deployment owner out of keying their own deployment.
     $ownerToken = keyCustodyClaimedDeployment();
 
     $this->postJson('/bfc/console/re-key', [
@@ -1341,9 +1339,9 @@ it('lets the deployment OWNER re-key with the token its own claim minted (AC14)'
 
     expect(ConsoleKey::query()->sole()->key_id)->toBe('owner-filed');
 
-    // And the exclusion would be no boundary anyway: an admin
-    // `api_tokens` row can mint itself an operator credential carrying
-    // the ability, in one request, with no further authority.
+    // And the exclusion would be no boundary anyway: the owner credential
+    // can mint itself an operator credential carrying the ability in one
+    // request, with no further authority.
     $minted = $this->postJson('/bfc/credentials', [
         'subject_type' => 'operator',
         'subject_ref' => 'self-granted',
