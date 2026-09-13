@@ -113,6 +113,14 @@ function frozenTestRemovalDispositions(): array
 }
 
 /** @return array<string, string> */
+function baselineHistoryAvailable(): bool
+{
+    $process = new SymfonyProcess(['git', 'cat-file', '-e', '96a4eab^{commit}'], removalPackageRoot());
+    $process->run();
+
+    return $process->isSuccessful();
+}
+
 function baselineDeletedTestContents(): array
 {
     $contents = [];
@@ -281,6 +289,20 @@ it('reports a bare legacy table-name test control at its file and line', functio
 });
 
 it('enforces the frozen disposition of every test file carrying a removal marker', function (): void {
+    // This is a DEVELOPMENT-TIME check on the removal's completeness: it compares each
+    // DELETE row against that file's content at the baseline SHA, so it needs git
+    // history. A `git archive` tarball carries none, and "did this PR delete a mixed
+    // file?" has no meaning in an installed tree with no before-state. It is R11b, not
+    // one of AC2's instruments 1-3, so the archive rung does not require it.
+    //
+    // It SKIPS with a reason rather than being made to pass: swallowing the git failure
+    // would turn a check that cannot run into one that reports success, which is the
+    // exact defect this whole slice has been about. A skip is distinguishable from a
+    // pass; a silent catch is not.
+    if (! baselineHistoryAvailable()) {
+        test()->markTestSkipped('baseline history unavailable (installed tree): R11b disposition is a development-time check.');
+    }
+
     expect(LegacyRemovalInventory::testRemovalDispositionOffences(
         removalPackageRoot(),
         frozenTestRemovalDispositions(),
