@@ -134,6 +134,18 @@ it('reports all six forbidden executable-symbol control kinds at their file and 
     );
 });
 
+it('allows only the surviving audit ApiToken case while reporting another ApiToken symbol', function (): void {
+    $root = removalControlTree();
+    $apiToken = implode('', ['Api', 'Token']);
+    $auditType = implode('\\', ['ArtisanBuild', 'BuiltForCloud', 'Audit', 'AppActorType']);
+
+    file_put_contents($root.'/src/AuditCases.php', "<?php\n\\{$auditType}::{$apiToken};\n\\Vendor\\{$apiToken}::query();\n");
+
+    expect(LegacyRemovalInventory::productionOffences($root))
+        ->not->toContain('src/AuditCases.php:2 [symbol:'.$apiToken.']')
+        ->toContain('src/AuditCases.php:3 [symbol:'.$apiToken.']');
+});
+
 it('reports legacy migration config route and public-document controls at their file and line', function (): void {
     $root = removalControlTree();
     $table = implode('_', ['api', 'tokens']);

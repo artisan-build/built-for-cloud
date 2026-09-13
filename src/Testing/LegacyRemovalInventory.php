@@ -110,7 +110,9 @@ final class LegacyRemovalInventory
             self::joined('Legacy', 'Rotation', 'Result'),
         ];
 
-        foreach (token_get_all($contents, TOKEN_PARSE) as $token) {
+        $tokens = token_get_all($contents, TOKEN_PARSE);
+
+        foreach ($tokens as $index => $token) {
             if (! is_array($token) || in_array($token[0], [T_COMMENT, T_DOC_COMMENT, T_CONSTANT_ENCAPSED_STRING], true)) {
                 continue;
             }
@@ -123,8 +125,7 @@ final class LegacyRemovalInventory
                 }
 
                 if ($part === self::joined('Api', 'Token')
-                    && $path === 'src/Audit/AppActorType.php'
-                    && self::isAllowedAuditCaseLine($contents, $token[2])) {
+                    && self::isAllowedAuditCase($path, $contents, $tokens, $index, $token[2])) {
                     continue;
                 }
 
@@ -169,12 +170,53 @@ final class LegacyRemovalInventory
         return $offences;
     }
 
-    private static function isAllowedAuditCaseLine(string $contents, int $line): bool
+    /** @param list<array{int, string, int}|string> $tokens */
+    private static function isAllowedAuditCase(string $path, string $contents, array $tokens, int $index, int $line): bool
     {
         $lines = preg_split('/\R/', $contents) ?: [];
         $source = trim($lines[$line - 1] ?? '');
 
-        return $source === 'case '.self::joined('Api', 'Token')." = '".implode('_', ['api', 'token'])."';";
+        if ($path === 'src/Audit/AppActorType.php'
+            && $source === 'case '.self::joined('Api', 'Token')." = '".implode('_', ['api', 'token'])."';") {
+            return true;
+        }
+
+        $separatorIndex = self::previousCodeTokenIndex($tokens, $index - 1);
+        $classIndex = $separatorIndex === null ? null : self::previousCodeTokenIndex($tokens, $separatorIndex - 1);
+        $classToken = $classIndex === null ? null : $tokens[$classIndex];
+
+        if ($separatorIndex === null || ($tokens[$separatorIndex][0] ?? null) !== T_DOUBLE_COLON || ! is_array($classToken)) {
+            return false;
+        }
+
+        $class = ltrim($classToken[1], '\\');
+        $allowed = implode('\\', ['ArtisanBuild', 'BuiltForCloud', 'Audit', 'AppActorType']);
+
+        if ($class === $allowed) {
+            return true;
+        }
+
+        preg_match('/^namespace\s+([^;]+);/m', self::withoutComments($contents), $namespace);
+
+        return $class === 'AppActorType'
+            && ($namespace[1] ?? null) === implode('\\', ['ArtisanBuild', 'BuiltForCloud', 'Audit']);
+    }
+
+    /**
+     * @param  list<array{int, string, int}|string>  $tokens
+     * @return int|null
+     */
+    private static function previousCodeTokenIndex(array $tokens, int $index): ?int
+    {
+        for (; $index >= 0; $index--) {
+            $token = $tokens[$index];
+
+            if (is_string($token) || ! in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+                return $index;
+            }
+        }
+
+        return null;
     }
 
     /** @return array<string, string> */

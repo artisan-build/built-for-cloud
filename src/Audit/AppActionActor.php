@@ -111,9 +111,9 @@ final readonly class AppActionActor
     /**
      * A credential acting on its own behalf, named by its opaque id.
      */
-    public static function credential(Credential $credential): self
+    public static function apiToken(Credential $credential): self
     {
-        return new self(AppActorType::from('api_token'), self::identifierOf($credential));
+        return new self(AppActorType::ApiToken, self::identifierOf($credential));
     }
 
     /**
