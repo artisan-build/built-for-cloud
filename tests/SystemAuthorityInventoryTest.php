@@ -19,11 +19,21 @@ use ArtisanBuild\BuiltForCloud\Commands\SubjectOffboardCommand;
 use ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand;
 use ArtisanBuild\BuiltForCloud\Jobs\DeliverOwnershipWebhook;
 use ArtisanBuild\BuiltForCloud\Testing\SystemAuthorityInventory;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueAfterCommitQueuedJob;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueCommentedHumanCommand;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueHumanQueuedJob;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueInheritedQueuedJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueScheduleRegistration;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueScheduleServiceProvider;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueUserPrincipalCommand;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueUserRoleCommand;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnclassifiedStateChangingCommand;
+use ArtisanBuild\BuiltForCloud\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Hash;
+
+uses(RefreshDatabase::class);
 
 function p5eProvider(): string
 {
@@ -100,12 +110,14 @@ it('reports the command inventory controls that resolve a human principal and de
     );
 
     expect($inventory['commands'])->toContain(
+        RogueCommentedHumanCommand::class,
         RogueUserPrincipalCommand::class,
         RogueUserRoleCommand::class,
         UnclassifiedStateChangingCommand::class,
     )->and($inventory['violations']['commands'])->toContain(
         'human-principal:'.RogueUserPrincipalCommand::class,
         'human-role:'.RogueUserRoleCommand::class,
+        'synthesized-human:'.RogueCommentedHumanCommand::class,
     );
 });
 
@@ -124,18 +136,70 @@ it('reports a queued job that resolves and synthesizes a human principal', funct
         );
 });
 
-it('positive-controls the empty schedule inventory with a fixture registration', function (): void {
-    $production = SystemAuthorityInventory::discover([p5eProvider()], [dirname(__DIR__).'/src']);
+it('derives after-commit and inherited queue implementations from the framework interface', function (): void {
     $controlled = SystemAuthorityInventory::discover(
         [p5eProvider()],
-        [dirname(__DIR__).'/src', __DIR__.'/Fixtures/RogueScheduleRegistration.php'],
+        [
+            dirname(__DIR__).'/src',
+            __DIR__.'/Fixtures/RogueAfterCommitQueuedJob.php',
+            __DIR__.'/Fixtures/InheritedQueuedParent.php',
+            __DIR__.'/Fixtures/RogueInheritedQueuedJob.php',
+        ],
+    );
+
+    expect($controlled['queued'])->toContain(
+        RogueAfterCommitQueuedJob::class,
+        RogueInheritedQueuedJob::class,
+    )->and($controlled['violations']['queued'])->toContain(
+        'synthesized-human:'.RogueAfterCommitQueuedJob::class,
+        'synthesized-human:'.RogueInheritedQueuedJob::class,
+    );
+});
+
+it('positive-controls the runtime schedule registry through package-style callAfterResolving registration', function (): void {
+    $production = SystemAuthorityInventory::discover([p5eProvider()], [dirname(__DIR__).'/src']);
+    app()->register(RogueScheduleServiceProvider::class);
+    $controlled = SystemAuthorityInventory::discover(
+        [p5eProvider(), __DIR__.'/Fixtures/RogueScheduleServiceProvider.php'],
+        [
+            dirname(__DIR__).'/src',
+            __DIR__.'/Fixtures/RogueScheduleServiceProvider.php',
+            __DIR__.'/Fixtures/RogueScheduleRegistration.php',
+        ],
     );
 
     expect($production['scheduled'])->toBe([])
-        ->and($controlled['scheduled'])->toBe([RogueScheduleRegistration::class.'::schedule'])
+        ->and($controlled['scheduled'])->toBe([RogueScheduleRegistration::class])
         ->and($controlled['violations']['scheduled'])->toContain(
             'human-role:'.RogueScheduleRegistration::class,
         );
+});
+
+it('keys scanned source by declared classes with zero comment-derived mis-keys', function (): void {
+    $method = (new ReflectionClass(SystemAuthorityInventory::class))->getMethod('sources');
+    /** @var array<string, string> $sources */
+    $sources = $method->invoke(null, [dirname(__DIR__).'/src']);
+    $miskeyed = array_values(array_filter(
+        array_keys($sources),
+        static fn (string $class): bool => ! class_exists($class),
+    ));
+
+    expect($miskeyed)->toBe([]);
+});
+
+it('lets create-admin write the initial user without authenticating as that user', function (): void {
+    expect(auth()->guest())->toBeTrue();
+
+    $exit = Artisan::call('create-admin', [
+        '--execute' => true,
+        '--email' => 'inventory-owner@example.test',
+        '--name' => 'Inventory Owner',
+        '--password-hash' => Hash::make('inventory-password'),
+    ]);
+
+    expect($exit)->toBe(0)
+        ->and(User::query()->where('email', 'inventory-owner@example.test')->where('role', 'owner')->exists())->toBeTrue()
+        ->and(auth()->guest())->toBeTrue();
 });
 
 it('classifies every derived command exactly once across the five frozen dispositions', function (): void {

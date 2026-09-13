@@ -5,12 +5,11 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Tests\Fixtures;
 
 use ArtisanBuild\BuiltForCloud\UserRole;
-use Illuminate\Console\Scheduling\Schedule;
 
 final class RogueScheduleRegistration
 {
-    public function schedule(Schedule $schedule): void
+    public function __invoke(): bool
     {
-        $schedule->call(static fn (): bool => UserRole::Owner === UserRole::Owner);
+        return UserRole::Owner === UserRole::Owner;
     }
 }

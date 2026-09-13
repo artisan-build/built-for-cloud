@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Testing;
 
+use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Contracts\Queue\ShouldQueue;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use SplFileInfo;
@@ -11,8 +13,13 @@ use SplFileInfo;
 /**
  * Derives requestless package entry points and reports human-authority use.
  *
- * Limit: this is a PHP source inventory, not runtime call-graph analysis. It
- * recognizes the package's explicit provider, interface, and scheduler forms.
+ * Limits: registered commands are read from explicit provider commands([...])
+ * lists. Queue membership uses the framework interface at runtime, but the
+ * authority checks inspect declared source rather than transitive call graphs.
+ * Schedules come from the framework registry; an event whose display summary
+ * cannot identify a class in the scanned roots is reported as uninspectable.
+ * Dynamically generated code and calls into unscanned consumer/vendor code are
+ * outside this source-level instrument.
  */
 final class SystemAuthorityInventory
 {
@@ -31,17 +38,17 @@ final class SystemAuthorityInventory
         $sources = self::sources($roots);
         $commands = self::registeredCommands($providerFiles);
         $queued = [];
-        $scheduled = [];
 
-        foreach ($sources as $class => $source) {
-            if (preg_match('/\bimplements\s+[^\{]*\bShouldQueue\b/s', $source) === 1) {
+        foreach (array_keys($sources) as $class) {
+            if (is_a($class, ShouldQueue::class, true)) {
                 $queued[] = $class;
             }
-
-            if (preg_match('/function\s+schedule\s*\([^)]*\bSchedule\b[^)]*\).*?->(?:call|command|job|exec)\s*\(/s', $source) === 1) {
-                $scheduled[] = $class.'::schedule';
-            }
         }
+
+        $scheduled = array_map(
+            static fn ($event): string => (string) $event->getSummaryForDisplay(),
+            app(Schedule::class)->events(),
+        );
 
         sort($commands);
         sort($queued);
@@ -52,12 +59,9 @@ final class SystemAuthorityInventory
             'queued' => $queued,
             'scheduled' => $scheduled,
             'violations' => [
-                'commands' => self::violations($commands, $sources, false),
-                'queued' => self::violations($queued, $sources, true),
-                'scheduled' => self::violations(array_map(
-                    static fn (string $entry): string => strstr($entry, '::', true) ?: $entry,
-                    $scheduled,
-                ), $sources, true),
+                'commands' => self::violations($commands, $sources),
+                'queued' => self::violations($queued, $sources),
+                'scheduled' => self::scheduledViolations($scheduled, $sources),
             ],
         ];
     }
@@ -110,12 +114,9 @@ final class SystemAuthorityInventory
                 }
 
                 $source = (string) file_get_contents($file->getPathname());
-                if (preg_match('/\bnamespace\s+([^;]+);/', $source, $namespace) !== 1
-                    || preg_match('/\b(?:final\s+|abstract\s+)?class\s+([A-Za-z_][A-Za-z0-9_]*)\b/', $source, $class) !== 1) {
-                    continue;
+                foreach (self::declaredClasses($source) as $class) {
+                    $sources[$class] = $source;
                 }
-
-                $sources[$namespace[1].'\\'.$class[1]] = $source;
             }
         }
 
@@ -127,24 +128,24 @@ final class SystemAuthorityInventory
      * @param  array<string, string>  $sources
      * @return list<string>
      */
-    private static function violations(array $entries, array $sources, bool $requestless): array
+    private static function violations(array $entries, array $sources): array
     {
         $violations = [];
 
         foreach ($entries as $class) {
             $source = $sources[$class] ?? '';
-            $isInstallBootstrap = str_ends_with($class, '\\CreateAdminCommand');
 
             if (preg_match('/\bAuth::(?:login|user|check)\s*\(|\b(?:auth|request)\s*\(\s*\)->user\s*\(/', $source) === 1
-                || (! $isInstallBootstrap && preg_match('/\bUser::(?:query|where|find)\s*\(/', $source) === 1)) {
+                || preg_match('/\bUser::(?:find|findOrFail|first|firstOrFail|sole)\s*\(/', $source) === 1
+                || preg_match('/\bUser::(?:query|where)\s*\([^;]*?->(?:first|firstOrFail|find|findOrFail|sole|get)\s*\(/s', $source) === 1) {
                 $violations[] = 'human-principal:'.$class;
             }
 
-            if (! $isInstallBootstrap && preg_match('/\bUserRole::/', $source) === 1) {
+            if (self::derivesHumanRole($source)) {
                 $violations[] = 'human-role:'.$class;
             }
 
-            if ($requestless && preg_match('/\bAuditActor::boundUser\s*\(|\bnew\s+User\b|\bUser::(?:query|where|find)\s*\(/', $source) === 1) {
+            if (preg_match('/\bAuditActor::boundUser\s*\(|\bAuth::login\s*\(/', $source) === 1) {
                 $violations[] = 'synthesized-human:'.$class;
             }
         }
@@ -152,5 +153,100 @@ final class SystemAuthorityInventory
         sort($violations);
 
         return array_values(array_unique($violations));
+    }
+
+    private static function derivesHumanRole(string $source): bool
+    {
+        if (! str_contains($source, 'UserRole::')) {
+            return false;
+        }
+
+        // Creating a user may inspect whether an Owner row exists and persist
+        // enum values. Those operations write membership; they do not grant
+        // the command authority from the membership they inspect.
+        $withoutUserWrites = preg_replace([
+            '/\bUser::query\(\)\s*->where\(\s*[\'\"]role[\'\"]\s*,\s*UserRole::[A-Za-z_][A-Za-z0-9_]*->value\s*\)\s*->exists\(\)/s',
+            '/[\'\"]role[\'\"]\s*=>[^,\n]*\bUserRole::[^,\n]*/',
+        ], '', $source);
+
+        return is_string($withoutUserWrites) && str_contains($withoutUserWrites, 'UserRole::');
+    }
+
+    /**
+     * @param  list<string>  $entries
+     * @param  array<string, string>  $sources
+     * @return list<string>
+     */
+    private static function scheduledViolations(array $entries, array $sources): array
+    {
+        $violations = [];
+
+        foreach ($entries as $entry) {
+            $class = strstr($entry, '::', true) ?: $entry;
+            if (! isset($sources[$class])) {
+                $violations[] = 'uninspectable-schedule:'.$entry;
+
+                continue;
+            }
+
+            array_push($violations, ...self::violations([$class], $sources));
+        }
+
+        sort($violations);
+
+        return array_values(array_unique($violations));
+    }
+
+    /** @return list<class-string> */
+    private static function declaredClasses(string $source): array
+    {
+        $tokens = token_get_all($source);
+        $namespace = '';
+        $classes = [];
+
+        foreach ($tokens as $index => $token) {
+            if (! is_array($token)) {
+                continue;
+            }
+
+            if ($token[0] === T_NAMESPACE) {
+                $namespace = '';
+                for ($cursor = $index + 1; isset($tokens[$cursor]); $cursor++) {
+                    $part = $tokens[$cursor];
+                    if ($part === ';' || $part === '{') {
+                        break;
+                    }
+                    if (is_array($part) && in_array($part[0], [T_STRING, T_NAME_QUALIFIED, T_NS_SEPARATOR], true)) {
+                        $namespace .= $part[1];
+                    }
+                }
+
+                continue;
+            }
+
+            if ($token[0] !== T_CLASS) {
+                continue;
+            }
+
+            for ($previous = $index - 1; $previous >= 0; $previous--) {
+                if (is_array($tokens[$previous]) && in_array($tokens[$previous][0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+                    continue;
+                }
+                if (is_array($tokens[$previous]) && in_array($tokens[$previous][0], [T_NEW, T_DOUBLE_COLON], true)) {
+                    continue 2;
+                }
+                break;
+            }
+
+            for ($cursor = $index + 1; isset($tokens[$cursor]); $cursor++) {
+                if (is_array($tokens[$cursor]) && $tokens[$cursor][0] === T_STRING) {
+                    $classes[] = ltrim($namespace.'\\'.$tokens[$cursor][1], '\\');
+
+                    break;
+                }
+            }
+        }
+
+        return $classes;
     }
 }

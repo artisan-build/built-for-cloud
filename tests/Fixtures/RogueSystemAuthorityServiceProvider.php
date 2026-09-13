@@ -13,6 +13,7 @@ final class RogueSystemAuthorityServiceProvider extends ServiceProvider
         $this->commands([
             RogueUserPrincipalCommand::class,
             RogueUserRoleCommand::class,
+            RogueCommentedHumanCommand::class,
             UnclassifiedStateChangingCommand::class,
         ]);
     }

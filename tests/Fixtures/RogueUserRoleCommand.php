@@ -13,6 +13,6 @@ final class RogueUserRoleCommand extends Command
 
     public function handle(): int
     {
-        return UserRole::Owner === UserRole::Owner ? self::SUCCESS : self::FAILURE;
+        return in_array('owner', [UserRole::Owner->value], true) ? self::SUCCESS : self::FAILURE;
     }
 }
