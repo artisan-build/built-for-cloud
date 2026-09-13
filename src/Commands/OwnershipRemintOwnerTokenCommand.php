@@ -11,7 +11,6 @@ use ArtisanBuild\BuiltForCloud\OwnerCredentialMinter;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\TokenGenerator;
-use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
@@ -23,7 +22,7 @@ use InvalidArgumentException;
  * Ownership itself never moves — the owner is whoever it already was — so this
  * is console/database authenticated only and is never exposed over HTTP.
  */
-final class OwnershipRemintOwnerTokenCommand extends Command
+final class OwnershipRemintOwnerTokenCommand extends SystemAuthorityCommand
 {
     protected $signature = 'bfc:ownership:remint-owner-token {--execute} {--hash=} {--environment=} {--local}';
 

@@ -8,7 +8,6 @@ use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
-use Illuminate\Console\Command;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 
@@ -24,7 +23,7 @@ use Illuminate\Support\Facades\DB;
  * the outbox dedup key makes the warning once-per-expiry even across
  * concurrent runs.
  */
-final class WarnExpiringCredentialsCommand extends Command
+final class WarnExpiringCredentialsCommand extends SystemAuthorityCommand
 {
     protected $signature = 'bfc:credentials:warn-expiring {--window-hours= : Override the configured warning window}';
 

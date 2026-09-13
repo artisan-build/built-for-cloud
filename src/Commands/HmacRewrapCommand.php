@@ -12,7 +12,6 @@ use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\FileStore;
 use Illuminate\Cache\Lock;
-use Illuminate\Console\Command;
 use Illuminate\Contracts\Cache\Lock as LockContract;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Cache;
@@ -45,7 +44,7 @@ use Illuminate\Support\Facades\Cache;
  * Output carries ids, versions and counts only — never key material,
  * plaintext or ciphertext.
  */
-final class HmacRewrapCommand extends Command
+final class HmacRewrapCommand extends SystemAuthorityCommand
 {
     protected $signature = 'bfc:hmac:rewrap
         {--chunk=100 : Rows re-encrypted per batch}';

@@ -66,7 +66,10 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\VerifyHmacSignature;
 use ArtisanBuild\BuiltForCloud\Listeners\EvictConsolePrincipal;
 use ArtisanBuild\BuiltForCloud\Listeners\QueueOwnershipWebhook;
+use ArtisanBuild\BuiltForCloud\Listeners\RefuseSystemAuthorityAuthentication;
+use ArtisanBuild\BuiltForCloud\Listeners\SystemAuthorityQueueScope;
 use Illuminate\Auth\AuthManager;
+use Illuminate\Auth\Events\Authenticated;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Auth\SessionGuard;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -78,6 +81,10 @@ use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Http\Request;
+use Illuminate\Queue\Events\JobExceptionOccurred;
+use Illuminate\Queue\Events\JobFailed;
+use Illuminate\Queue\Events\JobProcessed;
+use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Routing\Events\RouteMatched;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
@@ -102,6 +109,8 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         );
 
         $this->app->singleton(UsageReporter::class, NullUsageReporter::class);
+        $this->app->singleton(SystemAuthorityContext::class);
+        $this->app->singleton(SystemAuthorityQueueScope::class);
 
         // P5b's forward-only carry: exchange has one durable destination.
         $this->app->bind(DurableCredentialMinter::class, UnifiedStoreCredentialMinter::class);
@@ -124,6 +133,13 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     public function boot(): void
     {
         HumanAuthConfiguration::apply($this->app->make(Repository::class));
+
+        Event::listen(Authenticated::class, [RefuseSystemAuthorityAuthentication::class, 'handle']);
+        Event::listen(Login::class, [RefuseSystemAuthorityAuthentication::class, 'handle']);
+        Event::listen(JobProcessing::class, [SystemAuthorityQueueScope::class, 'processing']);
+        Event::listen(JobProcessed::class, [SystemAuthorityQueueScope::class, 'finished']);
+        Event::listen(JobExceptionOccurred::class, [SystemAuthorityQueueScope::class, 'finished']);
+        Event::listen(JobFailed::class, [SystemAuthorityQueueScope::class, 'finished']);
 
         if ($this->app->resolved('auth')) {
             HumanAuthConfiguration::assertEffectiveProvider($this->app->make('auth'));

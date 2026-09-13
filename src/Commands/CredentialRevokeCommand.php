@@ -9,14 +9,13 @@ use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Commands\Concerns\ParsesCredentialVerbInput;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\RevokeOutcome;
-use Illuminate\Console\Command;
 
 /**
  * The revoke verb's CLI transport (PRD 1.0): the same
  * {@see RevokeCredential} action the HTTP transport runs. By id — the
  * precise verb; exactly this row dies.
  */
-final class CredentialRevokeCommand extends Command
+final class CredentialRevokeCommand extends SystemAuthorityCommand
 {
     use ParsesCredentialVerbInput;
 

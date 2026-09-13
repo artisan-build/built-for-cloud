@@ -7,7 +7,6 @@ namespace ArtisanBuild\BuiltForCloud\Commands;
 use ArtisanBuild\BuiltForCloud\CloudCommandRunner;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\OwnershipClaimMinter;
-use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
@@ -19,7 +18,7 @@ use InvalidArgumentException;
  * environment; `--execute` is the half that runs there (and is what you reach
  * for directly via `cloud command:run`).
  */
-final class OwnershipMintClaimCommand extends Command
+final class OwnershipMintClaimCommand extends SystemAuthorityCommand
 {
     protected $signature = 'bfc:ownership:mint-claim {--execute} {--hash=} {--environment=} {--local}';
 

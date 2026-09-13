@@ -25,17 +25,19 @@ use SplFileInfo;
 use Throwable;
 
 /**
- * Derives requestless package entry points and reports human-authority use.
+ * Derives requestless package entry points and reports advisory source-level
+ * human-authority tripwires. Runtime enforcement, not this scanner, holds the
+ * no-human-authentication and no-bound-user-actor rules.
  *
  * Limits: registered commands are read from explicit provider commands([...])
  * lists. Queue membership uses the framework interface at runtime, but the
  * authority checks inspect declared source rather than transitive call graphs.
  * Schedules combine the framework registry's actual callable/command identity
  * with a tokenized scheduling-reference tripwire across scanned roots. A real
- * callable or command outside those roots is reported as uninspectable, while
- * conditional registrations remain visible to the tripwire. Dynamically
- * generated registrations, transitive calls, and unscanned consumer/vendor
- * code remain outside this source-level instrument.
+ * callable or command outside those roots is reported as uninspectable. The
+ * tripwire recognizes Illuminate\Console\Scheduling references, but facades,
+ * helper indirection, dynamic registrations, transitive calls, and unscanned
+ * consumer/vendor code remain outside this advisory instrument.
  */
 final class SystemAuthorityInventory
 {
@@ -195,10 +197,11 @@ final class SystemAuthorityInventory
      * (setUser), and PINNED against those contracts by
      * `SystemAuthorityInventoryTest`: when the framework adds a method, that test
      * reds and forces a decision here rather than letting a new spelling through.
-     * The read-only members (check, guest, user, id, hasUser, validate) and the
-     * clearing members (logout, viaRemember) are deliberately excluded — the read
-     * ones are covered by the `Auth::user|check` principal check in
-     * {@see self::violations()}.
+     * The remaining contract methods cannot accept an arbitrary new identity and
+     * are deliberately excluded. Some are status/read operations, `user()` may
+     * restore a session or remembered identity, `viaRemember()` reports how the
+     * current identity was restored, and `logout()` clears it. This vocabulary is
+     * an advisory subset, not a bound on SessionGuard or facade methods.
      *
      * @var list<string>
      */
@@ -607,7 +610,10 @@ final class SystemAuthorityInventory
         $violations = [];
 
         foreach (self::phpFiles($roots) as $file) {
-            if (realpath($file->getPathname()) === realpath(__FILE__)) {
+            if (in_array(realpath($file->getPathname()), [
+                realpath(__FILE__),
+                realpath(dirname(__DIR__).'/SystemAuthoritySchedule.php'),
+            ], true)) {
                 continue;
             }
 

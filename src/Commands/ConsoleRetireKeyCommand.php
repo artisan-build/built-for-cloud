@@ -12,7 +12,6 @@ use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyRetired;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
-use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -52,7 +51,7 @@ use Illuminate\Support\Facades\DB;
  * retiring one key too many, so it needs this flag. Without it the
  * command refuses and prints what the flag would do.
  */
-final class ConsoleRetireKeyCommand extends Command
+final class ConsoleRetireKeyCommand extends SystemAuthorityCommand
 {
     use ParsesCredentialVerbInput;
 

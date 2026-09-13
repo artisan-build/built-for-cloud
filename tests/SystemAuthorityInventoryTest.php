@@ -274,15 +274,16 @@ it('distinguishes user writes from human authentication without a command-name c
         ->and(p5eSource(SystemAuthorityInventory::class))->not->toContain('CreateAdminCommand');
 });
 
-it('states the source-level inventory limits and fail-closed schedule boundary truthfully', function (): void {
+it('states the source-level advisory instrument limits truthfully', function (): void {
     expect(p5eSource(SystemAuthorityInventory::class))->toContain(
         'Queue membership uses the framework interface at runtime',
         'actual callable/command identity',
-        'conditional registrations remain visible to the tripwire',
-        'Dynamically',
-        'generated registrations',
+        'advisory source-level',
+        'facades',
+        'helper indirection',
+        'dynamic registrations',
         'transitive calls',
-        'unscanned consumer/vendor',
+        'consumer/vendor code',
     );
 });
 
@@ -401,12 +402,10 @@ it('names the unchanged maintenance and install-scaffold behavior instead of exc
         ->not->toContain('CloudCommandRunner', 'requireLocal()');
 });
 
-it('reports every framework auth operation that establishes a human identity, not a chosen few', function (): void {
-    // The vocabulary is PINNED against the framework's own contracts. When Laravel
-    // adds a method that logs a human in, this test reds and forces a decision in
-    // SystemAuthorityInventory::AUTH_OPERATIONS instead of letting a new spelling
-    // through unnoticed. That is the difference between a bound and a guess: the
-    // previous version listed four of the six and Auth::attempt walked past it.
+it('pins the advisory auth vocabulary to the framework contract subset it claims', function (): void {
+    // This keeps the tripwire's documented contract subset honest. It does not
+    // claim to enumerate SessionGuard or facade methods: runtime Authenticated +
+    // Login enforcement carries that prohibition.
     $reflection = new ReflectionClass(SystemAuthorityInventory::class);
     $operations = $reflection->getConstant('AUTH_OPERATIONS');
 
@@ -417,9 +416,9 @@ it('reports every framework auth operation that establishes a human identity, no
         }
     }
 
-    // Deliberately excluded, with the reason: these READ or CLEAR the identity
-    // rather than establishing one, and the read members are already covered by
-    // the Auth::user/check principal check.
+    // Deliberately excluded because none accepts an arbitrary new identity.
+    // user() can restore a session or recaller identity, viaRemember() reports
+    // restoration status, and logout() clears identity.
     $excluded = ['check', 'guest', 'user', 'id', 'hasUser', 'validate', 'logout', 'viaRemember'];
 
     expect(array_values(array_diff(array_unique($declared), $excluded)))

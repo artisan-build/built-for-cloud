@@ -214,6 +214,21 @@ It also creates one structurally guarded `bfc_authority` row in `standalone` mod
 `InstallationAuthority::change()` is the non-Eloquent write API; it advances that generation with a
 compare-and-set update and returns the exact state it wrote, so stale writers cannot change authority.
 
+### System-authority entries
+
+Built for Cloud commands, queued jobs/listeners, and package-registered schedule callbacks execute in
+a package system-authority context. While that context is active, Laravel `SessionGuard`
+authentication is refused through listeners on both `Authenticated` and `Login`, and
+`AuditActor::boundUser()` refuses to synthesize human attribution. The context is always released in
+`finally` paths; queue processed, failed, and exception events remove the queue frame so a long-lived
+worker does not carry package authority into the next host job.
+
+This boundary covers the package's own derived entry inventories and guards that dispatch Laravel's
+authentication events. `RequestGuard`, custom host guards that do not dispatch `Authenticated` or
+`Login`, and host commands, jobs, listeners, or schedules outside those inventories are host
+configuration. The retained source scanner is an advisory tripwire, not the enforcement mechanism;
+its detailed limits are in [`docs/system-authority-instrument-limits.md`](docs/system-authority-instrument-limits.md).
+
 ### Role policy
 
 `RolePolicy` implements only the frozen coarse policy:

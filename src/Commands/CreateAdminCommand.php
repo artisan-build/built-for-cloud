@@ -7,7 +7,6 @@ namespace ArtisanBuild\BuiltForCloud\Commands;
 use ArtisanBuild\BuiltForCloud\CloudCommandRunner;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
-use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
 
@@ -15,7 +14,7 @@ use function Laravel\Prompts\password;
 use function Laravel\Prompts\select;
 use function Laravel\Prompts\text;
 
-final class CreateAdminCommand extends Command
+final class CreateAdminCommand extends SystemAuthorityCommand
 {
     protected $signature = 'create-admin {--execute} {--email=} {--password=} {--password-hash=} {--name=} {--environment=} {--local} {--force}';
 

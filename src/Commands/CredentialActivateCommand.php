@@ -13,7 +13,6 @@ use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
-use Illuminate\Console\Command;
 
 /**
  * The activate verb's CLI transport (PRD 1.21, SEC-V3-01): the same
@@ -25,7 +24,7 @@ use Illuminate\Console\Command;
  * (D7's CLI rule holds trivially — nothing secret in, nothing secret
  * out).
  */
-final class CredentialActivateCommand extends Command
+final class CredentialActivateCommand extends SystemAuthorityCommand
 {
     use ParsesCredentialVerbInput;
 

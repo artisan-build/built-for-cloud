@@ -15,7 +15,6 @@ use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\MintResult;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
-use Illuminate\Console\Command;
 
 /**
  * The mint verb's CLI transport (PRD 1.0 + 1.6): the same
@@ -26,7 +25,7 @@ use Illuminate\Console\Command;
  * printed exactly once, to the TTY, straight out of the sealed carrier —
  * and accepts no secret input of any kind.
  */
-final class CredentialMintCommand extends Command
+final class CredentialMintCommand extends SystemAuthorityCommand
 {
     use ParsesCredentialVerbInput;
 
