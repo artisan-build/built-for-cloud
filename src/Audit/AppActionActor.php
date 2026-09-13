@@ -196,7 +196,7 @@ final readonly class AppActionActor
 
         return match (true) {
             $principal->delegated => throw self::unattributable(),
-            $principal->principal instanceof Credential => self::credential($principal->principal),
+            $principal->principal instanceof Credential => self::apiToken($principal->principal),
             $principal->principal instanceof Authenticatable => self::localUser($principal->principal),
             default => throw self::unattributable(),
         };
