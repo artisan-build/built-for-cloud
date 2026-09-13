@@ -1796,3 +1796,55 @@ it('proposes an adoption whose roster subjects are numeric strings, as a real au
         ->and($subjects)->toBe(['101', '202'])
         ->and($subjects)->each->toBeString();
 });
+
+it('lets a locally-unverified Owner exit after adopt, on the authority\'s verification of the same address', function (): void {
+    // S2c found this in dry run 2, live, against a real authority. The Owner the package's
+    // OWN create-admin command produces has no email_verified_at. Adopt nulls every local
+    // password by design, and a same-email link used to keep the local NULL even though the
+    // roster reported that exact address verified — so the Owner could neither authenticate
+    // nor receive recovery, and the accessible-Owner guard refused EVERY later exit. The
+    // installation could not leave managed mode through the guided flow at all.
+    //
+    // The existing coverage missed it from both sides: the guard's own test uses an
+    // UNVERIFIED roster contact, and every successful exit test starts from an Owner who is
+    // already locally verified. Nothing covered locally-unverified plus roster-verified.
+    $email = 'create-admin-owner@example.test';
+    $roster = [[
+        'scalpels_id' => 'owner-subject', 'membership_status' => 'active', 'role' => 'owner',
+        'display_name' => 'Create Admin Owner', 'contact_email' => $email, 'contact_email_verified' => true,
+    ]];
+    [$owner, $fixture] = p4dConfigure(ManagedTransitionDirection::Adopt, $roster);
+    $owner->forceFill(['email' => $email, 'email_verified_at' => null])->save();
+
+    // The precondition, asserted: if this were already verified the test would prove nothing.
+    expect($owner->refresh()->hasVerifiedEmail())->toBeFalse();
+
+    $this->actingAsVersioned($owner);
+    $link = [[
+        'scalpels_id' => 'owner-subject', 'local_kind' => 'user', 'local_id' => (string) $owner->getKey(),
+        'role' => 'owner', 'disposition' => 'link', 'final_email' => $email,
+    ]];
+    $adopted = app(ManagedTransitions::class)->complete(
+        $owner,
+        p4dProposed($owner, ManagedTransitionDirection::Adopt, $link),
+    );
+    $linked = $owner->refresh();
+
+    expect($adopted->status)->toBe(ManagedTransitionStatus::Acknowledged)
+        // Adopt nulls the password by design, so recovery is the only way back...
+        ->and($linked->password)->toBeNull()
+        // ...and the authority vouches for this exact address, so it is verified now.
+        ->and($linked->hasVerifiedEmail())->toBeTrue()
+        ->and(StandaloneAccess::userCanReceiveRecovery($linked))->toBeTrue();
+
+    // The consequence that was actually broken: exit is reachable. The authority is at
+    // generation 8 now that adopt has committed, so the fixture answers as that generation.
+    $fixture->generation = 8;
+    $exited = app(ManagedTransitions::class)->complete(
+        $owner->refresh(),
+        p4dProposed($owner->refresh(), ManagedTransitionDirection::Exit, $link),
+    );
+
+    expect($exited->status)->toBe(ManagedTransitionStatus::Acknowledged)
+        ->and(InstallationAuthority::current()->mode)->toBe(AuthorityMode::Standalone);
+});
