@@ -53,8 +53,7 @@ final class RevokeCredential
         ?AuditActor $actor = null,
         ?Subject $scope = null,
         ?CredentialOwnership $ownership = null,
-    ): RevokeOutcome
-    {
+    ): RevokeOutcome {
         /** @var RevokeOutcome */
         return DB::transaction(function () use ($id, $actor, $scope, $ownership): RevokeOutcome {
             /** @var Credential|null $target */

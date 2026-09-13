@@ -62,7 +62,10 @@ final class SystemAuthorityInventory
         ];
     }
 
-    /** @param list<string> $providerFiles @return list<string> */
+    /**
+     * @param  list<string>  $providerFiles
+     * @return list<string>
+     */
     private static function registeredCommands(array $providerFiles): array
     {
         $commands = [];
@@ -88,7 +91,10 @@ final class SystemAuthorityInventory
         return array_values(array_unique($commands));
     }
 
-    /** @param list<string> $roots @return array<class-string|string, string> */
+    /**
+     * @param  list<string>  $roots
+     * @return array<string, string>
+     */
     private static function sources(array $roots): array
     {
         $sources = [];

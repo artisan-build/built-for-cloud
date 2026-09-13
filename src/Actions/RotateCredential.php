@@ -112,8 +112,7 @@ final class RotateCredential
         RotateOptions $options,
         ?AuditActor $actor = null,
         ?CredentialOwnership $ownership = null,
-    ): ?RotationResult
-    {
+    ): ?RotationResult {
         $phaseOne = fn (): ?RotationResult => DB::transaction(
             fn (): ?RotationResult => $this->mintReplacement($id, $options, $actor, $ownership),
         );
@@ -196,8 +195,7 @@ final class RotateCredential
         RotateOptions $options,
         ?AuditActor $actor,
         ?CredentialOwnership $ownership,
-    ): ?RotationResult
-    {
+    ): ?RotationResult {
         /** @var Credential|null $source */
         $source = Credential::query()->whereKey($id)->lockForUpdate()->first();
 
