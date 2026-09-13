@@ -26,7 +26,7 @@ function issueScopedClaimCode(Scope $scope, string $email): string
         'email' => $email,
         'scope' => $scope->value,
         'ttl_seconds' => 3600,
-    ], ['Authorization' => 'Bearer '.auditAdminToken('scope-'.$scope->value.'-'.bin2hex(random_bytes(4)))])
+    ], ['Authorization' => 'Bearer '.auditOperatorCredential('scope-'.$scope->value.'-'.bin2hex(random_bytes(4)))])
         ->assertCreated();
 
     return (string) $response->json('claim_code');

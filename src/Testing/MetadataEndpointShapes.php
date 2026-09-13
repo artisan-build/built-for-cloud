@@ -215,17 +215,6 @@ final class MetadataEndpointShapes
             ],
             'DELETE /bfc/credentials/{id}' => ['type' => 'empty'],
             'DELETE /bfc/me/credentials/{id}' => ['type' => 'empty'],
-            'DELETE /api/credentials/id/{id}' => ['type' => 'empty'],
-            // No cardinality bound. How many rows share a name is not a
-            // classification concern and the producer imposes no cap; an
-            // earlier revision's 1,000 was a bound written where nothing
-            // enforced it. Each ITEM being bounded is the claim.
-            'DELETE /api/credentials/{name}' => [
-                'type' => 'object',
-                'fields' => [
-                    'revoked_ids' => ['type' => 'list', 'of' => ['type' => 'token']],
-                ],
-            ],
         ];
     }
 

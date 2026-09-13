@@ -14,7 +14,6 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ManagedAuthentication;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTokens;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTransitions;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\PersonalCredentials;
@@ -44,7 +43,6 @@ final class StandaloneSurfaceInventory
             ManageOnboarding::class => false,
             ManageOwnership::class => false,
             ManageSubjects::class => false,
-            ManageTokens::class => false,
             ManageTransitions::class => false,
             MetaController::class => false,
             PersonalCredentials::class => false,

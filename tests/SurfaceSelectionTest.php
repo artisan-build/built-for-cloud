@@ -74,7 +74,7 @@ final class SurfaceSelectionTest extends TestCase
         // still gates its own routes (the MCP per-tool primitive included).
         $aliases = Route::getMiddleware();
 
-        foreach (['bfc.auth', 'bfc.admin', 'bfc.token.admin', 'bfc.credential.admin', 'bfc.ability', 'bfc.hmac'] as $alias) {
+        foreach (['bfc.auth', 'bfc.admin', 'bfc.credential.admin', 'bfc.ability', 'bfc.hmac'] as $alias) {
             $this->assertArrayHasKey($alias, $aliases);
         }
 
@@ -106,7 +106,7 @@ final class SurfaceSelectionTest extends TestCase
     #[WithConfig('built-for-cloud.surfaces.migrations', false, false)]
     public function test_migrations_off_stops_loading_the_package_schema(): void
     {
-        foreach (['users', 'bfc_authority', 'credentials', 'api_tokens', 'onboarding_tokens', 'ownership', 'ownership_claims', 'invitations', 'credential_audit_events'] as $table) {
+        foreach (['users', 'bfc_authority', 'credentials', 'onboarding_tokens', 'ownership', 'ownership_claims', 'invitations', 'credential_audit_events'] as $table) {
             $this->assertFalse(Schema::hasTable($table), "Expected the {$table} table to be absent with the migrations surface off.");
         }
 
@@ -131,9 +131,6 @@ final class SurfaceSelectionTest extends TestCase
                 "Expected no bfc:* command with the commands surface off; found {$name}.",
             );
         }
-
-        $this->assertArrayNotHasKey('token:create', $commands);
-        $this->assertArrayNotHasKey('token:rotate', $commands);
 
         // Independence: everything else still mounts.
         $this->getJson('/bfc/meta')->assertOk();

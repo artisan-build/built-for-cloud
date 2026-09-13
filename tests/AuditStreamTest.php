@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\Credential;
@@ -13,7 +12,6 @@ use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\Scope;
-use ArtisanBuild\BuiltForCloud\TokenRegistry;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -32,8 +30,8 @@ function auditEvents(LifecycleEventType $event): array
         ->all();
 }
 
-it('audits issue with the code id, recipient, selected ttl, and the admin token actor', function (): void {
-    $ownerToken = auditAdminToken('owner');
+it('audits issue with the code id, recipient, selected ttl, and operator actor', function (): void {
+    $ownerToken = auditOperatorCredential('owner');
 
     $this->postJson('/bfc/onboarding/issue', [
         'email' => 'person@example.test',
@@ -46,13 +44,13 @@ it('audits issue with the code id, recipient, selected ttl, and the admin token 
 
     $issued = $events[0];
     $code = OnboardingToken::query()->firstOrFail();
-    $adminRow = ApiToken::query()->where('name', 'owner')->firstOrFail();
+    $adminRow = Credential::query()->where('name', 'owner')->firstOrFail();
 
     expect($issued->code_id)->toBe($code->id)
         ->and($issued->credential_id)->toBeNull()
         ->and($issued->recipient)->toBe('person@example.test')
         ->and($issued->code_ttl_seconds)->toBe(3600)
-        ->and($issued->actor_type)->toBe(AuditActorType::AdminToken)
+        ->and($issued->actor_type)->toBe(AuditActorType::OperatorIntegration)
         ->and($issued->actor_ref)->toBe($adminRow->id)
         ->and($issued->environment)->toBe('testing');
 
@@ -83,7 +81,7 @@ it('audits the supersession revocation when re-issuing over a pending exchanged 
 
     expect($superseded)->toHaveCount(1)
         ->and($superseded[0]->reason_code)->toBe(AuditReason::Superseded)
-        ->and($superseded[0]->actor_type)->toBe(AuditActorType::AdminToken);
+        ->and($superseded[0]->actor_type)->toBe(AuditActorType::OperatorIntegration);
 });
 
 it('audits exchange and links both revocations old-to-new with supersession lineage', function (): void {
@@ -147,7 +145,7 @@ it('audits first use inside the burn transaction with the code linkage and recip
         ->where('token_hash', OnboardingToken::hashToken($claimCode))
         ->firstOrFail();
 
-    // The admin token that issued has its own first_used row (its first
+    // The operator credential that issued has its own first_used row (its first
     // authenticated request IS a first use); scope to this durable.
     $durableFirstUses = fn (): array => array_values(array_filter(
         auditEvents(LifecycleEventType::FirstUsed),
@@ -170,10 +168,10 @@ it('audits first use inside the burn transaction with the code linkage and recip
 });
 
 it('audits rotation as issued replacement plus rotated originals with lineage', function (): void {
-    $registry = app(TokenRegistry::class);
-    $old = $registry->store('rotate-me', hash('sha256', 'old-secret'));
+    $old = Credential::factory()->create(['name' => 'rotate-me']);
 
-    $new = $registry->rotate('rotate-me', hash('sha256', 'new-secret'));
+    $this->artisan('bfc:credential:rotate', ['id' => $old->id, '--local' => true])->assertSuccessful();
+    $new = Credential::query()->where('id', '!=', $old->id)->sole();
 
     $issued = auditEvents(LifecycleEventType::Issued);
     expect($issued)->toHaveCount(1)
@@ -188,13 +186,11 @@ it('audits rotation as issued replacement plus rotated originals with lineage', 
 });
 
 it('audits emergency rotation with the emergency reason and the cli actor from the command', function (): void {
-    $registry = app(TokenRegistry::class);
-    $old = $registry->store('emergency-me', hash('sha256', 'old-secret'));
+    $old = Credential::factory()->create(['name' => 'emergency-me']);
 
-    $this->artisan('token:rotate', [
-        'name' => 'emergency-me',
-        '--execute' => true,
-        '--hash' => hash('sha256', 'new-secret'),
+    $this->artisan('bfc:credential:rotate', [
+        'id' => $old->id,
+        '--local' => true,
         '--emergency' => true,
     ])->assertSuccessful();
 
@@ -206,10 +202,9 @@ it('audits emergency rotation with the emergency reason and the cli actor from t
 });
 
 it('audits revocation with the operator-request reason and the cli actor', function (): void {
-    $registry = app(TokenRegistry::class);
-    $cliTarget = $registry->store('cli-revoked', hash('sha256', 'cli-secret'));
+    $cliTarget = Credential::factory()->create(['name' => 'cli-revoked']);
 
-    $this->artisan('token:revoke', ['name' => 'cli-revoked', '--execute' => true])
+    $this->artisan('bfc:credential:revoke', ['id' => $cliTarget->id, '--local' => true])
         ->assertSuccessful();
 
     $cliEvents = array_values(array_filter(

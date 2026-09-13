@@ -42,8 +42,7 @@ it('claims an unowned environment with a claim token and returns an admin owner 
 
     $ownerCredential = Credential::query()->whereKey($ownership?->owner_credential_id)->firstOrFail();
 
-    expect($ownership?->owner_token_id)->toBeNull()
-        ->and($ownerCredential->abilities)->toBe([EnsureCredentialAdmin::ABILITY]);
+    expect($ownerCredential->abilities)->toBe([EnsureCredentialAdmin::ABILITY]);
 
     $this->getJson('/bfc/credentials', ownerHeaders($ownerPlaintext))->assertOk();
     $this->postJson('/bfc/ownership/claim', ['token' => $claimToken])->assertUnauthorized();
@@ -83,7 +82,6 @@ it('cuts over ownership with the pending claim and revokes the old owner token',
     $ownership = Ownership::current();
 
     expect($ownership?->owner_credential_id)->not->toBe($oldOwnerCredentialId)
-        ->and($ownership?->owner_token_id)->toBeNull()
         ->and($ownership?->pending_claim_id)->toBeNull()
         ->and($ownership?->notify_callback)->toBe('https://cutover.example.test/hook')
         ->and($ownership?->webhook_secret)->not->toBe($oldWebhookSecret)

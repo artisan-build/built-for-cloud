@@ -18,10 +18,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
-use Orchestra\Testbench\Attributes\WithConfig;
 use PHPUnit\Framework\Attributes\DataProvider;
 
-#[WithConfig('built-for-cloud.credential_api.enabled', true, false)]
 final class ClientIdentityObservationTest extends TestCase
 {
     use RefreshDatabase;
@@ -114,21 +112,6 @@ final class ClientIdentityObservationTest extends TestCase
 
         // ...and PR1's path is untouched: the identity is still recorded on the token itself.
         $this->assertSame('scoped-client', Credential::query()->where('name', 'consume')->firstOrFail()->client_identity);
-    }
-
-    // AC4 — the fallback token authenticates, so it is not a NoCredential event either.
-    public function test_the_fallback_token_is_not_a_no_credential_event(): void
-    {
-        $this->enableObservations();
-
-        config(['built-for-cloud.fallback_token' => 'fallback-secret']);
-
-        $this->getJson('/bfc/credentials', [
-            'Authorization' => 'Bearer fallback-secret',
-            ClientIdentity::HEADER => 'fallback-client',
-        ])->assertForbidden();
-
-        $this->assertSame(0, ClientIdentityObservation::query()->count());
     }
 
     // AC5 — OFF by default. No config touched here on purpose.

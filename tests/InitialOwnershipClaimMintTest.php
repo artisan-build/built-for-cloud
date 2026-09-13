@@ -2,10 +2,9 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\Database\MintInitialOwnershipClaim;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
-use ArtisanBuild\BuiltForCloud\Scope;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\DB;
@@ -125,15 +124,11 @@ it('mints nothing when a pending claim already exists', function (): void {
 });
 
 it('mints nothing on a claimed instance', function (): void {
-    $ownerToken = ApiToken::query()->create([
-        'name' => 'owner',
-        'token_hash' => hash('sha256', 'owner-secret'),
-        'abilities' => [Scope::Admin->value],
-    ]);
+    $ownerCredential = Credential::factory()->create(['name' => 'owner']);
 
     DB::table('ownership')->insert([
         'id' => (string) Str::uuid(),
-        'owner_token_id' => $ownerToken->getKey(),
+        'owner_credential_id' => $ownerCredential->getKey(),
         'created_at' => now(),
         'updated_at' => now(),
     ]);

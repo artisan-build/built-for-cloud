@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
 use ArtisanBuild\BuiltForCloud\Actions\OffboardSubject;
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
@@ -145,15 +144,6 @@ it('contains the whole account in one action: every credential state, codes, inv
         MintOptions::fromInput(['kind' => 'hmac', 'code_ttl_seconds' => 3600]),
     );
 
-    // A subject-stamped legacy api_tokens row.
-    $legacy = ApiToken::query()->create([
-        'name' => 'legacy-acme',
-        'token_hash' => hash('sha256', 'legacy-acme-secret'),
-        'abilities' => [Scope::Consume->value],
-        'subject_type' => SubjectType::ExternalConsumer->value,
-        'subject_ref' => 'acme',
-    ]);
-
     // The principal's pending claim code, invitation, reset token, session.
     $code = OnboardingToken::query()->create([
         'id' => (string) Str::uuid(),
@@ -195,13 +185,12 @@ it('contains the whole account in one action: every credential state, codes, inv
     expect($result->applied)->toBeTrue()
         ->and($result->fullyContained())->toBeTrue();
 
-    // Every credential in every lifecycle state is dead — active, grace,
-    // pending bearer, pending hmac, and the legacy row.
+    // Every credential in every lifecycle state is dead: active, grace,
+    // pending bearer, and pending hmac.
     expect($active->credential->refresh()->revoked_at)->not->toBeNull()
         ->and($grace->credential->refresh()->revoked_at)->not->toBeNull()
         ->and($pendingBearer->credential->refresh()->revoked_at)->not->toBeNull()
-        ->and(Credential::query()->findOrFail($hmacResult->summary->id)->revoked_at)->not->toBeNull()
-        ->and($legacy->refresh()->revoked_at)->not->toBeNull();
+        ->and(Credential::query()->findOrFail($hmacResult->summary->id)->revoked_at)->not->toBeNull();
 
     // Every outstanding code and invitation is consumed/canceled — the
     // hmac delivery code included — and the reset token and session are gone.
@@ -234,8 +223,7 @@ it('contains the whole account in one action: every credential state, codes, inv
     expect($revoked)->toContain($active->credential->id)
         ->and($revoked)->toContain($grace->credential->id)
         ->and($revoked)->toContain($pendingBearer->credential->id)
-        ->and($revoked)->toContain($hmacResult->summary->id)
-        ->and($revoked)->toContain((string) $legacy->getKey());
+        ->and($revoked)->toContain($hmacResult->summary->id);
 });
 
 it('revokes every credential bound to a resolved user across subjects without duplicate count or audit', function (): void {

@@ -73,8 +73,8 @@ trait ContractAssertions
 
     public function assertBuiltForCloudOwnershipAuthContract(): void
     {
-        $wrongAbility = $this->mintBuiltForCloudOperatorCredential([OperatorAbility::CredentialMint->value]);
-        $consumeToken = $this->mintBuiltForCloudConsumeToken();
+        $wrongAbility = $this->mintBuiltForCloudOperatorWithAbilities([OperatorAbility::CredentialMint->value]);
+        $consumeToken = $this->mintBuiltForCloudConsumeCredential();
 
         foreach (['/bfc/ownership/release', '/bfc/ownership/cancel-transfer'] as $uri) {
             $this->postJson($uri)->assertUnauthorized();
@@ -93,8 +93,8 @@ trait ContractAssertions
 
     public function assertBuiltForCloudOnboardingAuthContract(): void
     {
-        $wrongAbility = $this->mintBuiltForCloudOperatorCredential([OperatorAbility::CredentialRead->value]);
-        $consumeToken = $this->mintBuiltForCloudConsumeToken();
+        $wrongAbility = $this->mintBuiltForCloudOperatorWithAbilities([OperatorAbility::CredentialRead->value]);
+        $consumeToken = $this->mintBuiltForCloudConsumeCredential();
 
         $this->postJson('/bfc/onboarding/issue', ['email' => 'contract@example.test'])
             ->assertUnauthorized();
@@ -186,7 +186,7 @@ trait ContractAssertions
      */
     public function assertBuiltForCloudCredentialListingContract(): void
     {
-        $admin = $this->mintBuiltForCloudAdminToken('contract-listing-admin');
+        $admin = $this->mintBuiltForCloudOperatorCredential('contract-listing-admin');
 
         $response = $this->getJson('/bfc/credentials', $this->builtForCloudBearerHeaders($admin));
 
@@ -282,7 +282,7 @@ trait ContractAssertions
      */
     public function assertBuiltForCloudMintTransportParity(): bool
     {
-        $admin = $this->mintBuiltForCloudAdminToken('parity-admin');
+        $admin = $this->mintBuiltForCloudOperatorCredential('parity-admin');
 
         $ref = 'parity-mint-'.bin2hex(random_bytes(4));
 
@@ -384,7 +384,7 @@ trait ContractAssertions
      */
     public function assertBuiltForCloudBasicAuthTransportParity(): void
     {
-        $admin = $this->mintBuiltForCloudAdminToken('parity-basic-admin');
+        $admin = $this->mintBuiltForCloudOperatorCredential('parity-basic-admin');
 
         $ref = 'parity-basic-'.bin2hex(random_bytes(4));
 
@@ -448,7 +448,7 @@ trait ContractAssertions
 
     public function assertBuiltForCloudListTransportParity(): void
     {
-        $admin = $this->mintBuiltForCloudAdminToken('parity-list-admin');
+        $admin = $this->mintBuiltForCloudOperatorCredential('parity-list-admin');
 
         $cliExit = Artisan::call('bfc:credential:list', ['--json' => true, '--local' => true]);
         Assert::assertSame(0, $cliExit);
@@ -473,7 +473,7 @@ trait ContractAssertions
      */
     public function assertBuiltForCloudRevokeTransportParity(): void
     {
-        $admin = $this->mintBuiltForCloudAdminToken('parity-revoke-admin');
+        $admin = $this->mintBuiltForCloudOperatorCredential('parity-revoke-admin');
 
         $ref = 'parity-revoke-'.bin2hex(random_bytes(4));
 
@@ -549,7 +549,7 @@ trait ContractAssertions
      */
     public function assertBuiltForCloudRotateTransportParity(): void
     {
-        $admin = $this->mintBuiltForCloudAdminToken('parity-rotate-admin');
+        $admin = $this->mintBuiltForCloudOperatorCredential('parity-rotate-admin');
 
         $ref = 'parity-rotate-'.bin2hex(random_bytes(4));
         $expiry = now()->addDays(30)->toIso8601String();
@@ -732,12 +732,12 @@ trait ContractAssertions
         return MetadataEndpointShapes::endpoints();
     }
 
-    public function mintBuiltForCloudAdminToken(string $name = 'contract-admin'): string
+    public function mintBuiltForCloudOperatorCredential(string $name = 'contract-admin'): string
     {
         return $this->mintBuiltForCloudCredential($name, SubjectType::Operator, [OperatorAbility::ADMIN]);
     }
 
-    public function mintBuiltForCloudConsumeToken(string $name = 'contract-consume'): string
+    public function mintBuiltForCloudConsumeCredential(string $name = 'contract-consume'): string
     {
         return $this->mintBuiltForCloudCredential($name, SubjectType::ExternalConsumer, [Scope::Consume->value]);
     }
@@ -763,7 +763,7 @@ trait ContractAssertions
     }
 
     /** @param list<string> $abilities */
-    private function mintBuiltForCloudOperatorCredential(array $abilities): string
+    private function mintBuiltForCloudOperatorWithAbilities(array $abilities): string
     {
         $plaintext = 'contract-operator-'.bin2hex(random_bytes(16));
 

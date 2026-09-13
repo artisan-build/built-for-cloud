@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\Console\Assertion;
 use ArtisanBuild\BuiltForCloud\Console\AssertionPurpose;
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
@@ -15,8 +14,13 @@ use ArtisanBuild\BuiltForCloud\Console\ConsoleRole;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleSession;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedClaims;
+use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\Exceptions\AssertionRefused;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\TestCase;
 use Carbon\CarbonImmutable;
 use ParagonIE\ConstantTime\Base64UrlSafe;
@@ -31,14 +35,18 @@ uses(TestCase::class)->in(__DIR__);
  * Shared helpers for the audit-stream tests (loaded here so any single
  * test file runs standalone).
  */
-function auditAdminToken(string $name = 'audit-admin'): string
+function auditOperatorCredential(string $name = 'audit-operator'): string
 {
     $plaintext = $name.'-secret-'.bin2hex(random_bytes(8));
 
-    ApiToken::query()->create([
+    Credential::query()->create([
+        'kind' => CredentialKind::Bearer,
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => $name,
         'name' => $name,
-        'token_hash' => hash('sha256', $plaintext),
-        'abilities' => [Scope::Admin->value],
+        'secret_hash' => hash('sha256', $plaintext),
+        'status' => CredentialStatus::Active,
+        'abilities' => [OperatorAbility::ADMIN],
     ]);
 
     return $plaintext;
@@ -53,7 +61,7 @@ function auditIssueCode(?string $email, int $ttlSeconds = 3600): string
         'email' => $email,
         'scope' => Scope::Consume->value,
         'ttl_seconds' => $ttlSeconds,
-    ], ['Authorization' => 'Bearer '.auditAdminToken('audit-admin-'.bin2hex(random_bytes(4)))]);
+    ], ['Authorization' => 'Bearer '.auditOperatorCredential('audit-operator-'.bin2hex(random_bytes(4)))]);
 
     $response->assertCreated();
 

@@ -21,11 +21,9 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
-use Orchestra\Testbench\Attributes\WithConfig;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 
-#[WithConfig('built-for-cloud.credential_api.enabled', true, false)]
 final class ClientIdentityTest extends TestCase
 {
     use RefreshDatabase;

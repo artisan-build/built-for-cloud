@@ -32,7 +32,6 @@ it('creates ownership schemas and resolves pending claims by plaintext token', f
         ->and(Schema::hasColumns('ownership_claims', ['id', 'token_hash', 'consumed_at']))->toBeTrue()
         ->and(Schema::hasTable('ownership'))->toBeTrue()
         ->and(Schema::hasColumns('ownership', ['id', 'owner_credential_id', 'notify_callback', 'webhook_secret', 'pending_claim_id']))->toBeTrue()
-        ->and(Schema::hasColumn('ownership', 'owner_token_id'))->toBeFalse()
         ->and(OwnershipClaim::query()->pending()->count())->toBe(1)
         ->and(OwnershipClaim::resolve($plainTextToken)?->is($claim))->toBeTrue()
         ->and(OwnershipClaim::resolve('consumed-secret'))->toBeNull();

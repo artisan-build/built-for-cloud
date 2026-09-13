@@ -18,7 +18,6 @@ trait EnablesEveryPackageRoute
 
         $app['config']->set('built-for-cloud.surfaces.routes', true);
         $app['config']->set('built-for-cloud.console.enabled', true);
-        $app['config']->set('built-for-cloud.credential_api.enabled', true);
     }
 }
 

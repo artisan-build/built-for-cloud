@@ -61,7 +61,7 @@ function hmacClaimMint(string $subjectRef = 'webhook-client', int $ttl = 3600): 
  */
 function hmacAdminHeaders(): array
 {
-    return ['Authorization' => 'Bearer '.auditAdminToken('hmac-admin-'.bin2hex(random_bytes(4)))];
+    return ['Authorization' => 'Bearer '.auditOperatorCredential('hmac-operator-'.bin2hex(random_bytes(4)))];
 }
 
 function bindBurnMode(BurnMode $mode): void

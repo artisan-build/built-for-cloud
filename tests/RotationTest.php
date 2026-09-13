@@ -3,7 +3,6 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesCredentialVerbs;
 use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesRotationOverrides;
@@ -14,13 +13,15 @@ use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\RotationOverride;
-use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Subject;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
+use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
@@ -28,22 +29,26 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Process;
 
-uses(RefreshDatabase::class, DetectsSecretLeaks::class);
+uses(RefreshDatabase::class, DetectsSecretLeaks::class, WithCredentials::class);
 
 /**
  * @return array{Authorization: string}
  */
 function rotationAdminHeaders(): array
 {
-    $plaintext = 'rotation-admin-secret-'.bin2hex(random_bytes(8));
-
-    ApiToken::query()->create([
+    $credential = test()->mintCredential([
         'name' => 'rotation-admin-'.bin2hex(random_bytes(4)),
-        'token_hash' => hash('sha256', $plaintext),
-        'abilities' => [Scope::Admin->value],
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => 'rotation-operator',
+        'abilities' => [EnsureCredentialAdmin::ABILITY],
     ]);
 
-    return ['Authorization' => 'Bearer '.$plaintext];
+    return ['Authorization' => $credential->bearerHeader()];
+}
+
+function rotationCredentialCount(): int
+{
+    return Credential::query()->where('subject_type', '!=', SubjectType::Operator->value)->count();
 }
 
 /**
@@ -356,7 +361,7 @@ it('refuses a widening attempt without the override flag, identically on both tr
         ->and($cliMessage)->toContain('override')
         ->and($cliSource->refresh()->rotated_at)->toBeNull()
         ->and($httpSource->refresh()->rotated_at)->toBeNull()
-        ->and(Credential::query()->count())->toBe(2);
+        ->and(rotationCredentialCount())->toBe(2);
 });
 
 it('refuses narrowing without the flag too: predictability beats cleverness', function (): void {
@@ -367,7 +372,7 @@ it('refuses narrowing without the flag too: predictability beats cleverness', fu
     ], rotationAdminHeaders())->assertStatus(422);
 
     expect($source->refresh()->rotated_at)->toBeNull()
-        ->and(Credential::query()->count())->toBe(1);
+        ->and(rotationCredentialCount())->toBe(1);
 });
 
 it('refuses the override flag with nothing to override', function (): void {
@@ -394,7 +399,7 @@ it('denies every override under a declaration that has not opted in — fail clo
 
     expect((string) $refusal->json('message'))->toContain('does not authorize this rotation override')
         ->and($source->refresh()->rotated_at)->toBeNull()
-        ->and(Credential::query()->count())->toBe(1);
+        ->and(rotationCredentialCount())->toBe(1);
 
     // The CLI refuses the identical question with the identical message.
     expect(Artisan::call('bfc:credential:rotate', [
@@ -458,7 +463,7 @@ it('lets an opted-in declaration deny the override while routine rotation stays 
 
     expect((string) $refusal->json('message'))->toContain('does not authorize this rotation override')
         ->and($source->refresh()->rotated_at)->toBeNull()
-        ->and(Credential::query()->count())->toBe(1);
+        ->and(rotationCredentialCount())->toBe(1);
 
     // The routine path is untouched by the denial.
     $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [], rotationAdminHeaders())->assertCreated();
@@ -495,7 +500,7 @@ it('refuses an authorized override that exceeds the mint ceilings — an overrid
 
     expect((string) $cleared->json('message'))->toContain('widens past what the declaration authorizes')
         ->and($source->refresh()->rotated_at)->toBeNull()
-        ->and(Credential::query()->count())->toBe(1);
+        ->and(rotationCredentialCount())->toBe(1);
 
     // Within the ceilings the same override applies.
     $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [
@@ -622,7 +627,7 @@ it('never forks the lineage on re-invocation: a graced row with a live successor
         ->and($completion->json('superseded_id'))->toBe($source->id)
         ->and($completion->json('delivery.shape'))->toBe('none')
         ->and($completion->json('delivery.secret'))->toBeNull()
-        ->and(Credential::query()->count())->toBe(2);
+        ->and(rotationCredentialCount())->toBe(2);
 
     // The lineage stayed linear: every rotated event of the source names
     // the ONE successor.
@@ -667,7 +672,7 @@ it('refuses re-rotation of a stamped row whose successor is no longer live, iden
 
     expect(Artisan::call('bfc:credential:rotate', ['id' => $source->id, '--local' => true]))->toBe(1)
         ->and(trim(Artisan::output()))->toBe($message)
-        ->and(Credential::query()->count())->toBe(2);
+        ->and(rotationCredentialCount())->toBe(2);
 });
 
 // ------------------------------------ cutover completion authority (Fix 3)
@@ -732,7 +737,7 @@ it('completes a failed cutover under rotate authority alone, with revoke denied,
     }
 
     // Nothing was minted by either completion: two sources, two successors.
-    expect(Credential::query()->count())->toBe(4);
+    expect(rotationCredentialCount())->toBe(4);
 });
 
 it('kills a compromised graced old row immediately via emergency completion', function (): void {
@@ -749,7 +754,7 @@ it('kills a compromised graced old row immediately via emergency completion', fu
 
     expect(Credential::query()->active()->pluck('id')->all())->not->toContain($source->id)
         ->and($source->expires_at?->lessThanOrEqualTo(now()))->toBeTrue()
-        ->and(Credential::query()->count())->toBe(2);
+        ->and(rotationCredentialCount())->toBe(2);
 });
 
 it('is no revoke bypass: an unstamped row cannot be retired without minting its replacement', function (): void {
@@ -780,7 +785,7 @@ it('is no revoke bypass: an unstamped row cannot be retired without minting its 
         ->assertCreated();
 
     expect($response->json('completed_cutover'))->toBeNull()
-        ->and(Credential::query()->count())->toBe(2)
+        ->and(rotationCredentialCount())->toBe(2)
         ->and(Credential::query()->active()->pluck('id')->all())->toContain((string) $response->json('credential.id'));
 });
 
@@ -797,7 +802,7 @@ it('refuses override options on a completion — nothing is minted for them to c
     ], rotationAdminHeaders())->assertStatus(422);
 
     expect((string) $refusal->json('message'))->toContain('override options do not apply')
-        ->and(Credential::query()->count())->toBe(2);
+        ->and(rotationCredentialCount())->toBe(2);
 });
 
 // -------------------------------------- CLI presence parity (Fix 2)
@@ -854,7 +859,7 @@ it('refuses a provided-empty value without the override flag identically on both
         ->and($cliMessage)->toContain('override')
         ->and($cliSource->refresh()->rotated_at)->toBeNull()
         ->and($httpSource->refresh()->rotated_at)->toBeNull()
-        ->and(Credential::query()->count())->toBe(2);
+        ->and(rotationCredentialCount())->toBe(2);
 });
 
 // ------------------------------------ non-forgeable provenance (Fix 1)
@@ -987,7 +992,7 @@ it('refuses to rotate revoked, expired and pending rows with a 409 naming the st
 
     $this->postJson('/bfc/credentials/no-such-id/rotate', [], $headers)->assertNotFound();
 
-    expect(Credential::query()->count())->toBe(3);
+    expect(rotationCredentialCount())->toBe(3);
 });
 
 // ------------------------------------------------- failure path A (AC 7)
@@ -1012,7 +1017,7 @@ it('rolls the whole rotation back when a follow-up write fails, leaving no orpha
     // and the source is exactly as it was.
     $source->refresh();
 
-    expect(Credential::query()->count())->toBe(1)
+    expect(rotationCredentialCount())->toBe(1)
         ->and($source->rotated_at)->toBeNull()
         ->and($source->abilities)->toBe(['consume'])
         ->and(CredentialAuditEvent::query()->count())->toBe(0);
@@ -1023,7 +1028,7 @@ it('rolls the whole rotation back when a follow-up write fails, leaving no orpha
     $result = $rotate($source->id, RotateOptions::fromInput([]));
 
     expect($result)->not->toBeNull()
-        ->and(Credential::query()->count())->toBe(2)
+        ->and(rotationCredentialCount())->toBe(2)
         ->and($source->refresh()->rotated_at)->not->toBeNull();
 });
 
@@ -1048,7 +1053,10 @@ it('leaves the replacement standing when old-row retirement fails, names the lef
         ->and($message)->toContain('STILL LIVE')
         ->and($response->json('delivery'))->toBeNull();
 
-    $replacement = Credential::query()->whereKeyNot($source->id)->sole();
+    $replacement = Credential::query()
+        ->where('subject_type', '!=', SubjectType::Operator->value)
+        ->whereKeyNot($source->id)
+        ->sole();
 
     expect($message)->toContain($replacement->id)
         ->and($replacement->status)->toBe(CredentialStatus::Active)
@@ -1124,5 +1132,5 @@ it('refuses rotation identically on both transports when the matrix denies the v
 
     expect($cliMessage)->toBe((string) $httpResponse->json('message'))
         ->and($cliMessage)->toContain('denies the rotate verb')
-        ->and(Credential::query()->count())->toBe(2);
+        ->and(rotationCredentialCount())->toBe(2);
 });

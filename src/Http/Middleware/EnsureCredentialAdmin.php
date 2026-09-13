@@ -46,7 +46,6 @@ use Throwable;
  * never depends on the audit write: containment must hold even while the
  * audit store is down, so the append is best-effort here (denials carry no
  * state transition to keep it transactional with).
- *
  */
 final class EnsureCredentialAdmin
 {
@@ -159,5 +158,4 @@ final class EnsureCredentialAdmin
             // must not convert a deny into a 500.
         }
     }
-
 }

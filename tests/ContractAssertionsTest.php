@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
+use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -22,15 +23,15 @@ it('passes the reusable built for cloud contract suite against the package harne
     $this->assertBuiltForCloudContract();
 });
 
-it('provides helpers for minting contract auth tokens', function (): void {
-    $admin = $this->mintBuiltForCloudAdminToken();
-    $consume = $this->mintBuiltForCloudConsumeToken();
+it('provides helpers for minting contract credentials', function (): void {
+    $admin = $this->mintBuiltForCloudOperatorCredential();
+    $consume = $this->mintBuiltForCloudConsumeCredential();
 
-    $adminToken = ApiToken::query()->where('token_hash', hash('sha256', $admin))->firstOrFail();
-    $consumeToken = ApiToken::query()->where('token_hash', hash('sha256', $consume))->firstOrFail();
+    $adminCredential = Credential::query()->where('secret_hash', hash('sha256', $admin))->firstOrFail();
+    $consumeCredential = Credential::query()->where('secret_hash', hash('sha256', $consume))->firstOrFail();
 
-    expect($adminToken->abilities)->toBe([Scope::Admin->value])
-        ->and($consumeToken->abilities)->toBe([Scope::Consume->value]);
+    expect($adminCredential->abilities)->toBe([OperatorAbility::ADMIN])
+        ->and($consumeCredential->abilities)->toBe([Scope::Consume->value]);
 });
 
 it('exercises the consumer thin-host conformance wrapper', function (): void {

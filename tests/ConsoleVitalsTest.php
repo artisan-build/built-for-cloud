@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
@@ -14,7 +13,6 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
-use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
 use ArtisanBuild\BuiltForCloud\Testing\MintedTestCredential;
@@ -197,9 +195,9 @@ it('ages the oldest pending job per request, not per snapshot', function (): voi
 /**
  * D16's core prohibition, and the §7 acceptance row: the dashboard read
  * is reachable by `metadata:read` and by NOTHING else — the break-glass
- * `credential:admin` and a legacy admin token explicitly included.
+ * `credential:admin` explicitly included.
  */
-it('refuses every credential but metadata:read, break-glass and legacy admin token included', function (): void {
+it('refuses every credential but metadata:read, including break-glass', function (): void {
     // The positive control first, so a blanket refusal cannot pass this
     // test by refusing everything.
     $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])->assertOk();
@@ -214,18 +212,6 @@ it('refuses every credential but metadata:read, break-glass and legacy admin tok
     ]);
 
     $this->getJson('/bfc/console/vitals', ['Authorization' => $breakGlass->bearerHeader()])->assertForbidden();
-
-    // A legacy admin `api_tokens` row — admin-equivalent on every
-    // operator verb route, and not a credential here at all.
-    $legacy = 'legacy-admin-'.bin2hex(random_bytes(16));
-
-    ApiToken::query()->create([
-        'name' => 'owner',
-        'token_hash' => hash('sha256', $legacy),
-        'abilities' => [Scope::Admin->value],
-    ]);
-
-    $this->getJson('/bfc/console/vitals', ['Authorization' => 'Bearer '.$legacy])->assertUnauthorized();
 
     // Every other name in the vocabulary, one at a time, plus the
     // no-abilities and empty-abilities shapes.
@@ -255,16 +241,6 @@ it('refuses every credential but metadata:read, break-glass and legacy admin tok
         $this->getJson('/bfc/console/vitals', ['Authorization' => $bare->bearerHeader()])->assertForbidden();
     }
 
-    // And the deprecated env pseudo-credential. Two things refuse it and
-    // only one of them is load-bearing: the `bfc` guard has no code path
-    // to the fallback store, AND the gate refuses a bearer colliding
-    // with the configured fallback before anything resolves. These bytes
-    // are not a credential either way, so this case is the weak one; the
-    // aliasing tests below are the case that matters.
-    config(['built-for-cloud.fallback_token' => 'fallback-secret-bytes']);
-
-    $this->getJson('/bfc/console/vitals', ['Authorization' => 'Bearer fallback-secret-bytes'])
-        ->assertUnauthorized();
 });
 
 it('audits a denied dashboard read with the acting credential', function (): void {
@@ -326,81 +302,6 @@ it('refuses no credential, an unknown one and an expired or revoked one indistin
     $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
         ->assertOk()
         ->assertJsonPath('api_version', BuiltForCloud::API_VERSION);
-});
-
-// ---------------------------------------------------------------- AC19 --
-
-/**
- * D16 requires the dashboard credential to be unable to touch mutating
- * surfaces. A credential whose BYTES are also the fallback token, or are
- * on file in the legacy `api_tokens` store, can touch them — the
- * aliasing does it, not the credential's own abilities list. So the
- * alias is refused, before anything resolves.
- */
-it('refuses a bearer that is also the configured fallback token', function (): void {
-    $reader = vitalsReader();
-
-    // The positive control first: these exact bytes read fine.
-    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])->assertOk();
-
-    // Now the SAME bytes are also the fallback pseudo-credential, which
-    // is admin-equivalent on the legacy surfaces.
-    config(['built-for-cloud.fallback_token' => $reader->plaintext()]);
-
-    // Snapshot the row AFTER the control read, so what is compared is
-    // what the REFUSAL did, not what the control did.
-    $before = $reader->credential->refresh()->getAttributes();
-
-    $refused = $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()]);
-
-    $refused->assertUnauthorized();
-
-    // Indistinguishable from an unknown bearer: telling a caller "these
-    // bytes are also something else" is what an aliasing probe wants.
-    expect($refused->getContent())
-        ->toBe($this->getJson('/bfc/console/vitals', ['Authorization' => 'Bearer nope-'.bin2hex(random_bytes(16))])->getContent());
-
-    // And side-effect-free: the refusal resolved nothing, so it stamped
-    // no usage and touched no column on the credential it declined to
-    // authenticate.
-    expect($reader->credential->refresh()->getAttributes())->toBe($before);
-});
-
-it('refuses a bearer that is also a legacy api_tokens secret', function (): void {
-    $reader = vitalsReader();
-
-    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])->assertOk();
-
-    // The same bytes filed in the legacy store, where an admin-scoped
-    // row is admin-equivalent on every operator verb.
-    ApiToken::query()->create([
-        'name' => 'owner',
-        'token_hash' => hash('sha256', $reader->plaintext()),
-        'abilities' => [Scope::Admin->value],
-    ]);
-
-    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])->assertUnauthorized();
-});
-
-it('refuses an aliased bearer even when the legacy row is revoked', function (): void {
-    $reader = vitalsReader();
-
-    ApiToken::query()->create([
-        'name' => 'retired',
-        'token_hash' => hash('sha256', $reader->plaintext()),
-        'abilities' => [Scope::Admin->value],
-        'revoked_at' => now(),
-    ]);
-
-    // A revoked row cannot act today, but the question is not "can these
-    // bytes act elsewhere right now" — it is whether this deployment has
-    // ever filed them as something else. It has, and a row can be
-    // un-revoked by anyone who could revoke it.
-    $this->getJson('/bfc/console/vitals', ['Authorization' => $reader->bearerHeader()])->assertUnauthorized();
-
-    // A DIFFERENT credential is unaffected: the check is on the bytes,
-    // not a blanket refusal once any legacy row exists.
-    $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])->assertOk();
 });
 
 // --------------------------------------------------------- AC13/AC14 --

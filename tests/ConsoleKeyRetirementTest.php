@@ -3,7 +3,6 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Actions\RetireConsoleKey;
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\Commands\ConsoleRetireKeyCommand;
@@ -17,7 +16,6 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
-use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\MintedTestCredential;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
@@ -341,20 +339,8 @@ it('gates retirement on console:key:write and refuses every other credential', f
         'Authorization' => retirementOperator([OperatorAbility::ADMIN])->bearerHeader(),
     ])->assertOk();
 
-    // …and so does a legacy admin token, as on every operator surface.
-    $adminPlaintext = 'legacy-admin-'.bin2hex(random_bytes(16));
-
-    ApiToken::query()->create([
-        'name' => 'legacy-admin',
-        'token_hash' => hash('sha256', $adminPlaintext),
-        'abilities' => [Scope::Admin->value],
-    ]);
-
-    $this->postJson(retirementUrl('k3'), [], ['Authorization' => 'Bearer '.$adminPlaintext])
-        ->assertOk();
-
     expect(ConsoleKey::query()->whereNotNull('retired_at')->pluck('key_id')->sort()->values()->all())
-        ->toBe(['k1', 'k2', 'k3']);
+        ->toBe(['k1', 'k2']);
 });
 
 it('answers one identical refusal to every pre-authorization failure', function (): void {

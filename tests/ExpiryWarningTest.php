@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
@@ -34,18 +33,11 @@ it('warns once, idempotently across runs, for a durable whose chosen expiry is i
     $foreverCredential = Credential::factory()->create(['expires_at' => null]);
     $pendingCredential = Credential::factory()->pending()->create(['expires_at' => now()->addHours(24)]);
     $revokedCredential = Credential::factory()->revoked()->create(['expires_at' => now()->addHours(24)]);
-    $legacyToken = ApiToken::query()->create([
-        'name' => 'legacy-expiring',
-        'token_hash' => hash('sha256', 'legacy-expiring-secret'),
-        'expires_at' => now()->addHours(24),
-    ]);
-
     config()->set('built-for-cloud-tests.holder_map', [
         $expiringCredential->id => 'holder@example.test',
         $foreverCredential->id => 'never-mailed@example.test',
         $pendingCredential->id => 'pending@example.test',
         $revokedCredential->id => 'revoked@example.test',
-        $legacyToken->id => 'legacy@example.test',
     ]);
 
     $this->artisan('bfc:credentials:warn-expiring')
@@ -62,9 +54,7 @@ it('warns once, idempotently across runs, for a durable whose chosen expiry is i
         // and nothing here nudges anyone toward making it.
         ->and(expiringEventsFor($foreverCredential->id))->toBe(0)
         ->and(expiringEventsFor($pendingCredential->id))->toBe(0)
-        ->and(expiringEventsFor($revokedCredential->id))->toBe(0)
-        // The transitional legacy store is no longer scanned.
-        ->and(expiringEventsFor($legacyToken->id))->toBe(0);
+        ->and(expiringEventsFor($revokedCredential->id))->toBe(0);
 
     Notification::assertSentOnDemandTimes(CredentialLifecycleNotification::class, 1);
     Notification::assertSentOnDemand(

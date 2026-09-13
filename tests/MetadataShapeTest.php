@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyring;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
@@ -12,7 +11,6 @@ use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\MetadataShape;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
-use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
 use ArtisanBuild\BuiltForCloud\Testing\MetadataEndpointShapes;
@@ -60,17 +58,13 @@ function metadataOperator(OperatorAbility $ability): MintedTestCredential
     ]);
 }
 
-function metadataAdminToken(): string
+function metadataOwner(): MintedTestCredential
 {
-    $plaintext = 'metadata-admin-'.bin2hex(random_bytes(16));
-
-    ApiToken::query()->create([
-        'name' => 'owner',
-        'token_hash' => hash('sha256', $plaintext),
-        'abilities' => [Scope::Admin->value],
+    return test()->mintCredential([
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => 'metadata-owner-'.bin2hex(random_bytes(4)),
+        'abilities' => [OperatorAbility::OwnershipRelease->value],
     ]);
-
-    return $plaintext;
 }
 
 /**
@@ -448,20 +442,6 @@ it('certifies both offboard shapes and refuses a hybrid of them', function (): v
     }
 });
 
-it('bounds list ITEMS and not list length', function (): void {
-    // How many rows share a name is not a classification concern, and
-    // the producer caps nothing — an earlier revision's 1,000 was a
-    // bound written where nothing enforced it.
-    $ids = array_map(static fn (int $i): string => 'id-'.$i, range(1, 1500));
-
-    $this->assertBuiltForCloudMetadataEndpoint(metadataResponse(['revoked_ids' => $ids]), 'DELETE /api/credentials/{name}');
-
-    expect(fn () => $this->assertBuiltForCloudMetadataEndpoint(
-        metadataResponse(['revoked_ids' => ['ok', 'Jane Operator']]),
-        'DELETE /api/credentials/{name}',
-    ))->toThrow(AssertionFailedError::class);
-});
-
 it('keeps the console key id type pinned to the keyring own charset', function (): void {
     // One regex, never a second copy that could drift from it — the
     // promise ConsoleKeyring::isValidKeyId already makes.
@@ -494,7 +474,7 @@ it('holds the classification on the metadata-classified endpoints the package se
 
     $this->assertBuiltForCloudMetadataEndpoint(
         $this->postJson('/bfc/ownership/cancel-transfer', [], [
-            'Authorization' => 'Bearer '.metadataAdminToken(),
+            'Authorization' => metadataOwner()->bearerHeader(),
         ])->assertOk(),
         'POST /bfc/ownership/cancel-transfer',
     );

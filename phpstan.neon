@@ -4,5 +4,6 @@ includes:
 parameters:
     paths:
         - src
+        - tests/Fixtures/InstallFixtureCommand.php
     level: 6
     treatPhpDocTypesAsCertain: false

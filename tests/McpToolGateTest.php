@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\ApiToken;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
@@ -53,35 +52,14 @@ it('lets a credential holding mcp:admin invoke the destructive tool (the positiv
         ->assertJson(['purged' => true]);
 });
 
-// Locked negative 1: an ingest-scoped token cannot invoke a destructive tool.
+// Locked negative 1: an ingest-scoped credential cannot invoke a destructive tool.
 it('denies an ingest-scoped credential the destructive tool', function (): void {
     $ingest = $this->mintCredential(['abilities' => [Scope::Consume->value]]);
 
     $this->postJson('/mcp/purge', [], ['Authorization' => $ingest->bearerHeader()])->assertForbidden();
 });
 
-it('denies a legacy ingest api_tokens secret the destructive tool outright', function (): void {
-    $plaintext = 'legacy-ingest-'.bin2hex(random_bytes(16));
-
-    ApiToken::query()->create([
-        'name' => 'ingest',
-        'token_hash' => hash('sha256', $plaintext),
-        'abilities' => [Scope::Consume->value],
-    ]);
-
-    // The bfc guard authenticates the unified store only: a legacy secret
-    // never resolves, so it is 401 before abilities are even consulted.
-    $this->postJson('/mcp/purge', [], ['Authorization' => 'Bearer '.$plaintext])->assertUnauthorized();
-});
-
-// Locked negative 2: a FALLBACK_TOKEN cannot invoke a destructive tool.
-it('denies the fallback token the destructive tool', function (): void {
-    config(['built-for-cloud.fallback_token' => 'fallback-secret-bytes']);
-
-    $this->postJson('/mcp/purge', [], ['Authorization' => 'Bearer fallback-secret-bytes'])->assertUnauthorized();
-});
-
-// Locked negative 3: an mcp:read token cannot invoke a destructive tool.
+// Locked negative 2: an mcp:read credential cannot invoke a destructive tool.
 it('denies an mcp:read credential the destructive tool and audits the denial', function (): void {
     $readOnly = $this->mintCredential(['abilities' => [OperatorAbility::McpRead->value]]);
 
@@ -96,7 +74,7 @@ it('denies an mcp:read credential the destructive tool and audits the denial', f
         ->and($denied[0]->note)->toContain(OperatorAbility::McpAdmin->value);
 });
 
-// Locked negative 4: an expired token cannot invoke a destructive tool.
+// Locked negative 3: an expired credential cannot invoke a destructive tool.
 it('denies an expired credential the destructive tool even when it holds mcp:admin', function (): void {
     $expired = $this->mintCredential([
         'abilities' => [OperatorAbility::McpAdmin->value],
@@ -106,7 +84,7 @@ it('denies an expired credential the destructive tool even when it holds mcp:adm
     $this->postJson('/mcp/purge', [], ['Authorization' => $expired->bearerHeader()])->assertUnauthorized();
 });
 
-// Locked negative 5: a revoked token cannot invoke a destructive tool.
+// Locked negative 4: a revoked credential cannot invoke a destructive tool.
 it('denies a revoked credential the destructive tool even when it holds mcp:admin', function (): void {
     $revoked = $this->mintCredential([
         'abilities' => [OperatorAbility::McpAdmin->value],

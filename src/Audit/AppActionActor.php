@@ -22,7 +22,7 @@ use LogicException;
  * not the truth of it.** `on_behalf_of` belongs to a delegated handoff
  * and to nothing else: a local user acts for the deployment they log in
  * to, and a credential acts for itself. Rather than validating that
-     * after the fact, the two non-delegated named constructors do not TAKE
+ * after the fact, the two non-delegated named constructors do not TAKE
  * an `on_behalf_of` at all, so a non-delegated actor cannot be constructed
  * carrying one; {@see AppActionEvent} refuses the same
  * combination at the row, for writes that never came through here.
@@ -111,7 +111,7 @@ final readonly class AppActionActor
     /**
      * A credential acting on its own behalf, named by its opaque id.
      */
-    public static function apiToken(Credential $credential): self
+    public static function credential(Credential $credential): self
     {
         return new self(AppActorType::from('api_token'), self::identifierOf($credential));
     }
@@ -196,7 +196,7 @@ final readonly class AppActionActor
 
         return match (true) {
             $principal->delegated => throw self::unattributable(),
-            $principal->principal instanceof Credential => self::apiToken($principal->principal),
+            $principal->principal instanceof Credential => self::credential($principal->principal),
             $principal->principal instanceof Authenticatable => self::localUser($principal->principal),
             default => throw self::unattributable(),
         };

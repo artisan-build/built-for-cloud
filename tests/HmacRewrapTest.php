@@ -182,7 +182,7 @@ it('lets the whole dance resume after a completed rewrap: activation unpauses, a
 
     stageAppKeyRotation();
 
-    $headers = ['Authorization' => 'Bearer '.auditAdminToken('rewrap-admin-'.bin2hex(random_bytes(4)))];
+    $headers = ['Authorization' => 'Bearer '.auditOperatorCredential('rewrap-operator-'.bin2hex(random_bytes(4)))];
 
     $this->postJson('/bfc/credentials/'.$pending->id.'/activate', [
         'delivery_fingerprint' => $confirmedBeforeRewrap,
@@ -203,7 +203,7 @@ it('pauses hmac MINTING mid-rewrap on both transports: no ciphertext-producing p
     Credential::factory()->hmac()->create();
     stageAppKeyRotation();
 
-    $headers = ['Authorization' => 'Bearer '.auditAdminToken('rewrap-admin-'.bin2hex(random_bytes(4)))];
+    $headers = ['Authorization' => 'Bearer '.auditOperatorCredential('rewrap-operator-'.bin2hex(random_bytes(4)))];
 
     $http = $this->postJson('/bfc/credentials', [
         'subject_type' => 'application',
@@ -274,7 +274,7 @@ it('pauses the exchange RE-KEY mid-rewrap as a retryable claim error, leaving th
 });
 
 it('excludes EVERY ciphertext writer while the rewrap lock is held — check-through-commit, with no version mismatch to see (rework Fix 1)', function (): void {
-    $headers = ['Authorization' => 'Bearer '.auditAdminToken('barrier-admin-'.bin2hex(random_bytes(4)))];
+    $headers = ['Authorization' => 'Bearer '.auditOperatorCredential('barrier-operator-'.bin2hex(random_bytes(4)))];
 
     // Everything a writer needs, prepared while the lock is free: an
     // ACTIVE key to rotate, and a delivered claim code ready to re-key.
