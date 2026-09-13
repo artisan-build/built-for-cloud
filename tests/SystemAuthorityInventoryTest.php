@@ -20,16 +20,26 @@ use ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand;
 use ArtisanBuild\BuiltForCloud\Jobs\DeliverOwnershipWebhook;
 use ArtisanBuild\BuiltForCloud\Testing\SystemAuthorityInventory;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueAfterCommitQueuedJob;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueAuthFacadeLoginCommand;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueAuthGuardLoginCommand;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueAuthHelperLoginCommand;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueCommentedHumanCommand;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueConditionalScheduleServiceProvider;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueHumanQueuedJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueInheritedQueuedJob;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueMislabelledScheduleServiceProvider;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueRoleExistsCommand;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueScheduleRegistration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueScheduleServiceProvider;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueSystemAuthorityServiceProvider;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueUserPrincipalCommand;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueUserRoleCommand;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnclassifiedStateChangingCommand;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UserWritingInstallCommand;
 use ArtisanBuild\BuiltForCloud\User;
+use ArtisanBuild\BuiltForCloud\UserRole;
+use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Hash;
@@ -120,6 +130,48 @@ it('reports the command inventory controls that resolve a human principal and de
         'human-role:'.RogueUserRoleCommand::class,
         'synthesized-human:'.RogueCommentedHumanCommand::class,
     );
+});
+
+it('reports each auth-typed login spelling and proves the isolated command really authenticates', function (string $class, string $signature): void {
+    $user = User::query()->create([
+        'name' => 'Already fetched login user',
+        'email' => str_replace(':', '-', $signature).'@example.test',
+        'password' => Hash::make('inventory-password'),
+        'role' => UserRole::Member,
+    ]);
+    app()->instance(Authenticatable::class, $user);
+    app()->register(RogueSystemAuthorityServiceProvider::class);
+    $file = (new ReflectionClass($class))->getFileName();
+    $inventory = SystemAuthorityInventory::discover(
+        [p5eFixtureProvider()],
+        [is_string($file) ? $file : ''],
+    );
+
+    expect(auth()->guest())->toBeTrue()
+        ->and($inventory['violations']['commands'])->toContain(
+            'human-principal:'.$class,
+            'synthesized-human:'.$class,
+        )
+        ->and(Artisan::call($signature))->toBe(0)
+        ->and(auth()->check())->toBeTrue()
+        ->and(auth()->id())->toBe($user->getAuthIdentifier());
+})->with([
+    'Auth::login' => [RogueAuthFacadeLoginCommand::class, 'fixture:auth-facade-login'],
+    'auth helper login' => [RogueAuthHelperLoginCommand::class, 'fixture:auth-helper-login'],
+    'Auth guard login' => [RogueAuthGuardLoginCommand::class, 'fixture:auth-guard-login'],
+]);
+
+it('does not subtract a role constraint in a User where array as though it were a write', function (): void {
+    $inventory = SystemAuthorityInventory::discover(
+        [p5eFixtureProvider()],
+        [__DIR__.'/Fixtures/RogueRoleExistsCommand.php'],
+    );
+
+    expect($inventory['commands'])->toContain(RogueRoleExistsCommand::class)
+        ->and($inventory['violations']['commands'])->toContain(
+            'human-principal:'.RogueRoleExistsCommand::class,
+            'human-role:'.RogueRoleExistsCommand::class,
+        );
 });
 
 it('reports a queued job that resolves and synthesizes a human principal', function (): void {
@@ -220,11 +272,59 @@ it('distinguishes user writes from human authentication without a command-name c
 it('states the source-level inventory limits and fail-closed schedule boundary truthfully', function (): void {
     expect(p5eSource(SystemAuthorityInventory::class))->toContain(
         'Queue membership uses the framework interface at runtime',
-        'rather than transitive call graphs',
-        'Schedules come from the framework registry',
-        'is reported as uninspectable',
-        'Dynamically generated code',
+        'actual callable/command identity',
+        'conditional registrations remain visible to the tripwire',
+        'Dynamically',
+        'generated registrations',
+        'transitive calls',
+        'unscanned consumer/vendor',
     );
+});
+
+it('attributes a mislabelled scheduled closure from its real callable instead of its display name', function (): void {
+    app()->register(RogueMislabelledScheduleServiceProvider::class);
+    $provider = __DIR__.'/Fixtures/RogueMislabelledScheduleServiceProvider.php';
+    $inventory = SystemAuthorityInventory::discover([p5eProvider()], [dirname(__DIR__).'/src', $provider]);
+
+    expect($inventory['scheduled'])->toHaveCount(1)
+        ->and($inventory['scheduled'][0])->toStartWith('Closure@'.$provider.':')
+        ->and($inventory['violations']['scheduled'])->toContain(
+            'synthesized-human:'.$inventory['scheduled'][0],
+        )->not->toContain('human-role:'.CreateAdminCommand::class);
+});
+
+it('keeps an unnamed closure outside scanned roots fail closed', function (): void {
+    app(Schedule::class)->call(static fn (): bool => true);
+    $inventory = SystemAuthorityInventory::discover([p5eProvider()], [dirname(__DIR__).'/src']);
+
+    expect($inventory['scheduled'])->toHaveCount(1)
+        ->and($inventory['violations']['scheduled'])->toContain(
+            'uninspectable-schedule:'.$inventory['scheduled'][0],
+        );
+});
+
+it('attributes a command-string schedule through the registered command inventory', function (): void {
+    app(Schedule::class)->command(RogueRoleExistsCommand::class);
+    $inventory = SystemAuthorityInventory::discover(
+        [p5eFixtureProvider()],
+        [__DIR__.'/Fixtures/RogueRoleExistsCommand.php'],
+    );
+
+    expect($inventory['scheduled'])->toBe([RogueRoleExistsCommand::class])
+        ->and($inventory['violations']['scheduled'])->toContain(
+            'human-role:'.RogueRoleExistsCommand::class,
+        );
+});
+
+it('tripwires a unit-test-gated schedule registration that the runtime registry cannot see', function (): void {
+    app()->register(RogueConditionalScheduleServiceProvider::class);
+    $provider = __DIR__.'/Fixtures/RogueConditionalScheduleServiceProvider.php';
+    $inventory = SystemAuthorityInventory::discover([p5eProvider()], [dirname(__DIR__).'/src', $provider]);
+
+    expect($inventory['scheduled'])->toBe([])
+        ->and($inventory['violations']['scheduled'])->toContain(
+            'schedule-reference:'.RogueConditionalScheduleServiceProvider::class,
+        );
 });
 
 it('classifies every derived command exactly once across the five frozen dispositions', function (): void {
