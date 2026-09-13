@@ -6,7 +6,7 @@ namespace ArtisanBuild\BuiltForCloud;
 
 final class BuiltForCloud
 {
-    public const VERSION = '0.8.1';
+    public const VERSION = '0.9.0';
 
     /**
      * The public HTTP contract's major version (docs/http-contract.md, PRD
