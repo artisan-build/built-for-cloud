@@ -339,7 +339,7 @@ final class LegacyRemovalInventory
         $class = ltrim($classToken[1], '\\');
         $allowed = implode('\\', ['ArtisanBuild', 'BuiltForCloud', 'Audit', 'AppActorType']);
 
-        if ($class === $allowed) {
+        if ($class === $allowed || (self::imports($contents)[$class] ?? null) === $allowed) {
             return true;
         }
 
@@ -347,6 +347,21 @@ final class LegacyRemovalInventory
 
         return $class === 'AppActorType'
             && ($namespace[1] ?? null) === implode('\\', ['ArtisanBuild', 'BuiltForCloud', 'Audit']);
+    }
+
+    /** @return array<string, string> */
+    private static function imports(string $contents): array
+    {
+        preg_match_all('/^use\s+([^;\s]+)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*;/mi', $contents, $matches, PREG_SET_ORDER);
+        $imports = [];
+
+        foreach ($matches as $match) {
+            $target = ltrim($match[1], '\\');
+            $separator = strrpos($target, '\\');
+            $imports[$match[2] ?? ($separator === false ? $target : substr($target, $separator + 1))] = $target;
+        }
+
+        return $imports;
     }
 
     /**

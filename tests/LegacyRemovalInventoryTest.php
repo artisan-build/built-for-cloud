@@ -159,9 +159,13 @@ it('allows only the surviving audit actor case while reporting another symbol wi
     $auditType = implode('\\', ['ArtisanBuild', 'BuiltForCloud', 'Audit', 'AppActorType']);
 
     file_put_contents($root.'/src/AuditCases.php', "<?php\n\\{$auditType}::{$apiToken};\n\\Vendor\\{$apiToken}::query();\n");
+    file_put_contents($root.'/src/ImportedAuditCase.php', "<?php\nuse {$auditType};\nAppActorType::{$apiToken};\n");
+    file_put_contents($root.'/src/AliasedAuditCase.php', "<?php\nuse {$auditType} as Actor;\nActor::{$apiToken};\n");
 
     expect(LegacyRemovalInventory::productionOffences($root))
         ->not->toContain('src/AuditCases.php:2 [symbol:'.$apiToken.']')
+        ->not->toContain('src/ImportedAuditCase.php:3 [symbol:'.$apiToken.']')
+        ->not->toContain('src/AliasedAuditCase.php:3 [symbol:'.$apiToken.']')
         ->toContain('src/AuditCases.php:3 [symbol:'.$apiToken.']');
 });
 
