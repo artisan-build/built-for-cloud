@@ -79,7 +79,7 @@ CSRF="$(perl -0777 -ne 'print $1 if /name="_token" value="([^"]+)"/' "${RUN_DIR}
 for pass in 1 2; do
     request 201 "${RUN_DIR}/mint-${pass}.json" --cookie "${COOKIE}" --cookie-jar "${COOKIE}" \
         --data-urlencode "_token=${CSRF}" --data-urlencode 'subject_type=installation' \
-        --data-urlencode "subject_ref=live-member-${pass}" --data-urlencode "name=live-pass-${pass}" \
+        --data-urlencode 'subject_ref=live-member' --data-urlencode "name=live-pass-${pass}" \
         "${BASE}/bfc/installation/credentials"
     CREDENTIAL_ID="$(json_value "${RUN_DIR}/mint-${pass}.json" 'credential.id')"
     SECRET="$(json_value "${RUN_DIR}/mint-${pass}.json" 'delivery.secret')"
