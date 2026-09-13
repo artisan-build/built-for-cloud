@@ -18,6 +18,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\Concerns\RevealsDelivery;
 use ArtisanBuild\BuiltForCloud\MintOptions;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\RevokeOutcome;
 use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
@@ -70,6 +71,17 @@ final class InstallationCredentials
             $options = MintOptions::fromInput($request->only([
                 'kind', 'name', 'abilities', 'expires_at', 'code_ttl_seconds',
             ]));
+            $operatorAbilities = array_map(
+                static fn (OperatorAbility $ability): string => $ability->value,
+                OperatorAbility::cases(),
+            );
+            $operatorAbilities[] = OperatorAbility::ADMIN;
+            $refusedAbility = array_values(array_intersect($options->abilities ?? [], $operatorAbilities))[0] ?? null;
+
+            if ($refusedAbility !== null) {
+                throw CredentialVerbRefused::abilityWidening($refusedAbility);
+            }
+
             $result = $mint(
                 new Subject(SubjectType::from($validated['subject_type']), $validated['subject_ref']),
                 new MintOptions(

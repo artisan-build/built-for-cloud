@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\OffboardOptions;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
@@ -24,6 +25,7 @@ uses(RefreshDatabase::class);
 beforeEach(function (): void {
     config(['auth.guards.bfc' => ['driver' => 'bfc', 'provider' => 'users']]);
     Route::middleware('auth:bfc')->get('/member-credential-probe', static fn (): array => ['authenticated' => true]);
+    Route::middleware('bfc.ability:custom:deploy')->get('/member-custom-ability-probe', static fn (): array => ['authorized' => true]);
 });
 
 function installationMember(UserRole|string $role, ?string $email = null): User
@@ -134,6 +136,48 @@ it('lets every recognized role perform each installation credential verb with a 
     }
 
     return $cases;
+});
+
+it('refuses every operator-vocabulary ability before a Member can mint a credential or receive its secret', function (string $ability): void {
+    $member = installationMember(UserRole::Member);
+    $before = Credential::query()->count();
+
+    $response = $this->actingAsVersioned($member)->postJson('/bfc/installation/credentials', [
+        'subject_type' => SubjectType::Application->value,
+        'subject_ref' => 'member-operator-ability',
+        'abilities' => [$ability],
+    ])->assertForbidden();
+
+    expect($response->json('message'))->toContain($ability)
+        ->and($response->json('delivery.secret'))->toBeNull()
+        ->and(Credential::query()->count())->toBe($before);
+})->with(function (): array {
+    $abilities = [];
+
+    foreach (OperatorAbility::cases() as $ability) {
+        $abilities[$ability->value] = [$ability->value];
+    }
+
+    $abilities[OperatorAbility::ADMIN] = [OperatorAbility::ADMIN];
+
+    return $abilities;
+});
+
+it('still lets a Member mint and use an application credential with a non-operator ability', function (): void {
+    $member = installationMember(UserRole::Member);
+    $response = $this->actingAsVersioned($member)->postJson('/bfc/installation/credentials', [
+        'subject_type' => SubjectType::Application->value,
+        'subject_ref' => 'member-custom-ability',
+        'abilities' => ['custom:deploy'],
+    ])->assertCreated();
+    $secret = (string) $response->json('delivery.secret');
+
+    expect($secret)->not->toBe('')
+        ->and(Credential::query()->findOrFail($response->json('credential.id'))->abilities)->toBe(['custom:deploy']);
+
+    $this->getJson('/member-custom-ability-probe', [
+        'Authorization' => 'Bearer '.$secret,
+    ])->assertOk();
 });
 
 it('lets one Member manage a credential another Member issued without using issuer attribution as scope', function (): void {
