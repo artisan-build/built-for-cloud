@@ -14,6 +14,7 @@ final class RogueSystemAuthorityServiceProvider extends ServiceProvider
             RogueUserPrincipalCommand::class,
             RogueUserRoleCommand::class,
             RogueCommentedHumanCommand::class,
+            UserWritingInstallCommand::class,
             UnclassifiedStateChangingCommand::class,
         ]);
     }

@@ -28,6 +28,7 @@ use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueScheduleServiceProvider;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueUserPrincipalCommand;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueUserRoleCommand;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnclassifiedStateChangingCommand;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UserWritingInstallCommand;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
@@ -200,6 +201,30 @@ it('lets create-admin write the initial user without authenticating as that user
     expect($exit)->toBe(0)
         ->and(User::query()->where('email', 'inventory-owner@example.test')->where('role', 'owner')->exists())->toBeTrue()
         ->and(auth()->guest())->toBeTrue();
+});
+
+it('distinguishes user writes from human authentication without a command-name carveout', function (): void {
+    $inventory = SystemAuthorityInventory::discover(
+        [p5eProvider(), p5eFixtureProvider()],
+        [dirname(__DIR__).'/src', __DIR__.'/Fixtures'],
+    );
+
+    expect($inventory['commands'])->toContain(UserWritingInstallCommand::class)
+        ->and(array_values(array_filter(
+            $inventory['violations']['commands'],
+            static fn (string $violation): bool => str_ends_with($violation, UserWritingInstallCommand::class),
+        )))->toBe([])
+        ->and(p5eSource(SystemAuthorityInventory::class))->not->toContain('CreateAdminCommand');
+});
+
+it('states the source-level inventory limits and fail-closed schedule boundary truthfully', function (): void {
+    expect(p5eSource(SystemAuthorityInventory::class))->toContain(
+        'Queue membership uses the framework interface at runtime',
+        'rather than transitive call graphs',
+        'Schedules come from the framework registry',
+        'is reported as uninspectable',
+        'Dynamically generated code',
+    );
 });
 
 it('classifies every derived command exactly once across the five frozen dispositions', function (): void {

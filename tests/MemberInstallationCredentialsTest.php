@@ -67,6 +67,13 @@ function assertInstallationAuthentication(string $secret, int $status = 200): vo
     ])->assertStatus($status);
 }
 
+it('pins both live lifecycle passes to one credential subject', function (): void {
+    $harness = (string) file_get_contents(__DIR__.'/Live/run-member-credential-harness.sh');
+
+    expect($harness)->toContain('for pass in 1 2', "--data-urlencode 'subject_ref=live-member'")
+        ->not->toContain('subject_ref=live-member-${pass}');
+});
+
 it('lets every recognized role perform each installation credential verb with a persisted effect and authentication proof', function (
     UserRole $role,
     string $verb,
