@@ -81,11 +81,9 @@ use Illuminate\Auth\Events\Login;
 use Illuminate\Auth\SessionGuard;
 use Illuminate\Bus\Dispatcher as BusDispatcher;
 use Illuminate\Cache\RateLimiting\Limit;
-use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Contracts\Bus\Dispatcher as BusDispatcherContract;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
-use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Contracts\Session\Session;
 use Illuminate\Contracts\View\View as ViewContract;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
@@ -279,7 +277,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router->aliasMiddleware('bfc.console', EnsureConsoleSession::class);
             $router->aliasMiddleware('bfc.mcp', AuthenticateMcp::class);
             $router->aliasMiddleware('bfc.standalone', EnsureStandaloneAuthority::class);
-            $this->prioritizeContractMajorAdmission();
+            $this->prioritizeContractMajorAdmission($router);
 
             // These convenience aliases remain public. Package operator routes
             // verify their resolved gate on match, and each final operator
@@ -320,27 +318,50 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     }
 
     /** Keep opt-in contract admission ahead of every package authentication gate. */
-    private function prioritizeContractMajorAdmission(): void
+    private function prioritizeContractMajorAdmission(Router $router): void
     {
-        $this->callAfterResolving(Kernel::class, static function (Kernel $kernel): void {
-            $packagePriority = [
-                EnsureContractMajor::class,
-                EnsureManagedAuthority::class,
-                EnsureStandaloneAuthority::class,
-                EnsureConsoleSession::class,
-                AuthenticateMcp::class,
-                VerifyHmacSignature::class,
-                EnsureDashboardCredential::class,
-                EnsureCredentialAdmin::class,
-                EnsureCredentialAbility::class,
-                EnsureUserIsAuthenticated::class,
-                EnsureUserIsAdmin::class,
-            ];
-            $priority = array_values(array_diff($kernel->getMiddlewarePriority(), $packagePriority));
-            $offset = array_search(AuthenticatesRequests::class, $priority, true);
+        $authentication = [
+            EnsureManagedAuthority::class,
+            EnsureStandaloneAuthority::class,
+            EnsureConsoleSession::class,
+            AuthenticateMcp::class,
+            VerifyHmacSignature::class,
+            EnsureDashboardCredential::class,
+            EnsureCredentialAdmin::class,
+            EnsureCredentialAbility::class,
+            EnsureUserIsAuthenticated::class,
+            EnsureUserIsAdmin::class,
+        ];
 
-            array_splice($priority, $offset === false ? count($priority) : $offset, 0, $packagePriority);
-            $kernel->setMiddlewarePriority($priority);
+        $router->matched(static function (RouteMatched $event) use ($authentication, $router): void {
+            $resolved = $router->resolveMiddleware(
+                $event->route->gatherMiddleware(),
+                $event->route->excludedMiddleware(),
+            );
+            $admission = array_search(EnsureContractMajor::class, $resolved, true);
+
+            if ($admission === false) {
+                return;
+            }
+
+            $firstAuthentication = null;
+
+            foreach ($resolved as $index => $middleware) {
+                $name = strstr($middleware, ':', true) ?: $middleware;
+
+                if (in_array($name, $authentication, true)) {
+                    $firstAuthentication = $index;
+                    break;
+                }
+            }
+
+            if ($firstAuthentication === null || $admission < $firstAuthentication) {
+                return;
+            }
+
+            array_splice($resolved, $admission, 1);
+            array_splice($resolved, $firstAuthentication, 0, [EnsureContractMajor::class]);
+            $event->route->computedMiddleware = $resolved;
         });
     }
 

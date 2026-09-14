@@ -18,6 +18,8 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureManagedAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\ExpireStandaloneHandoffOnRefusal;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\VerifyHmacSignature;
 use ArtisanBuild\BuiltForCloud\HttpContract;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -25,8 +27,12 @@ use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Log\Events\MessageLogged;
+use Illuminate\Routing\Events\RouteMatched;
+use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Routing\Router;
+use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Route;
@@ -203,9 +209,19 @@ it('registers the exact alias and resolves admission before every package authen
         EnsureUserIsAuthenticated::class,
         EnsureUserIsAdmin::class,
     ];
+    $declaredAuthentication = array_reverse($authentication);
+    $existing = [
+        ThrottleRequests::class,
+        UniformConsoleKeyRefusal::class,
+        ...$declaredAuthentication,
+        StartSession::class,
+        ExpireStandaloneHandoffOnRefusal::class,
+    ];
+    $baseline = $router->resolveMiddleware($existing);
     $route = Route::get('/contract-major-order-probe', fn (): array => ['ok' => true])
-        ->middleware([...array_reverse($authentication), 'bfc.contract-major']);
-    $resolved = $router->resolveMiddleware($route->middleware(), $route->excludedMiddleware());
+        ->middleware([...$existing, 'bfc.contract-major']);
+    Event::dispatch(new RouteMatched($route, Request::create('/contract-major-order-probe')));
+    $resolved = $router->gatherRouteMiddleware($route);
     $admission = array_search(EnsureContractMajor::class, $resolved, true);
 
     expect($admission)->toBeInt();
@@ -213,6 +229,12 @@ it('registers the exact alias and resolves admission before every package authen
     foreach ($authentication as $middleware) {
         expect(array_search($middleware, $resolved, true), $middleware)->toBeGreaterThan($admission);
     }
+
+    expect(array_values(array_filter(
+        $resolved,
+        static fn (string $middleware): bool => $middleware !== EnsureContractMajor::class,
+    )))->toBe($baseline)
+        ->and(array_values(array_intersect($resolved, $authentication)))->toBe($declaredAuthentication);
 });
 
 it('keeps all existing package routes outside opt-in admission', function (): void {
