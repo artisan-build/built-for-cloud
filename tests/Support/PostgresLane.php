@@ -80,7 +80,7 @@ trait PostgresLane
     private function truncatePostgresLane(): void
     {
         $tables = $this->postgresLaneConnection()->select(
-            "select tablename from pg_tables where schemaname = 'public' and tablename not in ('migrations', 'bfc_p6_run_identity')",
+            "select tablename from pg_tables where schemaname = 'public' and tablename <> 'migrations'",
         );
 
         if ($tables === []) {

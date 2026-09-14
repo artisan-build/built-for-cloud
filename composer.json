@@ -37,10 +37,12 @@
         }
     },
     "scripts": {
-        "test": "pest",
+        "test": "@php tests/Support/run-p6-gate-command.php \"composer test\" vendor/bin/pest",
+        "test:pgsql": "@php tests/Support/run-p6-gate-command.php \"composer test:pgsql\" vendor/bin/pest --group=pgsql --fail-on-skipped --colors=never",
+        "test:p6c-live": "@php tests/Live/run-p6c-live.php",
         "lint": "pint",
-        "lint:test": "pint --test",
-        "stan": "phpstan analyse --memory-limit=512M"
+        "lint:test": "@php tests/Support/run-p6-gate-command.php \"composer lint:test\" vendor/bin/pint --test",
+        "stan": "@php tests/Support/run-p6-gate-command.php \"composer stan\" vendor/bin/phpstan analyse --memory-limit=512M"
     },
     "extra": {
         "laravel": {

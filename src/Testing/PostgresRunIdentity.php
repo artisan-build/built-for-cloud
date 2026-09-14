@@ -16,8 +16,6 @@ final class PostgresRunIdentity
 
     public const string MANIFEST_SCHEMA = 'bfc.p6.postgres-run.v1';
 
-    public const string MARKER_TABLE = 'bfc_p6_run_identity';
-
     private function __construct(
         public readonly string $databaseName,
         public readonly string $manifestPath,
@@ -68,12 +66,12 @@ final class PostgresRunIdentity
 
     public function installDatabaseEvidence(PDO $target): void
     {
-        $target->exec('CREATE TABLE '.self::MARKER_TABLE.' (database_name varchar(39) PRIMARY KEY, run_marker char(64) NOT NULL)');
-        $statement = $target->prepare('INSERT INTO '.self::MARKER_TABLE.' (database_name, run_marker) VALUES (:database_name, :run_marker)');
-        $statement->execute([
-            'database_name' => $this->databaseName,
-            'run_marker' => $this->marker,
-        ]);
+        $quotedMarker = $target->quote($this->marker);
+        if (! is_string($quotedMarker)) {
+            throw new RuntimeException('PostgreSQL database identity could not be encoded; manual cleanup is required.');
+        }
+
+        $target->exec('COMMENT ON DATABASE '.$this->quotedDatabaseName().' IS '.$quotedMarker);
     }
 
     public function assertManifestEvidence(): void
@@ -90,13 +88,15 @@ final class PostgresRunIdentity
     public function assertDatabaseEvidence(PDO $target): void
     {
         $database = $target->query('SELECT current_database()')->fetchColumn();
-        $row = $target->query('SELECT database_name, run_marker FROM '.self::MARKER_TABLE)->fetch();
+        $statement = $target->prepare(
+            "SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = :database_name",
+        );
+        $statement->execute(['database_name' => $this->databaseName]);
+        $databaseMarker = $statement->fetchColumn();
 
         if ($database !== $this->databaseName
-            || ! is_array($row)
-            || ($row['database_name'] ?? null) !== $this->databaseName
-            || ! is_string($row['run_marker'] ?? null)
-            || ! hash_equals($this->marker, $row['run_marker'])) {
+            || ! is_string($databaseMarker)
+            || ! hash_equals($this->marker, $databaseMarker)) {
             throw new RuntimeException('PostgreSQL database identity verification failed; manual cleanup is required.');
         }
     }
@@ -144,5 +144,12 @@ final class PostgresRunIdentity
         if (! is_string($resolved) || ! is_dir($resolved) || $mode === false || ($mode & 0077) !== 0) {
             throw new InvalidArgumentException('The PostgreSQL run manifest directory must exist and be private.');
         }
+    }
+
+    private function quotedDatabaseName(): string
+    {
+        self::assertDatabaseName($this->databaseName);
+
+        return '"'.str_replace('"', '""', $this->databaseName).'"';
     }
 }

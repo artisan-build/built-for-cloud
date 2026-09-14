@@ -32,6 +32,13 @@ final class DisposablePostgresLane
     {
         $identity = PostgresRunIdentity::generate($privateManifestDirectory);
 
+        return self::claimGeneratedIdentity($administrator, $identity);
+    }
+
+    /** The private seam lets the real-PostgreSQL collision control stop after generation. */
+    private static function claimGeneratedIdentity(PostgresAdministrator $administrator, PostgresRunIdentity $identity): self
+    {
+
         try {
             $admin = $administrator->connect();
         } catch (Throwable $exception) {

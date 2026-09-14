@@ -163,3 +163,15 @@ it('detects generated secret material and secret-shaped stamp fields', function 
     $stamp['archive']['authorization'] = 'redacted';
     expect(fn () => P6GateStamp::assertValid($stamp))->toThrow(InvalidArgumentException::class);
 });
+
+it('pins the exact P6 coordinator scripts while leaving the ordinary suite on SQLite', function (): void {
+    $composer = json_decode((string) file_get_contents(__DIR__.'/../composer.json'), true, flags: JSON_THROW_ON_ERROR);
+
+    expect($composer['scripts']['stan'])->toBe('@php tests/Support/run-p6-gate-command.php "composer stan" vendor/bin/phpstan analyse --memory-limit=512M')
+        ->and($composer['scripts']['lint:test'])->toBe('@php tests/Support/run-p6-gate-command.php "composer lint:test" vendor/bin/pint --test')
+        ->and($composer['scripts']['test'])->toBe('@php tests/Support/run-p6-gate-command.php "composer test" vendor/bin/pest')
+        ->and($composer['scripts']['test:pgsql'])->toBe('@php tests/Support/run-p6-gate-command.php "composer test:pgsql" vendor/bin/pest --group=pgsql --fail-on-skipped --colors=never')
+        ->and($composer['scripts']['test:p6c-live'])->toBe('@php tests/Live/run-p6c-live.php')
+        ->and((string) file_get_contents(__DIR__.'/../README.md'))
+        ->toContain('The ordinary `composer test` command remains the SQLite suite.', 'BFC_P6_COMMAND_STAMP', 'BFC_P6_LIVE_STAMP');
+});
