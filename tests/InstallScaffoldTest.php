@@ -9,8 +9,9 @@ use ArtisanBuild\BuiltForCloud\Install\InstallTargetState;
 use ArtisanBuild\BuiltForCloud\Install\ServerScaffold;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\InstallFixtureCommand;
-use Illuminate\Contracts\Console\Kernel;
+use Composer\Semver\VersionParser;
 use Illuminate\Console\Command;
+use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Process;
@@ -257,8 +258,22 @@ it('validates the complete server request before writing either target without l
     'env key' => [['BAD-KEY' => 'test-created-sensitive-value'], ['vendor/package' => '^1.0']],
     'env value type' => [['GOOD_KEY' => ['test-created-sensitive-value']], ['vendor/package' => '^1.0']],
     'package' => [['GOOD_KEY' => 'test-created-sensitive-value'], ['Vendor/Package;rm' => '^1.0']],
+    'uppercase package' => [['GOOD_KEY' => 'test-created-sensitive-value'], ['Vendor/package' => '^1.0']],
     'constraint' => [['GOOD_KEY' => 'test-created-sensitive-value'], ['vendor/package' => '|| test-created-sensitive-value']],
 ]);
+
+it('uses the installed Composer validators for accepted package names and constraints', function (): void {
+    $dir = install_scaffold_temp_dir();
+    $composer = $dir.'/composer.json';
+    file_put_contents($composer, "{\"name\":\"fixture/app\"}\n");
+
+    expect(class_exists(VersionParser::class))->toBeTrue();
+    $state = (new ServerScaffold)->writeComposer($composer, ['vendor-name/package.name' => '^1.2 || ^2.0']);
+    $document = json_decode((string) file_get_contents($composer), true, flags: JSON_THROW_ON_ERROR);
+
+    expect($state)->toBe(InstallTargetState::Replaced)
+        ->and($document['require'])->toBe(['vendor-name/package.name' => '^1.2 || ^2.0']);
+});
 
 it('rejects relative traversal symlink and missing composer target paths before writes', function (string $case): void {
     $dir = install_scaffold_temp_dir();

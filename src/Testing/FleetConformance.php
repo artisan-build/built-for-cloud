@@ -116,7 +116,7 @@ final readonly class FleetConformance
         $capabilities = $response->json('capabilities');
 
         if (! is_array($capabilities)
-            || array_diff($spec->requiredCapabilities, array_filter($capabilities, 'is_string')) !== []) {
+            || array_diff($spec->capabilities, array_filter($capabilities, 'is_string')) !== []) {
             throw new \RuntimeException('A required capability predicate is not observable.');
         }
 
@@ -158,7 +158,7 @@ final readonly class FleetConformance
 
     private function scannerFamily(string $family, ConsumerConformance $spec): ConformanceFamilyReport
     {
-        if ($family === 'mcp_delegated' && ! in_array('mcp-delegated', $spec->requiredCapabilities, true)) {
+        if ($family === 'mcp_delegated' && ! in_array('mcp-delegated', $spec->capabilities, true)) {
             return new ConformanceFamilyReport(
                 'not_applicable',
                 'capability_not_declared',
@@ -245,6 +245,12 @@ final readonly class FleetConformance
             ...LegacyRemovalInventory::publicDocumentOffences($spec->packageRoot),
         ];
 
+        foreach ($spec->sourceRoots as $root) {
+            foreach (LegacyRemovalInventory::sourceOffences($root) as $offence) {
+                $offences[] = $this->rootIdentity($root, $spec).'/'.$offence;
+            }
+        }
+
         return [$offences, $offences, $this->visited($spec)];
     }
 
@@ -285,6 +291,7 @@ final readonly class FleetConformance
     private function uiConfigReads(ConsumerConformance $spec): array
     {
         $reads = [];
+        $violations = [];
         $visited = 0;
 
         foreach ([$spec->packageRoot.'/src', ...$spec->sourceRoots] as $root) {
@@ -292,7 +299,16 @@ final readonly class FleetConformance
             array_push($reads, ...UiConfigReadScan::discoverPublishedConfiguration($root));
         }
 
-        return [$reads, [], $visited];
+        try {
+            UiConfigReadScan::assertPublishedConfigurationDispositions(
+                $spec->packageRoot.'/src',
+                $spec->sourceRoots,
+            );
+        } catch (Throwable) {
+            $violations[] = 'published-configuration-dispositions';
+        }
+
+        return [$reads, $violations, $visited];
     }
 
     /** @return array{list<string>, list<string>, int} */
@@ -301,14 +317,20 @@ final readonly class FleetConformance
         $server = $spec->mcpServer ?? throw new \RuntimeException('Missing MCP server.');
         $inventory = McpDelegatedTools::discover($server);
 
+        try {
+            McpDelegatedTools::assertConforms($server);
+        } catch (Throwable) {
+            $inventory['violations'][] = 'mcp-delegated-conformance';
+        }
+
         return [$inventory['tools'], $inventory['violations'], count($inventory['tools'])];
     }
 
     /**
-     * @param list<string> $expected
-     * @param list<string> $discovered
-     * @param list<string> $violations
-     * @param list<string> $limits
+     * @param  list<string>  $expected
+     * @param  list<string>  $discovered
+     * @param  list<string>  $violations
+     * @param  list<string>  $limits
      */
     private function applicable(array $expected, array $discovered, array $violations, int $visited, array $limits): ConformanceFamilyReport
     {
@@ -337,7 +359,9 @@ final readonly class FleetConformance
         );
     }
 
-    /** @return list<string> */
+    /** @param list<string> $members
+     * @return list<string>
+     */
     private function identities(array $members, ConsumerConformance $spec): array
     {
         return array_map(function (string $member) use ($spec): string {

@@ -4,18 +4,31 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Jobs\DeliverOwnershipWebhook;
+use ArtisanBuild\BuiltForCloud\Mcp\AdvertisesToolClassification;
 use ArtisanBuild\BuiltForCloud\Testing\ConformanceFailed;
 use ArtisanBuild\BuiltForCloud\Testing\ConsumerConformance;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
 use ArtisanBuild\BuiltForCloud\Testing\FleetConformance;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
+use Laravel\Mcp\Server;
+use Laravel\Mcp\Server\Tool;
 
 uses(RefreshDatabase::class, ContractAssertions::class);
 
 beforeEach(function (): void {
     Queue::fake();
 });
+
+final class AggregateOffendingMcpTool extends Tool
+{
+    use AdvertisesToolClassification;
+}
+
+final class AggregateOffendingMcpServer extends Server
+{
+    protected array $tools = [AggregateOffendingMcpTool::class];
+}
 
 /** @param list<string> $members
  * @return list<string>
@@ -88,9 +101,9 @@ function packageConformanceExpected(): array
 }
 
 /**
- * @param list<string> $runtime
- * @param list<string> $capabilities
- * @param array<string, list<string>>|null $expected
+ * @param  list<string>  $runtime
+ * @param  list<string>  $capabilities
+ * @param  array<string, list<string>>|null  $expected
  */
 function packageConformanceSpec(
     array $runtime = ['auth_schema', 'credential_listing', 'meta', 'transport_parity'],
@@ -106,11 +119,52 @@ function packageConformanceSpec(
         sourceRoots: [__DIR__.'/Fixtures/ThinHost'],
         providerFiles: [$root.'/src/BuiltForCloudServiceProvider.php'],
         runtimeAssertions: $runtime,
-        requiredCapabilities: $capabilities,
-        purposeMappings: ['fixture.consume' => CredentialPurpose::Consumption],
+        capabilities: $capabilities,
+        purposeMappings: in_array('meta', $runtime, true) ? ['fixture.consume' => CredentialPurpose::Consumption] : [],
         mcpServer: null,
         expected: $expected ?? packageConformanceExpected(),
     );
+}
+
+/**
+ * @param  list<string>|null  $providerFiles
+ * @param  list<string>  $runtime
+ * @param  list<string>  $capabilities
+ * @param  class-string<Server>|null  $mcpServer
+ */
+function aggregateControlSpec(
+    string $consumerRoot,
+    ?array $providerFiles = null,
+    array $runtime = [],
+    array $capabilities = [],
+    ?string $mcpServer = null,
+): ConsumerConformance {
+    $packageRoot = dirname(__DIR__);
+    $providerFiles ??= [$packageRoot.'/src/BuiltForCloudServiceProvider.php'];
+    sort($providerFiles);
+
+    return new ConsumerConformance(
+        consumer: 'aggregate-control',
+        consumerRoot: $consumerRoot,
+        packageRoot: $packageRoot,
+        sourceRoots: [$consumerRoot],
+        providerFiles: $providerFiles,
+        runtimeAssertions: $runtime,
+        capabilities: $capabilities,
+        purposeMappings: [],
+        mcpServer: $mcpServer,
+        expected: packageConformanceExpected(),
+    );
+}
+
+function aggregateControlRoot(string $relativePath, string $contents): string
+{
+    $root = sys_get_temp_dir().'/bfc-aggregate-control-'.bin2hex(random_bytes(6));
+    $path = $root.'/'.$relativePath;
+    mkdir(dirname($path), 0700, true);
+    file_put_contents($path, $contents);
+
+    return $root;
 }
 
 it('runs the single fleet entry point with every family and deterministic exact report schemas', function (): void {
@@ -146,7 +200,7 @@ it('returns the identical passing report and throws the identical failing report
     array_pop($expected['credential_paths']);
     $expected['credential_paths'][] = 'path:test-created-missing-member';
     sort($expected['credential_paths']);
-    $spec = packageConformanceSpec(runtime: [], expected: $expected);
+    $spec = packageConformanceSpec(runtime: [], capabilities: [], expected: $expected);
     $fleet = new FleetConformance($this);
     $report = $fleet->inspect($spec);
 
@@ -168,7 +222,7 @@ it('returns the identical passing report and throws the identical failing report
     $this->fail('The independently mismatched expected inventory passed.');
 });
 
-it('refuses roots fields families ordering duplicates and mcp declarations that violate version one', function (): void {
+it('accepts object members in any order while refusing missing unknown duplicate and incoherent declarations', function (): void {
     $input = [
         'consumer' => 'package-fixture',
         'consumer_root' => __DIR__.'/Fixtures/ThinHost',
@@ -176,7 +230,7 @@ it('refuses roots fields families ordering duplicates and mcp declarations that 
         'source_roots' => [__DIR__.'/Fixtures/ThinHost'],
         'provider_files' => [dirname(__DIR__).'/src/BuiltForCloudServiceProvider.php'],
         'runtime_assertions' => [],
-        'required_capabilities' => [],
+        'capabilities' => [],
         'purpose_mappings' => [],
         'mcp_server' => null,
         'expected' => packageConformanceExpected(),
@@ -184,6 +238,16 @@ it('refuses roots fields families ordering duplicates and mcp declarations that 
 
     expect(fn () => ConsumerConformance::fromArray($input + ['unknown' => true]))
         ->toThrow(InvalidArgumentException::class);
+
+    $reordered = array_reverse($input, true);
+    $reordered['expected'] = array_reverse($reordered['expected'], true);
+    $normalized = ConsumerConformance::fromArray($reordered);
+    expect($normalized->capabilities)->toBe([])
+        ->and(array_keys($normalized->expected))->toBe(ConsumerConformance::FAMILIES);
+
+    $missing = $input;
+    unset($missing['consumer']);
+    expect(fn () => ConsumerConformance::fromArray($missing))->toThrow(InvalidArgumentException::class);
 
     $unknownFamily = $input;
     $unknownFamily['expected']['unknown'] = [];
@@ -195,8 +259,17 @@ it('refuses roots fields families ordering duplicates and mcp declarations that 
     expect(fn () => ConsumerConformance::fromArray($escape))->toThrow(InvalidArgumentException::class, 'escapes');
 
     $mcp = $input;
-    $mcp['required_capabilities'] = ['mcp-delegated'];
+    $mcp['runtime_assertions'] = ['meta'];
+    $mcp['capabilities'] = ['mcp-delegated'];
     expect(fn () => ConsumerConformance::fromArray($mcp))->toThrow(InvalidArgumentException::class, 'requires');
+
+    $withoutMeta = $input;
+    $withoutMeta['capabilities'] = ['credentials'];
+    expect(fn () => ConsumerConformance::fromArray($withoutMeta))->toThrow(InvalidArgumentException::class, 'runtime meta');
+
+    $purposeWithoutMeta = $input;
+    $purposeWithoutMeta['purpose_mappings'] = ['fixture.consume' => CredentialPurpose::Consumption];
+    expect(fn () => ConsumerConformance::fromArray($purposeWithoutMeta))->toThrow(InvalidArgumentException::class, 'runtime meta');
 
     $duplicates = $input;
     $duplicates['source_roots'][] = __DIR__.'/Fixtures/ThinHost';
@@ -214,6 +287,113 @@ it('does not accept a declared capability without the live meta predicate', func
         ->and($report->families['runtime.meta']->violations)->toBe(['assertion-failed:runtime.meta']);
 });
 
+it('rejects every scanner family positive control through the aggregate seam', function (): void {
+    $legacySymbol = implode('', ['Api', 'Token']);
+    $controls = [
+        'thin_host' => [
+            aggregateControlRoot('app/Models/User.php', "<?php\nfinal class AggregateUser {}\n"),
+            'consumer/app/Models/User.php|app-user-model',
+        ],
+        'credential_paths' => [
+            aggregateControlRoot('PurposeOmitted.php', <<<'PHP'
+<?php
+namespace AggregateControl;
+use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
+final class PurposeOmitted
+{
+    public function __construct(private CredentialResolver $resolver) {}
+    public function authenticate(string $secret): mixed
+    {
+        return $this->resolver->resolve(CredentialKind::Bearer, $secret);
+    }
+}
+PHP),
+            'missing-purpose-rule:AggregateControl\\PurposeOmitted::authenticate',
+        ],
+        'credential_writers' => [
+            aggregateControlRoot('RogueWriter.php', <<<'PHP'
+<?php
+namespace AggregateControl;
+use ArtisanBuild\BuiltForCloud\Credential;
+final class RogueWriter
+{
+    public function write(): Credential
+    {
+        return Credential::query()->create(['kind' => 'bearer']);
+    }
+}
+PHP),
+            'missing-purpose:AggregateControl\\RogueWriter::write',
+        ],
+        'legacy_removal' => [
+            aggregateControlRoot('Legacy.php', "<?php\n{$legacySymbol}::query();\n"),
+            'consumer/Legacy.php:2 [symbol:'.$legacySymbol.']',
+        ],
+        'no_signing_path' => [
+            aggregateControlRoot('Signing.php', "<?php\nsodium_crypto_sign(\$message, \$key);\n"),
+            'consumer/Signing.php|sodium_crypto_sign(',
+        ],
+        'ui_config_reads' => [
+            aggregateControlRoot('RogueUiRead.php', "<?php\nnamespace AggregateControl;\nfinal class RogueUiRead { public function read(): mixed { return config('built-for-cloud.ui.rogue'); } }\n"),
+            'published-configuration-dispositions',
+        ],
+    ];
+
+    foreach ($controls as $family => [$root, $violation]) {
+        $report = (new FleetConformance($this))->inspect(aggregateControlSpec($root));
+
+        expect($report->passed)->toBeFalse($family)
+            ->and($report->families[$family]->visited)->toBeGreaterThan(0, $family)
+            ->and($report->families[$family]->violations)->toContain($violation);
+    }
+
+    $systemRoot = aggregateControlRoot('RogueSystem.php', <<<'PHP'
+<?php
+namespace AggregateControl;
+use ArtisanBuild\BuiltForCloud\User;
+use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Auth;
+final class RogueSystemCommand extends Command
+{
+    public function handle(): int
+    {
+        Auth::login(User::query()->first());
+        return self::SUCCESS;
+    }
+}
+final class RogueSystemProvider
+{
+    public function boot(): void
+    {
+        $this->commands([RogueSystemCommand::class]);
+    }
+}
+PHP);
+    $systemReport = (new FleetConformance($this))->inspect(aggregateControlSpec(
+        $systemRoot,
+        [dirname(__DIR__).'/src/BuiltForCloudServiceProvider.php', $systemRoot.'/RogueSystem.php'],
+    ));
+    expect($systemReport->passed)->toBeFalse()
+        ->and($systemReport->families['system_authority']->violations)
+        ->toContain('human-principal:AggregateControl\\RogueSystemCommand');
+
+    $mcpRoot = aggregateControlRoot('Clean.php', "<?php\nfinal class AggregateMcpConsumer {}\n");
+    $mcpReport = (new FleetConformance($this))->inspect(aggregateControlSpec(
+        $mcpRoot,
+        runtime: ['meta'],
+        capabilities: ['mcp-delegated'],
+        mcpServer: AggregateOffendingMcpServer::class,
+    ));
+    expect($mcpReport->passed)->toBeFalse()
+        ->and($mcpReport->families['mcp_delegated']->visited)->toBe(1)
+        ->and($mcpReport->families['mcp_delegated']->violations)->toContain(
+            AggregateOffendingMcpTool::class.' is missing IsReadOnly, IsDestructive, or IsIdempotent.',
+            AggregateOffendingMcpTool::class.' is missing ToolClassification.',
+            'mcp-delegated-conformance',
+        );
+});
+
 it('never leaks absolute paths or test-created secret material in a failing report', function (): void {
     $secret = 'test-created-secret-'.bin2hex(random_bytes(8));
     $consumer = sys_get_temp_dir().'/bfc-conformance-'.bin2hex(random_bytes(6));
@@ -229,7 +409,7 @@ it('never leaks absolute paths or test-created secret material in a failing repo
         sourceRoots: [$consumer],
         providerFiles: [dirname(__DIR__).'/src/BuiltForCloudServiceProvider.php'],
         runtimeAssertions: [],
-        requiredCapabilities: [],
+        capabilities: [],
         purposeMappings: [],
         mcpServer: null,
         expected: $expected,

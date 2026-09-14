@@ -32,11 +32,14 @@ final readonly class ConsumerConformance
         'mcp_delegated',
     ];
 
+    /** @var array<string, list<string>> */
+    public array $expected;
+
     /**
      * @param  list<string>  $sourceRoots
      * @param  list<string>  $providerFiles
      * @param  list<string>  $runtimeAssertions
-     * @param  list<string>  $requiredCapabilities
+     * @param  list<string>  $capabilities
      * @param  array<string, CredentialPurpose>  $purposeMappings
      * @param  class-string<Server>|null  $mcpServer
      * @param  array<string, list<string>>  $expected
@@ -48,10 +51,10 @@ final readonly class ConsumerConformance
         public array $sourceRoots,
         public array $providerFiles,
         public array $runtimeAssertions,
-        public array $requiredCapabilities,
+        public array $capabilities,
         public array $purposeMappings,
         public ?string $mcpServer,
-        public array $expected,
+        array $expected,
     ) {
         if ($consumer === '') {
             throw new InvalidArgumentException('The consumer slug must be non-empty.');
@@ -64,10 +67,14 @@ final readonly class ConsumerConformance
         self::assertSortedUniquePaths($sourceRoots, [$consumerRoot, $packageRoot], false);
         self::assertSortedUniquePaths($providerFiles, [$consumerRoot, $packageRoot], true);
         self::assertSortedUniqueStrings($runtimeAssertions, true);
-        self::assertSortedUniqueStrings($requiredCapabilities, true);
+        self::assertSortedUniqueStrings($capabilities, true);
 
         if (array_diff($runtimeAssertions, self::RUNTIME_ASSERTIONS) !== []) {
             throw new InvalidArgumentException('The runtime assertion declaration is invalid.');
+        }
+
+        if (($capabilities !== [] || $purposeMappings !== []) && ! in_array('meta', $runtimeAssertions, true)) {
+            throw new InvalidArgumentException('Capabilities and purpose mappings require the runtime meta assertion.');
         }
 
         $purposeKeys = array_keys($purposeMappings);
@@ -84,7 +91,7 @@ final readonly class ConsumerConformance
             }
         }
 
-        if (in_array('mcp-delegated', $requiredCapabilities, true) && $mcpServer === null) {
+        if (in_array('mcp-delegated', $capabilities, true) && $mcpServer === null) {
             throw new InvalidArgumentException('The mcp-delegated capability requires an MCP server.');
         }
 
@@ -92,26 +99,28 @@ final readonly class ConsumerConformance
             throw new InvalidArgumentException('The MCP server declaration is invalid.');
         }
 
-        if (array_keys($expected) !== self::FAMILIES) {
+        if (self::sortedKeys($expected) !== self::sortedKeys(array_fill_keys(self::FAMILIES, []))) {
             throw new InvalidArgumentException('The expected conformance families are invalid.');
         }
 
         foreach ($expected as $members) {
             self::assertSortedUniqueStrings($members, true);
         }
+
+        $this->expected = array_replace(array_fill_keys(self::FAMILIES, []), $expected);
     }
 
     /**
-     * @param array<string, mixed> $input
+     * @param  array<string, mixed>  $input
      */
     public static function fromArray(array $input): self
     {
         $keys = [
             'consumer', 'consumer_root', 'package_root', 'source_roots', 'provider_files',
-            'runtime_assertions', 'required_capabilities', 'purpose_mappings', 'mcp_server', 'expected',
+            'runtime_assertions', 'capabilities', 'purpose_mappings', 'mcp_server', 'expected',
         ];
 
-        if (array_keys($input) !== $keys) {
+        if (self::sortedKeys($input) !== self::sortedKeys(array_fill_keys($keys, null))) {
             throw new InvalidArgumentException('The consumer conformance fields are invalid.');
         }
 
@@ -121,7 +130,7 @@ final readonly class ConsumerConformance
             }
         }
 
-        foreach (['source_roots', 'provider_files', 'runtime_assertions', 'required_capabilities', 'purpose_mappings', 'expected'] as $key) {
+        foreach (['source_roots', 'provider_files', 'runtime_assertions', 'capabilities', 'purpose_mappings', 'expected'] as $key) {
             if (! is_array($input[$key])) {
                 throw new InvalidArgumentException('A consumer conformance field has the wrong type.');
             }
@@ -143,7 +152,7 @@ final readonly class ConsumerConformance
             array_values($input['source_roots']),
             array_values($input['provider_files']),
             array_values($input['runtime_assertions']),
-            array_values($input['required_capabilities']),
+            array_values($input['capabilities']),
             $purposeMappings,
             $input['mcp_server'],
             $expected,
@@ -157,9 +166,20 @@ final readonly class ConsumerConformance
         }
     }
 
+    /** @param array<string, mixed> $values
+     * @return list<string>
+     */
+    private static function sortedKeys(array $values): array
+    {
+        $keys = array_keys($values);
+        sort($keys);
+
+        return $keys;
+    }
+
     /**
-     * @param list<string> $paths
-     * @param list<string> $declaredRoots
+     * @param  list<string>  $paths
+     * @param  list<string>  $declaredRoots
      */
     private static function assertSortedUniquePaths(array $paths, array $declaredRoots, bool $files): void
     {

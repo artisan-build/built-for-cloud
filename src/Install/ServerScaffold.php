@@ -16,6 +16,9 @@ use Throwable;
  */
 final class ServerScaffold
 {
+    /** Composer's package-name rule from composer-schema.json. */
+    private const string COMPOSER_PACKAGE_NAME_PATTERN = '{^[a-z0-9]([_.-]?[a-z0-9]+)*/[a-z0-9](([_.]?|-{0,2})[a-z0-9]+)*$}D';
+
     /**
      * @param  array<string, string>  $environment
      * @param  array<string, string>  $requirements
@@ -145,7 +148,7 @@ final class ServerScaffold
         foreach ($requirements as $package => $constraint) {
             if (! is_string($package)
                 || ! is_string($constraint)
-                || preg_match('{^[a-z0-9]([_.-]?[a-z0-9]+)*/[a-z0-9](([_.]?|-{0,2})[a-z0-9]+)*$}D', $package) !== 1) {
+                || preg_match(self::COMPOSER_PACKAGE_NAME_PATTERN, $package) !== 1) {
                 throw new InvalidArgumentException('The Composer requirements are invalid.');
             }
 
