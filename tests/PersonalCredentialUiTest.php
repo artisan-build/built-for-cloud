@@ -112,7 +112,7 @@ final class PersonalCredentialUiTest extends TestCase
             ->assertSee($kind->value);
         $this->assertSame(1, substr_count((string) $page->getContent(), '<main>'));
 
-        $issue = $this->actingAsVersioned($user, 'web')->post(route('bfc.ui.personal-credentials.store'), [
+        $this->actingAsVersioned($user, 'web')->post(route('bfc.ui.personal-credentials.store'), [
             'app_purpose' => $appPurpose,
             'kind' => $kind->value,
             'name' => $name,
@@ -123,7 +123,11 @@ final class PersonalCredentialUiTest extends TestCase
             'user_id' => (string) $victim->getKey(),
             'abilities' => [OperatorAbility::Admin->value],
             'root' => CredentialPurpose::SIGNING_ROOT_SUBJECT_REF,
-        ])->assertCreated()
+        ])->assertRedirect(route('bfc.ui.personal-credentials.index'))
+            ->assertStatus(303);
+        $issueEffects = $this->effects();
+        $issue = $this->get(route('bfc.ui.personal-credentials.index'))
+            ->assertOk()
             ->assertSeeHtml('data-testid="personal-credentials-delivery"');
 
         $issued = Credential::query()->where('name', $name)->sole();
@@ -139,6 +143,7 @@ final class PersonalCredentialUiTest extends TestCase
         $revisit = $this->actingAsVersioned($user, 'web')->get(route('bfc.ui.personal-credentials.index'));
         $revisit->assertOk()->assertSee($name)->assertDontSeeHtml('data-testid="personal-credentials-delivery"');
         $this->assertStringNotContainsString($secret, (string) $revisit->getContent());
+        $this->assertSame($issueEffects, $this->effects());
 
         if ($kind === CredentialKind::Hmac) {
             $this->activateHmac($issued, $issue);
@@ -155,12 +160,16 @@ final class PersonalCredentialUiTest extends TestCase
         $rotationSource = $kind === CredentialKind::Asymmetric
             ? $this->activeAsymmetric($user, $name.'-active')
             : $issued;
-        $rotate = $this->actingAsVersioned($user, 'web')->post(
+        $this->actingAsVersioned($user, 'web')->post(
             route('bfc.ui.personal-credentials.rotate', $rotationSource->id),
             $kind === CredentialKind::Asymmetric
                 ? ['code_ttl_seconds' => 120, 'abilities' => [OperatorAbility::Admin->value], 'emergency' => true]
                 : ['abilities' => [OperatorAbility::Admin->value], 'emergency' => true],
-        )->assertCreated()
+        )->assertRedirect(route('bfc.ui.personal-credentials.index'))
+            ->assertStatus(303);
+        $rotationEffects = $this->effects();
+        $rotate = $this->get(route('bfc.ui.personal-credentials.index'))
+            ->assertOk()
             ->assertSeeHtml('data-testid="personal-credentials-delivery"');
 
         $rotationSecret = $this->deliverySecret($rotate, $kind);
@@ -177,6 +186,7 @@ final class PersonalCredentialUiTest extends TestCase
         $rotationRevisit = $this->actingAsVersioned($user, 'web')->get(route('bfc.ui.personal-credentials.index'));
         $rotationRevisit->assertOk()->assertDontSeeHtml('data-testid="personal-credentials-delivery"');
         $this->assertStringNotContainsString($rotationSecret, (string) $rotationRevisit->getContent());
+        $this->assertSame($rotationEffects, $this->effects());
 
         if ($kind === CredentialKind::Hmac) {
             $this->assertHmacAuthenticates($user, $issued->id, $secret);
@@ -212,6 +222,50 @@ final class PersonalCredentialUiTest extends TestCase
         } elseif ($kind !== CredentialKind::Asymmetric) {
             $this->assertSecretDoesNotAuthenticate($replacement, $rotationSecret, $purpose);
         }
+    }
+
+    public function test_issue_and_rotate_delivery_survives_one_redirected_get_without_repeat_effects(): void
+    {
+        $user = $this->user(UserRole::Member);
+        $this->actingAsVersioned($user, 'web');
+
+        $this->post(route('bfc.ui.personal-credentials.store'), [
+            'app_purpose' => 'test.consume',
+            'kind' => CredentialKind::Bearer->value,
+            'name' => 'test-created-refresh-proof',
+        ])->assertRedirect(route('bfc.ui.personal-credentials.index'))
+            ->assertStatus(303);
+
+        $afterIssue = $this->effects();
+        $issueDelivery = $this->get(route('bfc.ui.personal-credentials.index'))
+            ->assertOk()
+            ->assertSeeHtml('data-testid="personal-credentials-delivery"');
+        $issueSecret = $this->deliverySecret($issueDelivery, CredentialKind::Bearer);
+        $this->assertSame($afterIssue, $this->effects());
+
+        $this->get(route('bfc.ui.personal-credentials.index'))
+            ->assertOk()
+            ->assertDontSeeHtml('data-testid="personal-credentials-delivery"')
+            ->assertDontSee($issueSecret);
+        $this->assertSame($afterIssue, $this->effects());
+
+        $issued = Credential::query()->where('name', 'test-created-refresh-proof')->sole();
+        $this->post(route('bfc.ui.personal-credentials.rotate', $issued->id))
+            ->assertRedirect(route('bfc.ui.personal-credentials.index'))
+            ->assertStatus(303);
+
+        $afterRotate = $this->effects();
+        $rotateDelivery = $this->get(route('bfc.ui.personal-credentials.index'))
+            ->assertOk()
+            ->assertSeeHtml('data-testid="personal-credentials-delivery"');
+        $rotationSecret = $this->deliverySecret($rotateDelivery, CredentialKind::Bearer);
+        $this->assertSame($afterRotate, $this->effects());
+
+        $this->get(route('bfc.ui.personal-credentials.index'))
+            ->assertOk()
+            ->assertDontSeeHtml('data-testid="personal-credentials-delivery"')
+            ->assertDontSee($rotationSecret);
+        $this->assertSame($afterRotate, $this->effects());
     }
 
     public function test_cross_user_unknown_and_invalid_submission_refusals_have_no_effect_or_delivery(): void
@@ -384,7 +438,7 @@ final class PersonalCredentialUiTest extends TestCase
                 'app_purpose' => 'test.consume',
                 'kind' => 'bearer',
                 'name' => 'test-created-flag-'.($enabled ? 'on' : 'off'),
-            ])->assertCreated();
+            ])->assertStatus(303);
             $observed[] = [
                 'delta' => array_map(
                     static fn (int $count, string $key): int => $count - $before[$key],
