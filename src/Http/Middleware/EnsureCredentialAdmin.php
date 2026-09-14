@@ -38,12 +38,14 @@ use Throwable;
  * The accepted row is visible downstream as `bfc.actor_credential_id` and
  * audited as an `operator_integration` actor.
  *
- * Observability (GATE-3.7): every token-auth FAILURE (401) and every
- * DENIED action (403) on this gate appends a `denied_action` event to the
- * PR4 audit stream — ids only, never presented secrets. The denial itself
- * never depends on the audit write: containment must hold even while the
- * audit store is down, so the append is best-effort here (denials carry no
- * state transition to keep it transactional with).
+ * Observability (GATE-3.7): missing, unknown and dead token-auth failures
+ * (401), and every authenticated denied action (403), append a
+ * `denied_action` event to the PR4 audit stream — ids only, never presented
+ * secrets. A wrong-purpose secret is anonymous on this protocol and creates
+ * no audit attribution. The denial itself never depends on the audit write:
+ * containment must hold even while the audit store is down, so the append is
+ * best-effort here (denials carry no state transition to keep it
+ * transactional with).
  */
 final class EnsureCredentialAdmin
 {

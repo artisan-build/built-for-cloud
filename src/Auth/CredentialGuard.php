@@ -69,8 +69,8 @@ use Throwable;
  *
  * The guard NEVER consults `built-for-cloud.fallback_token` or any other env
  * pseudo-credential — there is no code path from here to it. All rejections
- * are indistinguishable 401s: expired, revoked, pending and unknown secrets
- * produce the same response.
+ * are indistinguishable 401s: expired, revoked, pending, wrong-purpose and
+ * unknown secrets produce the same response.
  */
 final class CredentialGuard implements Guard
 {
