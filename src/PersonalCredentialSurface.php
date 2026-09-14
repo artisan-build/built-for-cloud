@@ -211,7 +211,7 @@ final readonly class PersonalCredentialSurface
         $this->requireSubject($request);
 
         return PersonalSubmissionNonce::issue(
-            $request->session()->getId(),
+            $request->session()->token(),
             $this->requireSessionUserId(),
             $verb,
             $target,
@@ -228,7 +228,7 @@ final readonly class PersonalCredentialSurface
 
         return PersonalSubmissionNonce::presented(
             $nonce,
-            $request->session()->getId(),
+            $request->session()->token(),
             $this->requireSessionUserId(),
             $verb,
             $target,

@@ -22,6 +22,7 @@ use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
+use ArtisanBuild\BuiltForCloud\PersonalSubmissionNonce;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiPersonalCredentialDeclaration;
@@ -51,6 +52,8 @@ final class PersonalCredentialUiTest extends TestCase
         UiPersonalCredentialDeclaration::$kinds = CredentialKind::cases();
         UiPersonalCredentialDeclaration::$abilities = [OperatorAbility::McpRead->value];
         UiPersonalCredentialDeclaration::$deniedVerbs = [];
+        UiPersonalCredentialDeclaration::$resolvesSubject = true;
+        UiPersonalCredentialDeclaration::$subjectRef = null;
 
         config([
             'auth.guards.bfc' => ['driver' => 'bfc', 'provider' => 'users'],
@@ -112,7 +115,8 @@ final class PersonalCredentialUiTest extends TestCase
             ->assertSee($kind->value);
         $this->assertSame(1, substr_count((string) $page->getContent(), '<main>'));
 
-        $this->actingAsVersioned($user, 'web')->post(route('bfc.ui.personal-credentials.store'), [
+        $issue = $this->post(route('bfc.ui.personal-credentials.store'), [
+            PersonalSubmissionNonce::FIELD => $this->submissionNonce($page, route('bfc.ui.personal-credentials.store')),
             'app_purpose' => $appPurpose,
             'kind' => $kind->value,
             'name' => $name,
@@ -123,12 +127,9 @@ final class PersonalCredentialUiTest extends TestCase
             'user_id' => (string) $victim->getKey(),
             'abilities' => [OperatorAbility::Admin->value],
             'root' => CredentialPurpose::SIGNING_ROOT_SUBJECT_REF,
-        ])->assertRedirect(route('bfc.ui.personal-credentials.index'))
-            ->assertStatus(303);
-        $issueEffects = $this->effects();
-        $issue = $this->get(route('bfc.ui.personal-credentials.index'))
-            ->assertOk()
+        ])->assertCreated()
             ->assertSeeHtml('data-testid="personal-credentials-delivery"');
+        $issueEffects = $this->effects();
 
         $issued = Credential::query()->where('name', $name)->sole();
         $secret = $this->deliverySecret($issue, $kind);
@@ -160,17 +161,23 @@ final class PersonalCredentialUiTest extends TestCase
         $rotationSource = $kind === CredentialKind::Asymmetric
             ? $this->activeAsymmetric($user, $name.'-active')
             : $issued;
-        $this->actingAsVersioned($user, 'web')->post(
+        $rotationPage = $kind === CredentialKind::Asymmetric
+            ? $this->get(route('bfc.ui.personal-credentials.index'))->assertOk()
+            : $issue;
+        $rotate = $this->post(
             route('bfc.ui.personal-credentials.rotate', $rotationSource->id),
-            $kind === CredentialKind::Asymmetric
-                ? ['code_ttl_seconds' => 120, 'abilities' => [OperatorAbility::Admin->value], 'emergency' => true]
-                : ['abilities' => [OperatorAbility::Admin->value], 'emergency' => true],
-        )->assertRedirect(route('bfc.ui.personal-credentials.index'))
-            ->assertStatus(303);
-        $rotationEffects = $this->effects();
-        $rotate = $this->get(route('bfc.ui.personal-credentials.index'))
-            ->assertOk()
+            [
+                PersonalSubmissionNonce::FIELD => $this->submissionNonce(
+                    $rotationPage,
+                    route('bfc.ui.personal-credentials.rotate', $rotationSource->id),
+                ),
+                ...($kind === CredentialKind::Asymmetric
+                    ? ['code_ttl_seconds' => 120, 'abilities' => [OperatorAbility::Admin->value], 'emergency' => true]
+                    : ['abilities' => [OperatorAbility::Admin->value], 'emergency' => true]),
+            ],
+        )->assertCreated()
             ->assertSeeHtml('data-testid="personal-credentials-delivery"');
+        $rotationEffects = $this->effects();
 
         $rotationSecret = $this->deliverySecret($rotate, $kind);
         $replacement = Credential::query()->where('name', $rotationSource->name)
@@ -224,48 +231,58 @@ final class PersonalCredentialUiTest extends TestCase
         }
     }
 
-    public function test_issue_and_rotate_delivery_survives_one_redirected_get_without_repeat_effects(): void
+    public function test_issue_and_rotate_deliver_immediately_and_replay_refuses_without_effects(): void
     {
         $user = $this->user(UserRole::Member);
         $this->actingAsVersioned($user, 'web');
 
-        $this->post(route('bfc.ui.personal-credentials.store'), [
+        $page = $this->get(route('bfc.ui.personal-credentials.index'))->assertOk();
+        $issuePayload = [
+            PersonalSubmissionNonce::FIELD => $this->submissionNonce($page, route('bfc.ui.personal-credentials.store')),
             'app_purpose' => 'test.consume',
             'kind' => CredentialKind::Bearer->value,
             'name' => 'test-created-refresh-proof',
-        ])->assertRedirect(route('bfc.ui.personal-credentials.index'))
-            ->assertStatus(303);
+        ];
+        $issueDelivery = $this->post(route('bfc.ui.personal-credentials.store'), $issuePayload)
+            ->assertCreated()
+            ->assertSeeHtml('data-testid="personal-credentials-delivery"')
+            ->assertHeader('Cache-Control', 'no-store, private');
 
         $afterIssue = $this->effects();
-        $issueDelivery = $this->get(route('bfc.ui.personal-credentials.index'))
-            ->assertOk()
-            ->assertSeeHtml('data-testid="personal-credentials-delivery"');
         $issueSecret = $this->deliverySecret($issueDelivery, CredentialKind::Bearer);
         $this->assertSame($afterIssue, $this->effects());
 
-        $this->get(route('bfc.ui.personal-credentials.index'))
-            ->assertOk()
+        $this->post(route('bfc.ui.personal-credentials.store'), $issuePayload)
+            ->assertStatus(409)
             ->assertDontSeeHtml('data-testid="personal-credentials-delivery"')
             ->assertDontSee($issueSecret);
         $this->assertSame($afterIssue, $this->effects());
 
         $issued = Credential::query()->where('name', 'test-created-refresh-proof')->sole();
-        $this->post(route('bfc.ui.personal-credentials.rotate', $issued->id))
-            ->assertRedirect(route('bfc.ui.personal-credentials.index'))
-            ->assertStatus(303);
+        $rotatePayload = [PersonalSubmissionNonce::FIELD => $this->submissionNonce(
+            $issueDelivery,
+            route('bfc.ui.personal-credentials.rotate', $issued->id),
+        )];
+        $rotateDelivery = $this->post(route('bfc.ui.personal-credentials.rotate', $issued->id), $rotatePayload)
+            ->assertCreated()
+            ->assertSeeHtml('data-testid="personal-credentials-delivery"')
+            ->assertHeader('Cache-Control', 'no-store, private');
 
         $afterRotate = $this->effects();
-        $rotateDelivery = $this->get(route('bfc.ui.personal-credentials.index'))
-            ->assertOk()
-            ->assertSeeHtml('data-testid="personal-credentials-delivery"');
         $rotationSecret = $this->deliverySecret($rotateDelivery, CredentialKind::Bearer);
+        $this->assertSame($afterRotate, $this->effects());
+
+        $this->post(route('bfc.ui.personal-credentials.rotate', $issued->id), $rotatePayload)
+            ->assertStatus(409)
+            ->assertDontSeeHtml('data-testid="personal-credentials-delivery"')
+            ->assertDontSee($rotationSecret);
         $this->assertSame($afterRotate, $this->effects());
 
         $this->get(route('bfc.ui.personal-credentials.index'))
             ->assertOk()
             ->assertDontSeeHtml('data-testid="personal-credentials-delivery"')
+            ->assertDontSee($issueSecret)
             ->assertDontSee($rotationSecret);
-        $this->assertSame($afterRotate, $this->effects());
     }
 
     public function test_cross_user_unknown_and_invalid_submission_refusals_have_no_effect_or_delivery(): void
@@ -356,6 +373,143 @@ final class PersonalCredentialUiTest extends TestCase
         }
     }
 
+    public function test_same_subject_different_user_rows_stay_outside_html_json_and_shared_mutations(): void
+    {
+        $actor = $this->user(UserRole::Member);
+        $victim = $this->user(UserRole::Member);
+        UiPersonalCredentialDeclaration::$subjectRef = 'shared-personal-subject';
+        $foreign = $this->personalCredential($victim);
+        $foreign->forceFill(['subject_ref' => 'shared-personal-subject'])->save();
+        $this->actingAsVersioned($actor, 'web');
+
+        $this->get(route('bfc.ui.personal-credentials.index'))
+            ->assertOk()
+            ->assertDontSee($foreign->id)
+            ->assertDontSee($foreign->name);
+        $this->getJson('/bfc/me/credentials')
+            ->assertOk()
+            ->assertJsonPath('credentials', [])
+            ->assertDontSee($foreign->id);
+
+        foreach ([
+            fn (): TestResponse => $this->post(route('bfc.ui.personal-credentials.rotate', $foreign->id)),
+            fn (): TestResponse => $this->delete(route('bfc.ui.personal-credentials.destroy', $foreign->id)),
+            fn (): TestResponse => $this->deleteJson('/bfc/me/credentials/'.$foreign->id),
+        ] as $request) {
+            $before = $this->effects();
+            $request()->assertNotFound()->assertDontSeeHtml('data-testid="personal-credentials-delivery"');
+            $this->assertSame($before, $this->effects());
+        }
+
+        $request = Request::create('/bfc/me/credentials/'.$foreign->id.'/rotate', 'POST');
+        $request->setUserResolver(static fn (): User => $actor);
+        $before = $this->effects();
+        $this->assertNull(app(PersonalCredentialSurface::class)->rotateMine($request, $foreign->id, new RotateOptions));
+        $this->assertSame($before, $this->effects());
+        $this->assertNull($foreign->refresh()->rotated_at);
+        $this->assertNull($foreign->revoked_at);
+    }
+
+    public function test_null_subject_refuses_every_html_verb_without_effect_or_delivery(): void
+    {
+        $user = $this->user(UserRole::Member);
+        $credential = $this->personalCredential($user);
+        UiPersonalCredentialDeclaration::$resolvesSubject = false;
+        $this->actingAsVersioned($user, 'web');
+
+        foreach ([
+            fn (): TestResponse => $this->get(route('bfc.ui.personal-credentials.index')),
+            fn (): TestResponse => $this->post(route('bfc.ui.personal-credentials.store'), [
+                'app_purpose' => 'test.consume', 'kind' => CredentialKind::Bearer->value,
+            ]),
+            fn (): TestResponse => $this->post(route('bfc.ui.personal-credentials.rotate', $credential->id)),
+            fn (): TestResponse => $this->delete(route('bfc.ui.personal-credentials.destroy', $credential->id)),
+        ] as $request) {
+            $before = $this->effects();
+            $request()->assertForbidden()->assertDontSeeHtml('data-testid="personal-credentials-delivery"');
+            $this->assertSame($before, $this->effects());
+        }
+    }
+
+    public function test_submission_nonce_is_hash_only_and_bound_to_session_verb_and_target(): void
+    {
+        $user = $this->user(UserRole::Member);
+        $other = $this->user(UserRole::Member);
+        $credential = $this->personalCredential($user);
+        $otherCredential = $this->personalCredential($user, [
+            'name' => 'test-created-other-target',
+            'secret_hash' => hash('sha256', 'test-created-other-target'),
+        ]);
+        $page = $this->actingAsVersioned($user, 'web')->get(route('bfc.ui.personal-credentials.index'))->assertOk();
+        $issueNonce = $this->submissionNonce($page, route('bfc.ui.personal-credentials.store'));
+        $rotateNonce = $this->submissionNonce($page, route('bfc.ui.personal-credentials.rotate', $credential->id));
+
+        $this->assertFalse(DB::table('bfc_personal_submission_nonces')->where('nonce_hash', $issueNonce)->exists());
+        $this->assertTrue(DB::table('bfc_personal_submission_nonces')->where('nonce_hash', hash('sha256', $issueNonce))->exists());
+        $this->assertStringNotContainsString($issueNonce, json_encode(session()->all(), JSON_THROW_ON_ERROR));
+
+        foreach ([
+            fn (): TestResponse => $this->post(route('bfc.ui.personal-credentials.store'), [
+                'app_purpose' => 'test.consume', 'kind' => CredentialKind::Bearer->value,
+            ]),
+            fn (): TestResponse => $this->post(route('bfc.ui.personal-credentials.rotate', $credential->id), [
+                PersonalSubmissionNonce::FIELD => $issueNonce,
+            ]),
+            fn (): TestResponse => $this->post(route('bfc.ui.personal-credentials.rotate', $otherCredential->id), [
+                PersonalSubmissionNonce::FIELD => $rotateNonce,
+            ]),
+        ] as $request) {
+            $before = $this->effects();
+            $request()->assertStatus(409)->assertDontSeeHtml('data-testid="personal-credentials-delivery"');
+            $this->assertSame($before, $this->effects());
+        }
+
+        $before = $this->effects();
+        $this->actingAsVersioned($other, 'web')->post(route('bfc.ui.personal-credentials.store'), [
+            PersonalSubmissionNonce::FIELD => $issueNonce,
+            'app_purpose' => 'test.consume',
+            'kind' => CredentialKind::Bearer->value,
+        ])->assertStatus(409)->assertDontSeeHtml('data-testid="personal-credentials-delivery"');
+        $this->assertSame($before, $this->effects());
+    }
+
+    public function test_out_of_policy_rotation_refuses_and_in_policy_rotation_succeeds(): void
+    {
+        $user = $this->user(UserRole::Member);
+        $outOfPolicy = $this->personalCredential($user);
+        $outOfPolicy->forceFill([
+            'kind' => CredentialKind::Basic,
+            'abilities' => [OperatorAbility::Admin->value],
+        ])->save();
+        UiPersonalCredentialDeclaration::$kinds = [CredentialKind::Bearer];
+        UiPersonalCredentialDeclaration::$abilities = [];
+        $page = $this->actingAsVersioned($user, 'web')->get(route('bfc.ui.personal-credentials.index'))->assertOk();
+        $before = $this->effects();
+
+        $this->post(route('bfc.ui.personal-credentials.rotate', $outOfPolicy->id), [
+            PersonalSubmissionNonce::FIELD => $this->submissionNonce(
+                $page,
+                route('bfc.ui.personal-credentials.rotate', $outOfPolicy->id),
+            ),
+        ])->assertForbidden()->assertDontSeeHtml('data-testid="personal-credentials-delivery"');
+        $this->assertSame($before, $this->effects());
+        $this->assertNull($outOfPolicy->refresh()->rotated_at);
+
+        $allowed = $this->personalCredential($user, [
+            'name' => 'test-created-in-policy',
+            'abilities' => null,
+            'secret_hash' => hash('sha256', 'test-created-in-policy'),
+        ]);
+        $allowedPage = $this->get(route('bfc.ui.personal-credentials.index'))->assertOk();
+        $this->post(route('bfc.ui.personal-credentials.rotate', $allowed->id), [
+            PersonalSubmissionNonce::FIELD => $this->submissionNonce(
+                $allowedPage,
+                route('bfc.ui.personal-credentials.rotate', $allowed->id),
+            ),
+        ])->assertCreated()->assertSeeHtml('data-testid="personal-credentials-delivery"');
+        $this->assertNotNull($allowed->refresh()->rotated_at);
+    }
+
     public function test_declaration_refusals_and_all_flags_off_direct_refusals_preserve_every_effect(): void
     {
         $user = $this->user(UserRole::Owner);
@@ -434,11 +588,13 @@ final class PersonalCredentialUiTest extends TestCase
             ));
 
             $before = $this->effects();
+            $page = $this->get(route('bfc.ui.personal-credentials.index'))->assertOk();
             $response = $this->post(route('bfc.ui.personal-credentials.store'), [
+                PersonalSubmissionNonce::FIELD => $this->submissionNonce($page, route('bfc.ui.personal-credentials.store')),
                 'app_purpose' => 'test.consume',
                 'kind' => 'bearer',
                 'name' => 'test-created-flag-'.($enabled ? 'on' : 'off'),
-            ])->assertStatus(303);
+            ])->assertCreated();
             $observed[] = [
                 'delta' => array_map(
                     static fn (int $count, string $key): int => $count - $before[$key],
@@ -616,9 +772,10 @@ final class PersonalCredentialUiTest extends TestCase
         return $user;
     }
 
-    private function personalCredential(User $user): Credential
+    /** @param array<string, mixed> $attributes */
+    private function personalCredential(User $user, array $attributes = []): Credential
     {
-        return Credential::query()->create([
+        return Credential::query()->create(array_merge([
             'kind' => CredentialKind::Bearer,
             'purpose' => CredentialPurpose::Consumption,
             'subject_type' => SubjectType::UserPrincipal,
@@ -628,7 +785,7 @@ final class PersonalCredentialUiTest extends TestCase
             'abilities' => [OperatorAbility::McpRead->value],
             'status' => CredentialStatus::Active,
             'secret_hash' => hash('sha256', 'test-created-secret-'.$user->getKey()),
-        ]);
+        ], $attributes));
     }
 
     private function activeAsymmetric(User $user, string $name): Credential
@@ -662,6 +819,18 @@ final class PersonalCredentialUiTest extends TestCase
         $this->assertSame(1, $matched);
 
         return html_entity_decode($matches[1], ENT_QUOTES | ENT_HTML5);
+    }
+
+    private function submissionNonce(TestResponse $response, string $action): string
+    {
+        $matched = preg_match(
+            '/<form[^>]+action="'.preg_quote($action, '/').'".*?name="submission_nonce" value="([a-f0-9]{64})"/s',
+            (string) $response->getContent(),
+            $matches,
+        );
+        $this->assertSame(1, $matched, 'Expected a server-minted submission nonce for '.$action.'.');
+
+        return $matches[1];
     }
 
     private function activateHmac(Credential $credential, TestResponse $delivery): void

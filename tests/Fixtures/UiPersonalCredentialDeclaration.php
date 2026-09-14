@@ -26,13 +26,17 @@ final class UiPersonalCredentialDeclaration implements AuthorizesCredentialVerbs
     /** @var list<CredentialVerb> */
     public static array $deniedVerbs = [];
 
+    public static bool $resolvesSubject = true;
+
+    public static ?string $subjectRef = null;
+
     public function resolveSubject(Request $request): ?Subject
     {
         $user = $request->user();
 
-        return $user === null
+        return $user === null || ! self::$resolvesSubject
             ? null
-            : new Subject(SubjectType::UserPrincipal, 'ui-user:'.$user->getAuthIdentifier());
+            : new Subject(SubjectType::UserPrincipal, self::$subjectRef ?? 'ui-user:'.$user->getAuthIdentifier());
     }
 
     public function resolveHmacSubject(Request $request): ?Subject

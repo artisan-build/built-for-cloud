@@ -50,6 +50,15 @@ it('keeps the standalone authority gate effective on every owned route', functio
     }
 });
 
+it('exempts only the finite shipped UI route names from standalone authority', function (): void {
+    $method = new ReflectionMethod(StandaloneRouteOwnership::class, 'requiresStandaloneAuthority');
+    $future = (new RoutingRoute(['GET'], '/bfc/ui/future', static fn (): null => null))->name('bfc.ui.future');
+    $home = Route::getRoutes()->getByName('bfc.ui.home');
+
+    expect($method->invoke(null, $future))->toBeTrue()
+        ->and($method->invoke(null, $home))->toBeFalse();
+});
+
 it('keeps bearer pages stateless and clean handoff pages on the ordinary session stack', function (): void {
     /** @var Router $router */
     $router = app('router');
