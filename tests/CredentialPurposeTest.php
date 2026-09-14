@@ -11,6 +11,7 @@ use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\Database\Factories\CredentialFactory;
+use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\MintOptions;
@@ -77,8 +78,13 @@ it('admits every generic purpose matrix cell and refuses every other cell before
                     continue;
                 }
 
-                expect(fn () => app(MintCredential::class)($subject, $options))
-                    ->toThrow(InvalidCredentialInput::class, 'not allowed');
+                if ($purpose === CredentialPurpose::SigningRoot) {
+                    expect(fn () => app(MintCredential::class)($subject, $options))
+                        ->toThrow(CredentialVerbRefused::class, 'reserved for its dedicated lifecycle');
+                } else {
+                    expect(fn () => app(MintCredential::class)($subject, $options))
+                        ->toThrow(InvalidCredentialInput::class, 'not allowed');
+                }
                 expect([
                     Credential::query()->count(),
                     CredentialAuditEvent::query()->count(),
@@ -101,11 +107,11 @@ it('refuses missing unknown signing-root and reserved-pair purpose inputs before
     expect(fn () => app(MintCredential::class)(
         new Subject(SubjectType::Installation, 'ordinary'),
         new MintOptions(kind: CredentialKind::Hmac, purpose: CredentialPurpose::SigningRoot),
-    ))->toThrow(InvalidCredentialInput::class, 'not allowed');
+    ))->toThrow(CredentialVerbRefused::class, 'reserved for its dedicated lifecycle');
     expect(fn () => app(MintCredential::class)(
         new Subject(SubjectType::Installation, CredentialPurpose::SIGNING_ROOT_SUBJECT_REF),
         new MintOptions(kind: CredentialKind::Hmac, purpose: CredentialPurpose::Signing),
-    ))->toThrow(InvalidCredentialInput::class, 'not allowed');
+    ))->toThrow(CredentialVerbRefused::class, 'reserved for its dedicated lifecycle');
 
     expect([Credential::query()->count(), CredentialAuditEvent::query()->count(), OnboardingToken::query()->count()])
         ->toBe($before);

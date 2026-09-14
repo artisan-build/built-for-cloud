@@ -10,6 +10,8 @@ use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
+use ArtisanBuild\BuiltForCloud\Hmac\SigningRootLifecycle;
+use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -98,6 +100,32 @@ it('rewraps every hmac ciphertext — active, pending, grace, revoked — and ve
 
     expect($keyring->decrypt((string) $active->refresh()->secret_ciphertext, $active->secret_key_version))->toBe($knownKey)
         ->and($keyring->cutoverInProgress())->toBeFalse();
+});
+
+it('rewraps the installation signing root without changing its MAC or emitting material', function (): void {
+    $result = app(SigningRootLifecycle::class)->provision();
+    /** @var Credential $root */
+    $root = Credential::query()->findOrFail($result->summary->id);
+    $keyring = app(HmacKeyring::class);
+    $plaintext = $keyring->decrypt((string) $root->secret_ciphertext, $root->secret_key_version);
+    $before = app(SigningRootMac::class)->mac('root-inclusive rewrap');
+    $ciphertextBefore = (string) $root->secret_ciphertext;
+    $oldVersion = stageAppKeyRotation();
+
+    $exit = $this->assertNoSecretLeakage($plaintext, fn (): int => Artisan::call('bfc:hmac:rewrap'));
+    $output = Artisan::output();
+
+    expect($exit)->toBe(0)
+        ->and($output)->toContain('1 hmac row(s) re-encrypted')
+        ->and($output)->toContain('Verified zero old-version rows')
+        ->and($output)->not->toContain($plaintext, $ciphertextBefore, $before->lowercaseHexMac)
+        ->and($root->refresh()->secret_key_version)->toBe($keyring->writeVersion())
+        ->and($root->secret_key_version)->not->toBe($oldVersion)
+        ->and((string) $root->secret_ciphertext)->not->toBe($ciphertextBefore)
+        ->and($keyring->decrypt((string) $root->secret_ciphertext, $root->secret_key_version))->toBe($plaintext)
+        ->and(app(SigningRootMac::class)->verify($root->id, 'root-inclusive rewrap', $before->lowercaseHexMac))->toBeTrue();
+
+    $this->assertConsoleOutputCarriesNoSecret($output, $plaintext);
 });
 
 it('is restartable: a run after a died sweep picks up exactly the rows still on the old version', function (): void {

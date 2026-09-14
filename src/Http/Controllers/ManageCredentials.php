@@ -17,6 +17,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\SigningRootRefused;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\Concerns\RevealsDelivery;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
@@ -142,7 +143,7 @@ final class ManageCredentials extends OperatorRouteController
             return response()->json(['message' => $invalid->getMessage()], 422);
         } catch (CredentialVerbRefused $refused) {
             return response()->json(['message' => $refused->getMessage()], 403);
-        } catch (RotationRefused|RewrapInProgress $refused) {
+        } catch (RotationRefused|RewrapInProgress|SigningRootRefused $refused) {
             return response()->json(['message' => $refused->getMessage()], 409);
         } catch (RotationCutoverIncomplete $incomplete) {
             return response()->json(['message' => $incomplete->getMessage()], 500);

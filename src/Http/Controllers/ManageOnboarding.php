@@ -25,6 +25,7 @@ use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
+use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintedSecret;
@@ -384,7 +385,17 @@ final class ManageOnboarding extends OperatorRouteController
             // code refuses HERE — authoritatively, inside the locked
             // transaction, and BEFORE any burn: a refused code must stay
             // presentable on the surface that can serve it.
-            if ($hitchShape && $this->codeLinksToSigningKey($code)) {
+            $linkedHmac = $this->linkedHmac($code);
+
+            if ($linkedHmac !== null && SigningRootMac::isReserved($linkedHmac)) {
+                return ClaimError::InvalidCode->respond('The installation signing root is reserved for its dedicated lifecycle.');
+            }
+
+            if ($linkedHmac !== null && $linkedHmac->purpose !== CredentialPurpose::Signing) {
+                return ClaimError::InvalidCode->respond('This code does not link to a deliverable signing credential.');
+            }
+
+            if ($hitchShape && $linkedHmac !== null) {
                 return ClaimError::InvalidCode->respond('This code redeems a signing key, which this claim surface cannot deliver. Exchange it at POST /bfc/onboarding/exchange instead.');
             }
 
@@ -549,16 +560,16 @@ final class ManageOnboarding extends OperatorRouteController
      * counts: even a dead signing-key link is not something this surface
      * can honestly answer for.
      */
-    private function codeLinksToSigningKey(OnboardingToken $code): bool
+    private function linkedHmac(OnboardingToken $code): ?Credential
     {
         if ($code->durable_credential_id === null) {
-            return false;
+            return null;
         }
 
         return Credential::query()
             ->whereKey($code->durable_credential_id)
             ->where('kind', CredentialKind::Hmac->value)
-            ->exists();
+            ->first();
     }
 
     /**
@@ -599,6 +610,14 @@ final class ManageOnboarding extends OperatorRouteController
 
         if ($credential === null || $credential->kind !== CredentialKind::Hmac) {
             return null;
+        }
+
+        if (SigningRootMac::isReserved($credential)) {
+            return ClaimError::InvalidCode->respond('The installation signing root is reserved for its dedicated lifecycle.');
+        }
+
+        if ($credential->purpose !== CredentialPurpose::Signing) {
+            return ClaimError::InvalidCode->respond('This code does not link to a deliverable signing credential.');
         }
 
         // A dead or already-cut-over link target delivers nothing. Mostly

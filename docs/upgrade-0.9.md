@@ -34,6 +34,20 @@ The accepted purpose values are `operator_management`, `dashboard_metadata`, `co
 persisted ability on a new credential must be a documented `OperatorAbility` value. Legacy claim
 scope strings such as `consume` and `onboard` are not abilities.
 
+## Provision the installation signing root
+
+Installations that use package-owned signing must run
+`php artisan bfc:signing-root:provision --local` once after deployment. The command derives the
+reserved `(installation, bfc:signing-root)` identity and returns no secret; do not attempt to create
+the row through generic credential commands or HTTP routes. Application code uses `SigningRootMac`
+to MAC and verify opaque bytes without receiving root plaintext.
+
+Root rotation is available through the unchanged public credential rotation action and creates a
+direct-active replacement before retiring the old root into one-hour verification grace. Use
+emergency rotation only when old verification must stop at cutover. The root participates in the
+normal staged APP_KEY procedure, so run `bfc:hmac:rewrap` before removing an old key from
+`APP_PREVIOUS_KEYS`; command output does not contain root material.
+
 ## Removed surfaces
 
 This table is rendered from `LegacyRemovalInventory::upgradeGuide()`. The test suite compares this

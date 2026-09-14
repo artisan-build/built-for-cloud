@@ -24,6 +24,8 @@ use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
+use ArtisanBuild\BuiltForCloud\Hmac\SigningRootLifecycle;
+use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintedSecret;
@@ -115,6 +117,28 @@ final class RotateCredential
         ?CredentialManagementScope $managementScope = null,
     ): ?RotationResult {
         OperatorAbility::assertValues($options->abilities);
+
+        $target = Credential::query()->whereKey($id);
+        $managementScope?->apply($target);
+
+        /** @var Credential|null $targeted */
+        $targeted = $target->first();
+
+        if ($targeted === null) {
+            return null;
+        }
+
+        if (SigningRootMac::isReserved($targeted)) {
+            if ($options->requestsChange() || $options->override || $options->codeTtlSeconds !== null) {
+                throw CredentialVerbRefused::signingRootLifecycleOnly();
+            }
+
+            if (! $this->verbAllowed(CredentialVerb::Rotate, $targeted->subject())) {
+                throw CredentialVerbRefused::byMatrix(CredentialVerb::Rotate);
+            }
+
+            return app(SigningRootLifecycle::class)->rotate($id, $options->emergency, $actor);
+        }
 
         $phaseOne = fn (): ?RotationResult => DB::transaction(
             fn (): ?RotationResult => $this->mintReplacement($id, $options, $actor, $managementScope),
