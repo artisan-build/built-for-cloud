@@ -11,6 +11,8 @@ use ArtisanBuild\BuiltForCloud\Testing\P6PostgresRunStamp;
 use ArtisanBuild\BuiltForCloud\Testing\P6RuntimeCounterProof;
 use ArtisanBuild\BuiltForCloud\Testing\P6SecretLeakDetector;
 use ArtisanBuild\BuiltForCloud\Tests\Support\P6HttpClient;
+use ArtisanBuild\BuiltForCloud\Tests\Support\P6LiveCommandRunner;
+use Symfony\Component\Process\Process;
 
 function p6SupportDirectory(): string
 {
@@ -19,6 +21,43 @@ function p6SupportDirectory(): string
 
     return $directory;
 }
+
+it('bootstraps a fresh Laravel host without dependency installation or skeleton scripts', function (): void {
+    $host = p6SupportDirectory().'/host';
+    $command = P6LiveCommandRunner::freshLaravelHostCommand($host);
+
+    expect($command)->toBe([
+        'composer',
+        'create-project',
+        'laravel/laravel:^13.0',
+        $host,
+        '--no-interaction',
+        '--no-install',
+        '--no-scripts',
+    ])->and($command)->toContain('--no-install', '--no-scripts');
+});
+
+it('reports only a controlled stage label when a non-sensitive command fails', function (): void {
+    $process = new Process([PHP_BINARY, __DIR__.'/Fixtures/p6-live-command-failure.php']);
+    $process->run();
+    $arguments = [];
+    $outputs = [];
+
+    expect($process->isSuccessful())->toBeTrue($process->getOutput().$process->getErrorOutput())
+        ->and($process->getOutput())->toBe('')
+        ->and($process->getErrorOutput())->toBe("P6c live command failed at stage: fresh Laravel host creation\n")
+        ->and($process->getErrorOutput())->not->toContain('child stdout', 'child stderr')
+        ->and(function () use (&$arguments, &$outputs): void {
+            P6LiveCommandRunner::run(
+                [PHP_BINARY, '-r', 'exit(0);'],
+                __DIR__,
+                [],
+                "unsafe\nstage",
+                $arguments,
+                $outputs,
+            );
+        })->toThrow(InvalidArgumentException::class, 'stage label is invalid');
+});
 
 it('requires observed successful commands from one exact candidate before live execution', function (): void {
     $path = p6SupportDirectory().'/commands.json';

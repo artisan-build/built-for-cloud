@@ -18,6 +18,7 @@ use ArtisanBuild\BuiltForCloud\Testing\P6SecretLeakDetector;
 use ArtisanBuild\BuiltForCloud\Testing\PostgresAdministrator;
 use ArtisanBuild\BuiltForCloud\Testing\SharedRuntimeIdentity;
 use ArtisanBuild\BuiltForCloud\Tests\Support\P6HttpClient;
+use ArtisanBuild\BuiltForCloud\Tests\Support\P6LiveCommandRunner;
 use ParagonIE\Paseto\Builder;
 use ParagonIE\Paseto\Keys\Version4\AsymmetricSecretKey;
 use ParagonIE\Paseto\Protocol\Version4;
@@ -52,16 +53,7 @@ function p6LiveJson(string $json, string $label): array
 /** @param array<string, string> $environment */
 function p6LiveRun(array $command, string $directory, array $environment, string $label, array &$arguments, array &$outputs): string
 {
-    $arguments[] = $command;
-    $process = new Process($command, $directory, $environment, null, 300);
-    $exitCode = $process->run();
-    if ($exitCode !== 0) {
-        p6LiveFail("{$label} exited non-zero.");
-    }
-    $output = $process->getOutput();
-    $outputs[] = $output.$process->getErrorOutput();
-
-    return $output;
+    return P6LiveCommandRunner::run($command, $directory, $environment, $label, $arguments, $outputs);
 }
 
 /** @param array<string, string> $environment */
@@ -348,7 +340,7 @@ try {
 
     $host = $runDirectory.'/host';
     p6LiveRun(
-        ['composer', 'create-project', 'laravel/laravel:^13.0', $host, '--no-interaction', '--no-install'],
+        P6LiveCommandRunner::freshLaravelHostCommand($host),
         $runDirectory,
         [],
         'fresh Laravel host creation',
