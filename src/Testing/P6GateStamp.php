@@ -10,7 +10,7 @@ use InvalidArgumentException;
 final class P6GateStamp
 {
     /** @param array<string, mixed> $stamp
-     * @param list<string> $forbiddenMaterials
+     * @param  list<string>  $forbiddenMaterials
      */
     public static function assertValid(array $stamp, array $forbiddenMaterials = []): void
     {

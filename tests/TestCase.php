@@ -60,5 +60,4 @@ abstract class TestCase extends Orchestra
         $app['config']->set('app.key', 'base64:'.base64_encode(str_repeat('bfc-test-key-32b', 2)));
         $app['config']->set('built-for-cloud.hmac.audience', 'https://bfc-test-installation.example');
     }
-
 }
