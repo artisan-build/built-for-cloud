@@ -23,13 +23,17 @@ final class PostgresMigrationIdempotencyTest extends TestCase
 
     public function test_full_package_postgresql_schema_resets_without_application_tables(): void
     {
-        $this->artisan('migrate:fresh', ['--database' => 'pgsql_testing', '--force' => true])->assertSuccessful();
-        $this->artisan('migrate:reset', ['--database' => 'pgsql_testing', '--force' => true])->assertSuccessful();
+        try {
+            $this->artisan('migrate:fresh', ['--database' => 'pgsql_testing', '--force' => true])->assertSuccessful();
+            $this->artisan('migrate:reset', ['--database' => 'pgsql_testing', '--force' => true])->assertSuccessful();
 
-        $tables = collect(DB::connection('pgsql_testing')->select(
-            "select tablename from pg_tables where schemaname = 'public' and tablename <> 'migrations'",
-        ))->map(static fn (object $table): string => (string) $table->tablename)->all();
+            $tables = collect(DB::connection('pgsql_testing')->select(
+                "select tablename from pg_tables where schemaname = 'public' and tablename <> 'migrations'",
+            ))->map(static fn (object $table): string => (string) $table->tablename)->all();
 
-        $this->assertSame([], $tables);
+            $this->assertSame([], $tables);
+        } finally {
+            $this->artisan('migrate:fresh', ['--database' => 'pgsql_testing', '--force' => true])->assertSuccessful();
+        }
     }
 }

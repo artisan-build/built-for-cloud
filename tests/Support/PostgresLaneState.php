@@ -62,7 +62,7 @@ final class PostgresLaneState
         self::$manifestDirectory = $directory;
         self::$lane = DisposablePostgresLane::create($administrator, $directory);
         self::$previousDatabaseEnvironment = getenv('PGSQL_TESTING_DATABASE');
-        putenv('PGSQL_TESTING_DATABASE='.self::$lane->databaseName());
+        self::exportDatabaseEnvironment(self::$lane->databaseName());
         register_shutdown_function(self::finish(...));
 
         return self::$lane;
@@ -116,16 +116,31 @@ final class PostgresLaneState
             );
         }
 
-        if (self::$previousDatabaseEnvironment === false) {
-            putenv('PGSQL_TESTING_DATABASE');
-        } elseif (is_string(self::$previousDatabaseEnvironment)) {
-            putenv('PGSQL_TESTING_DATABASE='.self::$previousDatabaseEnvironment);
-        }
+        self::restoreDatabaseEnvironment();
 
         if (is_string(self::$manifestDirectory)) {
             @rmdir(self::$manifestDirectory);
         }
 
         self::$lane = null;
+    }
+
+    private static function exportDatabaseEnvironment(string $database): void
+    {
+        putenv('PGSQL_TESTING_DATABASE='.$database);
+        $_SERVER['PGSQL_TESTING_DATABASE'] = $database;
+        $_ENV['PGSQL_TESTING_DATABASE'] = $database;
+    }
+
+    private static function restoreDatabaseEnvironment(): void
+    {
+        if (self::$previousDatabaseEnvironment === false) {
+            putenv('PGSQL_TESTING_DATABASE');
+            unset($_SERVER['PGSQL_TESTING_DATABASE'], $_ENV['PGSQL_TESTING_DATABASE']);
+        } elseif (is_string(self::$previousDatabaseEnvironment)) {
+            self::exportDatabaseEnvironment(self::$previousDatabaseEnvironment);
+        }
+
+        self::$previousDatabaseEnvironment = null;
     }
 }

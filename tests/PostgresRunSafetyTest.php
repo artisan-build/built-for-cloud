@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\Testing\PostgresDatabaseProvisioner;
 use ArtisanBuild\BuiltForCloud\Testing\PostgresRunIdentity;
 use ArtisanBuild\BuiltForCloud\Tests\Support\PostgresLaneState;
 use PDO;
+use Symfony\Component\Process\Process;
 
 function p6SafetyAdministrator(): PostgresAdministrator
 {
@@ -132,4 +133,16 @@ it('fails closed on either marker copy while an unrelated owned database survive
             @rmdir($directoryB);
         }
     }
+})->group('pgsql');
+
+it('exports the generated target database to child processes', function (): void {
+    $lane = PostgresLaneState::lane(p6SafetyAdministrator());
+    $process = new Process([
+        PHP_BINARY,
+        '-r',
+        'fwrite(STDOUT, (string) getenv("PGSQL_TESTING_DATABASE"));',
+    ]);
+    $process->mustRun();
+
+    expect($process->getOutput())->toBe($lane->databaseName());
 })->group('pgsql');
