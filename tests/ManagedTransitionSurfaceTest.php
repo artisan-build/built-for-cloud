@@ -11,13 +11,16 @@ use ArtisanBuild\BuiltForCloud\ManagedTransition;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionDirection;
 use ArtisanBuild\BuiltForCloud\ManagedTransitions;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionStatus;
+use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ManagedTransitionAuthorityFixture;
 use ArtisanBuild\BuiltForCloud\Tests\TestCase;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Http\Request;
+use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -85,13 +88,119 @@ function p4cBegin(TestCase $test, User $owner, ManagedTransitionDirection $direc
 }
 
 it('mounts the Owner proposal routes behind the package human gate', function (): void {
-    foreach (['bfc.transitions.index', 'bfc.transitions.store', 'bfc.transitions.edit', 'bfc.transitions.update', 'bfc.transitions.complete'] as $name) {
+    foreach (['bfc.transitions.index', 'bfc.transitions.store', 'bfc.transitions.edit', 'bfc.transitions.update', 'bfc.transitions.complete', 'bfc.transitions.abandon'] as $name) {
         $route = Route::getRoutes()->getByName($name);
 
         expect($route, $name)->not->toBeNull();
         expect($this->app['router']->gatherRouteMiddleware($route), $name)
             ->toContain(EnsureUserIsAuthenticated::class);
     }
+
+    $abandon = Route::getRoutes()->getByName('bfc.transitions.abandon');
+    expect($this->app['router']->gatherRouteMiddleware($abandon))
+        ->toContain(StartSession::class, PreventRequestForgery::class);
+});
+
+it('recovers from a roster-changed stage refusal through the Owner abandon route', function (): void {
+    [$owner, $fixture] = p4cConfigure();
+    $transition = p4cBegin($this, $owner, ManagedTransitionDirection::Adopt);
+    $fixture->rosterPages['NULL'][0]['role'] = UserRole::Admin->value;
+    $fixture->stageRosterChanged = true;
+    $edit = route('bfc.transitions.edit', $transition, false);
+
+    $this->actingAsVersioned($owner)
+        ->from($edit)
+        ->post(route('bfc.transitions.complete', $transition, false))
+        ->assertRedirect($edit)
+        ->assertSessionHasErrors('transition');
+
+    expect($transition->refresh()->status)->toBe(ManagedTransitionStatus::Staging)
+        ->and(collect($fixture->calls)->where('leg', 'T3'))->toHaveCount(1);
+
+    $this->post(route('bfc.transitions.abandon', $transition, false))
+        ->assertRedirect(route('bfc.transitions.index', ManagedTransitionDirection::Adopt->value));
+
+    expect($transition->refresh()->status)->toBe(ManagedTransitionStatus::Abandoned)
+        ->and(collect($fixture->calls)->where('leg', 'T7'))->toHaveCount(1);
+
+    $response = $this->post(route('bfc.transitions.store', ManagedTransitionDirection::Adopt->value, false));
+    $replacement = ManagedTransition::query()->whereKeyNot($transition->id)->sole();
+
+    $response->assertRedirect(route('bfc.transitions.edit', $replacement));
+    expect($replacement->status)->toBe(ManagedTransitionStatus::Proposed)
+        ->and(collect($fixture->calls)->where('leg', 'T1'))->toHaveCount(2);
+});
+
+it('refuses non-Owner and stale sessions on the abandon route without changing the transition', function (string $caller): void {
+    [$owner, $fixture] = p4cConfigure();
+    $transition = p4cBegin($this, $owner, ManagedTransitionDirection::Adopt);
+    $actor = User::query()->create([
+        'name' => 'Abandon '.$caller,
+        'email' => 'abandon-'.$caller.'@example.test',
+    ]);
+    $actor->forceFill(['role' => $caller === 'admin' ? 'admin' : 'member'])->save();
+    $before = $transition->fresh()->getAttributes();
+    $url = route('bfc.transitions.abandon', $transition, false);
+
+    $response = match ($caller) {
+        'admin', 'member' => $this->actingAsVersioned($actor)->post($url),
+        'guest' => (function () use ($url) {
+            auth()->logout();
+
+            return $this->post($url);
+        })(),
+        'stale-session' => $this->actingAs($owner)->withSession([
+            StandaloneAccess::SESSION_VERSION_KEY => $owner->auth_session_version + 1,
+        ])->post($url),
+    };
+
+    if (in_array($caller, ['admin', 'member'], true)) {
+        $response->assertForbidden();
+    } else {
+        $response->assertRedirect(route('bfc.login'));
+    }
+
+    expect($transition->fresh()->getAttributes())->toBe($before)
+        ->and(collect($fixture->calls)->where('leg', 'T7'))->toHaveCount(0);
+})->with(['admin', 'member', 'guest', 'stale-session']);
+
+it('renders the abandon form for every pre-commit transition status', function (ManagedTransitionStatus $status): void {
+    [$owner] = p4cConfigure();
+    $transition = p4cBegin($this, $owner, ManagedTransitionDirection::Adopt);
+    $transition->forceFill(['status' => $status])->save();
+
+    $this->actingAsVersioned($owner)
+        ->get(route('bfc.transitions.edit', $transition, false))
+        ->assertOk()
+        ->assertSeeHtml('data-testid="transition-abandon-form"');
+})->with([
+    ManagedTransitionStatus::Prepared,
+    ManagedTransitionStatus::Rostered,
+    ManagedTransitionStatus::Proposed,
+    ManagedTransitionStatus::Staging,
+    ManagedTransitionStatus::Staged,
+]);
+
+it('does not render the abandon form after commit', function (): void {
+    [$owner] = p4cConfigure();
+    $transition = p4cBegin($this, $owner, ManagedTransitionDirection::Adopt);
+    $transition->forceFill(['status' => ManagedTransitionStatus::Committed])->save();
+
+    $this->actingAsVersioned($owner)
+        ->get(route('bfc.transitions.edit', $transition, false))
+        ->assertOk()
+        ->assertDontSeeHtml('data-testid="transition-abandon-form"');
+});
+
+it('does not render a proposal page after abandonment', function (): void {
+    [$owner] = p4cConfigure();
+    $transition = p4cBegin($this, $owner, ManagedTransitionDirection::Adopt);
+    $transition->forceFill(['status' => ManagedTransitionStatus::Abandoned])->save();
+
+    $this->actingAsVersioned($owner)
+        ->get(route('bfc.transitions.edit', $transition, false))
+        ->assertStatus(409)
+        ->assertDontSeeHtml('data-testid="transition-abandon-form"');
 });
 
 it('shows a never-visited roster subject and every tagged local identity without an adoption role control', function (): void {
@@ -405,6 +514,7 @@ it('refuses Admin, Member, and unauthenticated requests on every transition rout
     $edit = route('bfc.transitions.edit', $transition, false);
     $update = route('bfc.transitions.update', $transition, false);
     $complete = route('bfc.transitions.complete', $transition, false);
+    $abandon = route('bfc.transitions.abandon', $transition, false);
 
     foreach ([$admin, $member] as $actor) {
         $this->actingAsVersioned($actor)->get($index)->assertForbidden();
@@ -412,6 +522,7 @@ it('refuses Admin, Member, and unauthenticated requests on every transition rout
         $this->actingAsVersioned($actor)->get($edit)->assertForbidden();
         $this->actingAsVersioned($actor)->put($update, ['roster' => [], 'locals' => []])->assertForbidden();
         $this->actingAsVersioned($actor)->post($complete)->assertForbidden();
+        $this->actingAsVersioned($actor)->post($abandon)->assertForbidden();
     }
 
     auth()->logout();
@@ -420,6 +531,7 @@ it('refuses Admin, Member, and unauthenticated requests on every transition rout
     $this->get($edit)->assertRedirect(route('bfc.login'));
     $this->put($update, ['roster' => [], 'locals' => []])->assertRedirect(route('bfc.login'));
     $this->post($complete)->assertRedirect(route('bfc.login'));
+    $this->post($abandon)->assertRedirect(route('bfc.login'));
 });
 
 it('executes completion through the Owner route and ends the stale standalone session', function (): void {

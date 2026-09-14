@@ -1667,7 +1667,7 @@ it('enumerates every transition HTTP surface in both directions under the frozen
     ManagedTransitionDirection $direction,
     string $disposition = 'link',
 ): void {
-    $expectedMethods = ['complete', 'edit', 'index', 'store', 'update'];
+    $expectedMethods = ['abandon', 'complete', 'edit', 'index', 'store', 'update'];
     $actualMethods = collect((new ReflectionClass(ManageTransitions::class))->getMethods(ReflectionMethod::IS_PUBLIC))
         ->reject(static fn (ReflectionMethod $method): bool => $method->isConstructor())
         ->map(static fn (ReflectionMethod $method): string => $method->getName())
@@ -1675,6 +1675,7 @@ it('enumerates every transition HTTP surface in both directions under the frozen
         ->values()
         ->all();
     $expectedRoutes = [
+        'bfc.transitions.abandon',
         'bfc.transitions.complete',
         'bfc.transitions.edit',
         'bfc.transitions.index',
@@ -1697,6 +1698,7 @@ it('enumerates every transition HTTP surface in both directions under the frozen
     } else {
         $transition = p4dProposed($owner, $direction, $mapping);
         $invoke = match ($surface) {
+            'abandon' => fn () => $this->post(route('bfc.transitions.abandon', $transition, false)),
             'edit' => fn () => $this->get(route('bfc.transitions.edit', $transition, false)),
             'update' => fn () => $this->put(route('bfc.transitions.update', $transition, false), $updatePayload),
             'complete' => fn () => $this->post(route('bfc.transitions.complete', $transition, false)),
@@ -1728,8 +1730,12 @@ it('enumerates every transition HTTP surface in both directions under the frozen
                 ->value('final_email'))->toBe('independent-owner@example.test');
     } elseif ($surface === 'complete') {
         expect($transition->refresh()->status)->toBe(ManagedTransitionStatus::Acknowledged);
+    } elseif ($surface === 'abandon') {
+        expect($transition->refresh()->status)->toBe(ManagedTransitionStatus::Abandoned);
     }
 })->with([
+    'adopt abandon' => ['abandon', ManagedTransitionDirection::Adopt],
+    'exit abandon' => ['abandon', ManagedTransitionDirection::Exit],
     'adopt complete' => ['complete', ManagedTransitionDirection::Adopt],
     'exit complete' => ['complete', ManagedTransitionDirection::Exit],
     'adopt complete create' => ['complete', ManagedTransitionDirection::Adopt, 'create'],
