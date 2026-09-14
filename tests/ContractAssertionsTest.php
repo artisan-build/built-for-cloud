@@ -48,3 +48,33 @@ it('exercises the consumer thin-host conformance wrapper', function (): void {
     expect(fn () => $this->assertBuiltForCloudThinHostSources(__DIR__.'/Fixtures/RogueHost'))
         ->toThrow(AssertionFailedError::class);
 });
+
+it('accepts a manifest matching the canonical catalog entry exactly', function (): void {
+    $catalogEntry = [
+        'name' => 'Catalog Test App',
+        'slug' => 'catalog-test-app',
+        'description' => 'A test-created catalog description.',
+        'icon' => 'https://assets.example.test/catalog-test-app.svg',
+        'product_url' => 'https://scalpels.app/products/catalog-test-app',
+    ];
+    config(['built-for-cloud.manifest' => $catalogEntry]);
+
+    $this->assertBuiltForCloudManifestMatches($catalogEntry);
+    expect(true)->toBeTrue();
+});
+
+it('refuses an independent catalog mismatch for every manifest field', function (string $field): void {
+    $catalogEntry = [
+        'name' => 'Catalog Test App',
+        'slug' => 'catalog-test-app',
+        'description' => 'A test-created catalog description.',
+        'icon' => 'https://assets.example.test/catalog-test-app.svg',
+        'product_url' => 'https://scalpels.app/products/catalog-test-app',
+    ];
+    $manifest = $catalogEntry;
+    $manifest[$field] = 'independent mismatch for '.$field;
+    config(['built-for-cloud.manifest' => $manifest]);
+
+    expect(fn () => $this->assertBuiltForCloudManifestMatches($catalogEntry))
+        ->toThrow(AssertionFailedError::class, "manifest [{$field}]");
+})->with(['name', 'slug', 'description', 'icon', 'product_url']);

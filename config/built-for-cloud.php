@@ -28,6 +28,14 @@ return [
 
     'token_prefix' => env('BUILT_FOR_CLOUD_TOKEN_PREFIX', 'tok_'),
 
+    'manifest' => [
+        'name' => null,
+        'slug' => null,
+        'description' => null,
+        'icon' => null,
+        'product_url' => null,
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | Unified Credential Store
@@ -505,7 +513,13 @@ return [
     */
 
     'ui' => [
-        'managed_transitions' => env('BUILT_FOR_CLOUD_UI_MANAGED_TRANSITIONS', false),
+        'landing_page' => false,
+        'member_management' => false,
+        'personal_credentials' => false,
+        'installation_credentials' => false,
+        'session_management' => false,
+        'managed_transitions' => false,
+        'credential_purposes' => [],
     ],
 
     /*

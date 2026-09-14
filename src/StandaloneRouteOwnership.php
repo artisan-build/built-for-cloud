@@ -232,12 +232,16 @@ final class StandaloneRouteOwnership
 
             if (count($named) !== 1
                 || ! self::occupiesReservedShape($named[0], $ownedRoute)
-                || ! in_array(
+                || (self::requiresStandaloneAuthority($ownedRoute) && ! in_array(
                     EnsureStandaloneAuthority::class,
                     $router->resolveMiddleware($named[0]->middleware(), $named[0]->excludedMiddleware()),
                     true,
-                )) {
-                throw new RuntimeException("The route name [{$name}] is reserved by built-for-cloud standalone authentication.");
+                ))) {
+                $owner = self::requiresStandaloneAuthority($ownedRoute)
+                    ? 'built-for-cloud standalone authentication'
+                    : 'the built-for-cloud landing page';
+
+                throw new RuntimeException("The route name [{$name}] is reserved by {$owner}.");
             }
 
             $domainAndUri = $ownedRoute->getDomain().$ownedRoute->uri();
@@ -246,7 +250,11 @@ final class StandaloneRouteOwnership
                 $occupant = $byMethod[$method][$domainAndUri] ?? null;
 
                 if (! $occupant instanceof Route || ! self::occupiesReservedShape($occupant, $ownedRoute)) {
-                    throw new RuntimeException("The route [{$method} {$ownedRoute->uri()}] is reserved by built-for-cloud standalone authentication.");
+                    $owner = self::requiresStandaloneAuthority($ownedRoute)
+                        ? 'built-for-cloud standalone authentication'
+                        : 'the built-for-cloud landing page';
+
+                    throw new RuntimeException("The route [{$method} {$ownedRoute->uri()}] is reserved by {$owner}.");
                 }
             }
         }
@@ -304,6 +312,11 @@ final class StandaloneRouteOwnership
             && array_diff($candidate->methods(), $ownedRoute->methods()) === []
             && array_diff($ownedRoute->methods(), $candidate->methods()) === []
             && $candidate->getActionName() === $ownedRoute->getActionName();
+    }
+
+    private static function requiresStandaloneAuthority(Route $route): bool
+    {
+        return $route->getName() !== 'bfc.landing';
     }
 
     /** @return list<string> */

@@ -3,25 +3,51 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTransitions;
+use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
+use ArtisanBuild\BuiltForCloud\LandingManifest;
+use ArtisanBuild\BuiltForCloud\LandingPageRegistrar;
 use ArtisanBuild\BuiltForCloud\Testing\UiConfigReadScan;
+use ArtisanBuild\BuiltForCloud\Tests\InventoryFixtures\PublishedConfigRogueRead;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConfigChainEnforcementPath;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConfigEnforcementPath;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConfigFacadeEnforcementPath;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConfigRepositoryEnforcementPath;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConfigTypedGetterEnforcementPath;
 use Illuminate\Contracts\Config\Repository;
+use ArtisanBuild\BuiltForCloud\UiCredentialPurposes;
 
 /**
  * P5-AC13's installed-src enumeration. It covers all four statically
  * attributable literal read forms and the typed-getter family documented by
  * UiConfigReadScan; the executable rogue gates below are its controls.
  */
-it('derives exactly the frozen visibility-only ui config consumer', function (): void {
+it('derives exactly the named display and mount ui config consumers', function (): void {
     $root = dirname(__DIR__).'/src';
-    $expected = [ManageTransitions::class.'|built-for-cloud.ui.managed_transitions|1'];
+    $expected = [
+        ManageTransitions::class.'|built-for-cloud.ui.managed_transitions|1' => 'managed-transition display',
+        LandingPageRegistrar::class.'|built-for-cloud.ui.landing_page|1' => 'optional public root mount',
+        UiCredentialPurposes::class.'|built-for-cloud.ui.credential_purposes|1' => 'credential-purpose display',
+    ];
 
     expect(UiConfigReadScan::countPhpFiles($root))->toBeGreaterThan(0)
-        ->and(UiConfigReadScan::discover($root))->toBe($expected);
+        ->and(UiConfigReadScan::discover($root))->toBe(array_keys($expected));
+});
+
+it('derives every published config read with a named disposition and detects rogue reads', function (): void {
+    $expected = [
+        AppPurposeRegistry::class.'|built-for-cloud.credentials.app_purposes|1' => 'protocol-purpose mapper',
+        ManageTransitions::class.'|built-for-cloud.ui.managed_transitions|1' => 'managed-transition display',
+        LandingManifest::class.'|built-for-cloud.manifest|1' => 'landing display',
+        LandingPageRegistrar::class.'|built-for-cloud.ui.landing_page|1' => 'optional public root mount',
+        UiCredentialPurposes::class.'|built-for-cloud.ui.credential_purposes|1' => 'credential-purpose display',
+    ];
+
+    expect(UiConfigReadScan::discoverPublishedConfiguration(dirname(__DIR__).'/src'))->toBe(array_keys($expected))
+        ->and(UiConfigReadScan::discoverPublishedConfiguration(__DIR__.'/InventoryFixtures/PublishedConfigRogueRead.php'))->toBe([
+            PublishedConfigRogueRead::class.'|built-for-cloud.credentials.app_purposes|1',
+            PublishedConfigRogueRead::class.'|built-for-cloud.manifest|1',
+            PublishedConfigRogueRead::class.'|built-for-cloud.ui.rogue_surface|1',
+        ]);
 });
 
 it('reports an executed enforcement path for every supported ui config read form', function (): void {

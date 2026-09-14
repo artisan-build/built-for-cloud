@@ -30,9 +30,37 @@ final class UiConfigReadScan
      */
     public static function discover(string $root): array
     {
+        return self::discoverMatching(
+            $root,
+            static fn (string $key): bool => str_starts_with($key, 'built-for-cloud.ui.'),
+            false,
+        );
+    }
+
+    /**
+     * @return list<string> `<consumer>|<exact key>|<ordinal>` identities
+     */
+    public static function discoverPublishedConfiguration(string $root): array
+    {
+        return self::discoverMatching(
+            $root,
+            static fn (string $key): bool => $key === 'built-for-cloud.manifest'
+                || str_starts_with($key, 'built-for-cloud.manifest.')
+                || str_starts_with($key, 'built-for-cloud.ui.')
+                || $key === 'built-for-cloud.credentials.app_purposes',
+            true,
+        );
+    }
+
+    /**
+     * @param  callable(string): bool  $matches
+     * @return list<string>
+     */
+    private static function discoverMatching(string $root, callable $matches, bool $productionOnly): array
+    {
         $reads = [];
 
-        foreach (self::phpFiles($root) as $relativePath => $file) {
+        foreach (self::phpFiles($root, $productionOnly) as $relativePath => $file) {
             $contents = file_get_contents($file->getPathname());
 
             if (! is_string($contents)) {
@@ -44,7 +72,7 @@ final class UiConfigReadScan
             $ordinals = [];
 
             foreach (self::literalConfigReads($tokens) as $key) {
-                if (! str_starts_with($key, 'built-for-cloud.ui.')) {
+                if (! $matches($key)) {
                     continue;
                 }
 
@@ -60,7 +88,7 @@ final class UiConfigReadScan
 
     public static function countPhpFiles(string $root): int
     {
-        return count(iterator_to_array(self::phpFiles($root)));
+        return count(iterator_to_array(self::phpFiles($root, false)));
     }
 
     /**
@@ -475,16 +503,25 @@ final class UiConfigReadScan
     /**
      * @return iterable<string, SplFileInfo>
      */
-    private static function phpFiles(string $root): iterable
+    private static function phpFiles(string $root, bool $productionOnly): iterable
     {
+        if (is_file($root)) {
+            yield basename($root) => new SplFileInfo($root);
+
+            return;
+        }
+
         $files = new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
         );
 
         /** @var SplFileInfo $file */
         foreach ($files as $file) {
-            if ($file->isFile() && $file->getExtension() === 'php') {
-                yield substr($file->getPathname(), strlen($root) + 1) => $file;
+            $relativePath = substr($file->getPathname(), strlen($root) + 1);
+
+            if ($file->isFile() && $file->getExtension() === 'php'
+                && (! $productionOnly || ! str_starts_with($relativePath, 'Testing'.DIRECTORY_SEPARATOR))) {
+                yield $relativePath => $file;
             }
         }
     }
