@@ -135,6 +135,7 @@ function packageConformanceSpec(
 
 /**
  * @param  list<string>|null  $providerFiles
+ * @param  list<string>|null  $sourceRoots
  * @param  list<string>  $runtime
  * @param  list<string>  $capabilities
  * @param  class-string<Server>|null  $mcpServer
@@ -142,6 +143,7 @@ function packageConformanceSpec(
 function aggregateControlSpec(
     string $consumerRoot,
     ?array $providerFiles = null,
+    ?array $sourceRoots = null,
     array $runtime = [],
     array $capabilities = [],
     ?string $mcpServer = null,
@@ -149,12 +151,14 @@ function aggregateControlSpec(
     $packageRoot = dirname(__DIR__);
     $providerFiles ??= [$packageRoot.'/src/BuiltForCloudServiceProvider.php'];
     sort($providerFiles);
+    $sourceRoots ??= [$consumerRoot];
+    sort($sourceRoots);
 
     return new ConsumerConformance(
         consumer: 'aggregate-control',
         consumerRoot: $consumerRoot,
         packageRoot: $packageRoot,
-        sourceRoots: [$consumerRoot],
+        sourceRoots: $sourceRoots,
         providerFiles: $providerFiles,
         runtimeAssertions: $runtime,
         capabilities: $capabilities,
@@ -435,6 +439,24 @@ PHP);
             AggregateOffendingMcpTool::class.' is missing ToolClassification.',
             'mcp-delegated-conformance',
         );
+});
+
+it('drives conventional thin-host checks from the consumer root instead of split scanner roots', function (): void {
+    $consumerRoot = aggregateControlRoot('app/Models/User.php', "<?php\nfinal class AggregateSplitRootUser {}\n");
+    $report = (new FleetConformance($this))->inspect(aggregateControlSpec(
+        $consumerRoot,
+        sourceRoots: [$consumerRoot.'/app'],
+        runtime: ['auth_schema'],
+    ));
+    $member = 'consumer/app/Models/User.php|app-user-model';
+
+    expect($report->passed)->toBeFalse()
+        ->and($report->families['runtime.auth_schema']->violations)->toBe([
+            'assertion-failed:runtime.auth_schema',
+        ])
+        ->and($report->families['thin_host']->visited)->toBeGreaterThan(0)
+        ->and($report->families['thin_host']->discovered)->toBe([$member])
+        ->and($report->families['thin_host']->violations)->toContain($member);
 });
 
 it('never leaks absolute paths or test-created secret material in a failing report', function (): void {

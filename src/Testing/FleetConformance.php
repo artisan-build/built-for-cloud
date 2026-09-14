@@ -136,9 +136,7 @@ final readonly class FleetConformance
         $this->callAssertion('assertBuiltForCloudHumanIdentityContract');
         $this->callAssertion('assertBuiltForCloudHumanLifecycleContract');
 
-        foreach ($spec->sourceRoots as $root) {
-            $this->callAssertion('assertBuiltForCloudThinHostSources', [$root]);
-        }
+        $this->callAssertion('assertBuiltForCloudThinHostSources', [$spec->consumerRoot]);
     }
 
     /** @param list<mixed> $arguments */
@@ -197,11 +195,9 @@ final readonly class FleetConformance
         $members = [];
         $visited = 0;
 
-        foreach ($spec->sourceRoots as $root) {
-            $visited += $this->phpFileCount($root);
-            foreach (ThinHostConformance::sourceArtifacts($root) as $path => $kind) {
-                $members[] = $this->rootIdentity($root, $spec).'/'.$path.'|'.$kind;
-            }
+        $visited = $this->phpFileCount($spec->consumerRoot);
+        foreach (ThinHostConformance::sourceArtifacts($spec->consumerRoot) as $path => $kind) {
+            $members[] = 'consumer/'.$path.'|'.$kind;
         }
 
         return [$members, $members, $visited];
