@@ -9,10 +9,11 @@ use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Commands\Concerns\ParsesCredentialVerbInput;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\MintOptions;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 
@@ -25,12 +26,12 @@ use ArtisanBuild\BuiltForCloud\SubjectType;
  * to the environment file, and nothing on this path reads or writes the
  * fallback config.
  *
- * The credential carries {@see EnsureCredentialAdmin::ABILITY}, so it
+ * The credential carries {@see OperatorAbility::Admin}, so it
  * authorizes on the `/bfc/credentials` verbs — the surface it exists to
  * manage — from the moment it is printed.
  *
  * IDEMPOTENT by default: when a live operator credential ALREADY HOLDING
- * {@see EnsureCredentialAdmin::ABILITY} exists, the command skips with a
+ * {@see OperatorAbility::Admin} exists, the command skips with a
  * notice instead of silently minting a sibling — an install scaffold
  * re-run must not mint twice. The predicate checks the promised
  * authority, not mere operator existence: an operator credential WITHOUT
@@ -58,7 +59,7 @@ final class InstallOperatorCredentialCommand extends SystemAuthorityCommand
     protected $signature = 'bfc:install:operator-credential
         {--ref=installer : The operator subject\'s ref (each control plane its own)}
         {--name= : Decorative label for the row}
-        {--abilities='.EnsureCredentialAdmin::ABILITY.' : Comma-separated abilities for the operator credential}
+        {--abilities='.OperatorAbility::Admin->value.' : Comma-separated abilities for the operator credential}
         {--force : Mint even though a live operator credential already exists}';
 
     protected $description = 'Mint the install-time operator credential';
@@ -67,7 +68,7 @@ final class InstallOperatorCredentialCommand extends SystemAuthorityCommand
     {
         if (! (bool) $this->option('force') && $this->usableOperatorCredentialExists()) {
             $this->line(
-                'A live operator credential holding '.EnsureCredentialAdmin::ABILITY
+                'A live operator credential holding '.OperatorAbility::Admin->value
                 .' already exists; skipping the install mint. Pass --force to deliberately mint another.',
             );
 
@@ -79,8 +80,9 @@ final class InstallOperatorCredentialCommand extends SystemAuthorityCommand
                 new Subject(SubjectType::Operator, (string) $this->option('ref')),
                 MintOptions::fromInput([
                     'kind' => CredentialKind::Bearer->value,
+                    'purpose' => CredentialPurpose::OperatorManagement->value,
                     'name' => $this->stringOption('name'),
-                    'abilities' => $this->stringOption('abilities') ?? EnsureCredentialAdmin::ABILITY,
+                    'abilities' => $this->stringOption('abilities') ?? OperatorAbility::Admin->value,
                 ]),
                 AuditActor::cliOperator(),
             );
@@ -116,6 +118,6 @@ final class InstallOperatorCredentialCommand extends SystemAuthorityCommand
             ->where('subject_type', SubjectType::Operator->value)
             ->active()
             ->get()
-            ->contains(static fn (Credential $credential): bool => $credential->hasAbility(EnsureCredentialAdmin::ABILITY));
+            ->contains(static fn (Credential $credential): bool => $credential->hasAbility(OperatorAbility::Admin->value));
     }
 }

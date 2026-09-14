@@ -336,7 +336,7 @@ it('gates retirement on console:key:write and refuses every other credential', f
 
     // …so does the explicit break-glass, a marking an operator chose…
     $this->postJson(retirementUrl('k2'), [], [
-        'Authorization' => retirementOperator([OperatorAbility::ADMIN])->bearerHeader(),
+        'Authorization' => retirementOperator([OperatorAbility::Admin->value])->bearerHeader(),
     ])->assertOk();
 
     expect(ConsoleKey::query()->whereNotNull('retired_at')->pluck('key_id')->sort()->values()->all())

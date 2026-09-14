@@ -7,6 +7,7 @@ use ArtisanBuild\BuiltForCloud\BuiltForCloudServiceProvider;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\Ownership;
@@ -425,6 +426,7 @@ $case = new class('testProbe') extends TestCase
     {
         return Credential::query()->create([
             'kind' => CredentialKind::Bearer,
+            'purpose' => CredentialPurpose::SystemDeployment,
             'subject_type' => SubjectType::Application,
             'subject_ref' => 'p5b-default',
             'name' => 'p5b process credential',

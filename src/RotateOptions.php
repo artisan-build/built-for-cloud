@@ -10,8 +10,8 @@ use Carbon\CarbonInterface;
 /**
  * What a caller may choose when rotating a unified-store credential
  * (PRD 1.7, D6). The default is TOTAL PRESERVATION: the replacement carries
- * the exact ability set, subject binding and remaining expiry of the row it
- * replaces, and nothing here can change that silently.
+ * the exact purpose, ability set, subject binding and remaining expiry of the
+ * row it replaces, and nothing here can change that silently.
  *
  * - `emergency` collapses the grace window: the old row dies immediately
  *   instead of staying resolvable for the hour.

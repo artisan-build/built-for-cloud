@@ -190,7 +190,7 @@ it('contains the claim reveal to the single response egress (D7 leak harness)', 
 it('refuses a signing-key code before any burn and leaves it presentable on the exchange surface', function (): void {
     $result = app(MintCredential::class)(
         new Subject(SubjectType::ExternalConsumer, 'webhook-client'),
-        MintOptions::fromInput(['kind' => 'hmac', 'code_ttl_seconds' => 3600]),
+        MintOptions::fromInput(['kind' => 'hmac', 'purpose' => 'signing', 'code_ttl_seconds' => 3600]),
     );
 
     assert($result->secret !== null);

@@ -190,7 +190,7 @@ $case = new class('testProbe') extends TestCase
         $owner = Credential::factory()->create([
             'name' => 'cache-owner',
             'subject_type' => SubjectType::Operator,
-            'abilities' => [OperatorAbility::ADMIN],
+            'abilities' => [OperatorAbility::Admin->value],
         ]);
         $ownership = Ownership::query()->create(['owner_credential_id' => $owner->getKey()]);
         $credentialLookups = 0;

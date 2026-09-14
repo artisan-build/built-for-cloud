@@ -10,11 +10,13 @@ use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\DefaultCredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
@@ -98,8 +100,9 @@ it('mints a bearer credential via the CLI with --local, revealing the secret exa
             expect(Artisan::call('bfc:credential:mint', [
                 'subject-type' => 'external_consumer',
                 'subject-ref' => 'acme',
+                '--purpose' => CredentialPurpose::Consumption->value,
                 '--name' => 'ci',
-                '--abilities' => 'consume,read',
+                '--abilities' => OperatorAbility::CredentialRead->value.','.OperatorAbility::CredentialMint->value,
                 '--local' => true,
             ]))->toBe(0);
 
@@ -121,7 +124,8 @@ it('mints a bearer credential via the CLI with --local, revealing the secret exa
 
     expect($credential->kind)->toBe(CredentialKind::Bearer)
         ->and($credential->name)->toBe('ci')
-        ->and($credential->abilities)->toBe(['consume', 'read'])
+        ->and($credential->purpose)->toBe(CredentialPurpose::Consumption)
+        ->and($credential->abilities)->toBe([OperatorAbility::CredentialRead->value, OperatorAbility::CredentialMint->value])
         ->and($credential->expires_at)->toBeNull()
         ->and($credential->secret_hash)->toBe(hash('sha256', $secret))
         ->and($credential->status)->toBe(CredentialStatus::Active);
@@ -160,6 +164,7 @@ it('mints a basic credential via the CLI, delivering the auth.json pair', functi
         'subject-type' => 'external_consumer',
         'subject-ref' => 'crate-org',
         '--kind' => 'basic',
+        '--purpose' => CredentialPurpose::Consumption->value,
         '--local' => true,
     ]))->toBe(0);
 
@@ -178,6 +183,7 @@ it('mints an asymmetric enrollment via the CLI: a pending row and a linked claim
         'subject-type' => 'application',
         'subject-ref' => 'reel-app-7',
         '--kind' => 'asymmetric',
+        '--purpose' => CredentialPurpose::Enrollment->value,
         '--code-ttl' => '900',
         '--local' => true,
     ]))->toBe(0);
@@ -211,6 +217,7 @@ it('requires a bounded code ttl for the asymmetric kind on both transports, with
         'subject-type' => 'application',
         'subject-ref' => 'reel-app-8',
         '--kind' => 'asymmetric',
+        '--purpose' => CredentialPurpose::Enrollment->value,
         '--local' => true,
     ]))->toBe(1);
 
@@ -220,6 +227,7 @@ it('requires a bounded code ttl for the asymmetric kind on both transports, with
         'subject_type' => 'application',
         'subject_ref' => 'reel-app-8',
         'kind' => 'asymmetric',
+        'purpose' => CredentialPurpose::Enrollment->value,
         'code_ttl_seconds' => 30,
     ], transportAdminHeaders())->assertUnprocessable();
 
@@ -234,6 +242,7 @@ it('rejects a non-integer code ttl identically on both transports — 60junk is 
         'subject-type' => 'application',
         'subject-ref' => 'reel-junk',
         '--kind' => 'asymmetric',
+        '--purpose' => CredentialPurpose::Enrollment->value,
         '--code-ttl' => '60junk',
         '--local' => true,
     ]))->toBe(1);
@@ -244,6 +253,7 @@ it('rejects a non-integer code ttl identically on both transports — 60junk is 
         'subject_type' => 'application',
         'subject_ref' => 'reel-junk',
         'kind' => 'asymmetric',
+        'purpose' => CredentialPurpose::Enrollment->value,
         'code_ttl_seconds' => '60junk',
     ], transportAdminHeaders())->assertUnprocessable();
 
@@ -261,6 +271,7 @@ it('converges a negative code ttl onto the same bounds error on both transports'
         'subject-type' => 'application',
         'subject-ref' => 'reel-negative',
         '--kind' => 'asymmetric',
+        '--purpose' => CredentialPurpose::Enrollment->value,
         '--code-ttl' => '-1',
         '--local' => true,
     ]))->toBe(1);
@@ -271,6 +282,7 @@ it('converges a negative code ttl onto the same bounds error on both transports'
         'subject_type' => 'application',
         'subject_ref' => 'reel-negative',
         'kind' => 'asymmetric',
+        'purpose' => CredentialPurpose::Enrollment->value,
         'code_ttl_seconds' => -1,
     ], transportAdminHeaders())->assertUnprocessable();
 
@@ -287,6 +299,7 @@ it('bounds the abilities count identically on both transports', function (): voi
     expect(Artisan::call('bfc:credential:mint', [
         'subject-type' => 'external_consumer',
         'subject-ref' => 'greedy',
+        '--purpose' => CredentialPurpose::Consumption->value,
         '--abilities' => implode(',', $abilities),
         '--local' => true,
     ]))->toBe(1);
@@ -296,6 +309,7 @@ it('bounds the abilities count identically on both transports', function (): voi
     $response = $this->postJson('/bfc/credentials', [
         'subject_type' => 'external_consumer',
         'subject_ref' => 'greedy',
+        'purpose' => CredentialPurpose::Consumption->value,
         'abilities' => $abilities,
     ], transportAdminHeaders())->assertUnprocessable();
 
@@ -310,6 +324,7 @@ it('bounds the ability entry length identically on both transports', function ()
     expect(Artisan::call('bfc:credential:mint', [
         'subject-type' => 'external_consumer',
         'subject-ref' => 'verbose',
+        '--purpose' => CredentialPurpose::Consumption->value,
         '--abilities' => $tooLong,
         '--local' => true,
     ]))->toBe(1);
@@ -319,6 +334,7 @@ it('bounds the ability entry length identically on both transports', function ()
     $response = $this->postJson('/bfc/credentials', [
         'subject_type' => 'external_consumer',
         'subject_ref' => 'verbose',
+        'purpose' => CredentialPurpose::Consumption->value,
         'abilities' => [$tooLong],
     ], transportAdminHeaders())->assertUnprocessable();
 
@@ -332,6 +348,7 @@ it('normalizes an empty abilities list to null identically on both transports', 
     $this->postJson('/bfc/credentials', [
         'subject_type' => 'external_consumer',
         'subject_ref' => 'empty-http',
+        'purpose' => CredentialPurpose::Consumption->value,
         'abilities' => [],
     ], transportAdminHeaders())->assertCreated()
         ->assertJsonPath('credential.abilities', null);
@@ -340,6 +357,7 @@ it('normalizes an empty abilities list to null identically on both transports', 
     expect(Artisan::call('bfc:credential:mint', [
         'subject-type' => 'external_consumer',
         'subject-ref' => 'empty-cli',
+        '--purpose' => CredentialPurpose::Consumption->value,
         '--abilities' => ' , ,',
         '--local' => true,
     ]))->toBe(0);
@@ -361,6 +379,7 @@ it('mints a pending hmac signing key identically on both transports, revealing i
         'subject-type' => 'application',
         'subject-ref' => 'postmaster-cli',
         '--kind' => 'hmac',
+        '--purpose' => CredentialPurpose::Signing->value,
         '--local' => true,
     ]))->toBe(0);
 
@@ -382,6 +401,7 @@ it('mints a pending hmac signing key identically on both transports, revealing i
         'subject_type' => 'application',
         'subject_ref' => 'postmaster-http',
         'kind' => 'hmac',
+        'purpose' => CredentialPurpose::Signing->value,
     ], transportAdminHeaders())->assertCreated();
 
     expect($response->json('delivery.shape'))->toBe('signing_key')
@@ -401,8 +421,9 @@ it('mints a bearer credential via HTTP, revealing the secret once in the respons
         fn (): TestResponse => $this->postJson('/bfc/credentials', [
             'subject_type' => 'external_consumer',
             'subject_ref' => 'acme-http',
+            'purpose' => CredentialPurpose::Consumption->value,
             'name' => 'ci',
-            'abilities' => ['consume'],
+            'abilities' => [OperatorAbility::CredentialRead->value],
         ], $headers),
         fn (TestResponse $response): string => (string) $response->json('delivery.secret'),
     );
@@ -436,6 +457,7 @@ it('mints a basic credential via HTTP with the auth.json pair in the delivery', 
         'subject_type' => 'external_consumer',
         'subject_ref' => 'crate-http',
         'kind' => 'basic',
+        'purpose' => CredentialPurpose::Consumption->value,
     ], transportAdminHeaders())->assertCreated();
 
     $credential = Credential::query()->where('subject_ref', 'crate-http')->sole();
@@ -450,6 +472,7 @@ it('mints an asymmetric enrollment via HTTP delivering the enrollment code', fun
         'subject_type' => 'application',
         'subject_ref' => 'reel-http',
         'kind' => 'asymmetric',
+        'purpose' => CredentialPurpose::Enrollment->value,
         'code_ttl_seconds' => 900,
     ], transportAdminHeaders())->assertCreated();
 
@@ -467,7 +490,7 @@ it('gates the HTTP verbs behind an operator credential', function (): void {
     $this->deleteJson('/bfc/credentials/some-id')->assertUnauthorized();
 
     $consume = auditOperatorCredential('not-admin-'.bin2hex(random_bytes(4)));
-    Credential::query()->where('secret_hash', hash('sha256', $consume))->update(['abilities' => [Scope::Consume->value]]);
+    Credential::query()->where('secret_hash', hash('sha256', $consume))->update(['abilities' => null]);
 
     $this->getJson('/bfc/credentials', ['Authorization' => 'Bearer '.$consume])->assertForbidden();
 });
@@ -480,16 +503,18 @@ it('refuses ability widening past the declared ceiling on both transports', func
     expect(Artisan::call('bfc:credential:mint', [
         'subject-type' => 'external_consumer',
         'subject-ref' => 'ceiling',
-        '--abilities' => 'consume,admin',
+        '--purpose' => CredentialPurpose::Consumption->value,
+        '--abilities' => OperatorAbility::CredentialRead->value.','.OperatorAbility::CredentialMint->value,
         '--expires' => now()->addMinutes(30)->toIso8601String(),
         '--local' => true,
     ]))->toBe(1)
-        ->and(Artisan::output())->toContain('"admin"');
+        ->and(Artisan::output())->toContain('"'.OperatorAbility::CredentialMint->value.'"');
 
     $this->postJson('/bfc/credentials', [
         'subject_type' => 'external_consumer',
         'subject_ref' => 'ceiling',
-        'abilities' => ['consume', 'admin'],
+        'purpose' => CredentialPurpose::Consumption->value,
+        'abilities' => [OperatorAbility::CredentialRead->value, OperatorAbility::CredentialMint->value],
         'expires_at' => now()->addMinutes(30)->toIso8601String(),
     ], transportAdminHeaders())->assertForbidden();
 
@@ -503,6 +528,7 @@ it('refuses lifetime widening — a later expiry OR no expiry at all — past th
     expect(Artisan::call('bfc:credential:mint', [
         'subject-type' => 'external_consumer',
         'subject-ref' => 'long-lived',
+        '--purpose' => CredentialPurpose::Consumption->value,
         '--expires' => now()->addDay()->toIso8601String(),
         '--local' => true,
     ]))->toBe(1);
@@ -511,6 +537,7 @@ it('refuses lifetime widening — a later expiry OR no expiry at all — past th
     expect(Artisan::call('bfc:credential:mint', [
         'subject-type' => 'external_consumer',
         'subject-ref' => 'immortal',
+        '--purpose' => CredentialPurpose::Consumption->value,
         '--local' => true,
     ]))->toBe(1)
         ->and(Artisan::output())->toContain('never substitutes');
@@ -518,6 +545,7 @@ it('refuses lifetime widening — a later expiry OR no expiry at all — past th
     $this->postJson('/bfc/credentials', [
         'subject_type' => 'external_consumer',
         'subject_ref' => 'immortal',
+        'purpose' => CredentialPurpose::Consumption->value,
     ], transportAdminHeaders())->assertForbidden();
 
     expect(transportCredentialCount('long-lived', 'immortal'))->toBe(0);
@@ -526,7 +554,8 @@ it('refuses lifetime widening — a later expiry OR no expiry at all — past th
     expect(Artisan::call('bfc:credential:mint', [
         'subject-type' => 'external_consumer',
         'subject-ref' => 'bounded',
-        '--abilities' => 'consume',
+        '--purpose' => CredentialPurpose::Consumption->value,
+        '--abilities' => OperatorAbility::CredentialRead->value,
         '--expires' => now()->addMinutes(30)->toIso8601String(),
         '--local' => true,
     ]))->toBe(0)
@@ -539,6 +568,7 @@ it('refuses the mint on both transports when the declaration denies the issue ve
     expect(Artisan::call('bfc:credential:mint', [
         'subject-type' => 'external_consumer',
         'subject-ref' => 'denied',
+        '--purpose' => CredentialPurpose::Consumption->value,
         '--local' => true,
     ]))->toBe(1)
         ->and(Artisan::output())->toContain('denies the issue verb');
@@ -546,6 +576,7 @@ it('refuses the mint on both transports when the declaration denies the issue ve
     $this->postJson('/bfc/credentials', [
         'subject_type' => 'external_consumer',
         'subject_ref' => 'denied',
+        'purpose' => CredentialPurpose::Consumption->value,
     ], transportAdminHeaders())->assertForbidden();
 
     expect(transportCredentialCount('denied'))->toBe(0);
@@ -590,6 +621,7 @@ it('refuses a mint that sets a declared-unsupported field, on both transports', 
     expect(Artisan::call('bfc:credential:mint', [
         'subject-type' => 'application',
         'subject-ref' => 'reel-app',
+        '--purpose' => CredentialPurpose::SystemDeployment->value,
         '--name' => 'not-allowed',
         '--local' => true,
     ]))->toBe(1)
@@ -598,7 +630,8 @@ it('refuses a mint that sets a declared-unsupported field, on both transports', 
     $this->postJson('/bfc/credentials', [
         'subject_type' => 'application',
         'subject_ref' => 'reel-app',
-        'abilities' => ['consume'],
+        'purpose' => CredentialPurpose::SystemDeployment->value,
+        'abilities' => [OperatorAbility::CredentialRead->value],
     ], transportAdminHeaders())->assertForbidden();
 
     expect(transportCredentialCount('reel-app'))->toBe(0);
@@ -688,7 +721,7 @@ it('never serializes a hash or secret column in the listing', function (): void 
 
     expect((string) $response->getContent())->not->toContain('secret_hash')
         ->and(array_keys($response->json()[0]))->toBe([
-            'id', 'kind', 'subject_type', 'subject_ref', 'name', 'abilities', 'status',
+            'id', 'kind', 'purpose', 'subject_type', 'subject_ref', 'name', 'abilities', 'status',
             'created_at', 'last_used_at', 'expires_at', 'revoked_at', 'rotated_at',
             'presentation_cadence_seconds', 'unsupported',
         ]);
@@ -745,6 +778,7 @@ it('revoking a pending enrollment consumes its outstanding claim code', function
         'subject-type' => 'application',
         'subject-ref' => 'reel-pending',
         '--kind' => 'asymmetric',
+        '--purpose' => CredentialPurpose::Enrollment->value,
         '--code-ttl' => '900',
         '--local' => true,
     ]);

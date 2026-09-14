@@ -7,8 +7,9 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesCredentialVerbs;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
@@ -177,6 +178,7 @@ final class SubjectsAuthorityTest extends TestCase
         $this->postJson('/bfc/credentials', [
             'subject_type' => SubjectType::ExternalConsumer->value,
             'subject_ref' => 'refused',
+            'purpose' => CredentialPurpose::Consumption->value,
             'name' => 'refused',
         ], $headers)->assertForbidden();
 
@@ -246,7 +248,7 @@ final class SubjectsAuthorityTest extends TestCase
             'subject_ref' => 'authority-admin',
             'name' => 'admin',
             'secret_hash' => hash('sha256', $plaintext),
-            'abilities' => [EnsureCredentialAdmin::ABILITY],
+            'abilities' => [OperatorAbility::Admin->value],
         ]);
 
         return ['Authorization' => 'Bearer '.$plaintext];

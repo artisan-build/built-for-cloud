@@ -41,10 +41,11 @@ final class CredentialListCommand extends SystemAuthorityCommand
         }
 
         $this->table(
-            ['Id', 'Kind', 'Subject', 'Name', 'Status', 'Abilities', 'Last Used At', 'Expires At', 'Unsupported'],
+            ['Id', 'Kind', 'Purpose', 'Subject', 'Name', 'Status', 'Abilities', 'Last Used At', 'Expires At', 'Unsupported'],
             array_map(static fn (array $row): array => [
                 $row['id'],
                 $row['kind'],
+                $row['purpose'],
                 $row['subject_type'].':'.$row['subject_ref'],
                 $row['name'],
                 $row['status'],

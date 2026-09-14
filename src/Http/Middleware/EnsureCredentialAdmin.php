@@ -27,12 +27,9 @@ use Throwable;
  * ABILITY (GATE-3.7's per-verb-family authority): each route names its
  * verb-family ability as the middleware parameter
  * (`bfc.credential.admin:credential:read`), and the admin-equivalent
- * {@see self::ABILITY} — what the installer mints (PRD 1.20) — satisfies
- * ANY ability a route names. Note the shape of that grant precisely: it
- * is unconditional, not a lookup. This gate never reads
- * {@see OperatorAbility::adminEquivalent}, which is a declared inventory
- * of the abilities these routes ask for today rather than a set the
- * break-glass is confined to. Without the operator branch the install-time
+ * {@see OperatorAbility::Admin} — what the installer mints (PRD 1.20) —
+ * satisfies only abilities in {@see OperatorAbility::adminEquivalent()}.
+ * Without the operator branch the install-time
  * credential would be 401 on the one surface it exists to manage; without
  * the per-verb parameter a stolen read-only credential would be
  * fleet-admin (SEC-V3-06).
@@ -56,15 +53,10 @@ final class EnsureCredentialAdmin
      * documented expansion is {@see OperatorAbility::adminEquivalent}).
      * The installer mints its operator credential with exactly this.
      *
-     * `metadata:read` ({@see OperatorAbility::MetadataRead}) is now
-     * enforced, and NOT here: the Console's dashboard read is mounted
-     * behind {@see EnsureDashboardCredential} — its own gate, and the
-     * only middleware on that route — precisely because THIS gate would
-     * grant the ability to a break-glass credential, which Console PRD
-     * D16 forbids.
+     * `metadata:read` ({@see OperatorAbility::MetadataRead}) is outside
+     * the bounded expansion and the Console dashboard also enforces its
+     * exact credential shape through {@see EnsureDashboardCredential}.
      */
-    public const string ABILITY = 'credential:admin';
-
     public function __construct(
         private readonly CredentialResolver $credentials,
         private readonly CredentialUsageRecorder $usage,
@@ -79,7 +71,7 @@ final class EnsureCredentialAdmin
      */
     public function handle(Request $request, Closure $next, ?string $ability = null): Response
     {
-        $required = $ability ?? self::ABILITY;
+        $required = $ability ?? OperatorAbility::Admin->value;
 
         $bearer = $request->bearerToken();
 
@@ -115,8 +107,11 @@ final class EnsureCredentialAdmin
             // (`credential:admin` — the documented mapping in
             // {@see OperatorAbility}). Nothing else satisfies; a null or
             // empty ability list satisfies nothing.
+            $breakGlass = $credential->hasAbility(OperatorAbility::Admin->value)
+                && in_array(OperatorAbility::tryFrom($required), OperatorAbility::adminEquivalent(), true);
+
             if ($credential->subject_type === SubjectType::Operator
-                && ($credential->hasAbility($required) || $credential->hasAbility(self::ABILITY))) {
+                && ($credential->hasAbility($required) || $breakGlass)) {
                 $request->attributes->set('bfc.actor_credential_id', $credential->id);
                 StandaloneRouteOwnership::markOperatorGateExecuted($request, self::class.':'.$required);
 

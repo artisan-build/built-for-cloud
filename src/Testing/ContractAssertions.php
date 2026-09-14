@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud\Testing;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
@@ -289,7 +290,8 @@ trait ContractAssertions
         $cliExit = Artisan::call('bfc:credential:mint', [
             'subject-type' => 'external_consumer',
             'subject-ref' => $ref,
-            '--abilities' => 'consume',
+            '--purpose' => CredentialPurpose::Consumption->value,
+            '--abilities' => OperatorAbility::CredentialRead->value,
             '--local' => true,
         ]);
         $cliOutput = Artisan::output();
@@ -314,7 +316,8 @@ trait ContractAssertions
         $httpResponse = $this->postJson('/bfc/credentials', [
             'subject_type' => 'external_consumer',
             'subject_ref' => $ref,
-            'abilities' => ['consume'],
+            'purpose' => CredentialPurpose::Consumption->value,
+            'abilities' => [OperatorAbility::CredentialRead->value],
         ], $this->builtForCloudBearerHeaders($admin));
 
         if ($httpResponse->status() === 403) {
@@ -359,7 +362,7 @@ trait ContractAssertions
         // Row-state parity on the identical question — subject fields now
         // INCLUDED, equal by construction, so a difference can only be a
         // transport bug. Only id, hash, and timestamps legitimately vary.
-        foreach (['kind', 'status', 'abilities', 'name', 'user_id', 'expires_at', 'subject_type', 'subject_ref'] as $attribute) {
+        foreach (['kind', 'purpose', 'status', 'abilities', 'name', 'user_id', 'expires_at', 'subject_type', 'subject_ref'] as $attribute) {
             Assert::assertEquals(
                 $cliSnapshot[$attribute] ?? null,
                 $httpRow->getAttributes()[$attribute] ?? null,
@@ -392,6 +395,7 @@ trait ContractAssertions
             'subject-type' => 'external_consumer',
             'subject-ref' => $ref,
             '--kind' => 'basic',
+            '--purpose' => CredentialPurpose::Consumption->value,
             '--local' => true,
         ]);
         $cliOutput = Artisan::output();
@@ -412,6 +416,7 @@ trait ContractAssertions
             'subject_type' => 'external_consumer',
             'subject_ref' => $ref,
             'kind' => 'basic',
+            'purpose' => CredentialPurpose::Consumption->value,
         ], $this->builtForCloudBearerHeaders($admin));
 
         if ($httpResponse->status() === 403) {
@@ -499,7 +504,8 @@ trait ContractAssertions
             Assert::assertSame(0, Artisan::call('bfc:credential:mint', [
                 'subject-type' => 'external_consumer',
                 'subject-ref' => $ref,
-                '--abilities' => 'consume',
+                '--purpose' => CredentialPurpose::Consumption->value,
+                '--abilities' => OperatorAbility::CredentialRead->value,
                 '--local' => true,
             ]), sprintf('Provisioning the %s for revoke parity failed.', $leg));
 
@@ -576,7 +582,8 @@ trait ContractAssertions
             Assert::assertSame(0, Artisan::call('bfc:credential:mint', [
                 'subject-type' => 'external_consumer',
                 'subject-ref' => $ref,
-                '--abilities' => 'consume',
+                '--purpose' => CredentialPurpose::Consumption->value,
+                '--abilities' => OperatorAbility::CredentialRead->value,
                 '--expires' => $expiry,
                 '--local' => true,
             ]), sprintf('Provisioning the %s for rotate parity failed.', $leg));
@@ -635,7 +642,7 @@ trait ContractAssertions
         // Row-state parity between the two replacements — equal by
         // construction on the identical question, so a difference can only
         // be a transport bug.
-        foreach (['kind', 'status', 'abilities', 'name', 'user_id', 'expires_at', 'subject_type', 'subject_ref'] as $attribute) {
+        foreach (['kind', 'purpose', 'status', 'abilities', 'name', 'user_id', 'expires_at', 'subject_type', 'subject_ref'] as $attribute) {
             Assert::assertEquals(
                 $cliReplacement->getAttributes()[$attribute] ?? null,
                 $httpReplacement->getAttributes()[$attribute] ?? null,
@@ -750,12 +757,22 @@ trait ContractAssertions
 
     public function mintBuiltForCloudAdminToken(string $name = 'contract-admin'): string
     {
-        return $this->mintBuiltForCloudCredential($name, SubjectType::Operator, [OperatorAbility::ADMIN]);
+        return $this->mintBuiltForCloudCredential(
+            $name,
+            SubjectType::Operator,
+            CredentialPurpose::OperatorManagement,
+            [OperatorAbility::Admin->value],
+        );
     }
 
     public function mintBuiltForCloudConsumeToken(string $name = 'contract-consume'): string
     {
-        return $this->mintBuiltForCloudCredential($name, SubjectType::ExternalConsumer, [Scope::Consume->value]);
+        return $this->mintBuiltForCloudCredential(
+            $name,
+            SubjectType::ExternalConsumer,
+            CredentialPurpose::Consumption,
+            null,
+        );
     }
 
     public function mintBuiltForCloudOperatorCredential(string $name = 'contract-admin'): string
@@ -769,14 +786,19 @@ trait ContractAssertions
     }
 
     /**
-     * @param  list<string>  $abilities
+     * @param  list<string>|null  $abilities
      */
-    private function mintBuiltForCloudCredential(string $name, SubjectType $subjectType, array $abilities): string
-    {
+    private function mintBuiltForCloudCredential(
+        string $name,
+        SubjectType $subjectType,
+        CredentialPurpose $purpose,
+        ?array $abilities,
+    ): string {
         $plainTextToken = $name.'-'.bin2hex(random_bytes(16));
 
         Credential::query()->create([
             'kind' => CredentialKind::Bearer,
+            'purpose' => $purpose,
             'subject_type' => $subjectType,
             'subject_ref' => $name,
             'name' => $name,
@@ -795,6 +817,7 @@ trait ContractAssertions
 
         Credential::query()->create([
             'kind' => CredentialKind::Bearer,
+            'purpose' => CredentialPurpose::OperatorManagement,
             'subject_type' => SubjectType::Operator,
             'subject_ref' => 'contract-operator',
             'abilities' => $abilities,

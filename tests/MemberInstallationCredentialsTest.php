@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
@@ -57,6 +58,7 @@ function installationCredential(string $name = 'deployment'): array
     /** @var Credential $credential */
     $credential = Credential::query()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::SystemDeployment,
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'installation-under-test',
         'name' => $name,
@@ -102,6 +104,7 @@ it('lets every recognized role perform each installation credential verb with a 
         $response = $this->postJson('/bfc/installation/credentials', [
             'subject_type' => SubjectType::Installation->value,
             'subject_ref' => 'matrix-'.$role->value,
+            'purpose' => CredentialPurpose::SystemDeployment->value,
             'name' => $role->value.'-issued',
             'user_id' => (string) $member->getKey(),
         ])->assertCreated();
@@ -150,6 +153,7 @@ it('refuses every operator-vocabulary ability before a Member can mint a credent
     $response = $this->actingAsVersioned($member)->postJson('/bfc/installation/credentials', [
         'subject_type' => SubjectType::Application->value,
         'subject_ref' => 'member-operator-ability',
+        'purpose' => CredentialPurpose::SystemDeployment->value,
         'abilities' => [$ability],
     ])->assertForbidden();
 
@@ -163,8 +167,6 @@ it('refuses every operator-vocabulary ability before a Member can mint a credent
         $abilities[$ability->value] = [$ability->value];
     }
 
-    $abilities[OperatorAbility::ADMIN] = [OperatorAbility::ADMIN];
-
     return $abilities;
 });
 
@@ -173,6 +175,7 @@ it('keeps operator-abilitied application rows outside every Member management ve
     $secret = 'operator-application-secret-'.bin2hex(random_bytes(12));
     $credential = Credential::query()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::SystemDeployment,
         'subject_type' => SubjectType::Application,
         'subject_ref' => 'operator-managed-application',
         'abilities' => [OperatorAbility::McpAdmin->value],
@@ -218,9 +221,10 @@ it('refuses an authorized Member rotation override whose effective abilities ent
     $member = installationMember(UserRole::Member);
     $credential = Credential::query()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::SystemDeployment,
         'subject_type' => SubjectType::Application,
         'subject_ref' => 'member-rotation-override',
-        'abilities' => ['deploy:read'],
+        'abilities' => null,
         'secret_hash' => hash('sha256', 'member-rotation-override-secret'),
         'status' => CredentialStatus::Active,
     ]);
@@ -245,9 +249,10 @@ it('keeps a deploy-read application row fully manageable by a Member', function 
     $member = installationMember(UserRole::Member);
     $credential = Credential::query()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::SystemDeployment,
         'subject_type' => SubjectType::Application,
         'subject_ref' => 'member-deploy-read',
-        'abilities' => ['deploy:read'],
+        'abilities' => null,
         'secret_hash' => hash('sha256', 'member-deploy-read-secret'),
         'status' => CredentialStatus::Active,
     ]);
@@ -257,28 +262,25 @@ it('keeps a deploy-read application row fully manageable by a Member', function 
 
     $rotation = $this->postJson('/bfc/installation/credentials/'.$credential->id.'/rotate')->assertCreated();
     $replacement = Credential::query()->findOrFail($rotation->json('credential.id'));
-    expect($replacement->abilities)->toBe(['deploy:read'])
+    expect($replacement->abilities)->toBeNull()
         ->and($credential->refresh()->rotated_at)->not->toBeNull();
 
     $this->deleteJson('/bfc/installation/credentials/'.$replacement->id)->assertNoContent();
     expect($replacement->refresh()->revoked_at)->not->toBeNull();
 });
 
-it('still lets a Member mint and use an application credential with a non-operator ability', function (): void {
+it('refuses an unknown ability on the Member mint surface without writing', function (): void {
     $member = installationMember(UserRole::Member);
+    $before = Credential::query()->count();
     $response = $this->actingAsVersioned($member)->postJson('/bfc/installation/credentials', [
         'subject_type' => SubjectType::Application->value,
         'subject_ref' => 'member-custom-ability',
+        'purpose' => CredentialPurpose::SystemDeployment->value,
         'abilities' => ['custom:deploy'],
-    ])->assertCreated();
-    $secret = (string) $response->json('delivery.secret');
+    ])->assertUnprocessable();
 
-    expect($secret)->not->toBe('')
-        ->and(Credential::query()->findOrFail($response->json('credential.id'))->abilities)->toBe(['custom:deploy']);
-
-    $this->getJson('/member-custom-ability-probe', [
-        'Authorization' => 'Bearer '.$secret,
-    ])->assertOk();
+    expect($response->json('message'))->toContain('Unknown credential ability')
+        ->and(Credential::query()->count())->toBe($before);
 });
 
 it('lets one Member manage a credential another Member issued without using issuer attribution as scope', function (): void {
@@ -288,6 +290,7 @@ it('lets one Member manage a credential another Member issued without using issu
     $issuedResponse = $this->actingAsVersioned($issuer, 'web')->postJson('/bfc/installation/credentials', [
         'subject_type' => SubjectType::Application->value,
         'subject_ref' => 'cross-member-app',
+        'purpose' => CredentialPurpose::SystemDeployment->value,
         'name' => 'cross-member',
     ])->assertCreated();
     $issued = Credential::query()->findOrFail($issuedResponse->json('credential.id'));
@@ -325,6 +328,7 @@ it('keeps installation credentials inaccessible through the personal ownership s
     $personalSecret = 'personal-secret-'.bin2hex(random_bytes(12));
     $personal = Credential::query()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::UserPrincipal,
         'subject_ref' => 'user:'.$member->getKey(),
         'user_id' => (string) $member->getKey(),
@@ -349,9 +353,12 @@ it('keeps null-user operator and external-consumer credentials outside the insta
     $secret = $subjectType->value.'-secret-'.bin2hex(random_bytes(12));
     $credential = Credential::query()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => $subjectType === SubjectType::Operator
+            ? CredentialPurpose::OperatorManagement
+            : CredentialPurpose::Consumption,
         'subject_type' => $subjectType,
         'subject_ref' => $subjectType->value.'-under-test',
-        'abilities' => $subjectType === SubjectType::Operator ? ['credential:admin'] : null,
+        'abilities' => $subjectType === SubjectType::Operator ? [OperatorAbility::Admin->value] : null,
         'secret_hash' => hash('sha256', $secret),
         'status' => CredentialStatus::Active,
     ]);
@@ -377,6 +384,7 @@ it('makes a personal HMAC id indistinguishable from an unknown id during APP_KEY
     $personal = new Credential;
     $personal->forceFill([
         'kind' => CredentialKind::Hmac,
+        'purpose' => CredentialPurpose::Signing,
         'subject_type' => SubjectType::UserPrincipal,
         'subject_ref' => 'user:'.$member->getKey(),
         'user_id' => (string) $member->getKey(),
@@ -408,6 +416,7 @@ it('denies an unknown stored role fail closed for every verb without changing ro
         'issue' => fn () => $this->actingAsVersioned($unknown)->postJson('/bfc/installation/credentials', [
             'subject_type' => SubjectType::Installation->value,
             'subject_ref' => 'unknown-role',
+            'purpose' => CredentialPurpose::SystemDeployment->value,
         ]),
         'rotate' => fn () => $this->actingAsVersioned($unknown)->postJson('/bfc/installation/credentials/'.$seeded['credential']->id.'/rotate'),
         'revoke' => fn () => $this->actingAsVersioned($unknown)->deleteJson('/bfc/installation/credentials/'.$seeded['credential']->id),
@@ -425,6 +434,7 @@ it('keeps a Member-issued installation credential alive after creator removal an
     $response = $this->actingAsVersioned($creator)->postJson('/bfc/installation/credentials', [
         'subject_type' => SubjectType::Installation->value,
         'subject_ref' => 'creator-removal',
+        'purpose' => CredentialPurpose::SystemDeployment->value,
         'name' => 'survivor',
     ])->assertCreated();
     $survivor = Credential::query()->findOrFail($response->json('credential.id'));
@@ -438,6 +448,7 @@ it('keeps a Member-issued installation credential alive after creator removal an
     $creator->forceFill(['status' => 'active'])->save();
     $bound = Credential::query()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::UserPrincipal,
         'subject_ref' => 'user:'.$creator->getKey(),
         'user_id' => (string) $creator->getKey(),

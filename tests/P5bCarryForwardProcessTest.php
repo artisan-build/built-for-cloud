@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\Credential;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
@@ -64,6 +64,11 @@ function p5bFreshCredential(string $id, string $hash, string $subjectType, strin
     return [
         'id' => $id,
         'secret_hash' => $hash,
+        'purpose' => match ($subjectType) {
+            SubjectType::Operator->value => CredentialPurpose::OperatorManagement->value,
+            SubjectType::Application->value, SubjectType::Installation->value => CredentialPurpose::SystemDeployment->value,
+            SubjectType::ExternalConsumer->value, SubjectType::UserPrincipal->value => CredentialPurpose::Consumption->value,
+        },
         'subject_type' => $subjectType,
         'subject_ref' => $subjectRef,
         'abilities' => $abilities,
@@ -100,7 +105,7 @@ it('persists an ownership claim as one linked unified owner credential in fresh 
             ->and($inspect['credential']['subject_type'])->toBe(SubjectType::Operator->value)
             ->and($inspect['credential']['subject_ref'])->toBe('owner')
             ->and($inspect['credential']['name'])->toBe('owner')
-            ->and($inspect['credential']['abilities'])->toBe([EnsureCredentialAdmin::ABILITY])
+            ->and($inspect['credential']['abilities'])->toBe([OperatorAbility::Admin->value])
             ->and($inspect['credential']['status'])->toBe('active')
             ->and($inspect['credential']['secret_hash'])->toMatch('/^[0-9a-f]{64}$/');
     } finally {
@@ -124,8 +129,8 @@ it('remints ownership into a new unified row and revokes every prior owner row i
         $setup = p5bFreshRun('ownership-remint', 'setup', $database, [
             'ownership_id' => $ownershipId,
             'webhook_secret' => $webhookSecret,
-            'old_owner' => p5bFreshCredential($oldId, bin2hex(random_bytes(32)), SubjectType::Operator->value, 'owner', [EnsureCredentialAdmin::ABILITY]),
-            'other_owner' => p5bFreshCredential($otherId, bin2hex(random_bytes(32)), SubjectType::Operator->value, 'owner', [EnsureCredentialAdmin::ABILITY]),
+            'old_owner' => p5bFreshCredential($oldId, bin2hex(random_bytes(32)), SubjectType::Operator->value, 'owner', [OperatorAbility::Admin->value]),
+            'other_owner' => p5bFreshCredential($otherId, bin2hex(random_bytes(32)), SubjectType::Operator->value, 'owner', [OperatorAbility::Admin->value]),
         ]);
         $command = p5bFreshRun('ownership-remint', 'command', $database, ['new_hash' => $newHash]);
         $inspect = p5bFreshRun('ownership-remint', 'inspect', $database);
@@ -146,7 +151,7 @@ it('remints ownership into a new unified row and revokes every prior owner row i
             ->and($new['revoked'])->toBeFalse()
             ->and($new['subject_type'])->toBe(SubjectType::Operator->value)
             ->and($new['subject_ref'])->toBe('owner')
-            ->and($new['abilities'])->toBe([EnsureCredentialAdmin::ABILITY])
+            ->and($new['abilities'])->toBe([OperatorAbility::Admin->value])
             ->and($new['secret_hash'])->toBe($newHash);
     } finally {
         @unlink($database);
@@ -175,7 +180,7 @@ it('admits only the exact dashboard metadata credential and persists its read au
             'credentials' => [
                 p5bFreshCredential($ids['exact'], hash('sha256', $secrets['exact']), SubjectType::Operator->value, 'dashboard-exact', [OperatorAbility::MetadataRead->value]),
                 p5bFreshCredential($ids['non_operator'], hash('sha256', $secrets['non_operator']), SubjectType::Application->value, 'dashboard-application', [OperatorAbility::MetadataRead->value]),
-                p5bFreshCredential($ids['superset'], hash('sha256', $secrets['superset']), SubjectType::Operator->value, 'dashboard-superset', [OperatorAbility::MetadataRead->value, EnsureCredentialAdmin::ABILITY]),
+                p5bFreshCredential($ids['superset'], hash('sha256', $secrets['superset']), SubjectType::Operator->value, 'dashboard-superset', [OperatorAbility::MetadataRead->value, OperatorAbility::Admin->value]),
             ],
         ]);
         $request = p5bFreshRun('dashboard', 'request', $database, ['bearers' => $secrets]);
@@ -312,7 +317,7 @@ it('persists all four K7 exact-ability transitions and refuses wrong abilities i
         array_map(static fn (string $name): string => p5bFreshSecret('p5b-route-'.$name.'-'), array_keys($ids)),
     );
     $credentials = [
-        p5bFreshCredential($ids['owner'], hash('sha256', $secrets['owner']), SubjectType::Operator->value, 'owner', [EnsureCredentialAdmin::ABILITY]),
+        p5bFreshCredential($ids['owner'], hash('sha256', $secrets['owner']), SubjectType::Operator->value, 'owner', [OperatorAbility::Admin->value]),
         p5bFreshCredential($ids['release_exact'], hash('sha256', $secrets['release_exact']), SubjectType::Operator->value, 'release-exact', [OperatorAbility::OwnershipRelease->value]),
         p5bFreshCredential($ids['release_wrong'], hash('sha256', $secrets['release_wrong']), SubjectType::Operator->value, 'release-wrong', [OperatorAbility::CredentialRead->value]),
         p5bFreshCredential($ids['issue_exact'], hash('sha256', $secrets['issue_exact']), SubjectType::Operator->value, 'issue-exact', [OperatorAbility::CredentialMint->value]),
@@ -450,9 +455,9 @@ it('persists MCP bearer usage and exposes only operator admin attribution throug
 
     try {
         $setup = p5bFreshRun('mcp', 'setup', $database, ['credentials' => [
-            p5bFreshCredential($ids['non_admin'], hash('sha256', $secrets['non_admin']), SubjectType::Operator->value, 'mcp-non-admin', ['apps:call']),
-            p5bFreshCredential($ids['operator_admin'], hash('sha256', $secrets['operator_admin']), SubjectType::Operator->value, 'mcp-operator-admin', [EnsureCredentialAdmin::ABILITY]),
-            p5bFreshCredential($ids['application_admin'], hash('sha256', $secrets['application_admin']), SubjectType::Application->value, 'mcp-application-admin', [EnsureCredentialAdmin::ABILITY]),
+            p5bFreshCredential($ids['non_admin'], hash('sha256', $secrets['non_admin']), SubjectType::Operator->value, 'mcp-non-admin', [OperatorAbility::McpRead->value]),
+            p5bFreshCredential($ids['operator_admin'], hash('sha256', $secrets['operator_admin']), SubjectType::Operator->value, 'mcp-operator-admin', [OperatorAbility::Admin->value]),
+            p5bFreshCredential($ids['application_admin'], hash('sha256', $secrets['application_admin']), SubjectType::Application->value, 'mcp-application-admin', [OperatorAbility::Admin->value]),
         ]]);
         $request = p5bFreshRun('mcp', 'request', $database, ['bearers' => $secrets]);
         $inspect = p5bFreshRun('mcp', 'inspect', $database);

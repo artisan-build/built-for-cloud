@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
@@ -141,7 +142,7 @@ it('contains the whole account in one action: every credential state, codes, inv
     // A pending hmac signing key WITH its outstanding delivery claim code.
     $hmacResult = app(MintCredential::class)(
         new Subject(SubjectType::ExternalConsumer, 'acme'),
-        MintOptions::fromInput(['kind' => 'hmac', 'code_ttl_seconds' => 3600]),
+        MintOptions::fromInput(['kind' => 'hmac', 'purpose' => 'signing', 'code_ttl_seconds' => 3600]),
     );
 
     // The principal's pending claim code, invitation, reset token, session.
@@ -1189,7 +1190,7 @@ it('rejects an offboarded bound user\'s operator credential on the operator gate
     $operator = $this->mintCredential([
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'control-plane',
-        'abilities' => [OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::Admin->value],
         'user_id' => (string) $user->getKey(),
     ]);
 
@@ -1205,9 +1206,10 @@ it('rejects an offboarded bound user\'s operator credential on the operator gate
     // A same-user operator credential created after containment proves the
     // operator gate still enforces the registry independently of the sweep.
     $postContainmentOperator = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'control-plane',
-        'abilities' => [OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::Admin->value],
         'user_id' => (string) $user->getKey(),
     ]);
 
@@ -1219,6 +1221,7 @@ it('rejects an offboarded bound user\'s operator credential on the operator gate
     $this->postJson('/bfc/credentials', [
         'subject_type' => 'external_consumer',
         'subject_ref' => 'someone',
+        'purpose' => CredentialPurpose::Consumption->value,
     ], ['Authorization' => $postContainmentOperator->bearerHeader()])->assertUnauthorized();
 });
 
@@ -1268,7 +1271,7 @@ it('rejects credentials minted AFTER containment for the offboarded subject on e
     $postMint = $this->mintCredential([
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'rogue-plane',
-        'abilities' => [OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::Admin->value],
     ]);
 
     $this->getJson('/offboard-guarded', ['Authorization' => $postMint->bearerHeader()])->assertUnauthorized();

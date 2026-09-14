@@ -5,6 +5,7 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\ManagedAuthClient;
@@ -246,6 +247,7 @@ function p4aSeedProtectedStores(User $user): void
     ]);
     Credential::query()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::UserPrincipal,
         'subject_ref' => (string) $user->scalpels_id,
         'name' => 'ownership-credential-'.$user->getKey(),

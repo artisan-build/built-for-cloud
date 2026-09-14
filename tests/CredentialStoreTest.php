@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\Database\Factories\CredentialFactory;
 use ArtisanBuild\BuiltForCloud\ReportedStatus;
@@ -26,6 +27,7 @@ it('stores rows of every credential kind without schema alteration', function ()
     foreach ([CredentialKind::Bearer, CredentialKind::Basic] as $kind) {
         $credential = Credential::query()->create([
             'kind' => $kind,
+            'purpose' => CredentialPurpose::SystemDeployment,
             'subject_type' => SubjectType::Application,
             'subject_ref' => 'app-'.$kind->value,
             'secret_hash' => hash('sha256', 'secret-'.$kind->value),
@@ -43,6 +45,7 @@ it('stores rows of every credential kind without schema alteration', function ()
 
     $asymmetric = Credential::query()->create([
         'kind' => CredentialKind::Asymmetric,
+        'purpose' => CredentialPurpose::Enrollment,
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'install-1',
         'public_key' => CredentialFactory::generatePublicKey(),
@@ -55,6 +58,7 @@ it('stores rows for every subject type', function (): void {
     foreach (SubjectType::cases() as $type) {
         $credential = Credential::query()->create([
             'kind' => CredentialKind::Bearer,
+            'purpose' => CredentialPurpose::SystemDeployment,
             'subject_type' => $type,
             'subject_ref' => 'ref-'.$type->value,
             'secret_hash' => hash('sha256', 'secret-'.$type->value),
@@ -67,6 +71,7 @@ it('stores rows for every subject type', function (): void {
 it('refuses to persist secret material on an asymmetric credential', function (): void {
     expect(fn (): Credential => Credential::query()->create([
         'kind' => CredentialKind::Asymmetric,
+        'purpose' => CredentialPurpose::Enrollment,
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'install-1',
         'public_key' => CredentialFactory::generatePublicKey(),
@@ -92,6 +97,7 @@ it('persists an asymmetric credential with a real public key and a null secret h
 
     $credential = Credential::query()->create([
         'kind' => CredentialKind::Asymmetric,
+        'purpose' => CredentialPurpose::Enrollment,
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'install-1',
         'public_key' => $publicKey,

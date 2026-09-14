@@ -68,7 +68,15 @@ it('holds the per-kind direct delivery boundary', function (
     $result = $this->assertNoSecretLeakageOfMinted(
         fn (): MintResult => app(MintCredential::class)(
             $subject,
-            MintOptions::fromInput(['kind' => $kind->value, ...$input]),
+            MintOptions::fromInput([
+                'kind' => $kind->value,
+                'purpose' => match ($kind) {
+                    CredentialKind::Bearer, CredentialKind::Basic => 'consumption',
+                    CredentialKind::Hmac => 'signing',
+                    CredentialKind::Asymmetric => 'enrollment',
+                },
+                ...$input,
+            ]),
         ),
         function (MintResult $mint) use (&$revealed): string {
             expect($mint->secret)->not->toBeNull();
@@ -260,7 +268,7 @@ it('delivers a distinct exchange-minted bearer once on both response faces', fun
 it('delivers an hmac key at exchange without activating or exposing it later', function (): void {
     $mint = app(MintCredential::class)(
         new Subject(SubjectType::ExternalConsumer, 'matrix-hmac-exchange'),
-        MintOptions::fromInput(['kind' => 'hmac', 'code_ttl_seconds' => 900]),
+        MintOptions::fromInput(['kind' => 'hmac', 'purpose' => 'signing', 'code_ttl_seconds' => 900]),
     );
     $claimCode = $mint->secret?->reveal();
     expect($claimCode)->toBeString()->not->toBe('');

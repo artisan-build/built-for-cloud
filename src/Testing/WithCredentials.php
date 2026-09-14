@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Testing;
 
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 
@@ -30,6 +31,7 @@ trait WithCredentials
 
         $credential = Credential::query()->create(array_merge([
             'kind' => CredentialKind::Bearer,
+            'purpose' => CredentialPurpose::SystemDeployment,
             'subject_type' => SubjectType::Application,
             'subject_ref' => 'test-subject',
             'status' => CredentialStatus::Active,

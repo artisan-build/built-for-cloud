@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -32,6 +33,7 @@ $owner->forceFill([
 $operatorBearer = 'p5d-k5-operator-'.bin2hex(random_bytes(16));
 Credential::query()->create([
     'kind' => CredentialKind::Bearer,
+    'purpose' => CredentialPurpose::OperatorManagement,
     'subject_type' => SubjectType::Operator,
     'subject_ref' => 'p5d-k5-live-operator',
     'name' => 'p5d-k5-live-operator',

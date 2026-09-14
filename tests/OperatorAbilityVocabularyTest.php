@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -31,6 +31,7 @@ function operatorCredential(?array $abilities): MintedTestCredential
 {
     return test()->mintCredential([
         'subject_type' => SubjectType::Operator,
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_ref' => 'control-plane-'.bin2hex(random_bytes(4)),
         'abilities' => $abilities,
     ]);
@@ -46,7 +47,11 @@ function operatorCredential(?array $abilities): MintedTestCredential
 function operatorMutations(string $targetId): array
 {
     return [
-        'mint' => ['postJson', '/bfc/credentials', ['subject_type' => 'external_consumer', 'subject_ref' => 'acme']],
+        'mint' => ['postJson', '/bfc/credentials', [
+            'subject_type' => 'external_consumer',
+            'subject_ref' => 'acme',
+            'purpose' => CredentialPurpose::Consumption->value,
+        ]],
         'rotate' => ['postJson', '/bfc/credentials/'.$targetId.'/rotate', []],
         'revoke' => ['deleteJson', '/bfc/credentials/'.$targetId, []],
         'activate' => ['postJson', '/bfc/credentials/'.$targetId.'/activate', ['delivery_fingerprint' => 'fp']],
@@ -65,7 +70,7 @@ it('locks the vocabulary names and the break-glass equivalence', function (): vo
         ->and(OperatorAbility::ConsoleKeyWrite->value)->toBe('console:key:write')
         ->and(OperatorAbility::McpRead->value)->toBe('mcp:read')
         ->and(OperatorAbility::MetadataRead->value)->toBe('metadata:read')
-        ->and(OperatorAbility::ADMIN)->toBe(EnsureCredentialAdmin::ABILITY)
+        ->and(OperatorAbility::tryFrom('credential:admin'))->toBe(OperatorAbility::Admin)
         ->and(OperatorAbility::adminEquivalent())->toBe([
             OperatorAbility::CredentialRead,
             OperatorAbility::CredentialMint,
@@ -134,6 +139,7 @@ it('scopes each verb family to its own ability', function (): void {
     $minted = $this->postJson('/bfc/credentials', [
         'subject_type' => 'external_consumer',
         'subject_ref' => 'acme',
+        'purpose' => CredentialPurpose::Consumption->value,
     ], ['Authorization' => $minter->bearerHeader()])->assertCreated();
 
     $mintedId = (string) $minted->json('credential.id');
@@ -148,23 +154,24 @@ it('scopes each verb family to its own ability', function (): void {
         ->assertCreated();
     $this->postJson('/bfc/credentials/'.$mintedId.'/activate', ['delivery_fingerprint' => 'fp'], ['Authorization' => $rotator->bearerHeader()])
         ->assertStatus(409);
-    $this->postJson('/bfc/credentials', ['subject_type' => 'external_consumer', 'subject_ref' => 'other'], ['Authorization' => $rotator->bearerHeader()])
+    $this->postJson('/bfc/credentials', ['subject_type' => 'external_consumer', 'subject_ref' => 'other', 'purpose' => CredentialPurpose::Consumption->value], ['Authorization' => $rotator->bearerHeader()])
         ->assertForbidden();
 
     // Revoke may revoke and nothing else.
     $this->deleteJson('/bfc/credentials/'.$mintedId, [], ['Authorization' => $revoker->bearerHeader()])->assertNoContent();
-    $this->postJson('/bfc/credentials', ['subject_type' => 'external_consumer', 'subject_ref' => 'more'], ['Authorization' => $revoker->bearerHeader()])
+    $this->postJson('/bfc/credentials', ['subject_type' => 'external_consumer', 'subject_ref' => 'more', 'purpose' => CredentialPurpose::Consumption->value], ['Authorization' => $revoker->bearerHeader()])
         ->assertForbidden();
 });
 
 it('honors the explicit break-glass credential on every verb', function (): void {
-    $breakGlass = operatorCredential([OperatorAbility::ADMIN]);
+    $breakGlass = operatorCredential([OperatorAbility::Admin->value]);
 
     $this->getJson('/bfc/credentials', ['Authorization' => $breakGlass->bearerHeader()])->assertOk();
 
     $minted = $this->postJson('/bfc/credentials', [
         'subject_type' => 'external_consumer',
         'subject_ref' => 'acme',
+        'purpose' => CredentialPurpose::Consumption->value,
     ], ['Authorization' => $breakGlass->bearerHeader()])->assertCreated();
 
     $mintedId = (string) $minted->json('credential.id');
@@ -194,6 +201,7 @@ it('audits a denied operator action with the acting principal', function (): voi
     $this->postJson('/bfc/credentials', [
         'subject_type' => 'external_consumer',
         'subject_ref' => 'acme',
+        'purpose' => CredentialPurpose::Consumption->value,
     ], ['Authorization' => $stolen->bearerHeader()])->assertForbidden();
 
     $denied = CredentialAuditEvent::query()
@@ -228,6 +236,7 @@ it('rate-limits operator writes per credential AND per IP independently (Fix 5)'
         $this->postJson('/bfc/credentials', [
             'subject_type' => 'external_consumer',
             'subject_ref' => 'burst-'.$i,
+            'purpose' => CredentialPurpose::Consumption->value,
         ], ['Authorization' => $minter->bearerHeader()])->assertCreated();
     }
 
@@ -236,6 +245,7 @@ it('rate-limits operator writes per credential AND per IP independently (Fix 5)'
     $this->postJson('/bfc/credentials', [
         'subject_type' => 'external_consumer',
         'subject_ref' => 'burst-61',
+        'purpose' => CredentialPurpose::Consumption->value,
     ], ['Authorization' => $minter->bearerHeader()])->assertStatus(429);
 
     // …and from a DIFFERENT IP: a stolen credential is bounded across
@@ -244,6 +254,7 @@ it('rate-limits operator writes per credential AND per IP independently (Fix 5)'
         ->postJson('/bfc/credentials', [
             'subject_type' => 'external_consumer',
             'subject_ref' => 'burst-ip-hop',
+            'purpose' => CredentialPurpose::Consumption->value,
         ], ['Authorization' => $minter->bearerHeader()])->assertStatus(429);
 
     // A different credential from the EXHAUSTED IP is throttled too (the
@@ -254,6 +265,7 @@ it('rate-limits operator writes per credential AND per IP independently (Fix 5)'
         ->postJson('/bfc/credentials', [
             'subject_type' => 'external_consumer',
             'subject_ref' => 'other-cred-same-ip',
+            'purpose' => CredentialPurpose::Consumption->value,
         ], ['Authorization' => $other->bearerHeader()])->assertStatus(429);
 
     // …while the same different credential from a fresh IP writes: the
@@ -262,6 +274,7 @@ it('rate-limits operator writes per credential AND per IP independently (Fix 5)'
         ->postJson('/bfc/credentials', [
             'subject_type' => 'external_consumer',
             'subject_ref' => 'other-cred-fresh-ip',
+            'purpose' => CredentialPurpose::Consumption->value,
         ], ['Authorization' => $other->bearerHeader()])->assertCreated();
 
     // Reads are deliberately not write-throttled.
@@ -277,6 +290,7 @@ it('bounds invalid-bearer rotation from one IP by the per-IP bucket (Fix 5)', fu
             ->postJson('/bfc/credentials', [
                 'subject_type' => 'external_consumer',
                 'subject_ref' => 'x',
+                'purpose' => CredentialPurpose::Consumption->value,
             ], ['Authorization' => 'Bearer invalid-'.$i.'-'.bin2hex(random_bytes(8))])
             ->assertUnauthorized();
     }
@@ -287,6 +301,7 @@ it('bounds invalid-bearer rotation from one IP by the per-IP bucket (Fix 5)', fu
         ->postJson('/bfc/credentials', [
             'subject_type' => 'external_consumer',
             'subject_ref' => 'x',
+            'purpose' => CredentialPurpose::Consumption->value,
         ], ['Authorization' => 'Bearer invalid-61-'.bin2hex(random_bytes(8))])
         ->assertStatus(429);
 });

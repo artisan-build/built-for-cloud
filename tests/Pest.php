@@ -16,6 +16,7 @@ use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedClaims;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\Exceptions\AssertionRefused;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
@@ -39,12 +40,13 @@ uses(TestCase::class)->in(__DIR__);
  */
 function auditOperatorCredential(
     string $name = 'audit-operator',
-    array $abilities = [OperatorAbility::ADMIN],
+    array $abilities = [OperatorAbility::Admin->value],
 ): string {
     $plaintext = $name.'-secret-'.bin2hex(random_bytes(8));
 
     Credential::query()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => $name,
         'name' => $name,

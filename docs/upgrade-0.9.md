@@ -9,6 +9,31 @@ Use the `bfc:credential:*` commands with `--local` only when you intend to opera
 database. Without `--local`, commands that support Laravel Cloud delegation operate on the selected
 remote environment.
 
+## Purpose migration: retire all and re-mint
+
+The purpose migration adds nullable string column `credentials.purpose` with no database default.
+Purpose is protocol authority, so the migration does not infer it from kind, subject, or legacy
+abilities. Instead it retires every credential row present at migration time by setting
+`revoked_at` once for rows that were still live and preserving the timestamp of rows already
+revoked. Stored lifecycle `status`, subject, abilities, ids, and row count are not rewritten.
+
+After migration, `bfc:credential:list --local` and its `--json` form show these rows as revoked
+tombstones with `purpose` set to null. They remain visible for inventory but cannot authenticate,
+sign, verify, publish an actor, or participate in active public-key selection. The list exposes no
+secret hash, ciphertext, key material, fingerprint, MAC, or secret-derived substitute.
+
+Re-mint every application-owned credential with an explicit matrix-valid purpose, distribute the
+new reveal-once secret or claim delivery, and complete any required activation before restoring
+traffic. There is no classifier, compatibility bridge, fallback store, or automatic re-mint.
+Rollback drops only the `purpose` column; it deliberately leaves every migration retirement in
+force and never resurrects an old credential.
+
+The accepted purpose values are `operator_management`, `dashboard_metadata`, `consumption`, `mcp`,
+`signing`, `signing_root`, `enrollment`, and `system_deployment`. Generic mint cannot create
+`signing_root`; it also rejects the reserved `(installation, bfc:signing-root)` identity. Every
+persisted ability on a new credential must be a documented `OperatorAbility` value. Legacy claim
+scope strings such as `consume` and `onboard` are not abilities.
+
 ## Removed surfaces
 
 This table is rendered from `LegacyRemovalInventory::upgradeGuide()`. The test suite compares this
@@ -59,7 +84,7 @@ ordering cannot drift independently.
 
 1. Replace direct references to removed classes and middleware aliases.
 2. Move callers to the fixed `/bfc` HTTP surface and remove the retired route-prefix configuration.
-3. Mint unified credentials with the required subject and abilities, distribute them through the
+3. Mint unified credentials with the required subject, purpose, and closed ability values; distribute them through the
    reveal-once or claim-code flow, and activate HMAC credentials before cutover.
 4. Update ownership and onboarding integrations to the replacement credential columns.
 5. Revoke the old credentials in the pre-0.9 installation, deploy 0.9, and verify each integration

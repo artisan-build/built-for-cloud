@@ -5,7 +5,6 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
-use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -54,7 +53,7 @@ it('lets a credential holding mcp:admin invoke the destructive tool (the positiv
 
 // Locked negative 1: an ingest-scoped credential cannot invoke a destructive tool.
 it('denies an ingest-scoped credential the destructive tool', function (): void {
-    $ingest = $this->mintCredential(['abilities' => [Scope::Consume->value]]);
+    $ingest = $this->mintCredential(['abilities' => null]);
 
     $this->postJson('/mcp/purge', [], ['Authorization' => $ingest->bearerHeader()])->assertForbidden();
 });
@@ -98,7 +97,7 @@ it('never lets the operator break-glass ability stand in for an mcp ability', fu
     $breakGlass = $this->mintCredential([
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'control-plane',
-        'abilities' => [OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::Admin->value],
     ]);
 
     // Exact match per tool: `credential:admin` is the operator surface's

@@ -7,6 +7,7 @@ use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyring;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\MetadataShape;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
@@ -562,6 +563,7 @@ it('holds the classification on the personal-surface row', function (): void {
 
     $credential = Credential::query()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::UserPrincipal,
         'subject_ref' => 'user:'.$user->getAuthIdentifier(),
         'user_id' => (string) $user->getAuthIdentifier(),
@@ -586,6 +588,7 @@ it('holds the classification on the installation-surface row', function (): void
 
     $credential = Credential::query()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::SystemDeployment,
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'metadata-installation',
         'user_id' => null,

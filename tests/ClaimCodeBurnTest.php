@@ -11,9 +11,11 @@ use ArtisanBuild\BuiltForCloud\Contracts\DeclaresBurnMode;
 use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
 use ArtisanBuild\BuiltForCloud\MintedDurableCredential;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -593,12 +595,19 @@ function mintUnifiedClaimDurable(
 ): string {
     $secret ??= 'unified-'.bin2hex(random_bytes(16));
 
+    [$purpose, $subjectType, $abilities] = match ($scope) {
+        Scope::Consume => [CredentialPurpose::Consumption, SubjectType::ExternalConsumer, null],
+        Scope::Admin => [CredentialPurpose::OperatorManagement, SubjectType::Operator, [OperatorAbility::Admin->value]],
+        Scope::Onboard => [CredentialPurpose::Enrollment, SubjectType::ExternalConsumer, null],
+    };
+
     Credential::factory()->create([
         'kind' => CredentialKind::Bearer,
-        'subject_type' => SubjectType::ExternalConsumer,
+        'purpose' => $purpose,
+        'subject_type' => $subjectType,
         'subject_ref' => $name,
         'name' => $name,
-        'abilities' => [$scope->value],
+        'abilities' => $abilities,
         'secret_hash' => hash('sha256', $secret),
         'expires_at' => $expiresAt,
     ]);

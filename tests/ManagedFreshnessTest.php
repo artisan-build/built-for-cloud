@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
@@ -151,6 +152,9 @@ function p3cAccountCredential(
 ): Credential {
     return Credential::query()->create([
         'kind' => $kind,
+        'purpose' => $kind === CredentialKind::Asymmetric
+            ? CredentialPurpose::Enrollment
+            : CredentialPurpose::Consumption,
         'subject_type' => $subjectType,
         'subject_ref' => (string) $user->scalpels_id,
         'name' => 'account-'.$user->scalpels_id,
@@ -164,6 +168,7 @@ function p3cDeploymentCredential(User $creator, string $secret): Credential
 {
     $credential = Credential::query()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::SystemDeployment,
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'installation-fixture',
         'name' => 'deployment',
@@ -1084,7 +1089,7 @@ it('resets an operator ingress grace deadline on success and enforces its exact 
         $user,
         $secret,
         subjectType: SubjectType::Operator,
-        abilities: [OperatorAbility::ADMIN],
+        abilities: [OperatorAbility::Admin->value],
     );
     Route::middleware('bfc.credential.admin:'.OperatorAbility::CredentialRead->value)
         ->get('/managed-ingress/credential-admin-boundary', static fn (): string => 'allowed');
@@ -1133,7 +1138,7 @@ it('enforces authoritative denial through the converged operator ingress', funct
         $user,
         $secret,
         subjectType: SubjectType::Operator,
-        abilities: [OperatorAbility::ADMIN],
+        abilities: [OperatorAbility::Admin->value],
     );
     Route::middleware('bfc.credential.admin:'.OperatorAbility::CredentialRead->value)
         ->get('/managed-ingress/credential-admin-authoritative', static fn (): string => 'allowed');

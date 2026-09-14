@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\Scope;
@@ -88,8 +89,9 @@ it('audits exchange and links both revocations old-to-new with supersession line
     // A live durable of the same name+scope that exchange's sweep revokes.
     $liveDurable = Credential::factory()->create([
         'name' => 'lineage@example.test',
+        'purpose' => CredentialPurpose::Consumption,
         'subject_ref' => 'lineage@example.test',
-        'abilities' => [Scope::Consume->value],
+        'abilities' => null,
     ]);
 
     $claimCode = auditIssueCode('lineage@example.test');

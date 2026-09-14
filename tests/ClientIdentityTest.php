@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\ClientIdentityRecorder;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -247,8 +248,10 @@ final class ClientIdentityTest extends TestCase
         $this->app->instance(CredentialDeclaration::class, new UnifiedStoreDeclaration);
         Credential::factory()->create([
             'name' => 'person@example.test',
+            'purpose' => CredentialPurpose::Consumption,
+            'subject_type' => SubjectType::ExternalConsumer,
             'secret_hash' => hash('sha256', $plaintext),
-            'abilities' => ['consume'],
+            'abilities' => null,
         ]);
 
         $this->postJson('/bfc/onboarding/verify', [], [
@@ -269,8 +272,10 @@ final class ClientIdentityTest extends TestCase
         $this->app->instance(CredentialDeclaration::class, new UnifiedStoreDeclaration);
         Credential::factory()->create([
             'name' => 'person@example.test',
+            'purpose' => CredentialPurpose::Consumption,
+            'subject_type' => SubjectType::ExternalConsumer,
             'secret_hash' => hash('sha256', $plaintext),
-            'abilities' => ['consume'],
+            'abilities' => null,
         ]);
 
         $this->postJson('/bfc/onboarding/verify', [], [

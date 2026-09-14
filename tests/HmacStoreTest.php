@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacKeyUnreadable;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -49,6 +50,7 @@ it('never serializes the ciphertext out of the model', function (): void {
 it('refuses a secret hash on an hmac row: a hash cannot sign', function (): void {
     Credential::query()->create([
         'kind' => CredentialKind::Hmac,
+        'purpose' => CredentialPurpose::Signing,
         'subject_type' => SubjectType::Application,
         'subject_ref' => 'postmaster',
         'secret_hash' => hash('sha256', 'anything'),
@@ -88,6 +90,7 @@ it('keeps the hmac lifecycle columns out of mass assignment: delivery and activa
     $credential = new Credential;
     $credential->fill([
         'kind' => CredentialKind::Hmac,
+        'purpose' => CredentialPurpose::Signing,
         'subject_type' => SubjectType::Application,
         'subject_ref' => 'postmaster',
         'secret_ciphertext' => $encrypted->ciphertext,

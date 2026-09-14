@@ -49,7 +49,7 @@ function pendingHmacKey(bool $exchanged, string $subjectRef = 'webhook-client'):
 {
     $result = app(MintCredential::class)(
         new Subject(SubjectType::ExternalConsumer, $subjectRef),
-        MintOptions::fromInput(['kind' => 'hmac', 'code_ttl_seconds' => 3600]),
+        MintOptions::fromInput(['kind' => 'hmac', 'purpose' => 'signing', 'code_ttl_seconds' => 3600]),
     );
 
     assert($result->secret !== null);
@@ -126,7 +126,7 @@ it('activates via the CLI with --local, refusing without it (the two-transport r
 it('consumes the claim code at activation so the link in the inbox cannot re-deliver a LIVE key', function (): void {
     $result = app(MintCredential::class)(
         new Subject(SubjectType::ExternalConsumer, 'client'),
-        MintOptions::fromInput(['kind' => 'hmac', 'code_ttl_seconds' => 3600]),
+        MintOptions::fromInput(['kind' => 'hmac', 'purpose' => 'signing', 'code_ttl_seconds' => 3600]),
     );
 
     assert($result->secret !== null);
@@ -146,7 +146,7 @@ it('consumes the claim code at activation so the link in the inbox cannot re-del
 it('activates a reveal-once-minted key without any exchange: the mint response WAS the delivery, its fingerprint included', function (): void {
     $result = app(MintCredential::class)(
         new Subject(SubjectType::Application, 'postmaster'),
-        MintOptions::fromInput(['kind' => 'hmac']),
+        MintOptions::fromInput(['kind' => 'hmac', 'purpose' => 'signing']),
     );
 
     expect($result->deliveryFingerprint)->toMatch('/^[0-9a-f]{16}$/');
@@ -217,7 +217,7 @@ it('refuses the stale confirmation after an interceptor re-claims, so the attack
     // A subject with a live production signing key, mid-rotation.
     $productionMint = app(MintCredential::class)(
         new Subject(SubjectType::ExternalConsumer, 'prod-client'),
-        MintOptions::fromInput(['kind' => 'hmac']),
+        MintOptions::fromInput(['kind' => 'hmac', 'purpose' => 'signing']),
     );
     $this->postJson('/bfc/credentials/'.$productionMint->summary->id.'/activate', [
         'delivery_fingerprint' => (string) $productionMint->deliveryFingerprint,
@@ -325,7 +325,7 @@ it('retires the lineage predecessor into grace and refuses to hide a failed reti
     // A live production signing key, mid-rotation to a pending successor.
     $productionMint = app(MintCredential::class)(
         new Subject(SubjectType::ExternalConsumer, 'grace-client'),
-        MintOptions::fromInput(['kind' => 'hmac']),
+        MintOptions::fromInput(['kind' => 'hmac', 'purpose' => 'signing']),
     );
     $this->postJson('/bfc/credentials/'.$productionMint->summary->id.'/activate', [
         'delivery_fingerprint' => (string) $productionMint->deliveryFingerprint,

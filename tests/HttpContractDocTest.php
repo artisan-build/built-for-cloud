@@ -6,7 +6,6 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\Audit\AppActionReason;
 use ArtisanBuild\BuiltForCloud\BuiltForCloud;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Route;
@@ -84,17 +83,7 @@ final class HttpContractDocTest extends TestCase
      * covered one, which is the failure this whole check exists to
      * answer:
      *
-     * 1. **That `adminEquivalent()` is what the gate enforces. It is
-     *    not.** {@see EnsureCredentialAdmin}
-     *    grants a `credential:admin` credential whatever ability the
-     *    route names, without consulting this method — which appears
-     *    nowhere in `src/` outside docblocks. So a future ability
-     *    deliberately left OFF the list would still be satisfied by
-     *    break-glass at runtime, and this test would stay green while
-     *    the contract's "exactly" quietly stopped being true. Closing
-     *    it means either having the gate consult the method or adding a
-     *    behavioural test per ability; neither is done.
-     * 2. **The ability a ROUTE requires.**
+     * 1. **The ability a ROUTE requires.**
      *    {@see self::test_every_registered_package_route_is_documented}
      *    compares `METHOD /uri` and nothing else, so swapping a route's
      *    middleware — `console:key:write` back to `credential:rotate`,
@@ -102,7 +91,7 @@ final class HttpContractDocTest extends TestCase
      *    is caught, but by ConsoleKeyCustodyTest's behavioural
      *    assertions, not here; nothing mechanically ties the doc's
      *    stated ability for a route to that route's middleware.
-     * 3. **WHERE in the document an ability appears.**
+     * 2. **WHERE in the document an ability appears.**
      *    {@see self::test_every_operator_ability_appears_in_the_contract}
      *    searches the whole file, and `console:key:write` occurs a dozen
      *    times across the changelog, the authority table and the route
@@ -289,7 +278,7 @@ final class HttpContractDocTest extends TestCase
             );
         }
 
-        $this->assertStringContainsString('`'.OperatorAbility::ADMIN.'`', $doc);
+        $this->assertStringContainsString('`'.OperatorAbility::Admin->value.'`', $doc);
     }
 
     /**

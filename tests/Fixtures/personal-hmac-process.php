@@ -5,6 +5,7 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\BuiltForCloudServiceProvider;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
@@ -82,6 +83,7 @@ $case = new class('testProbe') extends TestCase
 
             Credential::query()->create([
                 'kind' => CredentialKind::Bearer,
+                'purpose' => CredentialPurpose::OperatorManagement,
                 'subject_type' => SubjectType::Operator,
                 'subject_ref' => 'personal-hmac-activation',
                 'name' => 'personal-hmac-activation',

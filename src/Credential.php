@@ -40,6 +40,7 @@ use InvalidArgumentException;
  *
  * @property string $id
  * @property CredentialKind $kind
+ * @property CredentialPurpose|null $purpose Null only on retired pre-purpose tombstones.
  * @property SubjectType $subject_type
  * @property string $subject_ref
  * @property string|null $name
@@ -82,6 +83,7 @@ final class Credential extends Model implements Authenticatable
     protected $fillable = [
         'id',
         'kind',
+        'purpose',
         'subject_type',
         'subject_ref',
         'name',
@@ -131,6 +133,7 @@ final class Credential extends Model implements Authenticatable
     {
         return [
             'kind' => CredentialKind::class,
+            'purpose' => CredentialPurpose::class,
             'subject_type' => SubjectType::class,
             'status' => CredentialStatus::class,
             'abilities' => 'array',
@@ -153,6 +156,21 @@ final class Credential extends Model implements Authenticatable
     protected static function booted(): void
     {
         self::saving(function (Credential $credential): void {
+            $rawPurpose = $credential->getAttributes()['purpose'] ?? null;
+
+            if (! is_string($rawPurpose) || CredentialPurpose::tryFrom($rawPurpose) === null) {
+                $historicalTombstone = $credential->exists
+                    && $credential->getRawOriginal('purpose') === null
+                    && $credential->revoked_at !== null
+                    && $rawPurpose === null;
+
+                if (! $historicalTombstone) {
+                    throw new InvalidArgumentException('A live credential requires a known protocol purpose.');
+                }
+            }
+
+            OperatorAbility::assertValues($credential->abilities);
+
             if ($credential->kind === CredentialKind::Asymmetric && $credential->secret_hash !== null) {
                 throw new InvalidArgumentException(
                     'An asymmetric credential carries a public key only and never stores secret material.',
