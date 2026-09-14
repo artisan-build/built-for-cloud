@@ -7,10 +7,12 @@ namespace App\Providers;
 use App\Support\P6LiveState;
 use ArtisanBuild\BuiltForCloud\ManagedAuthClient;
 use ArtisanBuild\BuiltForCloud\ManagedFreshness;
+use ArtisanBuild\BuiltForCloud\Testing\P6RuntimeCounterProof;
 use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\Testing\BoundedWait;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Foundation\Http\Events\RequestHandled;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Http\Request;
@@ -47,6 +49,19 @@ final class P6LiveServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        $this->app['events']->listen(RequestHandled::class, static function (RequestHandled $event): void {
+            $node = (string) env('BFC_P6_NODE');
+            P6LiveState::increment('node_'.$node.'_requests');
+            $counter = P6RuntimeCounterProof::counterForRequest(
+                $event->request->method(),
+                $event->request->path(),
+            );
+
+            if (is_string($counter)) {
+                P6LiveState::increment($counter.'_on_'.$node);
+            }
+        });
+
         Http::fake(function (ClientRequest $request) {
             if ($request->url() !== 'https://p6-authority.test/managed-auth/v1/memberships/confirm') {
                 throw new HttpException(500, 'The local P6 authority received an unexpected request.');
@@ -79,14 +94,7 @@ final class P6LiveServiceProvider extends ServiceProvider
         });
 
         $this->app->booted(static function (Application $app): void {
-            $node = (string) env('BFC_P6_NODE');
-            $observe = static function (string $event) use ($node): void {
-                P6LiveState::increment('node_'.$node.'_requests');
-                P6LiveState::increment($event.'_on_'.$node);
-            };
-
-            Route::get('/_bfc-p6c/runtime', static function () use ($observe, $app): array {
-                $observe('runtime');
+            Route::get('/_bfc-p6c/runtime', static function () use ($app): array {
                 $database = (string) DB::scalar('select current_database()');
                 $postgres = (string) DB::scalar('show server_version');
                 $laravel = $app->version();
@@ -98,41 +106,32 @@ final class P6LiveServiceProvider extends ServiceProvider
 
                 return [
                     'database' => $database,
+                    'laravel' => $laravel,
                     'roles' => [
-                        'cache' => ['driver' => 'database', 'version' => 'postgresql-'.$postgres, 'identity' => $database.':cache'],
-                        'replay' => ['driver' => 'database', 'version' => 'postgresql-'.$postgres, 'identity' => $database.':cache'],
-                        'session' => ['driver' => 'cookie', 'version' => 'laravel-'.$laravel, 'identity' => $sessionIdentity],
+                        'cache' => ['driver' => (string) config('cache.default'), 'version' => 'postgresql-'.$postgres, 'identity' => $database.':cache'],
+                        'replay' => ['driver' => 'database', 'version' => 'postgresql-'.$postgres, 'identity' => $database.':console_assertion_burns'],
+                        'session' => ['driver' => (string) config('session.driver'), 'version' => 'laravel-'.$laravel, 'identity' => $sessionIdentity],
                     ],
                 ];
             });
-            Route::get('/_bfc-p6c/state', static function () use ($observe): array {
-                $observe('state');
-
+            Route::get('/_bfc-p6c/state', static function (): array {
                 return P6LiveState::all();
             });
-            Route::post('/_bfc-p6c/barrier/release', static function () use ($observe): array {
-                $observe('barrier_release');
+            Route::post('/_bfc-p6c/barrier/release', static function (): array {
                 P6LiveState::put('refresh_release', 1);
 
                 return ['released' => true];
             });
-            Route::post('/_bfc-p6c/mcp', static function (Request $request) use ($observe): array {
-                $observe('mcp');
-
+            Route::post('/_bfc-p6c/mcp', static function (Request $request): array {
                 return ['node' => (string) env('BFC_P6_NODE'), 'principal' => $request->user()?->getAuthIdentifier()];
             })->middleware(['bfc.contract-major', 'bfc.mcp']);
-            Route::post('/_bfc-p6c/managed-refresh/{user}', static function (User $user) use ($observe): array {
-                $observe('managed_refresh');
-
+            Route::post('/_bfc-p6c/managed-refresh/{user}', static function (User $user): array {
                 return ['allowed' => app(ManagedFreshness::class)->allows($user)];
             });
-            Route::get('/_bfc-p6c/session', static function (Request $request) use ($observe): array {
-                $observe('session_accept');
-
+            Route::get('/_bfc-p6c/session', static function (Request $request): array {
                 return ['user_id' => $request->user()?->getAuthIdentifier(), 'node' => (string) env('BFC_P6_NODE')];
             })->middleware(['web', 'bfc.auth']);
-            Route::post('/_bfc-p6c/session/invalidate', static function (Request $request) use ($observe): array {
-                $observe('session_invalidate');
+            Route::post('/_bfc-p6c/session/invalidate', static function (Request $request): array {
                 $user = $request->user();
                 abort_unless($user instanceof User, 401);
                 StandaloneAccess::invalidateSessions($user);

@@ -19,17 +19,17 @@ it('generates both required entropy dimensions without accepting a caller target
     $directory = p6IdentityDirectory();
     $identity = PostgresRunIdentity::generate($directory);
     $manifest = json_decode((string) file_get_contents($identity->manifestPath), true, flags: JSON_THROW_ON_ERROR);
-    $creation = new ReflectionMethod(DisposablePostgresLane::class, 'create');
 
     expect($identity->databaseName)->toMatch('/^bfc_p6_[a-f0-9]{32}$/')
         ->and($manifest['database_name'])->toBe($identity->databaseName)
         ->and($manifest['run_marker'])->toMatch('/^[a-f0-9]{64}$/')
         ->and($manifest['run_marker'])->not->toContain(substr($identity->databaseName, strlen('bfc_p6_')))
         ->and(fileperms($identity->manifestPath) & 0777)->toBe(0600)
-        ->and(array_map(
-            static fn (ReflectionParameter $parameter): string => $parameter->getName(),
-            $creation->getParameters(),
-        ))->toBe(['administrator', 'privateManifestDirectory']);
+        ->and(fn () => DisposablePostgresLane::create(
+            administrator: new PostgresAdministrator('127.0.0.1', 5432, 'postgres', 'postgres', 'test-password'),
+            privateManifestDirectory: $directory,
+            databaseName: 'bfc_p6_'.str_repeat('a', 32),
+        ))->toThrow(Error::class, 'Unknown named parameter');
 
     $identity->assertManifestEvidence();
     $identity->forgetManifest();

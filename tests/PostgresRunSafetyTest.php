@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Testing\DisposablePostgresLane;
 use ArtisanBuild\BuiltForCloud\Testing\PostgresAdministrator;
+use ArtisanBuild\BuiltForCloud\Testing\PostgresDatabaseProvisioner;
 use ArtisanBuild\BuiltForCloud\Testing\PostgresRunIdentity;
 use ArtisanBuild\BuiltForCloud\Tests\Support\PostgresLaneState;
 use PDO;
@@ -44,19 +45,47 @@ function p6SafetyDrop(PDO $administrator, string $database): void
 it('refuses a pre-existing generated target and removes only its unused manifest', function (): void {
     $administrator = p6SafetyAdministrator();
     $directory = p6SafetyDirectory();
-    $identity = PostgresRunIdentity::generate($directory);
+    $unrelatedDirectory = p6SafetyDirectory();
+    $unrelated = DisposablePostgresLane::create($administrator, $unrelatedDirectory);
     $admin = $administrator->connect();
-    $admin->exec('CREATE DATABASE '.p6SafetyIdentifier($identity->databaseName));
-    $claim = new ReflectionMethod(DisposablePostgresLane::class, 'claimGeneratedIdentity');
+    $collision = new class implements PostgresDatabaseProvisioner
+    {
+        public ?string $databaseName = null;
+
+        public function exists(PDO $administrator, string $databaseName): bool
+        {
+            if ($this->databaseName === null) {
+                $this->databaseName = $databaseName;
+                $administrator->exec('CREATE DATABASE '.p6SafetyIdentifier($databaseName));
+            }
+
+            return true;
+        }
+
+        public function create(PDO $administrator, string $databaseName): void
+        {
+            throw new LogicException('Creation must not run after a collision.');
+        }
+
+        public function drop(PDO $administrator, string $databaseName): void
+        {
+            throw new LogicException('The refused collision is cleaned up explicitly.');
+        }
+    };
 
     try {
-        expect(fn () => $claim->invoke(null, $administrator, $identity))
+        expect(fn () => DisposablePostgresLane::create($administrator, $directory, $collision))
             ->toThrow(RuntimeException::class, 'already exists')
-            ->and(is_file($identity->manifestPath))->toBeFalse();
+            ->and($collision->databaseName)->toMatch('/^bfc_p6_[a-f0-9]{32}$/')
+            ->and(glob($directory.'/*.json'))->toBe([]);
+        $unrelated->assertOwned();
     } finally {
-        p6SafetyDrop($admin, $identity->databaseName);
-        @unlink($identity->manifestPath);
+        if ($collision->databaseName !== null) {
+            p6SafetyDrop($admin, $collision->databaseName);
+        }
+        $unrelated->teardown();
         rmdir($directory);
+        rmdir($unrelatedDirectory);
     }
 })->group('pgsql');
 

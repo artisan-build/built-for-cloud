@@ -510,7 +510,10 @@ live command.
 The live command builds a Composer zip from the exact committed candidate, installs that dist archive
 into a disposable fresh Laravel host, and runs the two-node matrix. It refuses path repositories,
 development branches, published tags, incomplete prior command evidence, isolated state drivers, and
-unverified teardown. These commands never select a Laravel Cloud application or run a remote command.
+unverified teardown. The PostgreSQL group drops its run-owned matrix database before exiting, so the
+subsequent live command creates a separate run-owned database and stamps both generated names plus that
+relationship rather than attributing the matrix verdicts to the live database. These commands never
+select a Laravel Cloud application or run a remote command.
 
 ### Releasing
 

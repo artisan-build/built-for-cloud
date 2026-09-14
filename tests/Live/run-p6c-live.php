@@ -12,6 +12,8 @@ use ArtisanBuild\BuiltForCloud\Testing\P6GateContract;
 use ArtisanBuild\BuiltForCloud\Testing\P6GateRecorder;
 use ArtisanBuild\BuiltForCloud\Testing\P6GateStamp;
 use ArtisanBuild\BuiltForCloud\Testing\P6LoopbackProcess;
+use ArtisanBuild\BuiltForCloud\Testing\P6PostgresRunStamp;
+use ArtisanBuild\BuiltForCloud\Testing\P6RuntimeCounterProof;
 use ArtisanBuild\BuiltForCloud\Testing\P6SecretLeakDetector;
 use ArtisanBuild\BuiltForCloud\Testing\PostgresAdministrator;
 use ArtisanBuild\BuiltForCloud\Testing\SharedRuntimeIdentity;
@@ -74,28 +76,6 @@ function p6LiveRunSensitive(array $command, string $directory, array $environmen
     return $process->getOutput();
 }
 
-/** @return array<string, mixed> */
-function p6LivePostgresEvidence(string $path): array
-{
-    $contents = @file_get_contents($path);
-    $stamp = is_string($contents) ? json_decode($contents, true) : null;
-    if (! is_array($stamp)
-        || array_keys($stamp) !== ['schema', 'database_name', 'run_marker_verified', 'cases', 'teardown']
-        || ($stamp['schema'] ?? null) !== 'bfc.p6.postgres.v1'
-        || ($stamp['run_marker_verified'] ?? null) !== true
-        || ! is_array($stamp['cases'] ?? null)
-        || array_keys($stamp['cases']) !== P6GateContract::POSTGRES_CASES
-        || array_values(array_unique($stamp['cases'])) !== ['pass']
-        || ! is_array($stamp['teardown'] ?? null)
-        || ($stamp['teardown']['verdict'] ?? null) !== 'pass'
-        || ($stamp['teardown']['database_absent'] ?? null) !== true
-        || ($stamp['teardown']['manifest_absent'] ?? null) !== true) {
-        p6LiveFail('The completed observed PostgreSQL stamp is required by the P6c live runner.');
-    }
-
-    return $stamp;
-}
-
 function p6LiveSigningKey(): AsymmetricSecretKey
 {
     foreach (range(1, 16) as $ignored) {
@@ -140,6 +120,25 @@ function p6LiveStatus(array $response, int $status, string $label): true
     p6LiveSame($status, $response['status'], $label.' status');
 
     return true;
+}
+
+/** @return array<string, int> */
+function p6LiveState(P6HttpClient $client, P6LoopbackProcess $listener): array
+{
+    $response = $client->request($listener->port, 'GET', '/_bfc-p6c/state');
+    p6LiveStatus($response, 200, 'shared runtime state');
+    $state = p6LiveJson($response['body'], 'shared runtime state');
+    $counters = [];
+
+    foreach ($state as $counter => $value) {
+        if (! is_string($counter) || ! is_int($value)) {
+            p6LiveFail('The shared runtime state contained a non-integer counter.');
+        }
+
+        $counters[$counter] = $value;
+    }
+
+    return $counters;
 }
 
 /** @param array{status: int, headers: array<string, list<string>>, body: string} $response */
@@ -279,6 +278,7 @@ mkdir($artifactDirectory, 0700);
 
 $listenerA = null;
 $listenerB = null;
+$worker = null;
 $lane = null;
 $failure = null;
 $arguments = [];
@@ -302,6 +302,8 @@ $cases = new P6GateRecorder(P6GateContract::LIVE_CASES);
 $commandResults = [];
 $candidateSha = '';
 $databaseName = '';
+$matrixDatabaseName = '';
+$liveMarkerVerified = false;
 $forbidden = [];
 
 try {
@@ -310,8 +312,9 @@ try {
     }
     $candidateSha = trim(p6LiveRun(['git', 'rev-parse', 'HEAD'], $root, [], 'candidate SHA', $arguments, $outputs));
     $commandResults = P6GateCommandLedger::completedForLiveRunner($commandStamp, $candidateSha);
-    $postgresEvidence = p6LivePostgresEvidence($postgresStamp);
+    $postgresEvidence = P6PostgresRunStamp::read($postgresStamp);
     $postgresCases = $postgresEvidence['cases'];
+    $matrixDatabaseName = $postgresEvidence['database_name'];
 
     $administrator = PostgresAdministrator::fromEnvironment();
     $lane = DisposablePostgresLane::create($administrator, $manifestDirectory);
@@ -385,7 +388,12 @@ try {
     $authoritySecret = 'p6-authority-'.bin2hex(random_bytes(24));
     $audience = 'urn:bfc:installation:'.$databaseName;
     $environment = p6LiveEnvironment($administrator, $databaseName, $appKey, $audience, $authoritySecret);
-    $forbidden = [$appKey, $authoritySecret, 'p6-canary-'.bin2hex(random_bytes(16))];
+    $forbidden = array_values(array_filter([
+        $appKey,
+        $authoritySecret,
+        $administrator->password,
+        'p6-canary-'.bin2hex(random_bytes(16)),
+    ], static fn (string $material): bool => $material !== ''));
 
     $cases->observe('fresh_migration_and_install', function () use ($host, $environment, $installedVersion, &$arguments, &$outputs): bool {
         p6LiveRun([PHP_BINARY, 'artisan', 'migrate:fresh', '--force', '--no-interaction'], $host, $environment, 'fresh host migration', $arguments, $outputs);
@@ -452,13 +460,19 @@ try {
     $client = new P6HttpClient;
     $runtimeAResponse = $client->request($listenerA->port, 'GET', '/_bfc-p6c/runtime');
     $runtimeBResponse = $client->request($listenerB->port, 'GET', '/_bfc-p6c/runtime');
+    p6LiveStatus($runtimeAResponse, 200, 'node A runtime');
+    p6LiveStatus($runtimeBResponse, 200, 'node B runtime');
     $runtimeA = p6LiveJson($runtimeAResponse['body'], 'node A runtime');
     $runtimeB = p6LiveJson($runtimeBResponse['body'], 'node B runtime');
     $identityA = new SharedRuntimeIdentity((string) ($runtimeA['database'] ?? ''), is_array($runtimeA['roles'] ?? null) ? $runtimeA['roles'] : []);
     $identityB = new SharedRuntimeIdentity((string) ($runtimeB['database'] ?? ''), is_array($runtimeB['roles'] ?? null) ? $runtimeB['roles'] : []);
     $identityA->assertSameAs($identityB);
+    p6LiveSame($databaseName, $identityA->database, 'shared live database identity');
     $shared = ['node_a' => $identityA->jsonSerialize(), 'node_b' => $identityB->jsonSerialize()];
-    $runtime['laravel'] = (string) preg_replace('/^laravel-/', '', $runtimeA['roles']['session']['version']);
+    $runtime['laravel'] = is_string($runtimeA['laravel'] ?? null) ? $runtimeA['laravel'] : '';
+    if ($runtime['laravel'] === '' || ($runtimeB['laravel'] ?? null) !== $runtime['laravel']) {
+        p6LiveFail('The two P6c nodes did not report one Laravel runtime version.');
+    }
     $responses[] = $runtimeAResponse;
     $responses[] = $runtimeBResponse;
 
@@ -550,21 +564,30 @@ try {
 
         return p6LiveStatus($response, 401, 'spoofed-client refusal');
     });
-    $cases->observe('cross_node_replay_refused', function () use ($client, $listenerA, $listenerB, $signingKey, $audience, $mcpHeaders, &$responses): bool {
+    $replayCountersBefore = p6LiveState($client, $listenerA);
+    $cases->observe('cross_node_replay_refused', function () use ($client, $listenerA, $listenerB, $signingKey, $audience, $mcpHeaders, $replayCountersBefore, &$responses): bool {
         $assertion = p6LiveAssertion($signingKey, $audience);
         $accepted = $client->request($listenerA->port, 'POST', '/_bfc-p6c/mcp', $mcpHeaders($assertion));
         $replayed = $client->request($listenerB->port, 'POST', '/_bfc-p6c/mcp', $mcpHeaders($assertion));
         $responses[] = $accepted;
         $responses[] = $replayed;
         p6LiveStatus($accepted, 200, 'first cross-node assertion');
+        p6LiveStatus($replayed, 401, 'cross-node replay');
+        P6RuntimeCounterProof::assertDeltas(
+            $replayCountersBefore,
+            p6LiveState($client, $listenerB),
+            ['mcp_on_a' => 1, 'mcp_on_b' => 1],
+        );
 
-        return p6LiveStatus($replayed, 401, 'cross-node replay');
+        return true;
     });
 
+    $rotationCountersBefore = p6LiveState($client, $listenerA);
     $rotation = $client->request($listenerA->port, 'POST', '/bfc/credentials/'.$seed['mcp_id'].'/rotate', [
         ['Authorization', 'Bearer '.$seed['operator_secret']],
         ['Content-Type', 'application/json'],
     ], '{"emergency":true}');
+    $responses[] = $rotation;
     p6LiveStatus($rotation, 201, 'credential rotation');
     $rotationBody = p6LiveJson($rotation['body'], 'credential rotation');
     $replacementId = $rotationBody['credential']['id'] ?? null;
@@ -573,28 +596,44 @@ try {
         p6LiveFail('Credential rotation did not return a replacement through the package transport.');
     }
     $forbidden[] = $replacementSecret;
-    $cases->observe('cross_node_rotation_visible', function () use ($client, $listenerB, $seed, $replacementSecret, $mcpHeaders, &$responses): bool {
+    $cases->observe('cross_node_rotation_visible', function () use ($client, $listenerB, $seed, $replacementSecret, $mcpHeaders, $rotationCountersBefore, &$responses): bool {
         $replacement = $client->request($listenerB->port, 'POST', '/_bfc-p6c/mcp', $mcpHeaders($replacementSecret));
         $old = $client->request($listenerB->port, 'POST', '/_bfc-p6c/mcp', $mcpHeaders($seed['mcp_secret']));
         $responses[] = $replacement;
         $responses[] = $old;
         p6LiveStatus($replacement, 200, 'cross-node replacement visibility');
+        p6LiveStatus($old, 401, 'cross-node emergency rotation retirement');
+        P6RuntimeCounterProof::assertDeltas(
+            $rotationCountersBefore,
+            p6LiveState($client, $listenerB),
+            ['credential_rotate_on_a' => 1, 'mcp_on_b' => 2],
+        );
 
-        return p6LiveStatus($old, 401, 'cross-node emergency rotation retirement');
+        return true;
     });
+    $revocationCountersBefore = p6LiveState($client, $listenerA);
     $revocation = $client->request($listenerA->port, 'DELETE', '/bfc/credentials/'.$replacementId, [
         ['Authorization', 'Bearer '.$seed['operator_secret']],
     ]);
+    $responses[] = $revocation;
     p6LiveStatus($revocation, 204, 'credential revocation');
-    $cases->observe('cross_node_revocation_visible', function () use ($client, $listenerB, $replacementSecret, $mcpHeaders, &$responses): bool {
+    $cases->observe('cross_node_revocation_visible', function () use ($client, $listenerB, $replacementSecret, $mcpHeaders, $revocationCountersBefore, &$responses): bool {
         $response = $client->request($listenerB->port, 'POST', '/_bfc-p6c/mcp', $mcpHeaders($replacementSecret));
         $responses[] = $response;
+        p6LiveStatus($response, 401, 'cross-node revocation visibility');
+        P6RuntimeCounterProof::assertDeltas(
+            $revocationCountersBefore,
+            p6LiveState($client, $listenerB),
+            ['credential_revoke_on_a' => 1, 'mcp_on_b' => 1],
+        );
 
-        return p6LiveStatus($response, 401, 'cross-node revocation visibility');
+        return true;
     });
 
+    $sessionCountersBefore = p6LiveState($client, $listenerA);
     $session = new P6HttpClient;
     $login = $session->request($listenerA->port, 'GET', '/bfc/login', [['Accept', 'text/html']]);
+    $responses[] = $login;
     if (preg_match('/name="_token" value="([^"]+)"/', $login['body'], $csrf) !== 1) {
         p6LiveFail('The package login form did not expose a CSRF field.');
     }
@@ -602,32 +641,50 @@ try {
     $loggedIn = $session->request($listenerA->port, 'POST', '/bfc/login', [
         ['Content-Type', 'application/x-www-form-urlencoded'], ['Accept', 'text/html'],
     ], $form);
+    $responses[] = $loggedIn;
     $cases->observe('session_established_on_a', static fn (): true => p6LiveStatus($loggedIn, 302, 'session establishment on node A'));
     $acceptedA = $session->request($listenerA->port, 'GET', '/_bfc-p6c/session');
+    $responses[] = $acceptedA;
     p6LiveStatus($acceptedA, 200, 'session check on node A');
+    p6LiveSame($seed['user_id'], p6LiveJson($acceptedA['body'], 'node A session')['user_id'] ?? null, 'node A session user');
     $staleSession = clone $session;
-    $cases->observe('session_accepted_on_b', function () use ($staleSession, $listenerB, &$responses): bool {
+    $cases->observe('session_accepted_on_b', function () use ($staleSession, $listenerB, $seed, &$responses): bool {
         $response = $staleSession->request($listenerB->port, 'GET', '/_bfc-p6c/session');
         $responses[] = $response;
+        p6LiveStatus($response, 200, 'session acceptance on node B');
+        $body = p6LiveJson($response['body'], 'session acceptance on node B');
+        p6LiveSame('b', $body['node'] ?? null, 'session acceptance node');
+        p6LiveSame($seed['user_id'], $body['user_id'] ?? null, 'node B session user');
 
-        return p6LiveStatus($response, 200, 'session acceptance on node B');
+        return true;
     });
     $cases->observe('session_invalidated_on_a', function () use ($session, $listenerA, &$responses): bool {
         $response = $session->request($listenerA->port, 'POST', '/_bfc-p6c/session/invalidate');
         $responses[] = $response;
+        p6LiveStatus($response, 200, 'session invalidation on node A');
+        p6LiveSame(true, p6LiveJson($response['body'], 'session invalidation on node A')['invalidated'] ?? null, 'session invalidation result');
 
-        return p6LiveStatus($response, 200, 'session invalidation on node A');
+        return true;
     });
     $cases->observe('session_refused_on_b', function () use ($staleSession, $listenerB, &$responses): bool {
         $response = $staleSession->request($listenerB->port, 'GET', '/_bfc-p6c/session');
         $responses[] = $response;
-        if ($response['status'] === 200) {
-            p6LiveFail('Node B accepted the invalidated session.');
-        }
+        p6LiveStatus($response, 401, 'invalidated session refusal on node B');
 
         return true;
     });
+    P6RuntimeCounterProof::assertDeltas(
+        $sessionCountersBefore,
+        p6LiveState($client, $listenerB),
+        [
+            'session_establish_on_a' => 1,
+            'session_accept_on_a' => 1,
+            'session_accept_on_b' => 2,
+            'session_invalidate_on_a' => 1,
+        ],
+    );
 
+    $managedCountersBefore = p6LiveState($client, $listenerA);
     $managed = p6LiveJson(p6LiveRunSensitive(
         [PHP_BINARY, 'p6c-host-cli.php', 'managed'],
         $host,
@@ -653,19 +710,36 @@ try {
         return ($state['refresh_entered'] ?? null) === 1;
     }, 10, 'The shared managed refresh did not reach its deterministic barrier.');
     $secondRefresh = $client->request($listenerB->port, 'POST', '/_bfc-p6c/managed-refresh/'.$managedUser);
+    $responses[] = $secondRefresh;
     p6LiveStatus($secondRefresh, 200, 'second managed freshness request');
     p6LiveSame(true, p6LiveJson($secondRefresh['body'], 'second managed freshness request')['allowed'] ?? null, 'second managed freshness result');
     $release = $client->request($listenerB->port, 'POST', '/_bfc-p6c/barrier/release');
+    $responses[] = $release;
     p6LiveStatus($release, 200, 'managed refresh barrier release');
     if ($worker->wait() !== 0) {
         p6LiveFail('The first managed freshness request failed.');
     }
     $firstRefresh = p6LiveJson($worker->getOutput(), 'first managed freshness request');
     p6LiveSame(200, $firstRefresh['status'] ?? null, 'first managed freshness status');
+    $responses[] = $firstRefresh;
+    p6LiveSame(
+        true,
+        p6LiveJson(is_string($firstRefresh['body'] ?? null) ? $firstRefresh['body'] : '', 'first managed freshness body')['allowed'] ?? null,
+        'first managed freshness result',
+    );
     $stateResponse = $client->request($listenerA->port, 'GET', '/_bfc-p6c/state');
+    $responses[] = $stateResponse;
     $state = p6LiveJson($stateResponse['body'], 'final runtime counters');
-    $cases->observe('single_shared_managed_refresh', static function () use ($state): bool {
-        p6LiveSame(1, $state['authority_refreshes'] ?? null, 'shared authority refresh count');
+    $cases->observe('single_shared_managed_refresh', static function () use ($state, $managedCountersBefore): bool {
+        P6RuntimeCounterProof::assertDeltas(
+            $managedCountersBefore,
+            $state,
+            [
+                'authority_refreshes' => 1,
+                'managed_refresh_on_a' => 1,
+                'managed_refresh_on_b' => 1,
+            ],
+        );
 
         return true;
     });
@@ -697,9 +771,18 @@ try {
     $failure = $exception;
 } finally {
     try {
+        if ($worker instanceof Process && $worker->isRunning()) {
+            $worker->stop(1, SIGTERM);
+        }
+    } catch (Throwable $exception) {
+        $failure ??= $exception;
+    }
+
+    try {
+        $workerAbsent = ! $worker instanceof Process || ! $worker->isRunning();
         $listenerAAbsent = ! $listenerA instanceof P6LoopbackProcess || $listenerA->stop();
         $listenerBAbsent = ! $listenerB instanceof P6LoopbackProcess || $listenerB->stop();
-        $teardown['listeners_absent'] = $listenerAAbsent && $listenerBAbsent;
+        $teardown['listeners_absent'] = $workerAbsent && $listenerAAbsent && $listenerBAbsent;
     } catch (Throwable $exception) {
         $failure ??= $exception;
     }
@@ -709,6 +792,7 @@ try {
             $result = $lane->teardown();
             $teardown['database_absent'] = $result->databaseAbsent;
             $teardown['manifest_absent'] = $result->manifestAbsent;
+            $liveMarkerVerified = $result->markerVerified;
         }
     } catch (Throwable $exception) {
         $failure ??= $exception;
@@ -727,7 +811,13 @@ try {
 
 if ($failure === null && $teardown['verdict'] === 'pass') {
     try {
-        $cases->observe('clean_teardown', static fn (): bool => true);
+        $cases->observe('clean_teardown', static fn (): bool => $teardown === [
+            'bounded' => true,
+            'listeners_absent' => true,
+            'database_absent' => true,
+            'manifest_absent' => true,
+            'verdict' => 'pass',
+        ]);
         $commandResults['composer test:p6c-live'] = ['exit_code' => 0, 'verdict' => 'pass'];
         $stamp = [
             'schema' => P6GateContract::SCHEMA,
@@ -741,7 +831,9 @@ if ($failure === null && $teardown['verdict'] === 'pass') {
             'runtime' => $runtime,
             'postgres' => [
                 'database_name' => $databaseName,
-                'run_marker_verified' => true,
+                'matrix_database_name' => $matrixDatabaseName,
+                'relationship' => 'separate-run-owned-databases',
+                'run_marker_verified' => $liveMarkerVerified,
                 'cases' => $postgresCases,
             ],
             'shared_runtime' => $shared,

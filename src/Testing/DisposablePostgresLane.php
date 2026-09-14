@@ -26,18 +26,16 @@ final class DisposablePostgresLane
     private function __construct(
         private readonly PostgresAdministrator $administrator,
         private readonly PostgresRunIdentity $identity,
+        private readonly PostgresDatabaseProvisioner $provisioner,
     ) {}
 
-    public static function create(PostgresAdministrator $administrator, string $privateManifestDirectory): self
-    {
+    public static function create(
+        PostgresAdministrator $administrator,
+        string $privateManifestDirectory,
+        ?PostgresDatabaseProvisioner $provisioner = null,
+    ): self {
         $identity = PostgresRunIdentity::generate($privateManifestDirectory);
-
-        return self::claimGeneratedIdentity($administrator, $identity);
-    }
-
-    /** The private seam lets the real-PostgreSQL collision control stop after generation. */
-    private static function claimGeneratedIdentity(PostgresAdministrator $administrator, PostgresRunIdentity $identity): self
-    {
+        $provisioner ??= new PdoPostgresDatabaseProvisioner;
 
         try {
             $admin = $administrator->connect();
@@ -50,16 +48,15 @@ final class DisposablePostgresLane
         try {
             self::assertAdministratorIsSeparate($admin, $identity->databaseName);
 
-            if (self::databaseExists($admin, $identity->databaseName)) {
+            if ($provisioner->exists($admin, $identity->databaseName)) {
                 $identity->forgetManifest();
 
                 throw new RuntimeException('The generated PostgreSQL target already exists; creation was refused.');
             }
 
-            $admin->exec('SET statement_timeout = 60000');
-            $admin->exec('CREATE DATABASE '.self::quoteIdentifier($identity->databaseName));
+            $provisioner->create($admin, $identity->databaseName);
         } catch (Throwable $exception) {
-            if (! self::databaseExistsSafely($admin, $identity->databaseName)) {
+            if (! self::databaseExistsSafely($provisioner, $admin, $identity->databaseName)) {
                 try {
                     $identity->forgetManifest();
                 } catch (Throwable) {
@@ -70,7 +67,7 @@ final class DisposablePostgresLane
             throw $exception;
         }
 
-        $lane = new self($administrator, $identity);
+        $lane = new self($administrator, $identity, $provisioner);
 
         try {
             $target = $administrator->connect($identity->databaseName);
@@ -160,7 +157,7 @@ final class DisposablePostgresLane
         $admin = $this->administrator->connect();
         self::assertAdministratorIsSeparate($admin, $this->databaseName());
 
-        if (! self::databaseExists($admin, $this->databaseName())) {
+        if (! $this->provisioner->exists($admin, $this->databaseName())) {
             throw new RuntimeException('The owned PostgreSQL database is missing; manual cleanup is required.');
         }
 
@@ -178,10 +175,9 @@ final class DisposablePostgresLane
         $this->manager?->purge(self::PRIMARY_CONNECTION);
         $admin = $this->administrator->connect();
         self::assertAdministratorIsSeparate($admin, $this->databaseName());
-        $admin->exec('SET statement_timeout = 60000');
-        $admin->exec('DROP DATABASE '.self::quoteIdentifier($this->databaseName()).' WITH (FORCE)');
+        $this->provisioner->drop($admin, $this->databaseName());
 
-        if (self::databaseExists($admin, $this->databaseName())) {
+        if ($this->provisioner->exists($admin, $this->databaseName())) {
             throw new RuntimeException('The verified PostgreSQL database remained after teardown; manual cleanup is required.');
         }
 
@@ -198,27 +194,15 @@ final class DisposablePostgresLane
         }
     }
 
-    private static function databaseExists(PDO $administrator, string $database): bool
-    {
-        $statement = $administrator->prepare('SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = :database)');
-        $statement->execute(['database' => $database]);
-
-        return filter_var($statement->fetchColumn(), FILTER_VALIDATE_BOOL);
-    }
-
-    private static function databaseExistsSafely(PDO $administrator, string $database): bool
-    {
+    private static function databaseExistsSafely(
+        PostgresDatabaseProvisioner $provisioner,
+        PDO $administrator,
+        string $database,
+    ): bool {
         try {
-            return self::databaseExists($administrator, $database);
+            return $provisioner->exists($administrator, $database);
         } catch (Throwable) {
             return true;
         }
-    }
-
-    private static function quoteIdentifier(string $identifier): string
-    {
-        PostgresRunIdentity::assertDatabaseName($identifier);
-
-        return '"'.str_replace('"', '""', $identifier).'"';
     }
 }

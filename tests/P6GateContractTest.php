@@ -39,6 +39,8 @@ function p6ValidStamp(): array
         'runtime' => ['php' => '8.4.13', 'laravel' => '13.24.0', 'postgres' => '17.4'],
         'postgres' => [
             'database_name' => $database,
+            'matrix_database_name' => 'bfc_p6_'.str_repeat('d', 32),
+            'relationship' => 'separate-run-owned-databases',
             'run_marker_verified' => true,
             'cases' => array_fill_keys(P6GateContract::POSTGRES_CASES, 'pass'),
         ],
@@ -144,12 +146,37 @@ it('refuses isolated or divergent shared state between nodes', function (string 
         $stamp['shared_runtime']['node_a']['roles']['cache']['driver'] = 'array';
     } elseif ($case === 'driver') {
         $stamp['shared_runtime']['node_b']['roles']['session']['driver'] = 'redis';
+    } elseif ($case === 'shared-wrong-database') {
+        $wrong = 'bfc_p6_'.str_repeat('e', 32);
+        $stamp['shared_runtime']['node_a']['database'] = $wrong;
+        $stamp['shared_runtime']['node_b']['database'] = $wrong;
     } else {
-        $stamp['shared_runtime']['node_b']['database'] = 'bfc_p6_'.str_repeat('d', 32);
+        $stamp['shared_runtime']['node_b']['database'] = 'bfc_p6_'.str_repeat('e', 32);
     }
 
     expect(fn () => P6GateStamp::assertValid($stamp))->toThrow(InvalidArgumentException::class);
-})->with(['isolated', 'driver', 'database']);
+})->with(['isolated', 'driver', 'shared-wrong-database', 'database']);
+
+it('requires an explicit relationship between separate run-owned matrix and live databases', function (string $case): void {
+    $stamp = p6ValidStamp();
+
+    if ($case === 'same-database') {
+        $stamp['postgres']['matrix_database_name'] = $stamp['postgres']['database_name'];
+    } else {
+        $stamp['postgres']['relationship'] = 'same-database';
+    }
+
+    expect(fn () => P6GateStamp::assertValid($stamp))
+        ->toThrow(InvalidArgumentException::class, 'relationship');
+})->with(['same-database', 'wrong-relationship']);
+
+it('rejects every incomplete or failed teardown observation', function (string $field): void {
+    $stamp = p6ValidStamp();
+    $stamp['teardown'][$field] = false;
+
+    expect(fn () => P6GateStamp::assertValid($stamp))
+        ->toThrow(InvalidArgumentException::class, 'teardown');
+})->with(['bounded', 'listeners_absent', 'database_absent', 'manifest_absent']);
 
 it('detects generated secret material and secret-shaped stamp fields', function (): void {
     $marker = 'test-created-p6-marker-'.bin2hex(random_bytes(8));

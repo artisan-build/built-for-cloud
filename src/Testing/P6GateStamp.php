@@ -39,8 +39,8 @@ final class P6GateStamp
 
         self::assertArchive($stamp['archive'], $stamp['candidate_sha']);
         self::assertRuntime($stamp['runtime']);
-        self::assertPostgres($stamp['postgres']);
-        self::assertSharedRuntime($stamp['shared_runtime']);
+        $liveDatabase = self::assertPostgres($stamp['postgres']);
+        self::assertSharedRuntime($stamp['shared_runtime'], $liveDatabase);
         self::assertListeners($stamp['listeners']);
         self::assertCommands($stamp['commands']);
         self::assertCases($stamp['cases']);
@@ -81,23 +81,39 @@ final class P6GateStamp
         }
     }
 
-    private static function assertPostgres(mixed $postgres): void
+    private static function assertPostgres(mixed $postgres): string
     {
         if (! is_array($postgres)) {
             throw new InvalidArgumentException('The P6c PostgreSQL evidence is absent.');
         }
 
-        self::assertExactKeys($postgres, ['database_name', 'run_marker_verified', 'cases'], 'postgres');
-        PostgresRunIdentity::assertDatabaseName(is_string($postgres['database_name'] ?? null) ? $postgres['database_name'] : '');
+        self::assertExactKeys($postgres, [
+            'database_name',
+            'matrix_database_name',
+            'relationship',
+            'run_marker_verified',
+            'cases',
+        ], 'postgres');
+        $database = is_string($postgres['database_name'] ?? null) ? $postgres['database_name'] : '';
+        $matrixDatabase = is_string($postgres['matrix_database_name'] ?? null) ? $postgres['matrix_database_name'] : '';
+        PostgresRunIdentity::assertDatabaseName($database);
+        PostgresRunIdentity::assertDatabaseName($matrixDatabase);
 
         if (($postgres['run_marker_verified'] ?? null) !== true) {
             throw new InvalidArgumentException('The P6c PostgreSQL run marker was not verified.');
         }
 
+        if (($postgres['relationship'] ?? null) !== 'separate-run-owned-databases'
+            || $database === $matrixDatabase) {
+            throw new InvalidArgumentException('The PostgreSQL matrix and live database relationship is invalid.');
+        }
+
         self::assertVerdicts($postgres['cases'] ?? null, P6GateContract::POSTGRES_CASES, 'PostgreSQL');
+
+        return $database;
     }
 
-    private static function assertSharedRuntime(mixed $shared): void
+    private static function assertSharedRuntime(mixed $shared, string $liveDatabase): void
     {
         if (! is_array($shared)) {
             throw new InvalidArgumentException('The P6c shared runtime evidence is absent.');
@@ -107,6 +123,10 @@ final class P6GateStamp
         $a = self::sharedIdentity($shared['node_a'] ?? null);
         $b = self::sharedIdentity($shared['node_b'] ?? null);
         $a->assertSameAs($b);
+
+        if ($a->database !== $liveDatabase) {
+            throw new InvalidArgumentException('The HTTP nodes do not use the stamped live PostgreSQL database.');
+        }
     }
 
     private static function assertListeners(mixed $listeners): void
