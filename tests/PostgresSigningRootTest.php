@@ -11,6 +11,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\SigningRootRefused;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\SigningRootLifecycle;
 use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
+use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\Support\PostgresLane;
 use Illuminate\Database\QueryException;
@@ -48,7 +49,7 @@ function runSigningRootOnConnection(string $connection, callable $action): mixed
 function seedSigningRootPostgresAuthority(): void
 {
     DB::table('bfc_authority')->updateOrInsert(
-        ['key' => \ArtisanBuild\BuiltForCloud\InstallationAuthority::KEY],
+        ['key' => InstallationAuthority::KEY],
         [
             'mode' => AuthorityMode::Standalone->value,
             'generation' => 1,
