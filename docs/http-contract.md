@@ -465,7 +465,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `GET /bfc/ui/credentials/personal` | `content` | package-owned HTML containing the caller's own credential summaries and declared fields |
 | `POST /bfc/ui/credentials/personal` | `content` | package-owned HTML containing the `delivery` single reveal and free-text credential fields |
 | `POST /bfc/ui/credentials/personal/{id}/rotate` | `content` | package-owned HTML containing the `delivery` single reveal and credential summaries |
-| `DELETE /bfc/ui/credentials/personal/{id}` | `metadata` | redirect after caller-owned credential revocation |
+| `DELETE /bfc/ui/credentials/personal/{id}` | `content` | redirect after caller-owned credential revocation |
 | `GET /bfc/installation/credentials` | `content` | installation-owned summary rows carry free-text names and subject refs |
 | `POST /bfc/installation/credentials` | `content` | the `delivery` single reveal, plus free-text name/subject fields |
 | `POST /bfc/installation/credentials/{id}/rotate` | `content` | the `delivery` single reveal, plus a summary row carrying free-text names and subject refs |
