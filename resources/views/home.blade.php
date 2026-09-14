@@ -1,17 +1,19 @@
 @extends('bfc::layout')
 
 @section('title')
-{{ $manifest->name }}
+@if ($manifest !== null){{ $manifest->name }}@endif
 @endsection
 
 @section('content')
-<section data-testid="ui-shell" data-app-slug="{{ $manifest->slug }}">
+<section data-testid="ui-shell"@if ($manifest !== null) data-app-slug="{{ $manifest->slug }}"@endif>
+    @if ($manifest !== null)
     <header data-testid="ui-manifest">
         <img data-testid="ui-manifest-icon" src="{{ $manifest->icon }}" alt="{{ $manifest->name }}">
         <h1 data-testid="ui-manifest-name">{{ $manifest->name }}</h1>
         <p data-testid="ui-manifest-description">{{ $manifest->description }}</p>
         <a data-testid="ui-manifest-product-link" href="{{ $manifest->productUrl }}">{{ $manifest->productUrl }}</a>
     </header>
+    @endif
 
     <nav data-testid="ui-navigation">
         @if ($memberManagement)

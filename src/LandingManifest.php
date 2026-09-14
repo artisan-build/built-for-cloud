@@ -18,8 +18,33 @@ final readonly class LandingManifest
 
     public static function fromConfiguration(): self
     {
-        $manifest = config('built-for-cloud.manifest');
+        return self::fromManifest(self::configuredManifest());
+    }
 
+    public static function fromOptionalConfiguration(): ?self
+    {
+        $manifest = self::configuredManifest();
+
+        if (is_array($manifest)) {
+            foreach (['name', 'slug', 'description', 'icon', 'product_url'] as $key) {
+                if (! array_key_exists($key, $manifest) || $manifest[$key] !== null) {
+                    return self::fromManifest($manifest);
+                }
+            }
+
+            return null;
+        }
+
+        return self::fromManifest($manifest);
+    }
+
+    private static function configuredManifest(): mixed
+    {
+        return config('built-for-cloud.manifest');
+    }
+
+    private static function fromManifest(mixed $manifest): self
+    {
         if (! is_array($manifest)) {
             throw new RuntimeException('The built-for-cloud landing manifest must contain five strings.');
         }

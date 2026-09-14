@@ -16,15 +16,12 @@ use Illuminate\Contracts\View\View;
 
 final readonly class UiHome
 {
-    public function __invoke(ActingPrincipalResolver $principals, LandingManifest $manifest): View
+    public function __invoke(ActingPrincipalResolver $principals, ?LandingManifest $manifest): View
     {
+        /** @var User $user */
         $user = $principals->resolve()->principal;
         $authority = InstallationAuthority::current();
-        $role = $user instanceof User ? RolePolicy::role($user->role) : null;
-
-        if (! $authority->isValid() || ! $role instanceof UserRole) {
-            abort(403);
-        }
+        $role = RolePolicy::role($user->role);
 
         return view('bfc::home', [
             'manifest' => $manifest,

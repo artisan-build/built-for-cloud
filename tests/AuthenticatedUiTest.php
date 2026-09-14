@@ -8,10 +8,12 @@ use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUiAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
+use ArtisanBuild\BuiltForCloud\LandingManifest;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
 use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -19,6 +21,8 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\View;
 use PHPUnit\Framework\Attributes\DataProvider;
+use RuntimeException;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 final class AuthenticatedUiTest extends TestCase
 {
@@ -75,6 +79,7 @@ final class AuthenticatedUiTest extends TestCase
         $response->assertOk()
             ->assertSeeHtml('data-testid="ui-shell"')
             ->assertSeeHtml('data-testid="ui-manifest"')
+            ->assertSeeHtml('data-app-slug="test-shell-application"')
             ->assertSeeHtml('data-testid="ui-navigation"');
         $content = (string) $response->getContent();
         $this->assertSame(1, $layoutRenders);
@@ -94,6 +99,102 @@ final class AuthenticatedUiTest extends TestCase
         $this->assertMarker($content, 'ui-nav-managed-transitions', $role === UserRole::Owner);
         $this->assertMarker($content, 'ui-nav-personal-credentials', true);
         $this->assertMarker($content, 'ui-nav-installation-credentials', true);
+    }
+
+    /** @return iterable<string, array{AuthorityMode}> */
+    public static function authorityModeProvider(): iterable
+    {
+        foreach (AuthorityMode::cases() as $mode) {
+            yield $mode->value => [$mode];
+        }
+    }
+
+    #[DataProvider('authorityModeProvider')]
+    public function test_default_null_manifest_renders_the_same_unbranded_shell_for_every_role(AuthorityMode $mode): void
+    {
+        $published = require __DIR__.'/../config/built-for-cloud.php';
+        config([
+            'built-for-cloud.manifest' => $published['manifest'],
+            'built-for-cloud.ui' => $published['ui'],
+        ]);
+        $this->setAuthority($mode);
+        $this->assertNull(app()->make(LandingManifest::class));
+        $layoutRenders = 0;
+        View::composer('bfc::layout', static function () use (&$layoutRenders): void {
+            $layoutRenders++;
+        });
+        $shells = [];
+
+        foreach (UserRole::cases() as $role) {
+            $rendersBeforeRequest = $layoutRenders;
+            $response = $this->actingAsVersioned($this->user(
+                $role,
+                managed: $mode === AuthorityMode::Managed,
+            ))->get('/bfc/ui');
+            $content = (string) $response->getContent();
+
+            $response->assertOk()
+                ->assertSeeHtml('data-testid="ui-shell"')
+                ->assertSeeHtml('data-testid="ui-navigation"')
+                ->assertSeeHtml('<title></title>');
+            $this->assertSame($rendersBeforeRequest + 1, $layoutRenders);
+            $this->assertSame(1, substr_count($content, '<main>'));
+            $this->assertSame(1, substr_count($content, 'data-testid="ui-shell"'));
+            $this->assertStringNotContainsString('data-testid="ui-manifest', $content);
+            $this->assertStringNotContainsString('data-app-slug=', $content);
+            $this->assertStringNotContainsString('data-testid="ui-nav-', $content);
+            $this->assertStringNotContainsString('<header', $content);
+            $this->assertStringNotContainsString('<img', $content);
+            $this->assertStringNotContainsString('<a ', $content);
+            $shells[] = $content;
+        }
+
+        $this->assertCount(1, array_unique($shells));
+    }
+
+    /** @return iterable<string, array{array<string, mixed>, string}> */
+    public static function invalidShellManifestProvider(): iterable
+    {
+        yield 'partial declaration' => [[
+            'name' => 'Test App',
+            'slug' => null,
+            'description' => null,
+            'icon' => null,
+            'product_url' => null,
+        ], '[slug]'];
+
+        yield 'malformed declaration' => [[
+            'name' => 'Test App',
+            'slug' => 'test-app',
+            'description' => 'A test-created app.',
+            'icon' => '/icon.svg',
+            'product_url' => 'https://scalpels.app/products/test-app',
+        ], '[icon]'];
+    }
+
+    /** @param array<string, mixed> $manifest */
+    #[DataProvider('invalidShellManifestProvider')]
+    public function test_partial_or_malformed_shell_manifest_refuses_instead_of_being_omitted(array $manifest, string $field): void
+    {
+        config([
+            'built-for-cloud.manifest' => $manifest,
+            'built-for-cloud.ui.landing_page' => false,
+        ]);
+        $pageRenders = 0;
+        View::composer('bfc::home', static function () use (&$pageRenders): void {
+            $pageRenders++;
+        });
+
+        try {
+            $this->withoutExceptionHandling()
+                ->actingAsVersioned($this->user(UserRole::Member))
+                ->get('/bfc/ui');
+            $this->fail('The invalid manifest was silently omitted.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString($field, $exception->getMessage());
+        }
+
+        $this->assertSame(0, $pageRenders);
     }
 
     /** @return iterable<string, array{UserRole}> */
@@ -182,7 +283,8 @@ final class AuthenticatedUiTest extends TestCase
         /** @var Router $router */
         $router = app('router');
         $middleware = $router->gatherRouteMiddleware($route);
-        $this->assertContains(EnsureUiAuthority::class, $middleware);
+        $this->assertSame(1, count(array_keys($middleware, EnsureUiAuthority::class, true)));
+        // AC7 counts this gate once; it already carries the UI-specific mode-aware intended-login branches.
         $this->assertContains(EnsureUserIsAuthenticated::class, $middleware);
 
         $content = (string) $this->actingAsVersioned($this->user(UserRole::Owner))
@@ -210,7 +312,7 @@ final class AuthenticatedUiTest extends TestCase
         try {
             $this->withoutExceptionHandling()->get('/bfc/ui');
             $this->fail('The late UI takeover was served.');
-        } catch (\RuntimeException $exception) {
+        } catch (RuntimeException $exception) {
             $this->assertStringContainsString('reserved by the built-for-cloud package user interface', $exception->getMessage());
         }
 
@@ -259,7 +361,7 @@ final class AuthenticatedUiTest extends TestCase
         $this->assertSame(0, $pageRenders);
     }
 
-    public function test_no_session_invalid_authority_and_delegated_console_principal_never_render_the_page_action(): void
+    public function test_no_session_and_delegated_console_principal_never_render_the_page_action(): void
     {
         $pageRenders = 0;
         View::composer('bfc::home', static function () use (&$pageRenders): void {
@@ -270,18 +372,6 @@ final class AuthenticatedUiTest extends TestCase
             ->assertRedirect(route('bfc.login', ['intended' => '/bfc/ui']));
         $this->assertSame(0, $pageRenders);
 
-        DB::unprepared('DROP TRIGGER bfc_authority_reject_delete');
-        DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->delete();
-        $this->get('/bfc/ui')->assertNotFound();
-        $this->assertSame(0, $pageRenders);
-
-        DB::table('bfc_authority')->insert([
-            'key' => InstallationAuthority::KEY,
-            'mode' => AuthorityMode::Standalone->value,
-            'generation' => 1,
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
         $entered = $this->post('/bfc/console/enter', consoleHandoff('/bfc/ui'));
         $entered->assertRedirect('/bfc/ui');
         $cookie = $entered->getCookie((string) config('session.cookie'));
@@ -290,6 +380,36 @@ final class AuthenticatedUiTest extends TestCase
             ->get('/bfc/ui')
             ->assertForbidden();
         $this->assertSame(0, $pageRenders);
+    }
+
+    public function test_invalid_authority_has_one_404_gate_and_never_invokes_the_page_action(): void
+    {
+        DB::unprepared('DROP TRIGGER bfc_authority_reject_delete');
+        DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->delete();
+        $pageRenders = 0;
+        View::composer('bfc::home', static function () use (&$pageRenders): void {
+            $pageRenders++;
+        });
+
+        $this->get('/bfc/ui')->assertNotFound();
+        $this->assertSame(0, $pageRenders);
+
+        $nextRuns = 0;
+        try {
+            app(EnsureUiAuthority::class)->handle(
+                Request::create('/bfc/ui'),
+                static function () use (&$nextRuns) {
+                    $nextRuns++;
+
+                    return response('page action ran');
+                },
+            );
+            $this->fail('Invalid authority reached the downstream page action.');
+        } catch (NotFoundHttpException $exception) {
+            $this->assertSame(404, $exception->getStatusCode());
+        }
+
+        $this->assertSame(0, $nextRuns);
     }
 
     private function setAuthority(AuthorityMode $mode): void
