@@ -25,7 +25,7 @@ use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\MintResult;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
-use ArtisanBuild\BuiltForCloud\PersonalSubmissionNonce;
+use ArtisanBuild\BuiltForCloud\SubmissionNonce;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -69,7 +69,7 @@ final class MintCredential
         Subject $subject,
         MintOptions $options,
         ?AuditActor $actor = null,
-        ?PersonalSubmissionNonce $submission = null,
+        ?SubmissionNonce $submission = null,
     ): MintResult {
         $this->validateProtocolBoundary($subject, $options);
 
@@ -140,7 +140,7 @@ final class MintCredential
         Subject $subject,
         MintOptions $options,
         ?AuditActor $actor,
-        ?PersonalSubmissionNonce $submission,
+        ?SubmissionNonce $submission,
     ): MintResult {
         /** @var MintResult */
         return DB::transaction(function () use ($subject, $options, $actor, $submission): MintResult {
@@ -193,7 +193,7 @@ final class MintCredential
         Subject $subject,
         MintOptions $options,
         ?AuditActor $actor,
-        ?PersonalSubmissionNonce $submission,
+        ?SubmissionNonce $submission,
     ): MintResult {
         $ttlSeconds = $options->codeTtlSeconds;
 
@@ -272,7 +272,7 @@ final class MintCredential
         Subject $subject,
         MintOptions $options,
         ?AuditActor $actor,
-        ?PersonalSubmissionNonce $submission,
+        ?SubmissionNonce $submission,
     ): MintResult {
         $ttlSeconds = $options->codeTtlSeconds;
 

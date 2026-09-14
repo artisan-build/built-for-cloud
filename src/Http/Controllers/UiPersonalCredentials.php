@@ -16,7 +16,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\SubmissionNonceRefused;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\Concerns\RevealsDelivery;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
-use ArtisanBuild\BuiltForCloud\PersonalSubmissionNonce;
+use ArtisanBuild\BuiltForCloud\SubmissionNonce;
 use ArtisanBuild\BuiltForCloud\RevokeOutcome;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\UiCredentialPurposes;
@@ -56,7 +56,7 @@ final class UiPersonalCredentials
 
             $submission = $surface->presentedSubmissionNonce(
                 $request,
-                $request->input(PersonalSubmissionNonce::FIELD),
+                $request->input(SubmissionNonce::FIELD),
                 CredentialVerb::Issue,
                 self::ISSUE_TARGET,
             );
@@ -91,7 +91,7 @@ final class UiPersonalCredentials
         try {
             $submission = $surface->presentedSubmissionNonce(
                 $request,
-                $request->input(PersonalSubmissionNonce::FIELD),
+                $request->input(SubmissionNonce::FIELD),
                 CredentialVerb::Rotate,
                 $id,
             );

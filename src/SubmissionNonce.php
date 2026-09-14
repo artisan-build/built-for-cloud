@@ -8,9 +8,9 @@ use ArtisanBuild\BuiltForCloud\Exceptions\SubmissionNonceRefused;
 use Illuminate\Support\Facades\DB;
 
 /**
- * A hash-only, session- and user-bound permit for one personal mutation.
+ * A hash-only, session- and user-bound permit for one credential mutation.
  */
-final readonly class PersonalSubmissionNonce
+final readonly class SubmissionNonce
 {
     public const string FIELD = 'submission_nonce';
 
@@ -28,7 +28,7 @@ final readonly class PersonalSubmissionNonce
     {
         $nonce = bin2hex(random_bytes(32));
 
-        DB::table('bfc_personal_submission_nonces')->insert([
+        DB::table('bfc_submission_nonces')->insert([
             'nonce_hash' => self::hash($nonce),
             'session_hash' => self::hash($sessionId),
             'user_id' => $userId,
@@ -64,7 +64,7 @@ final readonly class PersonalSubmissionNonce
      */
     public function consume(): void
     {
-        $deleted = DB::table('bfc_personal_submission_nonces')
+        $deleted = DB::table('bfc_submission_nonces')
             ->where('nonce_hash', self::hash($this->presented))
             ->where('session_hash', $this->sessionHash)
             ->where('user_id', $this->userId)

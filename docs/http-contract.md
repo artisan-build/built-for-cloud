@@ -1665,10 +1665,18 @@ This surface calls the same unified-store actions described above. Its ownership
 credentials for `application` and `installation` subjects whose `user_id` is null; personal rows
 are neither listed nor accepted as rotate/revoke targets.
 
+Issue and rotation render the installation page directly with the single reveal in the immediate
+POST response. They never redirect delivery or write secret material to session or flash storage.
+Every rendered issue and rotation form carries the same hash-only, session/user/verb/target-bound,
+expiring, single-use submission nonce used by the personal HTML surface. It is consumed in the
+credential mutation transaction. A missing, expired, consumed, foreign-session, wrong-user,
+wrong-verb or wrong-target nonce is **409**, with no credential, audit, outbox, app-action or
+onboarding effect and no delivery. Responses are `private, no-store`; GET responses never reveal
+secret material.
+
 ### GET /bfc/installation/credentials
 
-**200** — `{"credentials": [{"…": "a summary row, exactly as on /bfc/credentials"}]}`,
-oldest first. The response includes all installation-owned rows and no personal rows.
+**200** — render all installation-owned summaries, oldest first, and no personal rows.
 
 ### POST /bfc/installation/credentials
 
@@ -1678,7 +1686,7 @@ and `code_ttl_seconds` fields have the same validation and delivery semantics as
 [`POST /bfc/credentials`](#post-bfccredentials). Any supplied `user_id` is not read; the persisted
 row is unbound from an individual user.
 
-- **201** — `{"credential": {…}, "delivery": {…}}`, including the single reveal.
+- **201** — render the installation page with the single reveal.
 - **403** — the role or declaration denies the operation. **409** — hmac rewrap in progress.
 - **419** — no valid CSRF token. **422** — invalid subject or credential input.
 
@@ -1687,8 +1695,8 @@ row is unbound from an individual user.
 Rotate an installation-owned row by id. Request options, preservation, override, cutover and
 delivery behavior match [`POST /bfc/credentials/{id}/rotate`](#post-bfccredentialsidrotate).
 
-- **201** — replacement summary, `superseded_id` and the single-reveal `delivery`.
-- **200** — cutover completion, including `completed_cutover: true` and `delivery.shape: "none"`.
+- **201** — render the installation page with the replacement's single reveal.
+- **200** — cutover completion with no secret delivery.
 - **404** — no installation-owned row with that id; personal-row existence is not disclosed.
 - **403**, **409**, **419**, **422** and **500** retain the unified rotate meanings above.
 

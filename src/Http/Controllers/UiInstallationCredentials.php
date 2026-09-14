@@ -11,12 +11,14 @@ use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialManagementScope;
+use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\SigningRootRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\SubmissionNonceRefused;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\Concerns\RevealsDelivery;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\RevokeOutcome;
@@ -24,37 +26,33 @@ use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
+use ArtisanBuild\BuiltForCloud\SubmissionNonce;
 use ArtisanBuild\BuiltForCloud\UiCredentialPurposes;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
-use Illuminate\View\View;
 
 final class UiInstallationCredentials
 {
     use RevealsDelivery;
 
-    private const string DELIVERY_SESSION_KEY = 'bfc.ui.installation-credentials.delivery';
+    private const string ISSUE_TARGET = 'installation-credentials';
 
     public function index(
         Request $request,
         ListCredentials $list,
         UiCredentialPurposes $purposes,
-    ): View {
-        $this->actor($request);
-
-        /** @var array<string, string>|null $delivery */
-        $delivery = $request->session()->get(self::DELIVERY_SESSION_KEY);
-
-        return view('bfc::credentials.installation', $this->page($list, $purposes, $delivery));
+    ): Response {
+        return $this->pageResponse($request, $list, $purposes, $this->actor($request));
     }
 
     public function store(
         Request $request,
         MintCredential $mint,
+        ListCredentials $list,
         UiCredentialPurposes $purposes,
-    ): RedirectResponse|Response {
+    ): Response {
         try {
             $actor = $this->actor($request);
             $appPurpose = $request->input('app_purpose');
@@ -65,6 +63,13 @@ final class UiInstallationCredentials
 
             $scope = CredentialManagementScope::memberInstallation();
             $subject = $this->subject($request, $scope);
+            $submission = SubmissionNonce::presented(
+                $request->input(SubmissionNonce::FIELD),
+                $request->session()->getId(),
+                (string) $actor->ref,
+                CredentialVerb::Issue,
+                self::ISSUE_TARGET,
+            );
             $submitted = MintOptions::fromInput($request->only([
                 'kind', 'name', 'expires_at', 'code_ttl_seconds',
             ]));
@@ -74,30 +79,42 @@ final class UiInstallationCredentials
                 name: $submitted->name,
                 expiresAt: $submitted->expiresAt,
                 codeTtlSeconds: $submitted->codeTtlSeconds,
-            ), $actor);
+            ), $actor, $submission);
         } catch (CredentialVerbRefused $refused) {
             return $this->error($refused->getMessage(), 403);
         } catch (InvalidCredentialInput $invalid) {
             return $this->error($invalid->getMessage(), 422);
         } catch (RewrapInProgress $refused) {
             return $this->error($refused->getMessage(), 409);
+        } catch (SubmissionNonceRefused $refused) {
+            return $this->error($refused->getMessage(), 409);
         }
 
-        return redirect()->route('bfc.ui.installation-credentials.index', status: 303)
-            ->with(self::DELIVERY_SESSION_KEY, $this->deliveryPayload($result));
+        return $this->pageResponse($request, $list, $purposes, $actor, $this->deliveryPayload($result), 201);
     }
 
     public function rotate(
         Request $request,
         RotateCredential $rotate,
+        ListCredentials $list,
+        UiCredentialPurposes $purposes,
         string $id,
-    ): RedirectResponse|Response {
+    ): Response {
         try {
+            $actor = $this->actor($request);
+            $submission = SubmissionNonce::presented(
+                $request->input(SubmissionNonce::FIELD),
+                $request->session()->getId(),
+                (string) $actor->ref,
+                CredentialVerb::Rotate,
+                $id,
+            );
             $result = $rotate(
                 $id,
                 RotateOptions::fromInput($request->only(['code_ttl_seconds'])),
-                $this->actor($request),
+                $actor,
                 CredentialManagementScope::memberInstallation(),
+                $submission,
             );
         } catch (CredentialVerbRefused $refused) {
             return $this->error($refused->getMessage(), 403);
@@ -107,14 +124,22 @@ final class UiInstallationCredentials
             return $this->error($refused->getMessage(), 409);
         } catch (RotationCutoverIncomplete $incomplete) {
             return $this->error($incomplete->getMessage(), 500);
+        } catch (SubmissionNonceRefused $refused) {
+            return $this->error($refused->getMessage(), 409);
         }
 
         if ($result === null) {
             abort(404);
         }
 
-        return redirect()->route('bfc.ui.installation-credentials.index', status: 303)
-            ->with(self::DELIVERY_SESSION_KEY, $this->deliveryPayload($result->mint));
+        return $this->pageResponse(
+            $request,
+            $list,
+            $purposes,
+            $actor,
+            $this->deliveryPayload($result->mint),
+            $result->completedCutover ? 200 : 201,
+        );
     }
 
     public function destroy(
@@ -144,8 +169,10 @@ final class UiInstallationCredentials
      * @return array<string, mixed>
      */
     private function page(
+        Request $request,
         ListCredentials $list,
         UiCredentialPurposes $purposes,
+        AuditActor $actor,
         ?array $delivery = null,
     ): array {
         $scope = CredentialManagementScope::memberInstallation();
@@ -165,16 +192,55 @@ final class UiInstallationCredentials
                         'appPurpose' => $appPurpose,
                         'kind' => $kind,
                         'subjectTypes' => $subjectTypes,
+                        'submissionNonce' => SubmissionNonce::issue(
+                            $request->session()->getId(),
+                            (string) $actor->ref,
+                            CredentialVerb::Issue,
+                            self::ISSUE_TARGET,
+                        ),
                     ];
                 }
             }
         }
 
+        $credentials = $list(managementScope: $scope);
+
         return [
-            'credentials' => $list(managementScope: $scope),
+            'credentials' => $credentials,
             'choices' => $choices,
             'delivery' => $delivery,
+            'rotationNonces' => array_reduce(
+                $credentials,
+                function (array $nonces, $credential) use ($request, $actor): array {
+                    $nonces[$credential->id] = SubmissionNonce::issue(
+                        $request->session()->getId(),
+                        (string) $actor->ref,
+                        CredentialVerb::Rotate,
+                        $credential->id,
+                    );
+
+                    return $nonces;
+                },
+                [],
+            ),
         ];
+    }
+
+    /** @param array<string, string>|null $delivery */
+    private function pageResponse(
+        Request $request,
+        ListCredentials $list,
+        UiCredentialPurposes $purposes,
+        AuditActor $actor,
+        ?array $delivery = null,
+        int $status = 200,
+    ): Response {
+        return response()->view(
+            'bfc::credentials.installation',
+            $this->page($request, $list, $purposes, $actor, $delivery),
+            $status,
+            ['Cache-Control' => 'private, no-store'],
+        );
     }
 
     private function subject(Request $request, CredentialManagementScope $scope): Subject
@@ -211,6 +277,6 @@ final class UiInstallationCredentials
             'choices' => [],
             'delivery' => null,
             'error' => $message,
-        ], $status);
+        ], $status, ['Cache-Control' => 'private, no-store']);
     }
 }
