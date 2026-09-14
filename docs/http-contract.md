@@ -148,6 +148,10 @@ with the three things that WOULD have moved the major and none of which happened
 - Persisted abilities are now closed over the documented `OperatorAbility` vocabulary. Claim scopes
   such as `consume` and `onboard` are wire vocabulary, not stored abilities, and unknown ability
   input is rejected before a credential, audit event, or delivery is created.
+- The package now owns one reserved installation signing root, provisioned only by the local
+  `bfc:signing-root:provision --local` command and consumed in-process through `SigningRootMac`.
+  It has no HTTP creation, listing, or mutation surface; its direct-active rotation is
+  make-before-break and exports no root material.
 - New `capabilities` entry `app-action-audit-emit`, and the app-action audit stream's schema and
   emission (Console PRD D17). Additive: no request or response shape changes, and the stream has
   no read transport — see [the app-action audit stream](#the-app-action-audit-stream).
@@ -1224,6 +1228,29 @@ upgrade path for any case that cannot accept it.
 
 Emits an `issued` audit event (ids only, never values) in the mint's own transaction, on both
 transports.
+
+### Reserved installation signing root (no HTTP surface)
+
+The reserved HMAC row is exactly `purpose: "signing_root"`, subject
+`(installation, bfc:signing-root)`, with no abilities. It is created only by
+`bfc:signing-root:provision --local`; the command accepts no identity, key-id, secret, or delivery
+arguments and returns only the credential id plus fixed no-export text. Generic and installation
+management listings exclude it, and generic mint, activation, revoke, offboarding, claim exchange,
+and personal minting cannot create, reveal, or mutate it.
+
+`SigningRootMac::mac(string $bytes)` selects the sole current root internally and returns only
+`{keyId, lowercaseHexMac}`. `SigningRootMac::verify(string $keyId, string $bytes, string $presentedMac)`
+returns only a boolean and accepts the exact named current root or an exact superseded root still in
+its one-hour verification grace. Bytes are opaque; the package adds no JSON encoding, timestamp,
+nonce, audience, or canonicalization. The wire MAC is exactly 64 lowercase hexadecimal characters.
+
+An unchanged call through the public generic rotation action delegates to the dedicated root
+lifecycle. The replacement is direct-active before the source is stamped; new signing therefore has
+no gap. Ordinary rotation keeps old verification through the earlier of one hour or its existing
+expiry, while emergency rotation ends old verification at transaction cutover. Every root mutation
+holds the HMAC writer barrier and the installation authority row lock in one database transaction.
+`bfc:hmac:rewrap` includes root ciphertext in its existing decrypt-then-encrypt step and emits only
+ids, key versions, counts, and fixed outcome text.
 
 ### DELETE /bfc/credentials/{id}
 

@@ -83,6 +83,7 @@ function frozenCredentialClassification(): array
         'command:ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand=bfc:outbox:drain',
         'command:ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand=bfc:ownership:mint-claim',
         'command:ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand=bfc:ownership:remint-owner-token',
+        'command:ArtisanBuild\BuiltForCloud\Commands\SigningRootProvisionCommand=bfc:signing-root:provision',
         'command:ArtisanBuild\BuiltForCloud\Commands\SubjectOffboardCommand=bfc:subject:offboard',
         'command:ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand=bfc:credentials:warn-expiring',
     ]);

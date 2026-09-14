@@ -37,8 +37,10 @@ final class CredentialPathInventory
     /**
      * Derive and compare P5P-AC2's direct resolver callers and ordinary HMAC
      * selectors. This is a syntax inventory, not data-flow analysis: it sees
-     * literal CredentialResolver dependencies/calls and query-builder HMAC
-     * selectors in PHP source, but not aliases assembled dynamically,
+     * literal CredentialResolver dependencies/calls and ordinary query-builder
+     * HMAC selectors in PHP source. The reserved SigningRootMac selectors are
+     * excluded here and independently compared by SigningRootInventory. This
+     * scanner cannot see aliases assembled dynamically,
      * container calls hidden behind wrappers, runtime rebinding, generated
      * code, or host application code. Required purpose tokens are checked at
      * named method or selector-class granularity; this does not prove that
@@ -91,7 +93,8 @@ final class CredentialPathInventory
 
             if (str_contains($record['code'], 'Credential::query()')
                 && str_contains($record['code'], 'CredentialKind::Hmac')
-                && preg_match('/\$this->keyring->decrypt\s*\(/', $record['code']) === 1) {
+                && preg_match('/\$this->keyring->decrypt\s*\(/', $record['code']) === 1
+                && $class !== 'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootMac') {
                 $selectors[] = $class;
             }
         }

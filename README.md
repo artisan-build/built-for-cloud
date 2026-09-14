@@ -166,6 +166,20 @@ php artisan bfc:credential:activate <id> --fingerprint=<fingerprint> --local
 php artisan bfc:credential:revoke <id> --local
 ```
 
+### Installation signing root
+
+`php artisan bfc:signing-root:provision --local` is the sole creation surface for the installation
+signing root. The package derives its reserved identity, creates it directly active, and returns no
+secret or delivery fingerprint. There is no HTTP equivalent, and generic credential mint, activation,
+revocation, offboarding, claim exchange, personal minting, and management listings cannot expose or
+mutate the reserved root.
+
+Application code signs opaque bytes with `SigningRootMac::mac($bytes)`, which returns only the current
+root id and a lowercase HMAC-SHA256 value. `SigningRootMac::verify($keyId, $bytes, $mac)` returns only a
+boolean and admits the named old id solely during rotation grace. Unchanged generic rotation requests
+delegate to the dedicated direct-active lifecycle; emergency rotation ends old verification at cutover.
+The existing `bfc:hmac:rewrap` command includes root ciphertext while keeping output material-free.
+
 ### Ownership bootstrap and recovery
 
 An unclaimed environment mints a one-time ownership claim token during migration and writes the

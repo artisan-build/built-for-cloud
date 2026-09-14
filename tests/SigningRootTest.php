@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Actions\OffboardSubject;
 use ArtisanBuild\BuiltForCloud\Actions\RevokeCredential;
 use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialManagementScope;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
@@ -23,16 +24,18 @@ use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\OffboardOptions;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
+use ArtisanBuild\BuiltForCloud\RevokeOutcome;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
+use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
-uses(RefreshDatabase::class);
+uses(RefreshDatabase::class, DetectsSecretLeaks::class);
 
 function signingRoot(): Credential
 {
@@ -88,6 +91,54 @@ it('MACs opaque bytes with the sole current root and exposes only its id and low
         ->and(app(SigningRootMac::class)->verify((string) Str::uuid(), $bytes, $result->lowercaseHexMac))->toBeFalse()
         ->and(app(SigningRootMac::class)->verify($root->id, $bytes, strtoupper($result->lowercaseHexMac)))->toBeFalse()
         ->and(app(SigningRootMac::class)->verify($root->id, $bytes, 'not-a-mac'))->toBeFalse();
+});
+
+it('keeps root material out of action summary list HTTP CLI and audit surfaces', function (): void {
+    $result = app(SigningRootLifecycle::class)->provision();
+    /** @var Credential $root */
+    $root = Credential::query()->findOrFail($result->summary->id);
+    $plaintext = app(HmacKeyring::class)->decrypt((string) $root->secret_ciphertext, $root->secret_key_version);
+    $mac = $this->assertNoSecretLeakage(
+        $plaintext,
+        fn () => app(SigningRootMac::class)->mac('disclosure inventory bytes'),
+    );
+
+    expect($result->delivery)->toBe(DeliveryShape::None)
+        ->and($result->secret)->toBeNull()
+        ->and($result->deliveryFingerprint)->toBeNull()
+        ->and(array_keys($result->summary->toArray()))->toBe([
+            'id', 'kind', 'purpose', 'subject_type', 'subject_ref', 'name', 'abilities', 'status',
+            'created_at', 'last_used_at', 'expires_at', 'revoked_at', 'rotated_at',
+            'presentation_cadence_seconds', 'unsupported',
+        ])
+        ->and(serialize($result->summary->toArray()))->not->toContain(
+            $plaintext,
+            (string) $root->secret_ciphertext,
+            $mac->lowercaseHexMac,
+        );
+
+    expect(Artisan::call('bfc:credential:list', ['--json' => true, '--local' => true]))->toBe(0);
+    $cli = Artisan::output();
+
+    expect(json_decode($cli, true, flags: JSON_THROW_ON_ERROR))->toBe([])
+        ->and($cli)->not->toContain($root->id, $plaintext, (string) $root->secret_ciphertext, $mac->lowercaseHexMac);
+    $this->assertConsoleOutputCarriesNoSecret($cli, $plaintext);
+
+    $http = $this->getJson('/bfc/credentials', [
+        'Authorization' => 'Bearer '.auditOperatorCredential('root-disclosure-operator'),
+    ])->assertOk();
+    $this->assertResponseCarriesNoSecret($http, $plaintext);
+    expect($http->getContent())->not->toContain($root->id, (string) $root->secret_ciphertext, $mac->lowercaseHexMac);
+
+    $audit = CredentialAuditEvent::query()
+        ->where('credential_id', $root->id)
+        ->get()
+        ->map(static fn (CredentialAuditEvent $event): array => $event->getAttributes())
+        ->all();
+
+    expect($audit)->toHaveCount(1)
+        ->and($audit[0]['note'])->toBeNull()
+        ->and(serialize($audit))->not->toContain($plaintext, (string) $root->secret_ciphertext, $mac->lowercaseHexMac);
 });
 
 it('delegates unchanged public rotation to direct-active make-before-break and verifies the old id only through grace', function (): void {
@@ -162,6 +213,17 @@ it('refuses generic mint activation revoke and offboarding for the reserved root
             'subject_ref' => SigningRootMac::SUBJECT_REF,
         ])))->toThrow(CredentialVerbRefused::class)
         ->and($root->refresh()->revoked_at)->toBeNull();
+});
+
+it('keeps installation-management mutation scopes from selecting the reserved root', function (): void {
+    $root = signingRoot();
+    $before = $root->getAttributes();
+    $scope = CredentialManagementScope::memberInstallation();
+
+    expect(app(RotateCredential::class)($root->id, new RotateOptions, managementScope: $scope))->toBeNull()
+        ->and(app(RevokeCredential::class)($root->id, managementScope: $scope))->toBe(RevokeOutcome::NotFound)
+        ->and($root->refresh()->getAttributes())->toBe($before)
+        ->and(Credential::query()->count())->toBe(1);
 });
 
 it('refuses a claim link to root material before burning the code or decrypting the row', function (): void {
