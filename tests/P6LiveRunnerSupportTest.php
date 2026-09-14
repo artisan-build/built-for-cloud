@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Providers\P6LiveServiceProvider;
 use ArtisanBuild\BuiltForCloud\Testing\P6ArchiveProof;
 use ArtisanBuild\BuiltForCloud\Testing\P6GateCommandLedger;
 use ArtisanBuild\BuiltForCloud\Testing\P6GateContract;
@@ -13,9 +14,13 @@ use ArtisanBuild\BuiltForCloud\Testing\P6SecretLeakDetector;
 use ArtisanBuild\BuiltForCloud\Tests\Support\P6HttpClient;
 use ArtisanBuild\BuiltForCloud\Tests\Support\P6LiveCommandRunner;
 use ArtisanBuild\BuiltForCloud\Tests\Support\P6LiveSecretMaterial;
+use ArtisanBuild\BuiltForCloud\User;
+use Illuminate\Http\Request;
 use ParagonIE\Paseto\Keys\Version4\AsymmetricSecretKey;
 use ParagonIE\Paseto\Protocol\Version4;
 use Symfony\Component\Process\Process;
+
+require_once __DIR__.'/Live/P6LiveServiceProvider.php';
 
 function p6SupportDirectory(): string
 {
@@ -161,6 +166,18 @@ it('encodes actual signing secret bytes for the leak inventory', function (): vo
         ->and(fn () => P6SecretLeakDetector::assertAbsent($surfaces, [$material]))
         ->toThrow(RuntimeException::class, 'cache_state');
 });
+
+it('returns the canonical string session identity from either live node', function (string $node): void {
+    $user = new User;
+    $user->setRawAttributes(['id' => 42]);
+    $request = Request::create('/_bfc-p6c/session');
+    $request->setUserResolver(static fn (): User => $user);
+
+    expect(P6LiveServiceProvider::sessionResponse($request, $node))->toBe([
+        'user_id' => '42',
+        'node' => $node,
+    ]);
+})->with(['a', 'b']);
 
 it('accepts only complete observed PostgreSQL lane evidence', function (string $case): void {
     $path = p6SupportDirectory().'/postgres.json';

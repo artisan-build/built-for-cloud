@@ -24,6 +24,12 @@ use Symfony\Component\HttpKernel\Exception\HttpException;
 
 final class P6LiveServiceProvider extends ServiceProvider
 {
+    /** @return array{user_id: string, node: string} */
+    public static function sessionResponse(Request $request, string $node): array
+    {
+        return ['user_id' => (string) $request->user()?->getAuthIdentifier(), 'node' => $node];
+    }
+
     public function register(): void
     {
         $this->app['config']->set('auth.defaults.guard', 'web');
@@ -129,7 +135,7 @@ final class P6LiveServiceProvider extends ServiceProvider
                 return ['allowed' => app(ManagedFreshness::class)->allows($user)];
             });
             Route::get('/_bfc-p6c/session', static function (Request $request): array {
-                return ['user_id' => $request->user()?->getAuthIdentifier(), 'node' => (string) env('BFC_P6_NODE')];
+                return P6LiveServiceProvider::sessionResponse($request, (string) env('BFC_P6_NODE'));
             })->middleware(['web', 'bfc.auth']);
             Route::post('/_bfc-p6c/session/invalidate', static function (Request $request): array {
                 $user = $request->user();
