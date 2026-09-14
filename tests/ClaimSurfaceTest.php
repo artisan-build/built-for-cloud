@@ -559,6 +559,12 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     // Deliberate: the numbers are cited in ClaimSurfaceScan's docblock,
     // and a cited number that drifts silently is the thing this package
     // exists to prevent. When it reds, update both.
+    //
+    // P5-purpose-a deliberately removed the obsolete absolute-bearing
+    // paragraph that called adminEquivalent() an unenforced inventory.
+    // Its new purpose prose also made one existing absolute block a
+    // residue note, leaving paired fixed while absolute and unpaired each
+    // fell by one.
     $gateSurfaces = [
         'src/Console', 'src/Audit', 'src/Http/Controllers/ConsoleEnter.php',
         'src/Http/Controllers/ConsoleChromeScript.php', 'resources/views', 'resources/js',
@@ -570,9 +576,9 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
         'blocks' => 1347,
-        'absolute' => 423,
+        'absolute' => 422,
         'paired' => 112,
-        'unpaired' => 311,
+        'unpaired' => 310,
     ]);
 
     // The surfaces the restatement map runs over are wider than the
