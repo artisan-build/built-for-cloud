@@ -18,6 +18,9 @@ uses(RefreshDatabase::class, ContractAssertions::class);
 
 beforeEach(function (): void {
     Queue::fake();
+    config(['built-for-cloud.credentials.app_purposes' => [
+        'fixture.consume' => CredentialPurpose::Consumption->value,
+    ]]);
 });
 
 final class AggregateOffendingMcpTool extends Tool
@@ -104,11 +107,13 @@ function packageConformanceExpected(): array
  * @param  list<string>  $runtime
  * @param  list<string>  $capabilities
  * @param  array<string, list<string>>|null  $expected
+ * @param  array<string, CredentialPurpose>|null  $purposeMappings
  */
 function packageConformanceSpec(
     array $runtime = ['auth_schema', 'credential_listing', 'meta', 'transport_parity'],
     array $capabilities = ['credentials', 'tokens'],
     ?array $expected = null,
+    ?array $purposeMappings = null,
 ): ConsumerConformance {
     $root = dirname(__DIR__);
 
@@ -120,7 +125,9 @@ function packageConformanceSpec(
         providerFiles: [$root.'/src/BuiltForCloudServiceProvider.php'],
         runtimeAssertions: $runtime,
         capabilities: $capabilities,
-        purposeMappings: in_array('meta', $runtime, true) ? ['fixture.consume' => CredentialPurpose::Consumption] : [],
+        purposeMappings: in_array('meta', $runtime, true)
+            ? ($purposeMappings ?? ['fixture.consume' => CredentialPurpose::Consumption])
+            : [],
         mcpServer: null,
         expected: $expected ?? packageConformanceExpected(),
     );
@@ -285,6 +292,42 @@ it('does not accept a declared capability without the live meta predicate', func
 
     expect($report->passed)->toBeFalse()
         ->and($report->families['runtime.meta']->violations)->toBe(['assertion-failed:runtime.meta']);
+});
+
+it('observes live purpose mappings without changing purpose config on pass or failure', function (): void {
+    $liveMappings = [
+        'fixture.consume' => CredentialPurpose::Consumption->value,
+        'fixture.unrelated' => CredentialPurpose::Mcp->value,
+    ];
+    config(['built-for-cloud.credentials.app_purposes' => $liveMappings]);
+
+    $passing = (new FleetConformance($this))->inspect(packageConformanceSpec(
+        runtime: ['meta'],
+        capabilities: [],
+    ));
+
+    expect($passing->passed)->toBeTrue()
+        ->and(config('built-for-cloud.credentials.app_purposes'))->toBe($liveMappings);
+
+    $mismatch = (new FleetConformance($this))->inspect(packageConformanceSpec(
+        runtime: ['meta'],
+        capabilities: [],
+        purposeMappings: ['fixture.consume' => CredentialPurpose::Mcp],
+    ));
+
+    expect($mismatch->passed)->toBeFalse()
+        ->and($mismatch->families['runtime.meta']->violations)->toBe(['assertion-failed:runtime.meta'])
+        ->and(config('built-for-cloud.credentials.app_purposes'))->toBe($liveMappings);
+
+    $missing = (new FleetConformance($this))->inspect(packageConformanceSpec(
+        runtime: ['meta'],
+        capabilities: [],
+        purposeMappings: ['fixture.absent' => CredentialPurpose::Consumption],
+    ));
+
+    expect($missing->passed)->toBeFalse()
+        ->and($missing->families['runtime.meta']->violations)->toBe(['assertion-failed:runtime.meta'])
+        ->and(config('built-for-cloud.credentials.app_purposes'))->toBe($liveMappings);
 });
 
 it('rejects every scanner family positive control through the aggregate seam', function (): void {

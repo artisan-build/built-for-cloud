@@ -120,11 +120,6 @@ final readonly class FleetConformance
             throw new \RuntimeException('A required capability predicate is not observable.');
         }
 
-        config()->set('built-for-cloud.credentials.app_purposes', array_map(
-            static fn ($purpose): string => $purpose->value,
-            $spec->purposeMappings,
-        ));
-
         $registry = app(AppPurposeRegistry::class);
         foreach ($spec->purposeMappings as $appPurpose => $purpose) {
             if ($registry->purpose($appPurpose) !== $purpose) {
