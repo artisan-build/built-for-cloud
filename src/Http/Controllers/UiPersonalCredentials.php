@@ -26,19 +26,24 @@ final class UiPersonalCredentials
 {
     use RevealsDelivery;
 
+    private const string DELIVERY_SESSION_KEY = 'bfc.ui.personal-credentials.delivery';
+
     public function index(
         Request $request,
         PersonalCredentialSurface $surface,
         UiCredentialPurposes $purposes,
     ): View {
-        return view('bfc::credentials.personal', $this->page($request, $surface, $purposes));
+        /** @var array<string, string>|null $delivery */
+        $delivery = $request->session()->get(self::DELIVERY_SESSION_KEY);
+
+        return view('bfc::credentials.personal', $this->page($request, $surface, $purposes, $delivery));
     }
 
     public function store(
         Request $request,
         PersonalCredentialSurface $surface,
         UiCredentialPurposes $purposes,
-    ): Response {
+    ): RedirectResponse|Response {
         try {
             $appPurpose = $request->input('app_purpose');
 
@@ -61,12 +66,8 @@ final class UiPersonalCredentials
             return $this->error($refused->getMessage(), 409);
         }
 
-        return response()->view('bfc::credentials.personal', $this->page(
-            $request,
-            $surface,
-            $purposes,
-            $this->deliveryPayload($result),
-        ), 201);
+        return redirect()->route('bfc.ui.personal-credentials.index', status: 303)
+            ->with(self::DELIVERY_SESSION_KEY, $this->deliveryPayload($result));
     }
 
     public function rotate(
@@ -74,7 +75,7 @@ final class UiPersonalCredentials
         PersonalCredentialSurface $surface,
         UiCredentialPurposes $purposes,
         string $id,
-    ): Response {
+    ): RedirectResponse|Response {
         try {
             $result = $surface->rotateMine(
                 $request,
@@ -95,12 +96,8 @@ final class UiPersonalCredentials
             abort(404);
         }
 
-        return response()->view('bfc::credentials.personal', $this->page(
-            $request,
-            $surface,
-            $purposes,
-            $this->deliveryPayload($result->mint),
-        ), $result->completedCutover ? 200 : 201);
+        return redirect()->route('bfc.ui.personal-credentials.index', status: 303)
+            ->with(self::DELIVERY_SESSION_KEY, $this->deliveryPayload($result->mint));
     }
 
     public function destroy(
