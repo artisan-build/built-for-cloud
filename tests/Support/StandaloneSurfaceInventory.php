@@ -24,6 +24,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneMemberships;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\StandalonePasswordRecovery;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneSessions;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\UiInstallationCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiLogout;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiPersonalCredentials;
 use Illuminate\Routing\Route;
@@ -57,6 +58,7 @@ final class StandaloneSurfaceInventory
             StandalonePasswordRecovery::class => true,
             StandaloneSessions::class => true,
             UiHome::class => false,
+            UiInstallationCredentials::class => false,
             UiLogout::class => false,
             UiPersonalCredentials::class => false,
         ];
