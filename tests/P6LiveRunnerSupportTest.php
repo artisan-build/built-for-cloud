@@ -37,6 +37,19 @@ it('bootstraps a fresh Laravel host without dependency installation or skeleton 
     ])->and($command)->toContain('--no-install', '--no-scripts');
 });
 
+it('installs the package archive without running scripts before fixture registration', function (): void {
+    $command = P6LiveCommandRunner::archiveInstallCommand();
+
+    expect($command)->toBe([
+        'composer',
+        'update',
+        '--no-interaction',
+        '--prefer-dist',
+        '--no-scripts',
+    ])->and($command)->toContain('--no-scripts')
+        ->and($command)->not->toContain('--no-install');
+});
+
 it('reports only a controlled stage label when a non-sensitive command fails', function (): void {
     $process = new Process([PHP_BINARY, __DIR__.'/Fixtures/p6-live-command-failure.php']);
     $process->run();

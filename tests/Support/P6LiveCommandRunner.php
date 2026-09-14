@@ -24,6 +24,18 @@ final class P6LiveCommandRunner
         ];
     }
 
+    /** @return list<string> */
+    public static function archiveInstallCommand(): array
+    {
+        return [
+            'composer',
+            'update',
+            '--no-interaction',
+            '--prefer-dist',
+            '--no-scripts',
+        ];
+    }
+
     /**
      * @param  list<string>  $command
      * @param  array<string, string>  $environment

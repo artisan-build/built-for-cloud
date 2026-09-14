@@ -356,7 +356,7 @@ try {
     $composer['require']['artisan-build/built-for-cloud'] = '0.0.0+p6c.'.$candidateSha;
     file_put_contents($composerPath, json_encode($composer, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)."\n");
     @unlink($host.'/composer.lock');
-    p6LiveRun(['composer', 'update', '--no-interaction', '--prefer-dist'], $host, [], 'fresh host archive install', $arguments, $outputs);
+    p6LiveRun(P6LiveCommandRunner::archiveInstallCommand(), $host, [], 'fresh host archive install', $arguments, $outputs);
     $lock = p6LiveJson((string) file_get_contents($host.'/composer.lock'), 'fresh host composer.lock');
     $installedVersion = P6ArchiveProof::assertInstalled($lock, $candidateSha, $archivePath);
 
