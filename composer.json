@@ -5,6 +5,7 @@
     "license": "MIT",
     "type": "library",
     "require": {
+        "composer/semver": "^3.4",
         "php": "^8.3",
         "illuminate/auth": "^13.24",
         "illuminate/console": "^13.24",

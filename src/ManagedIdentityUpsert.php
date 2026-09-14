@@ -58,8 +58,7 @@ final class ManagedIdentityUpsert
                     continue;
                 }
 
-                if ($exception instanceof UniqueConstraintViolationException
-                    || $this->isIntegrityConstraintViolation($exception)) {
+                if ($exception instanceof UniqueConstraintViolationException) {
                     throw new ManagedAuthRefused(previous: $exception);
                 }
 
@@ -187,10 +186,4 @@ final class ManagedIdentityUpsert
         ], true);
     }
 
-    private function isIntegrityConstraintViolation(QueryException $exception): bool
-    {
-        $sqlState = $exception->errorInfo[0] ?? $exception->getCode();
-
-        return str_starts_with((string) $sqlState, '23');
-    }
 }
