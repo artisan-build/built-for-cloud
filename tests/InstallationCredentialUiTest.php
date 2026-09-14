@@ -157,7 +157,11 @@ final class InstallationCredentialUiTest extends TestCase
             $kind === CredentialKind::Asymmetric
                 ? ['code_ttl_seconds' => 120, 'abilities' => [OperatorAbility::Admin->value], 'emergency' => true]
                 : ['abilities' => [OperatorAbility::Admin->value], 'emergency' => true],
-        )->assertCreated()->assertSeeHtml('data-testid="installation-credentials-delivery"');
+        )->assertRedirect(route('bfc.ui.installation-credentials.index'))
+            ->assertStatus(303);
+        $rotate = $this->get(route('bfc.ui.installation-credentials.index'))
+            ->assertOk()
+            ->assertSeeHtml('data-testid="installation-credentials-delivery"');
         $replacement = Credential::query()->where('name', $source->name)->whereKeyNot($source->id)->sole();
         $rotationSecret = $this->deliverySecret($rotate, $kind);
         $this->assertImmediateReveal($rotate, $rotationSecret);
@@ -277,7 +281,7 @@ final class InstallationCredentialUiTest extends TestCase
         ])->assertForbidden()->assertDontSeeHtml('data-testid="installation-credentials-delivery"');
         $this->assertSame($before, $this->effects());
 
-        $response = $this->post(route('bfc.ui.installation-credentials.store'), [
+        $this->post(route('bfc.ui.installation-credentials.store'), [
             'app_purpose' => 'test.deploy',
             'kind' => CredentialKind::Bearer->value,
             'subject_type' => SubjectType::Application->value,
@@ -287,14 +291,17 @@ final class InstallationCredentialUiTest extends TestCase
             'user_id' => (string) $actor->getKey(),
             'root' => SigningRootMac::SUBJECT_REF,
             'name' => 'raw-fields-ignored',
-        ])->assertCreated();
+        ])->assertRedirect(route('bfc.ui.installation-credentials.index'))
+            ->assertStatus(303);
         $credential = Credential::query()->where('name', 'raw-fields-ignored')->sole();
         $this->assertSame(CredentialPurpose::SystemDeployment, $credential->purpose);
         $this->assertNull($credential->abilities);
         $this->assertNull($credential->user_id);
         $this->assertSame(SubjectType::Application, $credential->subject_type);
         $this->assertSame('raw-fields-ignored', $credential->subject_ref);
-        $response->assertSeeHtml('data-testid="installation-credentials-delivery"');
+        $this->get(route('bfc.ui.installation-credentials.index'))
+            ->assertOk()
+            ->assertSeeHtml('data-testid="installation-credentials-delivery"');
     }
 
     public function test_unknown_role_refuses_every_browser_verb_without_effect(): void
@@ -339,7 +346,8 @@ final class InstallationCredentialUiTest extends TestCase
                 'subject_type' => SubjectType::Installation->value,
                 'subject_ref' => 'flag-'.($enabled ? 'on' : 'off'),
                 'name' => 'flag-'.($enabled ? 'on' : 'off'),
-            ])->assertCreated()->assertSeeHtml('data-testid="installation-credentials-delivery"');
+            ])->assertRedirect(route('bfc.ui.installation-credentials.index'))
+                ->assertStatus(303);
             $observed[] = [
                 'delta' => array_map(
                     static fn (int $count, string $key): int => $count - $before[$key],
@@ -348,9 +356,60 @@ final class InstallationCredentialUiTest extends TestCase
                 ),
                 'status' => $response->getStatusCode(),
             ];
+            $this->get(route('bfc.ui.installation-credentials.index'))
+                ->assertOk()
+                ->assertSeeHtml('data-testid="installation-credentials-delivery"');
         }
 
         $this->assertSame($observed[0], $observed[1]);
+    }
+
+    public function test_issue_and_rotate_delivery_survives_one_redirected_get_without_repeat_effects(): void
+    {
+        $actor = $this->user(UserRole::Member);
+        $this->actingAsVersioned($actor, 'web');
+
+        $this->post(route('bfc.ui.installation-credentials.store'), [
+            'app_purpose' => 'test.deploy',
+            'kind' => CredentialKind::Bearer->value,
+            'subject_type' => SubjectType::Installation->value,
+            'subject_ref' => 'test-created-refresh-proof',
+            'name' => 'test-created-refresh-proof',
+        ])->assertRedirect(route('bfc.ui.installation-credentials.index'))
+            ->assertStatus(303)
+            ->assertDontSeeHtml('data-testid="installation-credentials-delivery"');
+
+        $afterIssue = $this->effects();
+        $issueDelivery = $this->get(route('bfc.ui.installation-credentials.index'))
+            ->assertOk()
+            ->assertSeeHtml('data-testid="installation-credentials-delivery"');
+        $issueSecret = $this->deliverySecret($issueDelivery, CredentialKind::Bearer);
+        $this->assertSame($afterIssue, $this->effects());
+
+        $this->get(route('bfc.ui.installation-credentials.index'))
+            ->assertOk()
+            ->assertDontSeeHtml('data-testid="installation-credentials-delivery"')
+            ->assertDontSee($issueSecret);
+        $this->assertSame($afterIssue, $this->effects());
+
+        $issued = Credential::query()->where('name', 'test-created-refresh-proof')->sole();
+        $this->post(route('bfc.ui.installation-credentials.rotate', $issued->id))
+            ->assertRedirect(route('bfc.ui.installation-credentials.index'))
+            ->assertStatus(303)
+            ->assertDontSeeHtml('data-testid="installation-credentials-delivery"');
+
+        $afterRotate = $this->effects();
+        $rotateDelivery = $this->get(route('bfc.ui.installation-credentials.index'))
+            ->assertOk()
+            ->assertSeeHtml('data-testid="installation-credentials-delivery"');
+        $rotationSecret = $this->deliverySecret($rotateDelivery, CredentialKind::Bearer);
+        $this->assertSame($afterRotate, $this->effects());
+
+        $this->get(route('bfc.ui.installation-credentials.index'))
+            ->assertOk()
+            ->assertDontSeeHtml('data-testid="installation-credentials-delivery"')
+            ->assertDontSee($rotationSecret);
+        $this->assertSame($afterRotate, $this->effects());
     }
 
     public function test_every_refusal_retains_zero_effect_with_all_flags_off_and_no_ui_purposes(): void
@@ -490,13 +549,16 @@ final class InstallationCredentialUiTest extends TestCase
             ];
         }
 
-        $response = $this->actingAsVersioned($actor, 'web')
+        $this->actingAsVersioned($actor, 'web')
             ->post(route('bfc.ui.installation-credentials.store'), $payload)
-            ->assertCreated()
+            ->assertRedirect(route('bfc.ui.installation-credentials.index'))
+            ->assertStatus(303);
+        $delivery = $this->get(route('bfc.ui.installation-credentials.index'))
+            ->assertOk()
             ->assertSeeHtml('data-testid="installation-credentials-delivery"');
         $credential = Credential::query()->where('name', $name)->sole();
 
-        return [$credential, $this->deliverySecret($response, $kind), $response];
+        return [$credential, $this->deliverySecret($delivery, $kind), $delivery];
     }
 
     private function prepareForUse(Credential $credential, TestResponse $delivery): void
