@@ -304,8 +304,7 @@ final readonly class PersonalCredentialSurface
         MintOptions $options,
         Subject $subject,
         CredentialPurpose $purpose,
-    ): MintOptions
-    {
+    ): MintOptions {
         $policy = $this->declaration();
         $policy = $policy instanceof DeclaresSelfServiceMintPolicy ? $policy : null;
 

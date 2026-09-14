@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
-use ArtisanBuild\BuiltForCloud\CredentialKind;
-use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
