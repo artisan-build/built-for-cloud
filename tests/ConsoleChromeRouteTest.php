@@ -5,6 +5,7 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\BuiltForCloudServiceProvider;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\LandingPage;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Tests\ConsoleChromeRouteScan;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnguardedChromeController;
@@ -160,7 +161,10 @@ it('accounts for every file in src containing the literal bfc:: substring in cod
     expect(ConsoleChromeRouteScan::countPhpFiles($src))->toBeGreaterThan(100);
 
     expect(ConsoleChromeRouteScan::viewReferencesIn($src))
-        ->toBe([basename((string) (new ReflectionClass(BuiltForCloudServiceProvider::class))->getFileName())]);
+        ->toBe([
+            basename((string) (new ReflectionClass(BuiltForCloudServiceProvider::class))->getFileName()),
+            'Http/Controllers/'.basename((string) (new ReflectionClass(LandingPage::class))->getFileName()),
+        ]);
 });
 
 it('serves the interceptor to a delegated session and the structured 401 to nobody', function (): void {
