@@ -112,6 +112,8 @@ because a reader applying rule 1 to their own change needs the real list:
   response keys included, so a consumer pinned to the pre-Console shape sees identical keys.
 - **Machinery that is not a route at all** — the `bfc-console` guard, the delegated-actor table and
   the app-action emission point serve no new wire shape and change none.
+- **Owner transition recovery** — an Owner may abandon a guided transition before local commit,
+  releasing the installation's active transition slot so preparation can restart from fresh authority data.
 
 - **Request-scoped delegated MCP authentication ships.** `AuthenticateMcp` accepts either a
   unified bearer credential or a purpose-bound Console assertion, burns assertions before dispatch,
@@ -447,6 +449,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/transitions/{direction}/prepare` | `metadata` | redirect after preparing and persisting a default proposal |
 | `GET /bfc/transitions/proposals/{transition}` | `content` | package-owned HTML containing authority-roster and local-identity data |
 | `PUT /bfc/transitions/proposals/{transition}` | `metadata` | redirect after replacing the persisted proposal mapping |
+| `POST /bfc/transitions/proposals/{transition}/abandon` | `metadata` | redirect after abandoning a pre-commit transition and releasing its active slot |
 | `POST /bfc/transitions/proposals/{transition}/complete` | `metadata` | redirect after resuming the transition through commit and acknowledgment |
 | `GET /bfc/me/sessions` | `content` | package-owned HTML containing caller-owned session metadata |
 | `DELETE /bfc/me/sessions/others` | `metadata` | redirect after caller-owned session deletion |
@@ -983,10 +986,10 @@ complete default proposal before redirecting to its review page.
 
 ### GET /bfc/transitions/proposals/{transition}
 
-Owner alone may review a proposal that remains in `proposed` state. Adoption presents authority roles
-as fixed while allowing local match, commit timing, and final-email corrections. Exit presents every
-roster subject, local user, and pending invitation while allowing standalone role, match, disposition,
-and final-email corrections where those fields apply.
+Owner alone may review a proposal from `prepared` through the durable completion states. Adoption
+presents authority roles as fixed while allowing local match, commit timing, and final-email corrections.
+Exit presents every roster subject, local user, and pending invitation while allowing standalone role,
+match, disposition, and final-email corrections where those fields apply.
 
 ### PUT /bfc/transitions/proposals/{transition}
 
@@ -1000,6 +1003,12 @@ mapping to T3.
 
 Owner alone may resume a persisted proposal through staging, local commit, and acknowledgment. Retries
 continue from the transition's durable status rather than blindly replaying a mutating authority leg.
+
+### POST /bfc/transitions/proposals/{transition}/abandon
+
+Owner alone may abandon a transition in `prepared`, `rostered`, `proposed`, `staging`, or `staged`
+state. The package sends the persisted idempotent abandon request to the authority, marks the local
+attempt abandoned, and releases the installation's active transition slot so a fresh preparation can begin.
 
 ### GET /bfc/me/sessions
 
