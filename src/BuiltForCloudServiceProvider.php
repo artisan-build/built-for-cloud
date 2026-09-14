@@ -59,6 +59,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\UiLogout;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiPersonalCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureContractMajor;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
@@ -83,6 +84,8 @@ use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Contracts\Bus\Dispatcher as BusDispatcherContract;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
+use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Contracts\Session\Session;
 use Illuminate\Contracts\View\View as ViewContract;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
@@ -259,6 +262,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router = $this->app['router'];
 
             $router->aliasMiddleware('bfc.auth', EnsureUserIsAuthenticated::class);
+            $router->aliasMiddleware('bfc.contract-major', EnsureContractMajor::class);
             $router->aliasMiddleware('bfc.admin', EnsureUserIsAdmin::class);
             $router->aliasMiddleware('bfc.credential.admin', EnsureCredentialAdmin::class);
             $router->aliasMiddleware('bfc.ability', EnsureCredentialAbility::class);
@@ -275,6 +279,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router->aliasMiddleware('bfc.console', EnsureConsoleSession::class);
             $router->aliasMiddleware('bfc.mcp', AuthenticateMcp::class);
             $router->aliasMiddleware('bfc.standalone', EnsureStandaloneAuthority::class);
+            $this->prioritizeContractMajorAdmission();
 
             // These convenience aliases remain public. Package operator routes
             // verify their resolved gate on match, and each final operator
@@ -312,6 +317,31 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 __DIR__.'/../resources/views' => $this->app->resourcePath('views/vendor/bfc'),
             ], 'built-for-cloud-views');
         }
+    }
+
+    /** Keep opt-in contract admission ahead of every package authentication gate. */
+    private function prioritizeContractMajorAdmission(): void
+    {
+        $this->callAfterResolving(Kernel::class, static function (Kernel $kernel): void {
+            $packagePriority = [
+                EnsureContractMajor::class,
+                EnsureManagedAuthority::class,
+                EnsureStandaloneAuthority::class,
+                EnsureConsoleSession::class,
+                AuthenticateMcp::class,
+                VerifyHmacSignature::class,
+                EnsureDashboardCredential::class,
+                EnsureCredentialAdmin::class,
+                EnsureCredentialAbility::class,
+                EnsureUserIsAuthenticated::class,
+                EnsureUserIsAdmin::class,
+            ];
+            $priority = array_values(array_diff($kernel->getMiddlewarePriority(), $packagePriority));
+            $offset = array_search(AuthenticatesRequests::class, $priority, true);
+
+            array_splice($priority, $offset === false ? count($priority) : $offset, 0, $packagePriority);
+            $kernel->setMiddlewarePriority($priority);
+        });
     }
 
     /**

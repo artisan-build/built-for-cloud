@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\AuditActor;
+use ArtisanBuild\BuiltForCloud\HttpContract;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
@@ -80,8 +81,6 @@ final class ConsoleVitals extends OperatorRouteController
      * Absent means "no expectation stated"; a value that is not exactly
      * this app's major degrades the payload instead of refusing it.
      */
-    public const string CONTRACT_VERSION_HEADER = 'BFC-Contract-Version';
-
     public function __invoke(Request $request, CollectVitals $collect): JsonResponse
     {
         DB::transaction(function () use ($request): void {
@@ -94,7 +93,7 @@ final class ConsoleVitals extends OperatorRouteController
             );
         });
 
-        return response()->json($collect($request->header(self::CONTRACT_VERSION_HEADER))->toArray());
+        return response()->json($collect($request->header(HttpContract::MAJOR_HEADER))->toArray());
     }
 
     /**
