@@ -245,7 +245,7 @@ it('compares the exact AC2 resolver and ordinary HMAC purpose dispositions', fun
         ->and($inventory['dispositions'])->toBe(frozenPurposeDispositions());
 });
 
-it('fails AC2 comparison for purpose-omitting resolver and HMAC selector controls', function (): void {
+it('fails AC2 comparison for identity drift and purpose-omitting caller and HMAC controls', function (): void {
     $root = sys_get_temp_dir().'/bfc-purpose-controls-'.bin2hex(random_bytes(8));
     $namespace = 'ArtisanBuild\\BuiltForCloud\\Tests\\PurposeControls';
 
@@ -288,6 +288,48 @@ PHP);
         'unexpected-hmac-selector:'.$namespace.'\\PurposeOmittedHmacSelector',
         'missing-signing-purpose:'.$namespace.'\\PurposeOmittedHmacSelector',
     );
+
+    $writeAdminShadow = static function (string $directory, bool $withPurpose): void {
+        mkdir($directory, 0777, true);
+        $purposeCheck = $withPurpose
+            ? <<<'PHP'
+        if ($credential->purpose !== CredentialPurpose::OperatorManagement) {
+            abort(401);
+        }
+PHP
+            : '';
+
+        file_put_contents($directory.'/EnsureCredentialAdmin.php', <<<PHP
+<?php
+namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
+use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
+final class EnsureCredentialAdmin
+{
+    public function __construct(private CredentialResolver \$resolver) {}
+    public function handle(string \$secret): mixed
+    {
+        \$credential = \$this->resolver->resolve(CredentialKind::Bearer, \$secret);
+{$purposeCheck}
+        \$this->recordUsage(\$credential);
+        return \$credential;
+    }
+}
+PHP);
+    };
+
+    $intactRoot = $root.'/intact';
+    $omittedRoot = $root.'/omitted';
+    $writeAdminShadow($intactRoot, true);
+    $writeAdminShadow($omittedRoot, false);
+
+    expect(CredentialPathInventory::comparePurposePolicy(dirname(__DIR__).'/src', [$intactRoot])['violations'])
+        ->toBe([])
+        ->and(CredentialPathInventory::comparePurposePolicy(dirname(__DIR__).'/src', [$omittedRoot])['violations'])
+        ->toBe([
+            'missing-purpose-rule:ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCredentialAdmin::handle',
+        ]);
 });
 
 it('reports a second credential store across query forms', function (string $query): void {

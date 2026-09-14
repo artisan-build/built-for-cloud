@@ -40,7 +40,10 @@ final class CredentialPathInventory
      * literal CredentialResolver dependencies/calls and query-builder HMAC
      * selectors in PHP source, but not aliases assembled dynamically,
      * container calls hidden behind wrappers, runtime rebinding, generated
-     * code, or host application code.
+     * code, or host application code. Required purpose tokens are checked at
+     * named method or selector-class granularity; this does not prove that
+     * every resolve expression, enforcement predicate, or selection query is
+     * individually guarded. Behavioral tests own those per-path order claims.
      *
      * @param  list<string>  $additionalRoots
      * @return array{
