@@ -164,6 +164,7 @@ $exemptFromCitation = [
     'resources/views/auth/reset-password.blade.php' => 'package form template; structural rendering and request-owned data are driven by StandaloneHumanLifecycleTest',
     'resources/views/auth/sessions.blade.php' => 'package form template; structural rendering and test-created sessions are driven by StandaloneDatabaseSessionsTest',
     'resources/views/auth/styles.blade.php' => 'presentation-only shared CSS with no security guarantee',
+    'resources/views/credentials/personal.blade.php' => 'package form template; structural rendering and request-owned data are driven by PersonalCredentialUiTest',
     'resources/views/home.blade.php' => 'package UI shell template; structural rendering, escaped test-created manifest values, and role navigation are driven by AuthenticatedUiTest',
     'resources/views/landing.blade.php' => 'package landing template; package-layout use, structural rendering, and escaped test-created manifest values are driven by LandingPageTest',
     'src/Audit/AppActionEventBuilder.php' => 'a two-line binding of the shared AppendOnlyBuilder to one model; it adds and overrides nothing, and every claim is on the base',

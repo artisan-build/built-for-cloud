@@ -33,6 +33,11 @@ final class SelfServiceUnavailable extends RuntimeException
         );
     }
 
+    public static function noLocalUserIdentifier(): self
+    {
+        return new self('The authenticated session has no usable local user identifier, so the personal-credentials surface refuses it.');
+    }
+
     /**
      * A DELEGATED console session is on this request (Console PRD D14),
      * and this surface can only act as the authenticated local human.

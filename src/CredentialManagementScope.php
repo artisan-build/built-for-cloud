@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
+use ArtisanBuild\BuiltForCloud\Contracts\DeclaresSelfServiceMintPolicy;
+use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -21,6 +24,9 @@ final readonly class CredentialManagementScope
         private CredentialOwnership $ownership,
         private array $subjectTypes,
         private array $excludedAbilities,
+        private ?Subject $subject = null,
+        private ?string $userId = null,
+        private bool $selfService = false,
     ) {}
 
     public static function memberInstallation(): self
@@ -29,6 +35,18 @@ final readonly class CredentialManagementScope
             CredentialOwnership::Installation,
             [SubjectType::Application->value, SubjectType::Installation->value],
             OperatorAbility::vocabulary(),
+        );
+    }
+
+    public static function personal(Subject $subject, string $userId): self
+    {
+        return new self(
+            CredentialOwnership::Account,
+            [$subject->type->value],
+            [],
+            $subject,
+            $userId,
+            true,
         );
     }
 
@@ -52,6 +70,14 @@ final readonly class CredentialManagementScope
 
         $query->whereIn('subject_type', $this->subjectTypes);
 
+        if ($this->subject !== null) {
+            $query->where('subject_ref', $this->subject->ref);
+        }
+
+        if ($this->userId !== null) {
+            $query->where('user_id', $this->userId);
+        }
+
         foreach ($this->excludedAbilities as $ability) {
             $query->where(static function (Builder $query) use ($ability): void {
                 $query->whereNull('abilities')
@@ -66,5 +92,37 @@ final readonly class CredentialManagementScope
     public function firstExcludedAbility(?array $abilities): ?string
     {
         return array_values(array_intersect($abilities ?? [], $this->excludedAbilities))[0] ?? null;
+    }
+
+    public function assertRotationAllowed(Credential $credential): void
+    {
+        if (! $this->selfService) {
+            return;
+        }
+
+        $declaration = app(CredentialDeclaration::class);
+
+        if ($declaration instanceof DeclaresSelfServiceMintPolicy) {
+            $kinds = $declaration->selfServiceKinds($credential->subject());
+            $abilities = $declaration->selfServiceAbilities($credential->subject());
+        } else {
+            $kinds = [CredentialKind::Bearer];
+            $abilities = [];
+        }
+
+        if (! in_array($credential->kind, $kinds, true)) {
+            throw CredentialVerbRefused::selfServiceKind($credential->kind);
+        }
+
+        $abilities = array_values(array_filter(
+            $abilities,
+            static fn (string $ability): bool => trim($ability) !== '',
+        ));
+
+        foreach ($credential->abilities ?? [] as $ability) {
+            if (! in_array($ability, $abilities, true)) {
+                throw CredentialVerbRefused::abilityWidening($ability);
+            }
+        }
     }
 }

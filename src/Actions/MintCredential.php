@@ -25,6 +25,7 @@ use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\MintResult;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
+use ArtisanBuild\BuiltForCloud\PersonalSubmissionNonce;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -64,8 +65,12 @@ final class MintCredential
 
     public function __construct(private readonly LifecycleEventRecorder $recorder) {}
 
-    public function __invoke(Subject $subject, MintOptions $options, ?AuditActor $actor = null): MintResult
-    {
+    public function __invoke(
+        Subject $subject,
+        MintOptions $options,
+        ?AuditActor $actor = null,
+        ?PersonalSubmissionNonce $submission = null,
+    ): MintResult {
         $this->validateProtocolBoundary($subject, $options);
 
         if (! $this->verbAllowed(CredentialVerb::Issue, $subject)) {
@@ -77,9 +82,9 @@ final class MintCredential
 
         return match ($options->kind) {
             CredentialKind::Bearer,
-            CredentialKind::Basic => $this->mintSecretBearing($subject, $options, $actor),
-            CredentialKind::Asymmetric => $this->mintEnrollment($subject, $options, $actor),
-            CredentialKind::Hmac => $this->mintSigningKey($subject, $options, $actor),
+            CredentialKind::Basic => $this->mintSecretBearing($subject, $options, $actor, $submission),
+            CredentialKind::Asymmetric => $this->mintEnrollment($subject, $options, $actor, $submission),
+            CredentialKind::Hmac => $this->mintSigningKey($subject, $options, $actor, $submission),
         };
     }
 
@@ -131,10 +136,15 @@ final class MintCredential
      * `bearer` and `basic`: a secret is generated, its sha256 is what the
      * store keeps, and the plaintext exists only inside the carrier.
      */
-    private function mintSecretBearing(Subject $subject, MintOptions $options, ?AuditActor $actor): MintResult
-    {
+    private function mintSecretBearing(
+        Subject $subject,
+        MintOptions $options,
+        ?AuditActor $actor,
+        ?PersonalSubmissionNonce $submission,
+    ): MintResult {
         /** @var MintResult */
-        return DB::transaction(function () use ($subject, $options, $actor): MintResult {
+        return DB::transaction(function () use ($subject, $options, $actor, $submission): MintResult {
+            $submission?->consume();
             $secret = new MintedSecret(
                 (string) config('built-for-cloud.token_prefix').bin2hex(random_bytes(32)),
             );
@@ -179,8 +189,12 @@ final class MintCredential
      * the client-generated public key against the pending row); until then
      * the code is issued and revocable but completes no enrollment.
      */
-    private function mintEnrollment(Subject $subject, MintOptions $options, ?AuditActor $actor): MintResult
-    {
+    private function mintEnrollment(
+        Subject $subject,
+        MintOptions $options,
+        ?AuditActor $actor,
+        ?PersonalSubmissionNonce $submission,
+    ): MintResult {
         $ttlSeconds = $options->codeTtlSeconds;
 
         // Input bounds, enforced in the ACTION so both transports reject
@@ -191,7 +205,8 @@ final class MintCredential
         }
 
         /** @var MintResult */
-        return DB::transaction(function () use ($subject, $options, $actor, $ttlSeconds): MintResult {
+        return DB::transaction(function () use ($subject, $options, $actor, $ttlSeconds, $submission): MintResult {
+            $submission?->consume();
             $credential = Credential::query()->create([
                 'kind' => CredentialKind::Asymmetric,
                 'purpose' => $options->purpose,
@@ -253,8 +268,12 @@ final class MintCredential
      * exchange delivers the pending key exactly once, audits the
      * delivery, and changes NOTHING about signing state.
      */
-    private function mintSigningKey(Subject $subject, MintOptions $options, ?AuditActor $actor): MintResult
-    {
+    private function mintSigningKey(
+        Subject $subject,
+        MintOptions $options,
+        ?AuditActor $actor,
+        ?PersonalSubmissionNonce $submission,
+    ): MintResult {
         $ttlSeconds = $options->codeTtlSeconds;
 
         if ($ttlSeconds !== null && ($ttlSeconds < self::CODE_TTL_MIN_SECONDS || $ttlSeconds > self::CODE_TTL_MAX_SECONDS)) {
@@ -270,7 +289,8 @@ final class MintCredential
         // check ahead of the sweep nor COMMIT an old-version row after
         // the rewrap's verified zero-count.
         /** @var MintResult */
-        return app(HmacWriterBarrier::class)->exclusive('minting', fn (): MintResult => DB::transaction(function () use ($subject, $options, $actor, $ttlSeconds, $keyring): MintResult {
+        return app(HmacWriterBarrier::class)->exclusive('minting', fn (): MintResult => DB::transaction(function () use ($subject, $options, $actor, $ttlSeconds, $keyring, $submission): MintResult {
+            $submission?->consume();
             $signingKey = bin2hex(random_bytes(32));
             $encrypted = $keyring->encrypt($signingKey);
 

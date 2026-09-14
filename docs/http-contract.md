@@ -462,6 +462,10 @@ server-generated operational text and — per the single-reveal rule above — n
 | `GET /bfc/me/credentials` | `content` | the caller's own summary rows carry free-text names and subject refs, plus the declaration's field lists |
 | `POST /bfc/me/credentials` | `content` | the `delivery` single reveal, plus free-text name/subject fields |
 | `DELETE /bfc/me/credentials/{id}` | `metadata` | empty `204` body |
+| `GET /bfc/ui/credentials/personal` | `content` | package-owned HTML containing the caller's own credential summaries and declared fields |
+| `POST /bfc/ui/credentials/personal` | `content` | package-owned HTML containing the `delivery` single reveal and free-text credential fields |
+| `POST /bfc/ui/credentials/personal/{id}/rotate` | `content` | package-owned HTML containing the `delivery` single reveal and credential summaries |
+| `DELETE /bfc/ui/credentials/personal/{id}` | `content` | redirect after caller-owned credential revocation |
 | `GET /bfc/installation/credentials` | `content` | installation-owned summary rows carry free-text names and subject refs |
 | `POST /bfc/installation/credentials` | `content` | the `delivery` single reveal, plus free-text name/subject fields |
 | `POST /bfc/installation/credentials/{id}/rotate` | `content` | the `delivery` single reveal, plus a summary row carrying free-text names and subject refs |
@@ -1466,10 +1470,11 @@ person:
 
 Consequently, and each of these is a named negative test in the package's suite:
 
-- the listing returns only the caller's own rows — another user's rows are not filtered out of a
-  rendered answer, they are never fetched;
+- the listing returns only rows whose derived subject **and stored `user_id`** match the caller —
+  another local user's rows remain inaccessible even when a declaration maps both users to the
+  same subject;
 - a mint binds to the session-derived subject, never to a crafted one;
-- a revoke acts only inside the caller's own subject; an id belonging to someone else answers
+- a revoke acts only inside the caller's own subject and exact stored `user_id`; an id belonging to someone else answers
   **404**, the same answer an id that never existed gets. This is deliberate: a `403` would
   confirm that another user's credential exists, which is a disclosure a `404` does not make.
 
@@ -1615,6 +1620,38 @@ Revoke one of the caller's own credentials, by id.
 - **403** — `{"message": "..."}`: no resolvable subject, or the declaration's `revoke` verb denies
   it for this subject.
 - **419** — no valid CSRF token.
+
+The package also exposes the same personal scope as an HTML settings surface. It uses the same
+session-derived subject, `bfc.auth` gate, `bfc-personal` limiter and browser middleware described
+above. Issue and rotation responses render the settings page directly so a one-time delivery never
+crosses a redirect or enters the session. Each rendered issue and rotation form carries a
+server-minted, single-use submission nonce. The server stores only its hash, bound to the session,
+authenticated local user, verb and target, and consumes it atomically with the credential mutation.
+Responses are `private, no-store`.
+
+### GET /bfc/ui/credentials/personal
+
+Render the caller's credential summaries, declared fields and admitted purpose/kind choices.
+
+### POST /bfc/ui/credentials/personal
+
+Mint for the submitted application purpose and render the single reveal in the response. Success
+is **201**; declaration refusals are **403**, invalid input is **422**, and hmac rewrap is **409**.
+A missing, expired, consumed, foreign-session, wrong-user, wrong-verb or wrong-target submission
+nonce is **409**, with no credential effects and no delivery.
+
+### POST /bfc/ui/credentials/personal/{id}/rotate
+
+Rotate one caller-owned credential and render the single reveal in the response. Success is
+**201**, or **200** when completing an interrupted cutover; an id outside the caller's scope is
+**404**. The row must still fit the declaration's current self-service kind and ability policy;
+otherwise rotation is refused with **403** and no effects. Submission nonce refusals are **409** as
+described above.
+
+### DELETE /bfc/ui/credentials/personal/{id}
+
+Revoke one caller-owned credential, then redirect to the personal credential page with **303**.
+An id outside the caller's scope is **404**.
 
 ## The installation-credentials surface (`/bfc/installation/credentials`)
 

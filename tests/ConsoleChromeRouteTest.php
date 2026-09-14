@@ -7,6 +7,7 @@ use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\LandingPage;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\UiPersonalCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Tests\ConsoleChromeRouteScan;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnguardedChromeController;
@@ -166,6 +167,7 @@ it('accounts for every file in src containing the literal bfc:: substring in cod
             basename((string) (new ReflectionClass(BuiltForCloudServiceProvider::class))->getFileName()),
             'Http/Controllers/'.basename((string) (new ReflectionClass(LandingPage::class))->getFileName()),
             'Http/Controllers/'.basename((string) (new ReflectionClass(UiHome::class))->getFileName()),
+            'Http/Controllers/'.basename((string) (new ReflectionClass(UiPersonalCredentials::class))->getFileName()),
         ]);
 });
 
