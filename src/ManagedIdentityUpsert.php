@@ -185,5 +185,4 @@ final class ManagedIdentityUpsert
             ['email'],
         ], true);
     }
-
 }
