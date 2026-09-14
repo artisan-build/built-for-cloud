@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-use Illuminate\Support\Facades\Route;
 use ArtisanBuild\BuiltForCloud\LandingPageRegistrar;
 use Illuminate\Routing\Router;
+use Illuminate\Support\Facades\Route;
 use Symfony\Component\Process\Process;
 
 it('mounts no package root and requires no manifest while landing is disabled', function (): void {

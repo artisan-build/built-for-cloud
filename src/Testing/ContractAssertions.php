@@ -182,7 +182,7 @@ trait ContractAssertions
     }
 
     /**
-     * @param array<string, mixed> $canonicalCatalogEntry
+     * @param  array<string, mixed>  $canonicalCatalogEntry
      */
     public function assertBuiltForCloudManifestMatches(array $canonicalCatalogEntry): void
     {

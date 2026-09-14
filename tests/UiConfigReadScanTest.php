@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTransitions;
 use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTransitions;
 use ArtisanBuild\BuiltForCloud\LandingManifest;
 use ArtisanBuild\BuiltForCloud\LandingPageRegistrar;
 use ArtisanBuild\BuiltForCloud\Testing\UiConfigReadScan;
-use ArtisanBuild\BuiltForCloud\Tests\InventoryFixtures\PublishedConfigRogueRead;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConfigChainEnforcementPath;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConfigEnforcementPath;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConfigFacadeEnforcementPath;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConfigRepositoryEnforcementPath;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConfigTypedGetterEnforcementPath;
-use Illuminate\Contracts\Config\Repository;
+use ArtisanBuild\BuiltForCloud\Tests\InventoryFixtures\PublishedConfigRogueRead;
 use ArtisanBuild\BuiltForCloud\UiCredentialPurposes;
+use Illuminate\Contracts\Config\Repository;
 
 /**
  * P5-AC13's installed-src enumeration. It covers all four statically
