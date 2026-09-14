@@ -371,7 +371,10 @@ it('keeps null-user operator and external-consumer credentials outside the insta
 
     expect($credential->refresh()->rotated_at)->toBeNull()
         ->and($credential->revoked_at)->toBeNull();
-    assertInstallationAuthentication($secret);
+    assertInstallationAuthentication(
+        $secret,
+        $subjectType === SubjectType::Operator ? 401 : 200,
+    );
 })->with([
     'operator' => SubjectType::Operator,
     'external consumer' => SubjectType::ExternalConsumer,
