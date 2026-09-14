@@ -44,14 +44,14 @@
                     @if ($member->status === 'active' && $member->role !== 'owner' && \ArtisanBuild\BuiltForCloud\RolePolicy::canManage($actor?->role, $member->role))
                         <div class="bfc-actions">
                             @if ($actor?->role === 'owner')
-                                <form method="POST" action="{{ route('bfc.members.role.update', $member) }}">
+                                <form data-testid="members-role-form" method="POST" action="{{ route('bfc.members.role.update', $member) }}">
                                     @csrf
                                     @method('PUT')
                                     <input type="hidden" name="role" value="{{ $member->role === 'admin' ? 'member' : 'admin' }}">
                                     <button type="submit">Change role</button>
                                 </form>
                             @endif
-                            <form method="POST" action="{{ route('bfc.members.destroy', $member) }}">
+                            <form data-testid="members-deactivation-form" method="POST" action="{{ route('bfc.members.destroy', $member) }}">
                                 @csrf
                                 @method('DELETE')
                                 <button type="submit">Deactivate</button>

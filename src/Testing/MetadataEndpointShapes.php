@@ -128,6 +128,7 @@ final class MetadataEndpointShapes
         return [
             'GET /bfc/console/vitals' => self::vitals(),
             'POST /bfc/logout' => ['type' => 'empty'],
+            'POST /bfc/ui/logout' => ['type' => 'empty'],
             'POST /bfc/forgot-password' => ['type' => 'empty'],
             'POST /bfc/reset-password' => ['type' => 'empty'],
             'POST /bfc/members/invitations' => ['type' => 'empty'],
