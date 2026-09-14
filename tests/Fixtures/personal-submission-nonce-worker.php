@@ -6,7 +6,7 @@ use ArtisanBuild\BuiltForCloud\BuiltForCloudServiceProvider;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
-use ArtisanBuild\BuiltForCloud\PersonalSubmissionNonce;
+use ArtisanBuild\BuiltForCloud\SubmissionNonce;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiPersonalCredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\TestCase;
 use ArtisanBuild\BuiltForCloud\User;
@@ -74,7 +74,7 @@ $case = new class('testProbe') extends TestCase
         $response = $this->actingAsVersioned($user, 'web')
             ->withSession(['_token' => $input['session_token']])
             ->post('/bfc/ui/credentials/personal', [
-                PersonalSubmissionNonce::FIELD => $input['submission_nonce'],
+                SubmissionNonce::FIELD => $input['submission_nonce'],
                 'app_purpose' => 'test.consume',
                 'kind' => CredentialKind::Bearer->value,
                 'name' => 'concurrent-personal-credential',

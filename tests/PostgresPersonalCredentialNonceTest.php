@@ -68,7 +68,7 @@ it('lets exactly one concurrent personal issue POST consume a submission nonce',
 
     $main = $this->postgresLaneConnection();
     $main->beginTransaction();
-    $locked = $main->table('bfc_personal_submission_nonces')
+    $locked = $main->table('bfc_submission_nonces')
         ->where('nonce_hash', hash('sha256', $nonce))
         ->lockForUpdate()
         ->first();
@@ -107,7 +107,7 @@ it('lets exactly one concurrent personal issue POST consume a submission nonce',
                   and application_name like 'bfc-p5-ui-d-nonce-worker-%'
                   and state = 'active'
                   and wait_event_type = 'Lock'
-                  and query like '%bfc_personal_submission_nonces%'
+                  and query like '%bfc_submission_nonces%'
                 SQL);
 
             if ($blocked === count($workers)) {

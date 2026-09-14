@@ -22,7 +22,7 @@ use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
-use ArtisanBuild\BuiltForCloud\PersonalSubmissionNonce;
+use ArtisanBuild\BuiltForCloud\SubmissionNonce;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiPersonalCredentialDeclaration;
@@ -116,7 +116,7 @@ final class PersonalCredentialUiTest extends TestCase
         $this->assertSame(1, substr_count((string) $page->getContent(), '<main>'));
 
         $issue = $this->post(route('bfc.ui.personal-credentials.store'), [
-            PersonalSubmissionNonce::FIELD => $this->submissionNonce($page, route('bfc.ui.personal-credentials.store')),
+            SubmissionNonce::FIELD => $this->submissionNonce($page, route('bfc.ui.personal-credentials.store')),
             'app_purpose' => $appPurpose,
             'kind' => $kind->value,
             'name' => $name,
@@ -167,7 +167,7 @@ final class PersonalCredentialUiTest extends TestCase
         $rotate = $this->post(
             route('bfc.ui.personal-credentials.rotate', $rotationSource->id),
             [
-                PersonalSubmissionNonce::FIELD => $this->submissionNonce(
+                SubmissionNonce::FIELD => $this->submissionNonce(
                     $rotationPage,
                     route('bfc.ui.personal-credentials.rotate', $rotationSource->id),
                 ),
@@ -238,7 +238,7 @@ final class PersonalCredentialUiTest extends TestCase
 
         $page = $this->get(route('bfc.ui.personal-credentials.index'))->assertOk();
         $issuePayload = [
-            PersonalSubmissionNonce::FIELD => $this->submissionNonce($page, route('bfc.ui.personal-credentials.store')),
+            SubmissionNonce::FIELD => $this->submissionNonce($page, route('bfc.ui.personal-credentials.store')),
             'app_purpose' => 'test.consume',
             'kind' => CredentialKind::Bearer->value,
             'name' => 'test-created-refresh-proof',
@@ -259,7 +259,7 @@ final class PersonalCredentialUiTest extends TestCase
         $this->assertSame($afterIssue, $this->effects());
 
         $issued = Credential::query()->where('name', 'test-created-refresh-proof')->sole();
-        $rotatePayload = [PersonalSubmissionNonce::FIELD => $this->submissionNonce(
+        $rotatePayload = [SubmissionNonce::FIELD => $this->submissionNonce(
             $issueDelivery,
             route('bfc.ui.personal-credentials.rotate', $issued->id),
         )];
@@ -444,8 +444,8 @@ final class PersonalCredentialUiTest extends TestCase
         $issueNonce = $this->submissionNonce($page, route('bfc.ui.personal-credentials.store'));
         $rotateNonce = $this->submissionNonce($page, route('bfc.ui.personal-credentials.rotate', $credential->id));
 
-        $this->assertFalse(DB::table('bfc_personal_submission_nonces')->where('nonce_hash', $issueNonce)->exists());
-        $this->assertTrue(DB::table('bfc_personal_submission_nonces')->where('nonce_hash', hash('sha256', $issueNonce))->exists());
+        $this->assertFalse(DB::table('bfc_submission_nonces')->where('nonce_hash', $issueNonce)->exists());
+        $this->assertTrue(DB::table('bfc_submission_nonces')->where('nonce_hash', hash('sha256', $issueNonce))->exists());
         $this->assertStringNotContainsString($issueNonce, json_encode(session()->all(), JSON_THROW_ON_ERROR));
 
         foreach ([
@@ -453,10 +453,10 @@ final class PersonalCredentialUiTest extends TestCase
                 'app_purpose' => 'test.consume', 'kind' => CredentialKind::Bearer->value,
             ]),
             fn (): TestResponse => $this->post(route('bfc.ui.personal-credentials.rotate', $credential->id), [
-                PersonalSubmissionNonce::FIELD => $issueNonce,
+                SubmissionNonce::FIELD => $issueNonce,
             ]),
             fn (): TestResponse => $this->post(route('bfc.ui.personal-credentials.rotate', $otherCredential->id), [
-                PersonalSubmissionNonce::FIELD => $rotateNonce,
+                SubmissionNonce::FIELD => $rotateNonce,
             ]),
         ] as $request) {
             $before = $this->effects();
@@ -466,7 +466,7 @@ final class PersonalCredentialUiTest extends TestCase
 
         $before = $this->effects();
         $this->actingAsVersioned($other, 'web')->post(route('bfc.ui.personal-credentials.store'), [
-            PersonalSubmissionNonce::FIELD => $issueNonce,
+            SubmissionNonce::FIELD => $issueNonce,
             'app_purpose' => 'test.consume',
             'kind' => CredentialKind::Bearer->value,
         ])->assertStatus(409)->assertDontSeeHtml('data-testid="personal-credentials-delivery"');
@@ -487,7 +487,7 @@ final class PersonalCredentialUiTest extends TestCase
         $before = $this->effects();
 
         $this->post(route('bfc.ui.personal-credentials.rotate', $outOfPolicy->id), [
-            PersonalSubmissionNonce::FIELD => $this->submissionNonce(
+            SubmissionNonce::FIELD => $this->submissionNonce(
                 $page,
                 route('bfc.ui.personal-credentials.rotate', $outOfPolicy->id),
             ),
@@ -502,7 +502,7 @@ final class PersonalCredentialUiTest extends TestCase
         ]);
         $allowedPage = $this->get(route('bfc.ui.personal-credentials.index'))->assertOk();
         $this->post(route('bfc.ui.personal-credentials.rotate', $allowed->id), [
-            PersonalSubmissionNonce::FIELD => $this->submissionNonce(
+            SubmissionNonce::FIELD => $this->submissionNonce(
                 $allowedPage,
                 route('bfc.ui.personal-credentials.rotate', $allowed->id),
             ),
@@ -590,7 +590,7 @@ final class PersonalCredentialUiTest extends TestCase
             $before = $this->effects();
             $page = $this->get(route('bfc.ui.personal-credentials.index'))->assertOk();
             $response = $this->post(route('bfc.ui.personal-credentials.store'), [
-                PersonalSubmissionNonce::FIELD => $this->submissionNonce($page, route('bfc.ui.personal-credentials.store')),
+                SubmissionNonce::FIELD => $this->submissionNonce($page, route('bfc.ui.personal-credentials.store')),
                 'app_purpose' => 'test.consume',
                 'kind' => 'bearer',
                 'name' => 'test-created-flag-'.($enabled ? 'on' : 'off'),
