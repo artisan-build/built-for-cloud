@@ -434,6 +434,7 @@ final class CredentialPathInventory
             foreach ($check['tokens'] as $token) {
                 if (! str_contains($code, $token)) {
                     $violations[] = 'missing-purpose-rule:'.$caller;
+
                     continue 2;
                 }
             }
