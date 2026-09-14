@@ -101,15 +101,18 @@ final readonly class CredentialManagementScope
         }
 
         $declaration = app(CredentialDeclaration::class);
-        $policy = $declaration instanceof DeclaresSelfServiceMintPolicy ? $declaration : null;
-        $kinds = $policy?->selfServiceKinds($credential->subject()) ?? [CredentialKind::Bearer];
+        $kinds = $declaration instanceof DeclaresSelfServiceMintPolicy
+            ? $declaration->selfServiceKinds($credential->subject())
+            : [CredentialKind::Bearer];
 
         if (! in_array($credential->kind, $kinds, true)) {
             throw CredentialVerbRefused::selfServiceKind($credential->kind);
         }
 
         $abilities = array_values(array_filter(
-            $policy?->selfServiceAbilities($credential->subject()) ?? [],
+            $declaration instanceof DeclaresSelfServiceMintPolicy
+                ? $declaration->selfServiceAbilities($credential->subject())
+                : [],
             static fn (string $ability): bool => trim($ability) !== '',
         ));
 
