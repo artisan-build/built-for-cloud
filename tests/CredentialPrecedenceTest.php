@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -145,6 +147,9 @@ it("session route × both mismatched → 200 by session, the other user's creden
 it('does not widen credential abilities with a simultaneously present session', function (): void {
     $user = precedenceUser();
     $minted = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
+        'subject_type' => SubjectType::UserPrincipal,
+        'subject_ref' => 'user:'.$user->id,
         'user_id' => (string) $user->id,
         'abilities' => null,
     ]);

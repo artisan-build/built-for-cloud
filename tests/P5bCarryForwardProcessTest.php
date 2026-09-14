@@ -178,9 +178,9 @@ it('admits only the exact dashboard metadata credential and persists its read au
     try {
         $setup = p5bFreshRun('dashboard', 'setup', $database, [
             'credentials' => [
-                p5bFreshCredential($ids['exact'], hash('sha256', $secrets['exact']), SubjectType::Operator->value, 'dashboard-exact', [OperatorAbility::MetadataRead->value]),
+                p5bFreshCredential($ids['exact'], hash('sha256', $secrets['exact']), SubjectType::Operator->value, 'dashboard-exact', [OperatorAbility::MetadataRead->value], ['purpose' => CredentialPurpose::DashboardMetadata->value]),
                 p5bFreshCredential($ids['non_operator'], hash('sha256', $secrets['non_operator']), SubjectType::Application->value, 'dashboard-application', [OperatorAbility::MetadataRead->value]),
-                p5bFreshCredential($ids['superset'], hash('sha256', $secrets['superset']), SubjectType::Operator->value, 'dashboard-superset', [OperatorAbility::MetadataRead->value, OperatorAbility::Admin->value]),
+                p5bFreshCredential($ids['superset'], hash('sha256', $secrets['superset']), SubjectType::Operator->value, 'dashboard-superset', [OperatorAbility::MetadataRead->value, OperatorAbility::Admin->value], ['purpose' => CredentialPurpose::DashboardMetadata->value]),
             ],
         ]);
         $request = p5bFreshRun('dashboard', 'request', $database, ['bearers' => $secrets]);
@@ -190,13 +190,13 @@ it('admits only the exact dashboard metadata credential and persists its read au
         $denied = array_values(array_filter($inspect['audit'], static fn (array $event): bool => $event['event'] === LifecycleEventType::DeniedAction->value));
 
         p5bFreshAssertBoundary([$setup, $request, $inspect], ['setup', 'request', 'inspect']);
-        expect($request['statuses'])->toBe(['exact' => 200, 'non_operator' => 403, 'superset' => 403])
+        expect($request['statuses'])->toBe(['exact' => 200, 'non_operator' => 401, 'superset' => 403])
             ->and(p5bFreshById($inspect['credentials'], $ids['exact'])['last_used'])->toBeTrue()
             ->and($sensitive)->toHaveCount(1)
             ->and($sensitive[0]['credential_id'])->toBe($ids['exact'])
             ->and($sensitive[0]['actor_type'])->toBe(AuditActorType::OperatorIntegration->value)
             ->and($sensitive[0]['actor_ref'])->toBe($ids['exact'])
-            ->and(array_column($denied, 'credential_id'))->toEqualCanonicalizing([$ids['non_operator'], $ids['superset']]);
+            ->and(array_column($denied, 'credential_id'))->toBe([$ids['superset']]);
     } finally {
         @unlink($database);
     }
@@ -455,9 +455,9 @@ it('persists MCP bearer usage and exposes only operator admin attribution throug
 
     try {
         $setup = p5bFreshRun('mcp', 'setup', $database, ['credentials' => [
-            p5bFreshCredential($ids['non_admin'], hash('sha256', $secrets['non_admin']), SubjectType::Operator->value, 'mcp-non-admin', [OperatorAbility::McpRead->value]),
+            p5bFreshCredential($ids['non_admin'], hash('sha256', $secrets['non_admin']), SubjectType::ExternalConsumer->value, 'mcp-non-admin', [OperatorAbility::McpRead->value], ['purpose' => CredentialPurpose::Mcp->value]),
             p5bFreshCredential($ids['operator_admin'], hash('sha256', $secrets['operator_admin']), SubjectType::Operator->value, 'mcp-operator-admin', [OperatorAbility::Admin->value]),
-            p5bFreshCredential($ids['application_admin'], hash('sha256', $secrets['application_admin']), SubjectType::Application->value, 'mcp-application-admin', [OperatorAbility::Admin->value]),
+            p5bFreshCredential($ids['application_admin'], hash('sha256', $secrets['application_admin']), SubjectType::ExternalConsumer->value, 'mcp-application-admin', [OperatorAbility::Admin->value], ['purpose' => CredentialPurpose::Mcp->value]),
         ]]);
         $request = p5bFreshRun('mcp', 'request', $database, ['bearers' => $secrets]);
         $inspect = p5bFreshRun('mcp', 'inspect', $database);

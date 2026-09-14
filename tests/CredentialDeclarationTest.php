@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\DefaultCredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Subject;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
@@ -26,21 +28,33 @@ beforeEach(function (): void {
 });
 
 it('fails closed: null abilities grant nothing', function (): void {
-    $minted = $this->mintCredential(['abilities' => null]);
+    $minted = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
+        'subject_type' => SubjectType::ExternalConsumer,
+        'abilities' => null,
+    ]);
 
     $this->getJson('/needs-read', ['Authorization' => $minted->bearerHeader()])
         ->assertStatus(403);
 });
 
 it('fails closed: empty abilities grant nothing', function (): void {
-    $minted = $this->mintCredential(['abilities' => []]);
+    $minted = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
+        'subject_type' => SubjectType::ExternalConsumer,
+        'abilities' => [],
+    ]);
 
     $this->getJson('/needs-read', ['Authorization' => $minted->bearerHeader()])
         ->assertStatus(403);
 });
 
 it('passes a held ability and fails a missing one', function (): void {
-    $minted = $this->mintCredential(['abilities' => ['credential:read']]);
+    $minted = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
+        'subject_type' => SubjectType::ExternalConsumer,
+        'abilities' => ['credential:read'],
+    ]);
 
     $this->getJson('/needs-read', ['Authorization' => $minted->bearerHeader()])
         ->assertStatus(200);
@@ -50,7 +64,11 @@ it('passes a held ability and fails a missing one', function (): void {
 });
 
 it('requires an explicit ability string on the middleware', function (): void {
-    $minted = $this->mintCredential(['abilities' => ['credential:read']]);
+    $minted = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
+        'subject_type' => SubjectType::ExternalConsumer,
+        'abilities' => ['credential:read'],
+    ]);
 
     $this->withoutExceptionHandling();
 
@@ -128,7 +146,11 @@ it('consults the declaration with the required ability on ability routes', funct
         }
     });
 
-    $minted = $this->mintCredential(['abilities' => ['credential:read']]);
+    $minted = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
+        'subject_type' => SubjectType::ExternalConsumer,
+        'abilities' => ['credential:read'],
+    ]);
 
     $this->getJson('/needs-read', ['Authorization' => $minted->bearerHeader()])
         ->assertStatus(200);

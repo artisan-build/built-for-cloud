@@ -622,7 +622,7 @@ it('mints no abilities at all when the app declares no self-service policy, so a
 
     $this->postJson('/mcp/purge', [], $header)->assertForbidden();
     $this->postJson('/mcp/status', [], $header)->assertForbidden();
-    $this->getJson('/bfc/credentials', $header)->assertForbidden();
+    $this->getJson('/bfc/credentials', $header)->assertUnauthorized();
 });
 
 it('grants exactly the self-service policy abilities and never the clients', function (): void {

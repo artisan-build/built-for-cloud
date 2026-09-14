@@ -135,10 +135,10 @@ final class ClientIdentityTest extends TestCase
     {
         Credential::factory()->create([
             'name' => 'consume',
-            'purpose' => CredentialPurpose::SystemDeployment,
+            'purpose' => CredentialPurpose::OperatorManagement,
             'secret_hash' => hash('sha256', 'consume-secret'),
-            'subject_type' => SubjectType::Application,
-            'abilities' => [OperatorAbility::CredentialRead->value],
+            'subject_type' => SubjectType::Operator,
+            'abilities' => [OperatorAbility::CredentialMint->value],
         ]);
 
         $this->getJson('/bfc/credentials', [
