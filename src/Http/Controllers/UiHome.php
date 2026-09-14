@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\LandingManifest;
+use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionDirection;
 use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\User;
@@ -26,6 +27,18 @@ final readonly class UiHome
         $memberManagement = (bool) config('built-for-cloud.ui.member_management', false)
             && RolePolicy::canManageMembers($role);
         $managedMemberManagement = $memberManagement && $authority->mode === AuthorityMode::Managed;
+        $managedMembers = collect();
+
+        if ($managedMemberManagement) {
+            $connection = ManagedAuthConnection::current();
+            $managedMembers = User::query()
+                ->where('scalpels_issuer', $connection->issuer)
+                ->where('scalpels_connection_id', $connection->connectionId)
+                ->whereNotNull('scalpels_id')
+                ->orderBy('name')
+                ->orderBy('id')
+                ->get();
+        }
 
         return view('bfc::home', [
             'manifest' => $manifest,
@@ -33,9 +46,7 @@ final readonly class UiHome
             'memberManagementHref' => $managedMemberManagement
                 ? '#managed-members'
                 : route('bfc.members.index'),
-            'managedMembers' => $managedMemberManagement
-                ? User::query()->whereNotNull('scalpels_id')->orderBy('name')->orderBy('id')->get()
-                : collect(),
+            'managedMembers' => $managedMembers,
             'managedMemberManagement' => $managedMemberManagement,
             'sessionManagement' => (bool) config('built-for-cloud.ui.session_management', false)
                 && $authority->mode === AuthorityMode::Standalone,

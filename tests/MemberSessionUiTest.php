@@ -250,6 +250,10 @@ final class MemberSessionUiTest extends TestCase
         ]);
         $actor = $this->user($role, managed: true);
         $known = $this->user(UserRole::Member, managed: true);
+        $differentIssuer = $this->user(UserRole::Member, managed: true);
+        $differentIssuer->forceFill(['scalpels_issuer' => 'https://different-issuer.example.test'])->save();
+        $differentConnection = $this->user(UserRole::Member, managed: true);
+        $differentConnection->forceFill(['scalpels_connection_id' => 'test-created-different-connection'])->save();
         $localOnly = $this->user(UserRole::Member);
         $this->seedSession($actor, 'test-created-managed-session');
 
@@ -268,6 +272,8 @@ final class MemberSessionUiTest extends TestCase
             $home->assertSee('href="#managed-members"', false)
                 ->assertSee($known->name)
                 ->assertSee($known->email)
+                ->assertDontSee($differentIssuer->email)
+                ->assertDontSee($differentConnection->email)
                 ->assertDontSee($localOnly->email);
         }
 
