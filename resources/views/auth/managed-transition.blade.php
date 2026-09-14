@@ -43,6 +43,13 @@
             @php
                 $localOptions = $users->map(fn ($user) => ['ref' => 'user:'.$user->getKey(), 'label' => 'User '.$user->getKey().' — '.$user->email])
                     ->concat($invitations->map(fn ($invitation) => ['ref' => 'invitation:'.$invitation->getKey(), 'label' => 'Invitation '.$invitation->getKey().' — '.$invitation->email]));
+                $abandonable = in_array($transition->status, [
+                    \ArtisanBuild\BuiltForCloud\ManagedTransitionStatus::Prepared,
+                    \ArtisanBuild\BuiltForCloud\ManagedTransitionStatus::Rostered,
+                    \ArtisanBuild\BuiltForCloud\ManagedTransitionStatus::Proposed,
+                    \ArtisanBuild\BuiltForCloud\ManagedTransitionStatus::Staging,
+                    \ArtisanBuild\BuiltForCloud\ManagedTransitionStatus::Staged,
+                ], true);
             @endphp
 
             @if ($direction === \ArtisanBuild\BuiltForCloud\ManagedTransitionDirection::Adopt)
@@ -262,6 +269,12 @@
                 <form method="POST" action="{{ route('bfc.transitions.complete', $transition) }}">
                     @csrf
                     <button type="submit" data-testid="transition-complete-control">Commit and switch authority</button>
+                </form>
+            @endif
+            @if ($affordanceEnabled && $abandonable)
+                <form method="POST" action="{{ route('bfc.transitions.abandon', $transition) }}" data-testid="transition-abandon-form">
+                    @csrf
+                    <button type="submit">Abandon transition</button>
                 </form>
             @endif
         @endif

@@ -53,6 +53,8 @@ final class ManageTransitions
         $transition = $this->transition($transition);
 
         if (! in_array($transition->status, [
+            ManagedTransitionStatus::Prepared,
+            ManagedTransitionStatus::Rostered,
             ManagedTransitionStatus::Proposed,
             ManagedTransitionStatus::Staging,
             ManagedTransitionStatus::Staged,
@@ -118,6 +120,18 @@ final class ManageTransitions
         return redirect()->route(
             $completed->direction === ManagedTransitionDirection::Exit ? 'bfc.login' : 'bfc.managed.login',
         );
+    }
+
+    public function abandon(
+        Request $request,
+        string $transition,
+        TransitionService $transitions,
+    ): RedirectResponse {
+        $this->owner($request);
+        $transition = $transitions->abandon($request, $this->transition($transition));
+
+        return redirect()->route('bfc.transitions.index', $transition->direction->value)
+            ->with('status', 'transition-abandoned');
     }
 
     private function view(
