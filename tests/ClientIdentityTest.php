@@ -521,6 +521,7 @@ final class ClientIdentityTest extends TestCase
         Credential::factory()->create([
             'name' => 'admin',
             'kind' => CredentialKind::Bearer,
+            'purpose' => CredentialPurpose::OperatorManagement,
             'subject_type' => SubjectType::Operator,
             'subject_ref' => 'client-identity-admin',
             'status' => CredentialStatus::Active,

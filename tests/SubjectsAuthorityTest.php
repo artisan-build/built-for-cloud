@@ -64,12 +64,14 @@ final class SubjectsAuthorityTest extends TestCase
 
         $own = Credential::factory()->create([
             'name' => 'client-key',
+            'purpose' => CredentialPurpose::Consumption,
             'secret_hash' => hash('sha256', 'own-secret'),
             'subject_type' => SubjectType::ExternalConsumer->value,
             'subject_ref' => 'tenant-a',
         ]);
         $foreign = Credential::factory()->create([
             'name' => 'client-key',
+            'purpose' => CredentialPurpose::Consumption,
             'secret_hash' => hash('sha256', 'foreign-secret'),
             'subject_type' => SubjectType::ExternalConsumer->value,
             'subject_ref' => 'tenant-b',
@@ -95,6 +97,7 @@ final class SubjectsAuthorityTest extends TestCase
 
         $foreign = Credential::factory()->create([
             'name' => 'client-key',
+            'purpose' => CredentialPurpose::Consumption,
             'secret_hash' => hash('sha256', 'crafted-target-secret'),
             'subject_type' => SubjectType::ExternalConsumer->value,
             'subject_ref' => 'tenant-b',
@@ -118,6 +121,7 @@ final class SubjectsAuthorityTest extends TestCase
 
         Credential::factory()->create([
             'name' => 'half-declared',
+            'purpose' => CredentialPurpose::Consumption,
             'subject_type' => SubjectType::ExternalConsumer->value,
             'subject_ref' => null,
         ]);
@@ -142,11 +146,13 @@ final class SubjectsAuthorityTest extends TestCase
 
         Credential::factory()->create([
             'name' => 'visible',
+            'purpose' => CredentialPurpose::Consumption,
             'subject_type' => SubjectType::ExternalConsumer->value,
             'subject_ref' => 'tenant-a',
         ]);
         Credential::factory()->create([
             'name' => 'hidden',
+            'purpose' => CredentialPurpose::Consumption,
             'subject_type' => SubjectType::ExternalConsumer->value,
             'subject_ref' => 'tenant-b',
         ]);
@@ -244,6 +250,7 @@ final class SubjectsAuthorityTest extends TestCase
     private function adminHeaders(string $plaintext = 'authority-admin-secret'): array
     {
         Credential::factory()->create([
+            'purpose' => CredentialPurpose::OperatorManagement,
             'subject_type' => SubjectType::Operator,
             'subject_ref' => 'authority-admin',
             'name' => 'admin',

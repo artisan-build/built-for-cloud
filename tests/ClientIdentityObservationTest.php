@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\ClientIdentity;
 use ArtisanBuild\BuiltForCloud\ClientIdentityObservation;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -558,6 +559,7 @@ final class ClientIdentityObservationTest extends TestCase
         Credential::factory()->create([
             'name' => 'admin',
             'kind' => CredentialKind::Bearer,
+            'purpose' => CredentialPurpose::OperatorManagement,
             'subject_type' => SubjectType::Operator,
             'subject_ref' => 'client-observation-admin',
             'status' => CredentialStatus::Active,

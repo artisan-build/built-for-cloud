@@ -101,6 +101,7 @@ beforeEach(function (): void {
 function collisionOwnership(?string $bearer = null): Ownership
 {
     $owner = Credential::factory()->create([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'collision-owner',
         'abilities' => [OperatorAbility::Admin->value],

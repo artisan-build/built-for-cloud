@@ -56,6 +56,9 @@ abstract class PurposeMigrationTestCase extends TestCase
         $connection = DB::connection($connectionName);
         $this->migratePrePurpose($connectionName);
         $fixture = $this->insertLegacyRows($connection);
+        $resolver = app(CredentialResolver::class);
+        $this->assertSame($fixture['ids'][0], $resolver->resolve(CredentialKind::Bearer, $fixture['bearer_secret'])?->id);
+        $this->assertSame($fixture['ids'][1], $resolver->resolve(CredentialKind::Basic, $fixture['basic_secret'])?->id);
         $before = $connection->table('credentials')->orderBy('id')->get([
             'id', 'status', 'subject_type', 'subject_ref', 'abilities', 'revoked_at',
         ])->map(static fn (object $row): array => (array) $row)->all();
@@ -165,7 +168,7 @@ abstract class PurposeMigrationTestCase extends TestCase
                 'id' => $ids[1], 'kind' => CredentialKind::Basic->value,
                 'subject_type' => SubjectType::Operator->value, 'subject_ref' => 'legacy-basic-subject',
                 'name' => 'legacy basic', 'abilities' => json_encode([OperatorAbility::CredentialRead->value], JSON_THROW_ON_ERROR),
-                'secret_hash' => hash('sha256', $basicSecret), 'status' => 'pending',
+                'secret_hash' => hash('sha256', $basicSecret), 'status' => 'active',
                 'created_at' => $createdAt, 'updated_at' => $createdAt,
             ],
             [
@@ -188,7 +191,7 @@ abstract class PurposeMigrationTestCase extends TestCase
                 'subject_type' => SubjectType::UserPrincipal->value, 'subject_ref' => 'legacy-already-revoked',
                 'name' => 'legacy revoked', 'abilities' => null,
                 'secret_hash' => hash('sha256', 'legacy-already-revoked-secret'),
-                'status' => 'active', 'revoked_at' => $alreadyRevokedAt,
+                'status' => 'pending', 'revoked_at' => $alreadyRevokedAt,
                 'created_at' => $createdAt, 'updated_at' => $createdAt,
             ],
         ];

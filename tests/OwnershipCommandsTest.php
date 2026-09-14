@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Ownership;
@@ -151,6 +152,7 @@ it('remints the owner token for the current owner and revokes the previous one',
     $previousCredentialId = $ownership?->owner_credential_id;
     $otherOwnerCredential = Credential::factory()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'owner',
         'name' => 'renamed-owner',

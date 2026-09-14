@@ -217,6 +217,8 @@ final class RotateCredential
             return null;
         }
 
+        $source->assertValidStoredPurpose();
+
         // The matrix consults the subject the ROW declares — never
         // anything the caller supplies (SEC-V3-07).
         if (! $this->verbAllowed(CredentialVerb::Rotate, $source->subject())) {

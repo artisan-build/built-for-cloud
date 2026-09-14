@@ -35,4 +35,19 @@ enum CredentialPurpose: string
             },
         };
     }
+
+    public function validForStorage(
+        CredentialKind $kind,
+        SubjectType $subjectType,
+        string $subjectRef,
+    ): bool {
+        if ($subjectType === SubjectType::Installation && $subjectRef === self::SIGNING_ROOT_SUBJECT_REF) {
+            return $kind === CredentialKind::Hmac && $this === self::SigningRoot;
+        }
+
+        return $this->allowedFor($kind, $subjectType)
+            || ($kind === CredentialKind::Bearer
+                && $subjectType === SubjectType::ExternalConsumer
+                && $this === self::Enrollment);
+    }
 }

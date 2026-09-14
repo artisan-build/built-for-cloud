@@ -7,8 +7,12 @@ use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
+use ArtisanBuild\BuiltForCloud\CredentialStatus;
+use ArtisanBuild\BuiltForCloud\Database\Factories\CredentialFactory;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
@@ -19,6 +23,8 @@ use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class, WithCredentials::class);
 
@@ -111,6 +117,129 @@ it('reserves null purpose for tombstones that were already null when loaded', fu
 
     expect(fn () => $credential->save())
         ->toThrow(InvalidArgumentException::class, 'requires a known protocol purpose');
+});
+
+it('enforces every stored purpose tuple at the direct model boundary without effects', function (): void {
+    foreach (CredentialKind::cases() as $kind) {
+        foreach (SubjectType::cases() as $subjectType) {
+            foreach (CredentialPurpose::cases() as $purpose) {
+                $before = [
+                    Credential::query()->count(),
+                    CredentialAuditEvent::query()->count(),
+                    CredentialOutboxEntry::query()->count(),
+                    OnboardingToken::query()->count(),
+                ];
+                $store = static fn (): Credential => Credential::query()->create([
+                    'kind' => $kind,
+                    'purpose' => $purpose,
+                    'subject_type' => $subjectType,
+                    'subject_ref' => 'direct-model-'.bin2hex(random_bytes(8)),
+                ]);
+                $allowed = p5PurposeAllowed($kind, $subjectType, $purpose)
+                    || ($kind === CredentialKind::Bearer
+                        && $subjectType === SubjectType::ExternalConsumer
+                        && $purpose === CredentialPurpose::Enrollment);
+
+                if ($allowed) {
+                    expect($store()->purpose)->toBe($purpose);
+
+                    continue;
+                }
+
+                expect($store)->toThrow(InvalidArgumentException::class, 'valid for its kind and subject');
+                expect([
+                    Credential::query()->count(),
+                    CredentialAuditEvent::query()->count(),
+                    CredentialOutboxEntry::query()->count(),
+                    OnboardingToken::query()->count(),
+                ])->toBe($before);
+            }
+        }
+    }
+});
+
+it('reserves the signing-root subject pair for its exact future stored shape', function (): void {
+    foreach (CredentialKind::cases() as $kind) {
+        foreach (CredentialPurpose::cases() as $purpose) {
+            $before = Credential::query()->count();
+            $store = static fn (): Credential => Credential::query()->create([
+                'kind' => $kind,
+                'purpose' => $purpose,
+                'subject_type' => SubjectType::Installation,
+                'subject_ref' => CredentialPurpose::SIGNING_ROOT_SUBJECT_REF,
+            ]);
+
+            if ($kind === CredentialKind::Hmac && $purpose === CredentialPurpose::SigningRoot) {
+                expect($store()->purpose)->toBe(CredentialPurpose::SigningRoot);
+
+                continue;
+            }
+
+            expect($store)->toThrow(InvalidArgumentException::class, 'valid for its kind and subject')
+                ->and(Credential::query()->count())->toBe($before);
+        }
+    }
+});
+
+it('refuses every invalid raw rotation branch before mutation audit or delivery', function (): void {
+    $invalid = [
+        'bearer' => [CredentialKind::Bearer, SubjectType::Application, CredentialPurpose::Signing],
+        'Basic' => [CredentialKind::Basic, SubjectType::Operator, CredentialPurpose::Signing],
+        'HMAC' => [CredentialKind::Hmac, SubjectType::ExternalConsumer, CredentialPurpose::Consumption],
+        'asymmetric' => [CredentialKind::Asymmetric, SubjectType::ExternalConsumer, CredentialPurpose::Signing],
+    ];
+
+    foreach ($invalid as $label => [$kind, $subjectType, $purpose]) {
+        $id = (string) Str::uuid();
+        $row = [
+            'id' => $id,
+            'kind' => $kind->value,
+            'purpose' => $purpose->value,
+            'subject_type' => $subjectType->value,
+            'subject_ref' => 'invalid-rotation-'.strtolower($label),
+            'name' => 'invalid '.$label,
+            'abilities' => null,
+            'status' => CredentialStatus::Active->value,
+            'created_at' => now()->subMinute(),
+            'updated_at' => now()->subMinute(),
+        ];
+
+        if (in_array($kind, [CredentialKind::Bearer, CredentialKind::Basic], true)) {
+            $row['secret_hash'] = hash('sha256', 'invalid-'.$label);
+        } elseif ($kind === CredentialKind::Hmac) {
+            $encrypted = app(HmacKeyring::class)->encrypt('invalid-hmac-secret');
+            $row['secret_ciphertext'] = $encrypted->ciphertext;
+            $row['secret_key_version'] = $encrypted->keyVersion;
+        } else {
+            $row['public_key'] = CredentialFactory::generatePublicKey();
+        }
+
+        DB::table('credentials')->insert($row);
+        $sourceBefore = (array) DB::table('credentials')->where('id', $id)->first();
+        $countsBefore = [
+            Credential::query()->count(),
+            CredentialAuditEvent::query()->count(),
+            CredentialOutboxEntry::query()->count(),
+            OnboardingToken::query()->count(),
+        ];
+        $result = null;
+
+        try {
+            $result = app(RotateCredential::class)($id, new RotateOptions);
+            test()->fail('The invalid '.$label.' source unexpectedly rotated.');
+        } catch (InvalidArgumentException $exception) {
+            expect($exception->getMessage())->toContain('valid for its kind and subject');
+        }
+
+        expect($result)->toBeNull()
+            ->and((array) DB::table('credentials')->where('id', $id)->first())->toBe($sourceBefore)
+            ->and([
+                Credential::query()->count(),
+                CredentialAuditEvent::query()->count(),
+                CredentialOutboxEntry::query()->count(),
+                OnboardingToken::query()->count(),
+            ])->toBe($countsBefore);
+    }
 });
 
 it('copies purpose through every ordinary rotation branch and exposes no override', function (CredentialKind $kind, CredentialPurpose $purpose): void {

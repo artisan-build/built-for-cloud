@@ -158,15 +158,13 @@ final class Credential extends Model implements Authenticatable
         self::saving(function (Credential $credential): void {
             $rawPurpose = $credential->getAttributes()['purpose'] ?? null;
 
-            if (! is_string($rawPurpose) || CredentialPurpose::tryFrom($rawPurpose) === null) {
-                $historicalTombstone = $credential->exists
-                    && $credential->getRawOriginal('purpose') === null
-                    && $credential->revoked_at !== null
-                    && $rawPurpose === null;
+            $historicalTombstone = $credential->exists
+                && $credential->getRawOriginal('purpose') === null
+                && $credential->revoked_at !== null
+                && $rawPurpose === null;
 
-                if (! $historicalTombstone) {
-                    throw new InvalidArgumentException('A live credential requires a known protocol purpose.');
-                }
+            if (! $historicalTombstone) {
+                $credential->assertValidStoredPurpose();
             }
 
             OperatorAbility::assertValues($credential->abilities);
@@ -243,6 +241,32 @@ final class Credential extends Model implements Authenticatable
                 );
             }
         });
+    }
+
+    public function assertValidStoredPurpose(): void
+    {
+        $rawPurpose = $this->getAttributes()['purpose'] ?? null;
+        $purpose = is_string($rawPurpose) ? CredentialPurpose::tryFrom($rawPurpose) : null;
+
+        if ($purpose === null) {
+            throw new InvalidArgumentException('A live credential requires a known protocol purpose.');
+        }
+
+        $rawKind = $this->getAttributes()['kind'] ?? null;
+        $kind = is_string($rawKind) ? CredentialKind::tryFrom($rawKind) : null;
+        $rawSubjectType = $this->getAttributes()['subject_type'] ?? null;
+        $subjectType = is_string($rawSubjectType) ? SubjectType::tryFrom($rawSubjectType) : null;
+        $subjectRef = $this->getAttributes()['subject_ref'] ?? null;
+
+        // Existing schema constraints own malformed partial subjects. Purpose
+        // validity applies once there is a complete known tuple to validate.
+        if ($kind === null || $subjectType === null || ! is_string($subjectRef)) {
+            return;
+        }
+
+        if (! $purpose->validForStorage($kind, $subjectType, $subjectRef)) {
+            throw new InvalidArgumentException('A live credential requires a purpose valid for its kind and subject.');
+        }
     }
 
     /**
