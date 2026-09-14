@@ -35,19 +35,18 @@ it('derives exactly the named display and mount ui config consumers', function (
 
 it('derives every published config read with a named disposition and detects rogue reads', function (): void {
     $expected = [
-        AppPurposeRegistry::class.'|built-for-cloud.credentials.app_purposes|1' => 'protocol-purpose mapper',
-        ManageTransitions::class.'|built-for-cloud.ui.managed_transitions|1' => 'managed-transition display',
-        LandingManifest::class.'|built-for-cloud.manifest|1' => 'landing display',
-        LandingPageRegistrar::class.'|built-for-cloud.ui.landing_page|1' => 'optional public root mount',
-        UiCredentialPurposes::class.'|built-for-cloud.ui.credential_purposes|1' => 'credential-purpose display',
+        AppPurposeRegistry::class.'|built-for-cloud.credentials.app_purposes|1' => 'mapper',
+        ManageTransitions::class.'|built-for-cloud.ui.managed_transitions|1' => 'display',
+        LandingManifest::class.'|built-for-cloud.manifest|1' => 'display',
+        LandingPageRegistrar::class.'|built-for-cloud.ui.landing_page|1' => 'mount',
+        UiCredentialPurposes::class.'|built-for-cloud.ui.credential_purposes|1' => 'display',
     ];
 
-    expect(UiConfigReadScan::discoverPublishedConfiguration(dirname(__DIR__).'/src'))->toBe(array_keys($expected))
-        ->and(UiConfigReadScan::discoverPublishedConfiguration(__DIR__.'/InventoryFixtures/PublishedConfigRogueRead.php'))->toBe([
-            PublishedConfigRogueRead::class.'|built-for-cloud.credentials.app_purposes|1',
-            PublishedConfigRogueRead::class.'|built-for-cloud.manifest|1',
-            PublishedConfigRogueRead::class.'|built-for-cloud.ui.rogue_surface|1',
-        ]);
+    expect(UiConfigReadScan::assertPublishedConfigurationDispositions(dirname(__DIR__).'/src'))->toBe($expected)
+        ->and(fn () => UiConfigReadScan::assertPublishedConfigurationDispositions(
+            dirname(__DIR__).'/src',
+            [__DIR__.'/InventoryFixtures/PublishedConfigRogueRead.php'],
+        ))->toThrow(RuntimeException::class, PublishedConfigRogueRead::class);
 });
 
 it('reports an executed enforcement path for every supported ui config read form', function (): void {

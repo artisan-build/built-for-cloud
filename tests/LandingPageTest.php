@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\StandaloneRouteOwnership;
 use Illuminate\Foundation\Application;
 use Illuminate\Routing\CompiledRouteCollection;
 use Illuminate\Routing\Router;
+use Illuminate\Support\Facades\View;
 use Orchestra\Testbench\TestCase as Orchestra;
 
 final class LandingPageTest extends Orchestra
@@ -38,6 +39,11 @@ final class LandingPageTest extends Orchestra
 
     public function test_it_renders_one_structural_marker_and_escaped_test_value_for_each_landing_element(): void
     {
+        $layoutRenders = 0;
+        View::composer('bfc::layout', static function () use (&$layoutRenders): void {
+            $layoutRenders++;
+        });
+
         $route = $this->app['router']->getRoutes()->getByName('bfc.landing');
         $this->assertNotNull($route);
         $this->assertSame('/', $route->uri());
@@ -46,6 +52,14 @@ final class LandingPageTest extends Orchestra
         $response = $this->get('/');
         $response->assertOk();
         $content = (string) $response->getContent();
+
+        $this->assertSame(1, $layoutRenders);
+        $this->assertSame(1, substr_count($content, '<main>'));
+        $document = new \DOMDocument;
+        $this->assertTrue($document->loadHTML($content));
+        $landingInsideLayout = (new \DOMXPath($document))->query('//main/section[@data-testid="landing"]');
+        $this->assertNotFalse($landingInsideLayout);
+        $this->assertSame(1, $landingInsideLayout->length);
 
         foreach ([
             'landing',

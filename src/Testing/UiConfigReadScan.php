@@ -4,6 +4,11 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Testing;
 
+use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTransitions;
+use ArtisanBuild\BuiltForCloud\LandingManifest;
+use ArtisanBuild\BuiltForCloud\LandingPageRegistrar;
+use ArtisanBuild\BuiltForCloud\UiCredentialPurposes;
 use FilesystemIterator;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
@@ -25,6 +30,18 @@ use SplFileInfo;
  */
 final class UiConfigReadScan
 {
+    /** @var array<string, 'display'|'mapper'|'mount'> */
+    public const array PUBLISHED_DISPOSITIONS = [
+        AppPurposeRegistry::class.'|built-for-cloud.credentials.app_purposes|1' => 'mapper',
+        ManageTransitions::class.'|built-for-cloud.ui.managed_transitions|1' => 'display',
+        LandingManifest::class.'|built-for-cloud.manifest|1' => 'display',
+        LandingPageRegistrar::class.'|built-for-cloud.ui.landing_page|1' => 'mount',
+        UiCredentialPurposes::class.'|built-for-cloud.ui.credential_purposes|1' => 'display',
+    ];
+
+    /** @var list<'display'|'mapper'|'mount'> */
+    private const array NAMED_DISPOSITIONS = ['display', 'mapper', 'mount'];
+
     /**
      * @return list<string> `<consumer>|<exact key>|<ordinal>` identities
      */
@@ -50,6 +67,37 @@ final class UiConfigReadScan
                 || $key === 'built-for-cloud.credentials.app_purposes',
             true,
         );
+    }
+
+    /**
+     * @param  list<string>  $additionalRoots
+     * @return array<string, 'display'|'mapper'|'mount'>
+     */
+    public static function assertPublishedConfigurationDispositions(string $sourceRoot, array $additionalRoots = []): array
+    {
+        $reads = self::discoverPublishedConfiguration($sourceRoot);
+
+        foreach ($additionalRoots as $root) {
+            array_push($reads, ...self::discoverPublishedConfiguration($root));
+        }
+
+        sort($reads);
+        $expectedReads = array_keys(self::PUBLISHED_DISPOSITIONS);
+        $unknownDispositions = array_diff(array_values(self::PUBLISHED_DISPOSITIONS), self::NAMED_DISPOSITIONS);
+
+        if ($reads !== $expectedReads || $unknownDispositions !== []) {
+            $unknownReads = array_values(array_diff($reads, $expectedReads));
+            $missingReads = array_values(array_diff($expectedReads, $reads));
+
+            throw new RuntimeException(sprintf(
+                'Published configuration read dispositions drifted (unknown reads: [%s]; missing reads: [%s]; unknown dispositions: [%s]).',
+                implode(', ', $unknownReads),
+                implode(', ', $missingReads),
+                implode(', ', $unknownDispositions),
+            ));
+        }
+
+        return self::PUBLISHED_DISPOSITIONS;
     }
 
     /**
