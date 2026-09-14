@@ -431,6 +431,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `GET /bfc/login` | `content` | package-owned HTML login form |
 | `POST /bfc/login` | `content` | redirect plus a newly established session cookie |
 | `POST /bfc/logout` | `metadata` | redirect after session invalidation |
+| `POST /bfc/ui/logout` | `metadata` | mode-neutral redirect after local session invalidation |
 | `GET /bfc/forgot-password` | `content` | package-owned HTML recovery form |
 | `POST /bfc/forgot-password` | `metadata` | redirect with a fixed non-enumerating status |
 | `GET /bfc/reset-password/{token}` | `content` | stateless encrypted-cookie handoff carrying the one-time request token |
@@ -883,6 +884,12 @@ the authority mode's real login route with a validated same-origin relative inte
 Invalid authority and delegated console principals refuse. Manifest identity and structural
 navigation come from published package configuration; affordance flags affect presentation,
 not route mounting or action authority.
+
+### POST /bfc/ui/logout
+
+Invalidates the current local browser session and regenerates its CSRF token under either
+authority mode. The next protected request refuses through the current mode's login path;
+managed mode does not claim or attempt upstream-provider logout.
 
 ---
 

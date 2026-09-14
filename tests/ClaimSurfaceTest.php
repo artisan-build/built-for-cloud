@@ -567,6 +567,8 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     // fell by one.
     // P5-purpose-d added one directly cited app-mapping contract block,
     // increasing blocks, absolute, and paired together.
+    // P5-UI-c added the mode-neutral UI logout route and its HTTP contract,
+    // increasing blocks by three and absolute/unpaired by one.
     $gateSurfaces = [
         'src/Console', 'src/Audit', 'src/Http/Controllers/ConsoleEnter.php',
         'src/Http/Controllers/ConsoleChromeScript.php', 'resources/views', 'resources/js',
@@ -577,10 +579,10 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1364,
-        'absolute' => 428,
+        'blocks' => 1367,
+        'absolute' => 429,
         'paired' => 113,
-        'unpaired' => 315,
+        'unpaired' => 316,
     ]);
 
     // The surfaces the restatement map runs over are wider than the
