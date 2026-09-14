@@ -35,6 +35,8 @@ final class UiInstallationCredentials
 {
     use RevealsDelivery;
 
+    private const string DELIVERY_SESSION_KEY = 'bfc.ui.installation-credentials.delivery';
+
     public function index(
         Request $request,
         ListCredentials $list,
@@ -42,15 +44,17 @@ final class UiInstallationCredentials
     ): View {
         $this->actor($request);
 
-        return view('bfc::credentials.installation', $this->page($list, $purposes));
+        /** @var array<string, string>|null $delivery */
+        $delivery = $request->session()->get(self::DELIVERY_SESSION_KEY);
+
+        return view('bfc::credentials.installation', $this->page($list, $purposes, $delivery));
     }
 
     public function store(
         Request $request,
         MintCredential $mint,
-        ListCredentials $list,
         UiCredentialPurposes $purposes,
-    ): Response {
+    ): RedirectResponse|Response {
         try {
             $actor = $this->actor($request);
             $appPurpose = $request->input('app_purpose');
@@ -79,20 +83,15 @@ final class UiInstallationCredentials
             return $this->error($refused->getMessage(), 409);
         }
 
-        return response()->view('bfc::credentials.installation', $this->page(
-            $list,
-            $purposes,
-            $this->deliveryPayload($result),
-        ), 201);
+        return redirect()->route('bfc.ui.installation-credentials.index', status: 303)
+            ->with(self::DELIVERY_SESSION_KEY, $this->deliveryPayload($result));
     }
 
     public function rotate(
         Request $request,
         RotateCredential $rotate,
-        ListCredentials $list,
-        UiCredentialPurposes $purposes,
         string $id,
-    ): Response {
+    ): RedirectResponse|Response {
         try {
             $result = $rotate(
                 $id,
@@ -114,11 +113,8 @@ final class UiInstallationCredentials
             abort(404);
         }
 
-        return response()->view('bfc::credentials.installation', $this->page(
-            $list,
-            $purposes,
-            $this->deliveryPayload($result->mint),
-        ), $result->completedCutover ? 200 : 201);
+        return redirect()->route('bfc.ui.installation-credentials.index', status: 303)
+            ->with(self::DELIVERY_SESSION_KEY, $this->deliveryPayload($result->mint));
     }
 
     public function destroy(
