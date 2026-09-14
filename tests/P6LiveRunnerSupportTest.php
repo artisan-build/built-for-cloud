@@ -12,6 +12,9 @@ use ArtisanBuild\BuiltForCloud\Testing\P6RuntimeCounterProof;
 use ArtisanBuild\BuiltForCloud\Testing\P6SecretLeakDetector;
 use ArtisanBuild\BuiltForCloud\Tests\Support\P6HttpClient;
 use ArtisanBuild\BuiltForCloud\Tests\Support\P6LiveCommandRunner;
+use ArtisanBuild\BuiltForCloud\Tests\Support\P6LiveSecretMaterial;
+use ParagonIE\Paseto\Keys\Version4\AsymmetricSecretKey;
+use ParagonIE\Paseto\Protocol\Version4;
 use Symfony\Component\Process\Process;
 
 function p6SupportDirectory(): string
@@ -147,6 +150,17 @@ it('detects a planted marker in every required secret sink', function (string $s
     expect(fn () => P6SecretLeakDetector::assertAbsent($surfaces, [$marker]))
         ->toThrow(RuntimeException::class, $surface);
 })->with(P6SecretLeakDetector::SURFACES);
+
+it('encodes actual signing secret bytes for the leak inventory', function (): void {
+    $key = AsymmetricSecretKey::generate(new Version4);
+    $material = P6LiveSecretMaterial::signingKey($key);
+    $surfaces = array_fill_keys(P6SecretLeakDetector::SURFACES, ['clean']);
+    $surfaces['cache_state'] = ['signing_key' => $material];
+
+    expect($material)->toBe(bin2hex($key->raw()))
+        ->and(fn () => P6SecretLeakDetector::assertAbsent($surfaces, [$material]))
+        ->toThrow(RuntimeException::class, 'cache_state');
+});
 
 it('accepts only complete observed PostgreSQL lane evidence', function (string $case): void {
     $path = p6SupportDirectory().'/postgres.json';

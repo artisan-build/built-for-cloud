@@ -19,6 +19,7 @@ use ArtisanBuild\BuiltForCloud\Testing\PostgresAdministrator;
 use ArtisanBuild\BuiltForCloud\Testing\SharedRuntimeIdentity;
 use ArtisanBuild\BuiltForCloud\Tests\Support\P6HttpClient;
 use ArtisanBuild\BuiltForCloud\Tests\Support\P6LiveCommandRunner;
+use ArtisanBuild\BuiltForCloud\Tests\Support\P6LiveSecretMaterial;
 use ParagonIE\Paseto\Builder;
 use ParagonIE\Paseto\Keys\Version4\AsymmetricSecretKey;
 use ParagonIE\Paseto\Protocol\Version4;
@@ -432,7 +433,7 @@ try {
             p6LiveFail('The fresh host fixture seed returned an invalid shape.');
         }
     }
-    array_push($forbidden, $password, $signingKey->toHexString(), $seed['mcp_secret'], $seed['wrong_secret'], $seed['operator_secret']);
+    array_push($forbidden, $password, P6LiveSecretMaterial::signingKey($signingKey), $seed['mcp_secret'], $seed['wrong_secret'], $seed['operator_secret']);
 
     $ready = static function (int $port): bool {
         try {
