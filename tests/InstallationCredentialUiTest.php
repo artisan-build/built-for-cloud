@@ -16,6 +16,7 @@ use ArtisanBuild\BuiltForCloud\CredentialManagementScope;
 use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
+use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\Database\Factories\CredentialFactory;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
@@ -29,6 +30,7 @@ use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
+use ArtisanBuild\BuiltForCloud\SubmissionNonce;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiInstallationCredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\UiCredentialPurposes;
 use ArtisanBuild\BuiltForCloud\User;
@@ -36,6 +38,7 @@ use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
@@ -152,15 +155,17 @@ final class InstallationCredentialUiTest extends TestCase
         $this->assertCredentialUsable($source, $sourceSecret, true);
         $source = $source->refresh();
 
-        $rotate = $this->actingAsVersioned($actor, 'web')->post(
+        $this->actingAsVersioned($actor, 'web');
+        $rotatePayload = $kind === CredentialKind::Asymmetric
+            ? ['code_ttl_seconds' => 120, 'abilities' => [OperatorAbility::Admin->value], 'emergency' => true]
+            : ['abilities' => [OperatorAbility::Admin->value], 'emergency' => true];
+        $rotatePayload[SubmissionNonce::FIELD] = $this->nonceFor(
             route('bfc.ui.installation-credentials.rotate', $source->id),
-            $kind === CredentialKind::Asymmetric
-                ? ['code_ttl_seconds' => 120, 'abilities' => [OperatorAbility::Admin->value], 'emergency' => true]
-                : ['abilities' => [OperatorAbility::Admin->value], 'emergency' => true],
-        )->assertRedirect(route('bfc.ui.installation-credentials.index'))
-            ->assertStatus(303);
-        $rotate = $this->get(route('bfc.ui.installation-credentials.index'))
-            ->assertOk()
+        );
+        $rotate = $this->post(
+            route('bfc.ui.installation-credentials.rotate', $source->id),
+            $rotatePayload,
+        )->assertStatus(201)
             ->assertSeeHtml('data-testid="installation-credentials-delivery"');
         $replacement = Credential::query()->where('name', $source->name)->whereKeyNot($source->id)->sole();
         $rotationSecret = $this->deliverySecret($rotate, $kind);
@@ -291,17 +296,15 @@ final class InstallationCredentialUiTest extends TestCase
             'user_id' => (string) $actor->getKey(),
             'root' => SigningRootMac::SUBJECT_REF,
             'name' => 'raw-fields-ignored',
-        ])->assertRedirect(route('bfc.ui.installation-credentials.index'))
-            ->assertStatus(303);
+            SubmissionNonce::FIELD => $this->nonceFor(route('bfc.ui.installation-credentials.store')),
+        ])->assertStatus(201)
+            ->assertSeeHtml('data-testid="installation-credentials-delivery"');
         $credential = Credential::query()->where('name', 'raw-fields-ignored')->sole();
         $this->assertSame(CredentialPurpose::SystemDeployment, $credential->purpose);
         $this->assertNull($credential->abilities);
         $this->assertNull($credential->user_id);
         $this->assertSame(SubjectType::Application, $credential->subject_type);
         $this->assertSame('raw-fields-ignored', $credential->subject_ref);
-        $this->get(route('bfc.ui.installation-credentials.index'))
-            ->assertOk()
-            ->assertSeeHtml('data-testid="installation-credentials-delivery"');
     }
 
     public function test_unknown_role_refuses_every_browser_verb_without_effect(): void
@@ -346,8 +349,9 @@ final class InstallationCredentialUiTest extends TestCase
                 'subject_type' => SubjectType::Installation->value,
                 'subject_ref' => 'flag-'.($enabled ? 'on' : 'off'),
                 'name' => 'flag-'.($enabled ? 'on' : 'off'),
-            ])->assertRedirect(route('bfc.ui.installation-credentials.index'))
-                ->assertStatus(303);
+                SubmissionNonce::FIELD => $this->nonceFor(route('bfc.ui.installation-credentials.store')),
+            ])->assertStatus(201)
+                ->assertSeeHtml('data-testid="installation-credentials-delivery"');
             $observed[] = [
                 'delta' => array_map(
                     static fn (int $count, string $key): int => $count - $before[$key],
@@ -356,60 +360,135 @@ final class InstallationCredentialUiTest extends TestCase
                 ),
                 'status' => $response->getStatusCode(),
             ];
-            $this->get(route('bfc.ui.installation-credentials.index'))
-                ->assertOk()
-                ->assertSeeHtml('data-testid="installation-credentials-delivery"');
         }
 
         $this->assertSame($observed[0], $observed[1]);
     }
 
-    public function test_issue_and_rotate_delivery_survives_one_redirected_get_without_repeat_effects(): void
+    public function test_issue_and_rotate_deliver_immediately_and_replay_or_revisit_never_reveals_or_repeats_effects(): void
     {
         $actor = $this->user(UserRole::Member);
         $this->actingAsVersioned($actor, 'web');
 
-        $this->post(route('bfc.ui.installation-credentials.store'), [
+        $issuePayload = [
             'app_purpose' => 'test.deploy',
             'kind' => CredentialKind::Bearer->value,
             'subject_type' => SubjectType::Installation->value,
             'subject_ref' => 'test-created-refresh-proof',
             'name' => 'test-created-refresh-proof',
-        ])->assertRedirect(route('bfc.ui.installation-credentials.index'))
-            ->assertStatus(303)
-            ->assertDontSeeHtml('data-testid="installation-credentials-delivery"');
+            SubmissionNonce::FIELD => $this->nonceFor(route('bfc.ui.installation-credentials.store')),
+        ];
+        $issueDelivery = $this->post(route('bfc.ui.installation-credentials.store'), $issuePayload)
+            ->assertStatus(201)
+            ->assertHeader('Cache-Control', 'no-store, private')
+            ->assertSeeHtml('data-testid="installation-credentials-delivery"');
 
         $afterIssue = $this->effects();
-        $issueDelivery = $this->get(route('bfc.ui.installation-credentials.index'))
-            ->assertOk()
-            ->assertSeeHtml('data-testid="installation-credentials-delivery"');
         $issueSecret = $this->deliverySecret($issueDelivery, CredentialKind::Bearer);
-        $this->assertSame($afterIssue, $this->effects());
 
-        $this->get(route('bfc.ui.installation-credentials.index'))
-            ->assertOk()
+        $this->post(route('bfc.ui.installation-credentials.store'), $issuePayload)
+            ->assertStatus(409)
             ->assertDontSeeHtml('data-testid="installation-credentials-delivery"')
             ->assertDontSee($issueSecret);
         $this->assertSame($afterIssue, $this->effects());
 
+        foreach ([1, 2] as $revisit) {
+            $this->get(route('bfc.ui.installation-credentials.index'))
+                ->assertOk()
+                ->assertHeader('Cache-Control', 'no-store, private')
+                ->assertDontSeeHtml('data-testid="installation-credentials-delivery"')
+                ->assertDontSee($issueSecret);
+        }
+        $this->assertSame($afterIssue, $this->effects());
+
         $issued = Credential::query()->where('name', 'test-created-refresh-proof')->sole();
-        $this->post(route('bfc.ui.installation-credentials.rotate', $issued->id))
-            ->assertRedirect(route('bfc.ui.installation-credentials.index'))
-            ->assertStatus(303)
-            ->assertDontSeeHtml('data-testid="installation-credentials-delivery"');
+        $rotatePayload = [SubmissionNonce::FIELD => $this->nonceFor(
+            route('bfc.ui.installation-credentials.rotate', $issued->id),
+        )];
+        $rotateDelivery = $this->post(route('bfc.ui.installation-credentials.rotate', $issued->id), $rotatePayload)
+            ->assertStatus(201)
+            ->assertHeader('Cache-Control', 'no-store, private')
+            ->assertSeeHtml('data-testid="installation-credentials-delivery"');
 
         $afterRotate = $this->effects();
-        $rotateDelivery = $this->get(route('bfc.ui.installation-credentials.index'))
-            ->assertOk()
-            ->assertSeeHtml('data-testid="installation-credentials-delivery"');
         $rotationSecret = $this->deliverySecret($rotateDelivery, CredentialKind::Bearer);
-        $this->assertSame($afterRotate, $this->effects());
 
-        $this->get(route('bfc.ui.installation-credentials.index'))
-            ->assertOk()
+        $this->post(route('bfc.ui.installation-credentials.rotate', $issued->id), $rotatePayload)
+            ->assertStatus(409)
             ->assertDontSeeHtml('data-testid="installation-credentials-delivery"')
             ->assertDontSee($rotationSecret);
         $this->assertSame($afterRotate, $this->effects());
+
+        foreach ([1, 2] as $revisit) {
+            $this->get(route('bfc.ui.installation-credentials.index'))
+                ->assertOk()
+                ->assertDontSeeHtml('data-testid="installation-credentials-delivery"')
+                ->assertDontSee($rotationSecret);
+        }
+        $this->assertSame($afterRotate, $this->effects());
+    }
+
+    public function test_submission_nonce_refuses_every_binding_mismatch_without_effect_or_delivery(): void
+    {
+        $actor = $this->user(UserRole::Member);
+        $other = $this->user(UserRole::Member);
+        $first = $this->storedCredential(SubjectType::Installation, 'nonce-first');
+        $second = $this->storedCredential(SubjectType::Installation, 'nonce-second');
+        $this->actingAsVersioned($actor, 'web');
+        $sessionId = $this->app['session']->getId();
+        $issuePayload = [
+            'app_purpose' => 'test.deploy',
+            'kind' => CredentialKind::Bearer->value,
+            'subject_type' => SubjectType::Installation->value,
+            'subject_ref' => 'nonce-refusal',
+        ];
+
+        $cases = [
+            'missing' => null,
+            'foreign session' => SubmissionNonce::issue('foreign-session', (string) $actor->getKey(), CredentialVerb::Issue, 'installation-credentials'),
+            'wrong user' => SubmissionNonce::issue($sessionId, (string) $other->getKey(), CredentialVerb::Issue, 'installation-credentials'),
+            'wrong verb' => SubmissionNonce::issue($sessionId, (string) $actor->getKey(), CredentialVerb::Rotate, 'installation-credentials'),
+            'wrong target' => SubmissionNonce::issue($sessionId, (string) $actor->getKey(), CredentialVerb::Issue, 'another-target'),
+        ];
+
+        foreach ($cases as $label => $nonce) {
+            $before = $this->effects();
+            $payload = $issuePayload;
+
+            if ($nonce !== null) {
+                $payload[SubmissionNonce::FIELD] = $nonce;
+            }
+
+            $this->post(route('bfc.ui.installation-credentials.store'), $payload)
+                ->assertStatus(409)
+                ->assertDontSeeHtml('data-testid="installation-credentials-delivery"');
+            $this->assertSame($before, $this->effects(), $label);
+        }
+
+        $wrongTarget = SubmissionNonce::issue(
+            $sessionId,
+            (string) $actor->getKey(),
+            CredentialVerb::Rotate,
+            $first->id,
+        );
+        $before = $this->effects();
+        $this->post(route('bfc.ui.installation-credentials.rotate', $second->id), [
+            SubmissionNonce::FIELD => $wrongTarget,
+        ])->assertStatus(409)->assertDontSeeHtml('data-testid="installation-credentials-delivery"');
+        $this->assertSame($before, $this->effects());
+
+        $expired = SubmissionNonce::issue(
+            $sessionId,
+            (string) $actor->getKey(),
+            CredentialVerb::Rotate,
+            $first->id,
+        );
+        $this->travel(3601)->seconds();
+        $before = $this->effects();
+        $this->post(route('bfc.ui.installation-credentials.rotate', $first->id), [
+            SubmissionNonce::FIELD => $expired,
+        ])->assertStatus(409)->assertDontSeeHtml('data-testid="installation-credentials-delivery"');
+        $this->assertSame($before, $this->effects());
     }
 
     public function test_every_refusal_retains_zero_effect_with_all_flags_off_and_no_ui_purposes(): void
@@ -529,6 +608,7 @@ final class InstallationCredentialUiTest extends TestCase
         string $subjectRef,
         bool $includeHostileFields = false,
     ): array {
+        $this->actingAsVersioned($actor, 'web');
         $expiresAt = now()->addDay()->startOfSecond()->toAtomString();
         $payload = [
             'app_purpose' => $appPurpose,
@@ -538,6 +618,7 @@ final class InstallationCredentialUiTest extends TestCase
             'name' => $name,
             'expires_at' => $expiresAt,
             'code_ttl_seconds' => $kind === CredentialKind::Asymmetric ? 120 : null,
+            SubmissionNonce::FIELD => $this->nonceFor(route('bfc.ui.installation-credentials.store')),
         ];
 
         if ($includeHostileFields) {
@@ -549,12 +630,8 @@ final class InstallationCredentialUiTest extends TestCase
             ];
         }
 
-        $this->actingAsVersioned($actor, 'web')
-            ->post(route('bfc.ui.installation-credentials.store'), $payload)
-            ->assertRedirect(route('bfc.ui.installation-credentials.index'))
-            ->assertStatus(303);
-        $delivery = $this->get(route('bfc.ui.installation-credentials.index'))
-            ->assertOk()
+        $delivery = $this->post(route('bfc.ui.installation-credentials.store'), $payload)
+            ->assertStatus(201)
             ->assertSeeHtml('data-testid="installation-credentials-delivery"');
         $credential = Credential::query()->where('name', $name)->sole();
 
@@ -751,26 +828,60 @@ final class InstallationCredentialUiTest extends TestCase
         return $root;
     }
 
-    /** @return array{credentials: int, audits: int, outbox: int, tokens: int} */
+    /** @return array{credentials: int, audits: int, outbox: int, app_actions: int, app_action_outbox: int, tokens: int} */
     private function effectCounts(): array
     {
         return [
             'credentials' => Credential::query()->count(),
             'audits' => CredentialAuditEvent::query()->count(),
             'outbox' => CredentialOutboxEntry::query()->count(),
+            'app_actions' => DB::table('bfc_app_action_events')->count(),
+            'app_action_outbox' => DB::table('bfc_app_action_outbox')->count(),
             'tokens' => OnboardingToken::query()->count(),
         ];
     }
 
-    /** @return array{counts: array{credentials: int, audits: int, outbox: int, tokens: int}, rows: array<int, array<string, mixed>>} */
+    /** @return array{counts: array<string, int>, rows: array<string, array<int, array<string, mixed>>>} */
     private function effects(): array
     {
         return [
             'counts' => $this->effectCounts(),
-            'rows' => Credential::query()->orderBy('id')->get()
-                ->map(static fn (Credential $credential): array => $credential->getRawOriginal())
-                ->all(),
+            'rows' => [
+                'credentials' => Credential::query()->orderBy('id')->get()
+                    ->map(static fn (Credential $credential): array => $credential->getRawOriginal())
+                    ->all(),
+                'audits' => CredentialAuditEvent::query()->orderBy('id')->get()
+                    ->map(static fn (CredentialAuditEvent $event): array => $event->getRawOriginal())
+                    ->all(),
+                'outbox' => CredentialOutboxEntry::query()->orderBy('id')->get()
+                    ->map(static fn (CredentialOutboxEntry $entry): array => $entry->getRawOriginal())
+                    ->all(),
+                'app_actions' => DB::table('bfc_app_action_events')->orderBy('id')->get()->map(fn ($row): array => (array) $row)->all(),
+                'app_action_outbox' => DB::table('bfc_app_action_outbox')->orderBy('id')->get()->map(fn ($row): array => (array) $row)->all(),
+                'tokens' => OnboardingToken::query()->orderBy('id')->get()
+                    ->map(static fn (OnboardingToken $token): array => $token->getRawOriginal())
+                    ->all(),
+            ],
         ];
+    }
+
+    private function nonceFor(string $action): string
+    {
+        $page = $this->get(route('bfc.ui.installation-credentials.index'))->assertOk();
+        $matched = preg_match(
+            '/<form[^>]*action="'.preg_quote(htmlspecialchars($action, ENT_QUOTES), '/').'"[^>]*>.*?name="submission_nonce" value="([^"]+)"/s',
+            (string) $page->getContent(),
+            $matches,
+        );
+        $this->assertSame(1, $matched, 'The installation mutation form must carry a submission nonce.');
+
+        $this->assertDatabaseHas('bfc_submission_nonces', [
+            'nonce_hash' => hash('sha256', html_entity_decode($matches[1], ENT_QUOTES | ENT_HTML5)),
+            'session_hash' => hash('sha256', $this->app['session']->getId()),
+        ]);
+        $this->withCookie((string) config('session.cookie'), $this->app['session']->getId());
+
+        return html_entity_decode($matches[1], ENT_QUOTES | ENT_HTML5);
     }
 
     private function allFlagsOff(): void
