@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\IntegrationEventContention;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
+use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
 use ArtisanBuild\BuiltForCloud\IntegrationEntitlement;
 use ArtisanBuild\BuiltForCloud\IntegrationEvent;
 use ArtisanBuild\BuiltForCloud\Invitation;
@@ -121,6 +122,10 @@ final class OffboardSubject
         }
 
         $subject = $this->targetSubject($options);
+
+        if ($subject->type === SubjectType::Installation && $subject->ref === SigningRootMac::SUBJECT_REF) {
+            throw CredentialVerbRefused::signingRootLifecycleOnly();
+        }
 
         if (! $this->verbAllowed(CredentialVerb::Offboard, $subject)) {
             throw CredentialVerbRefused::byMatrix(CredentialVerb::Offboard);

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
 use Illuminate\Database\Eloquent\Builder;
 
 /**
@@ -43,6 +44,8 @@ final readonly class CredentialManagementScope
      */
     public function apply(Builder $query): Builder
     {
+        SigningRootMac::excludeReservedFrom($query);
+
         $this->ownership === CredentialOwnership::Installation
             ? $query->whereNull('user_id')
             : $query->whereNotNull('user_id');

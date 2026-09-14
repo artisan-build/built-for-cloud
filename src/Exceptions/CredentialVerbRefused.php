@@ -77,4 +77,9 @@ final class CredentialVerbRefused extends RuntimeException
             .'Overrides are opt-in: a declaration that has not opted in denies every one.',
         );
     }
+
+    public static function signingRootLifecycleOnly(): self
+    {
+        return new self('The installation signing root is reserved for its dedicated lifecycle.');
+    }
 }

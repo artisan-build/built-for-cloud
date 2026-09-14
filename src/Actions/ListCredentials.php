@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialManagementScope;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
+use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
 use ArtisanBuild\BuiltForCloud\Subject;
 
@@ -44,6 +45,7 @@ final class ListCredentials
         $unsupported = $this->declaredUnsupportedFields();
 
         $query = Credential::query();
+        SigningRootMac::excludeReservedFrom($query);
 
         if ($subject !== null) {
             $query->where('subject_type', $subject->type->value)

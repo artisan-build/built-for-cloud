@@ -13,6 +13,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\SigningRootRefused;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\RotationResult;
 
@@ -71,7 +72,7 @@ final class CredentialRotateCommand extends SystemAuthorityCommand
             }
 
             $result = $rotate((string) $id, RotateOptions::fromInput($input), AuditActor::cliOperator());
-        } catch (CredentialVerbRefused|InvalidCredentialInput|RotationRefused|RotationCutoverIncomplete|RewrapInProgress $refused) {
+        } catch (CredentialVerbRefused|InvalidCredentialInput|RotationRefused|RotationCutoverIncomplete|RewrapInProgress|SigningRootRefused $refused) {
             $this->error($refused->getMessage());
 
             return self::FAILURE;

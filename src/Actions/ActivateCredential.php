@@ -20,6 +20,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
+use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
@@ -142,6 +143,10 @@ final class ActivateCredential
 
         if ($credential === null) {
             return null;
+        }
+
+        if (SigningRootMac::isReserved($credential)) {
+            throw CredentialVerbRefused::signingRootLifecycleOnly();
         }
 
         if ($credential->kind !== CredentialKind::Hmac) {

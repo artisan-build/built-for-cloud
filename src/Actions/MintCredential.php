@@ -92,8 +92,11 @@ final class MintCredential
         }
 
         if ($options->purpose === CredentialPurpose::SigningRoot
-            || ($subject->type === SubjectType::Installation && $subject->ref === CredentialPurpose::SIGNING_ROOT_SUBJECT_REF)
-            || ! $options->purpose->allowedFor($options->kind, $subject->type)) {
+            || ($subject->type === SubjectType::Installation && $subject->ref === CredentialPurpose::SIGNING_ROOT_SUBJECT_REF)) {
+            throw CredentialVerbRefused::signingRootLifecycleOnly();
+        }
+
+        if (! $options->purpose->allowedFor($options->kind, $subject->type)) {
             throw InvalidCredentialInput::purposeNotAllowed();
         }
     }
