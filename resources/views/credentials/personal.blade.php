@@ -30,6 +30,7 @@
         @foreach ($choices as $choice)
             <form data-testid="personal-credentials-issue-option" method="POST" action="{{ route('bfc.ui.personal-credentials.store') }}">
                 @csrf
+                <input type="hidden" name="{{ \ArtisanBuild\BuiltForCloud\PersonalSubmissionNonce::FIELD }}" value="{{ $choice['submissionNonce'] }}">
                 <input type="hidden" name="app_purpose" value="{{ $choice['appPurpose'] }}">
                 <input type="hidden" name="kind" value="{{ $choice['kind']->value }}">
                 <p>{{ $choice['appPurpose'] }} / {{ $choice['kind']->value }}</p>
@@ -53,6 +54,7 @@
                     <span>{{ $credential->status }}</span>
                     <form method="POST" action="{{ route('bfc.ui.personal-credentials.rotate', $credential->id) }}">
                         @csrf
+                        <input type="hidden" name="{{ \ArtisanBuild\BuiltForCloud\PersonalSubmissionNonce::FIELD }}" value="{{ $rotationNonces[$credential->id] }}">
                         @if ($credential->kind === \ArtisanBuild\BuiltForCloud\CredentialKind::Asymmetric)
                             <label>Enrollment code lifetime in seconds <input name="code_ttl_seconds" inputmode="numeric" required></label>
                         @endif

@@ -105,7 +105,7 @@ final readonly class PersonalCredentialSurface
      */
     public function mine(Request $request): array
     {
-        return ($this->list)($this->requireSubject($request));
+        return ($this->list)(managementScope: $this->personalScope($request));
     }
 
     /**
@@ -145,6 +145,7 @@ final readonly class PersonalCredentialSurface
         Request $request,
         CredentialPurpose $purpose,
         MintOptions $options,
+        ?PersonalSubmissionNonce $submission = null,
     ): MintResult {
         $subject = $this->requireSubject($request);
 
@@ -152,6 +153,7 @@ final readonly class PersonalCredentialSurface
             $subject,
             $this->selfServiceOptions($options, $subject, $purpose),
             $this->actor(),
+            $submission,
         );
     }
 
@@ -167,15 +169,20 @@ final readonly class PersonalCredentialSurface
         return array_values(array_unique($kinds, SORT_REGULAR));
     }
 
-    public function rotateMine(Request $request, string $id, RotateOptions $options): ?RotationResult
-    {
+    public function rotateMine(
+        Request $request,
+        string $id,
+        RotateOptions $options,
+        ?PersonalSubmissionNonce $submission = null,
+    ): ?RotationResult {
         $subject = $this->requireSubject($request);
 
         return ($this->rotate)(
             $id,
             $options,
             $this->actor(),
-            CredentialManagementScope::personal($subject),
+            $this->personalScope($request, $subject),
+            $submission,
         );
     }
 
@@ -192,7 +199,40 @@ final readonly class PersonalCredentialSurface
     {
         $subject = $this->requireSubject($request);
 
-        return ($this->revoke)($id, $this->actor(), $subject);
+        return ($this->revoke)(
+            $id,
+            $this->actor(),
+            managementScope: $this->personalScope($request, $subject),
+        );
+    }
+
+    public function issueSubmissionNonce(Request $request, CredentialVerb $verb, string $target): string
+    {
+        $this->requireSubject($request);
+
+        return PersonalSubmissionNonce::issue(
+            $request->session()->getId(),
+            $this->requireSessionUserId(),
+            $verb,
+            $target,
+        );
+    }
+
+    public function presentedSubmissionNonce(
+        Request $request,
+        mixed $nonce,
+        CredentialVerb $verb,
+        string $target,
+    ): PersonalSubmissionNonce {
+        $this->requireSubject($request);
+
+        return PersonalSubmissionNonce::presented(
+            $nonce,
+            $request->session()->getId(),
+            $this->requireSessionUserId(),
+            $verb,
+            $target,
+        );
     }
 
     /**
@@ -368,6 +408,19 @@ final readonly class PersonalCredentialSurface
         $id = $user->getAuthIdentifier();
 
         return is_scalar($id) && (string) $id !== '' ? (string) $id : null;
+    }
+
+    private function requireSessionUserId(): string
+    {
+        return $this->sessionUserId() ?? throw SelfServiceUnavailable::noLocalUserIdentifier();
+    }
+
+    private function personalScope(Request $request, ?Subject $subject = null): CredentialManagementScope
+    {
+        return CredentialManagementScope::personal(
+            $subject ?? $this->requireSubject($request),
+            $this->requireSessionUserId(),
+        );
     }
 
     /**

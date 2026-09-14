@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
+use ArtisanBuild\BuiltForCloud\Contracts\DeclaresSelfServiceMintPolicy;
+use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -22,6 +25,8 @@ final readonly class CredentialManagementScope
         private array $subjectTypes,
         private array $excludedAbilities,
         private ?Subject $subject = null,
+        private ?string $userId = null,
+        private bool $selfService = false,
     ) {}
 
     public static function memberInstallation(): self
@@ -33,13 +38,15 @@ final readonly class CredentialManagementScope
         );
     }
 
-    public static function personal(Subject $subject): self
+    public static function personal(Subject $subject, string $userId): self
     {
         return new self(
             CredentialOwnership::Account,
             [$subject->type->value],
             [],
             $subject,
+            $userId,
+            true,
         );
     }
 
@@ -67,6 +74,10 @@ final readonly class CredentialManagementScope
             $query->where('subject_ref', $this->subject->ref);
         }
 
+        if ($this->userId !== null) {
+            $query->where('user_id', $this->userId);
+        }
+
         foreach ($this->excludedAbilities as $ability) {
             $query->where(static function (Builder $query) use ($ability): void {
                 $query->whereNull('abilities')
@@ -81,5 +92,31 @@ final readonly class CredentialManagementScope
     public function firstExcludedAbility(?array $abilities): ?string
     {
         return array_values(array_intersect($abilities ?? [], $this->excludedAbilities))[0] ?? null;
+    }
+
+    public function assertRotationAllowed(Credential $credential): void
+    {
+        if (! $this->selfService) {
+            return;
+        }
+
+        $declaration = app(CredentialDeclaration::class);
+        $policy = $declaration instanceof DeclaresSelfServiceMintPolicy ? $declaration : null;
+        $kinds = $policy?->selfServiceKinds($credential->subject()) ?? [CredentialKind::Bearer];
+
+        if (! in_array($credential->kind, $kinds, true)) {
+            throw CredentialVerbRefused::selfServiceKind($credential->kind);
+        }
+
+        $abilities = array_values(array_filter(
+            $policy?->selfServiceAbilities($credential->subject()) ?? [],
+            static fn (string $ability): bool => trim($ability) !== '',
+        ));
+
+        foreach ($credential->abilities ?? [] as $ability) {
+            if (! in_array($ability, $abilities, true)) {
+                throw CredentialVerbRefused::abilityWidening($ability);
+            }
+        }
     }
 }

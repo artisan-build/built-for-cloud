@@ -312,10 +312,15 @@ final class StandaloneRouteOwnership
 
     private static function requiresStandaloneAuthority(Route $route): bool
     {
-        $name = $route->getName();
-
-        return $name !== 'bfc.landing'
-            && (! is_string($name) || ! str_starts_with($name, 'bfc.ui.'));
+        return ! in_array($route->getName(), [
+            'bfc.landing',
+            'bfc.ui.home',
+            'bfc.ui.logout',
+            'bfc.ui.personal-credentials.index',
+            'bfc.ui.personal-credentials.store',
+            'bfc.ui.personal-credentials.rotate',
+            'bfc.ui.personal-credentials.destroy',
+        ], true);
     }
 
     private static function reservedOwner(Route $route): string

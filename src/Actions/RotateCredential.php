@@ -32,6 +32,7 @@ use ArtisanBuild\BuiltForCloud\MintedSecret;
 use ArtisanBuild\BuiltForCloud\MintResult;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
+use ArtisanBuild\BuiltForCloud\PersonalSubmissionNonce;
 use ArtisanBuild\BuiltForCloud\ReportedStatus;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\RotationResult;
@@ -115,6 +116,7 @@ final class RotateCredential
         RotateOptions $options,
         ?AuditActor $actor = null,
         ?CredentialManagementScope $managementScope = null,
+        ?PersonalSubmissionNonce $submission = null,
     ): ?RotationResult {
         OperatorAbility::assertValues($options->abilities);
 
@@ -141,7 +143,7 @@ final class RotateCredential
         }
 
         $phaseOne = fn (): ?RotationResult => DB::transaction(
-            fn (): ?RotationResult => $this->mintReplacement($id, $options, $actor, $managementScope),
+            fn (): ?RotationResult => $this->mintReplacement($id, $options, $actor, $managementScope, $submission),
         );
 
         // The writer barrier (SEC-V3-08, check-through-commit): an
@@ -230,6 +232,7 @@ final class RotateCredential
         RotateOptions $options,
         ?AuditActor $actor,
         ?CredentialManagementScope $managementScope,
+        ?PersonalSubmissionNonce $submission,
     ): ?RotationResult {
         $query = Credential::query()->whereKey($id);
         $managementScope?->apply($query);
@@ -242,12 +245,15 @@ final class RotateCredential
         }
 
         $source->assertValidStoredPurpose();
+        $managementScope?->assertRotationAllowed($source);
 
         // The matrix consults the subject the ROW declares — never
         // anything the caller supplies (SEC-V3-07).
         if (! $this->verbAllowed(CredentialVerb::Rotate, $source->subject())) {
             throw CredentialVerbRefused::byMatrix(CredentialVerb::Rotate);
         }
+
+        $submission?->consume();
 
         if ($source->status === CredentialStatus::Pending) {
             throw RotationRefused::sourcePending($id);
