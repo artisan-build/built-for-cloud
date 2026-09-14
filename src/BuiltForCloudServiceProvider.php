@@ -54,6 +54,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneMemberships;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\StandalonePasswordRecovery;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneSessions;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\UiLogout;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
@@ -469,6 +470,9 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $uiRoutes[] = $router->get('/bfc/ui', UiHome::class)
             ->middleware([...$personal, EnsureUiAuthority::class, EnsureUserIsAuthenticated::class])
             ->name('bfc.ui.home');
+        $uiRoutes[] = $router->post('/bfc/ui/logout', UiLogout::class)
+            ->middleware([...$personal, EnsureUiAuthority::class, EnsureUserIsAuthenticated::class])
+            ->name('bfc.ui.logout');
 
         $router->get('/bfc/managed/login', [ManagedAuthentication::class, 'create'])
             ->middleware([EnsureManagedAuthority::class, ...$personal])

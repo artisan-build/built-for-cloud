@@ -312,14 +312,14 @@ final class StandaloneRouteOwnership
 
     private static function requiresStandaloneAuthority(Route $route): bool
     {
-        return ! in_array($route->getName(), ['bfc.landing', 'bfc.ui.home'], true);
+        return ! in_array($route->getName(), ['bfc.landing', 'bfc.ui.home', 'bfc.ui.logout'], true);
     }
 
     private static function reservedOwner(Route $route): string
     {
         return match ($route->getName()) {
             'bfc.landing' => 'the built-for-cloud landing page',
-            'bfc.ui.home' => 'the built-for-cloud package user interface',
+            'bfc.ui.home', 'bfc.ui.logout' => 'the built-for-cloud package user interface',
             default => 'built-for-cloud standalone authentication',
         };
     }

@@ -23,10 +23,20 @@ final readonly class UiHome
         $authority = InstallationAuthority::current();
         $role = RolePolicy::role($user->role);
 
+        $memberManagement = (bool) config('built-for-cloud.ui.member_management', false)
+            && RolePolicy::canManageMembers($role);
+        $managedMemberManagement = $memberManagement && $authority->mode === AuthorityMode::Managed;
+
         return view('bfc::home', [
             'manifest' => $manifest,
-            'memberManagement' => (bool) config('built-for-cloud.ui.member_management', false)
-                && RolePolicy::canManageMembers($role),
+            'memberManagement' => $memberManagement,
+            'memberManagementHref' => $managedMemberManagement
+                ? '#managed-members'
+                : route('bfc.members.index'),
+            'managedMembers' => $managedMemberManagement
+                ? User::query()->whereNotNull('scalpels_id')->orderBy('name')->orderBy('id')->get()
+                : collect(),
+            'managedMemberManagement' => $managedMemberManagement,
             'sessionManagement' => (bool) config('built-for-cloud.ui.session_management', false)
                 && $authority->mode === AuthorityMode::Standalone,
             'managedTransitions' => (bool) config('built-for-cloud.ui.managed_transitions', false)

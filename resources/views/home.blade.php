@@ -17,7 +17,7 @@
 
     <nav data-testid="ui-navigation">
         @if ($memberManagement)
-            <a data-testid="ui-nav-member-management" href="{{ route('bfc.members.index') }}">Members</a>
+            <a data-testid="ui-nav-member-management" href="{{ $memberManagementHref }}">Members</a>
         @endif
         @if ($sessionManagement)
             <a data-testid="ui-nav-session-management" href="{{ route('bfc.sessions.index') }}">Sessions</a>
@@ -31,6 +31,26 @@
         @if ($installationCredentials)
             <a data-testid="ui-nav-installation-credentials" href="{{ url('/bfc/ui/credentials/installation') }}">Installation credentials</a>
         @endif
+        <form data-testid="ui-logout-form" method="POST" action="{{ route('bfc.ui.logout') }}">
+            @csrf
+            <button type="submit">Log out</button>
+        </form>
     </nav>
+
+    @if ($managedMemberManagement)
+        <section id="managed-members" data-testid="managed-members-list">
+            <p data-testid="managed-members-incomplete">Locally materialized identities only; this is not a complete or current authority roster.</p>
+            <ul>
+                @foreach ($managedMembers as $member)
+                    <li data-testid="managed-members-item">
+                        <strong>{{ $member->name }}</strong>
+                        <span>{{ $member->email }}</span>
+                        <span>{{ $member->managed_membership_role }}</span>
+                        <span>{{ $member->managed_membership_status }}</span>
+                    </li>
+                @endforeach
+            </ul>
+        </section>
+    @endif
 </section>
 @endsection

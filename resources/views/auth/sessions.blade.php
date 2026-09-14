@@ -29,7 +29,7 @@
                         @if (hash_equals($currentSessionId, (string) $session->id))
                             <strong data-testid="sessions-current">Current</strong>
                         @else
-                            <form method="POST" action="{{ route('bfc.sessions.destroy', $session->id) }}">
+                            <form data-testid="sessions-revoke-form" method="POST" action="{{ route('bfc.sessions.destroy', $session->id) }}">
                                 @csrf
                                 @method('DELETE')
                                 <label>Current password <input name="password" type="password" autocomplete="current-password" required></label>
