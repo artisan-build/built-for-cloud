@@ -33,6 +33,11 @@ final class InvalidCredentialInput extends InvalidArgumentException
         return new self(sprintf('Unknown credential purpose "%s".', $purpose));
     }
 
+    public static function invalidAppPurposeMapping(): self
+    {
+        return new self('The app purpose mapping is invalid.');
+    }
+
     public static function purposeNotAllowed(): self
     {
         return new self('The credential purpose is not allowed for this kind and subject.');

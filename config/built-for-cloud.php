@@ -54,6 +54,8 @@ return [
         'guard' => env('BUILT_FOR_CLOUD_CREDENTIAL_GUARD', 'bfc'),
         'declaration' => null,
         'session_guard' => null,
+        // App-owned operation id => one closed package protocol purpose.
+        'app_purposes' => [],
     ],
 
     /*

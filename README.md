@@ -45,6 +45,19 @@ account freshness.
 | **Revocation** | Stops a credential resolving immediately and records the lifecycle event. |
 | **Usage** | Successful presentations update `last_used_at`; first use consumes an associated claim code in the same transaction. |
 
+### App adoption purposes
+
+An application can map its own fixed operation ids to the package's closed protocol-purpose
+vocabulary through `built-for-cloud.credentials.app_purposes`. The map is empty by default and each
+entry has exactly one string value, for example `'your-app.ingest' => 'consumption'`. Resolve it with
+`AppPurposeRegistry::purpose()`, which returns one `CredentialPurpose` or throws
+`InvalidCredentialInput`; missing or malformed ids, malformed maps, list values, and unknown enum
+values all fail closed without echoing configuration. App ids must match
+`^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-z0-9._-]*$`.
+
+This mapping is enforcement data. `built-for-cloud.ui.*` remains display-only and cannot change a
+result; labels, ordering, and visibility are never purpose authority.
+
 ### Client identity
 
 A BfC client app (`artisan-build/bfc-client`) sends a stable `X-BfC-Client-Id` header alongside the
