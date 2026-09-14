@@ -89,11 +89,8 @@ final readonly class PostgresAdministrator
             'prefix_indexes' => true,
             'search_path' => 'public',
             'sslmode' => $this->sslMode,
-            'options' => sprintf(
-                '--application_name=%s --lock_timeout=%dms --statement_timeout=60000ms',
-                $applicationName,
-                $lockTimeoutMilliseconds,
-            ),
+            'application_name' => $applicationName,
+            'options' => [],
         ];
     }
 

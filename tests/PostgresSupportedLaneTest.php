@@ -30,8 +30,12 @@ it('runs and records the representative supported PostgreSQL matrix', function (
     $secondary = $this->postgresLaneProbe();
     expect($primary->scalar('select current_database()'))->toBe($secondary->scalar('select current_database()'))
         ->and($primary->scalar('select pg_backend_pid()'))->not->toBe($secondary->scalar('select pg_backend_pid()'))
+        ->and($primary->scalar('show application_name'))->toBe('bfc-p6-primary')
+        ->and($secondary->scalar('show application_name'))->toBe('bfc-p6-secondary')
         ->and($primary->scalar('show lock_timeout'))->toBe('750ms')
-        ->and($secondary->scalar('show lock_timeout'))->toBe('750ms');
+        ->and($secondary->scalar('show lock_timeout'))->toBe('750ms')
+        ->and($primary->scalar("select (extract(epoch from current_setting('statement_timeout')::interval) * 1000)::bigint::text"))->toBe('60000')
+        ->and($secondary->scalar("select (extract(epoch from current_setting('statement_timeout')::interval) * 1000)::bigint::text"))->toBe('60000');
 
     User::query()->create(['name' => 'Unique A', 'email' => 'Postgres-Matrix@example.test']);
     expect(fn () => User::query()->create(['name' => 'Unique B', 'email' => 'postgres-matrix@example.test']))

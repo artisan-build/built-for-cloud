@@ -6,6 +6,7 @@ use ArtisanBuild\BuiltForCloud\Testing\DisposablePostgresLane;
 use ArtisanBuild\BuiltForCloud\Testing\PostgresAdministrator;
 use ArtisanBuild\BuiltForCloud\Testing\PostgresRunIdentity;
 use ArtisanBuild\BuiltForCloud\Testing\PostgresTeardownResult;
+use Illuminate\Database\Connectors\PostgresConnector;
 
 function p6IdentityDirectory(): string
 {
@@ -93,12 +94,16 @@ it('keeps administrator coordinates separate from generated target configuration
     $target = 'bfc_p6_'.str_repeat('a', 32);
     $primary = $administrator->laravelConnection($target, 'bfc-p6-primary', 750);
     $secondary = $administrator->laravelConnection($target, 'bfc-p6-secondary', 750);
+    $connector = new PostgresConnector;
 
     expect($primary['database'])->toBe($target)
         ->and($secondary['database'])->toBe($target)
-        ->and($primary['options'])->not->toBe($secondary['options'])
-        ->and($primary['options'])->toContain('--lock_timeout=750ms')
-        ->and($secondary['options'])->toContain('--lock_timeout=750ms')
+        ->and($primary['application_name'])->toBe('bfc-p6-primary')
+        ->and($secondary['application_name'])->toBe('bfc-p6-secondary')
+        ->and($primary['options'])->toBe([])
+        ->and($secondary['options'])->toBe([])
+        ->and($connector->getOptions($primary))->toBeArray()
+        ->and($connector->getOptions($secondary))->toBeArray()
         ->and($primary)->not->toHaveKey('admin_database');
 });
 

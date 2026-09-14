@@ -19,6 +19,8 @@ final class DisposablePostgresLane
 
     public const int LOCK_TIMEOUT_MILLISECONDS = 750;
 
+    public const int STATEMENT_TIMEOUT_MILLISECONDS = 60_000;
+
     private ?DatabaseManager $manager = null;
 
     private bool $dropped = false;
@@ -121,13 +123,22 @@ final class DisposablePostgresLane
         $primaryPdo = $primary->getPdo();
         $secondaryPdo = $secondary->getPdo();
 
+        foreach ([$primary, $secondary] as $connection) {
+            $connection->scalar("select set_config('lock_timeout', ?, false)", [self::LOCK_TIMEOUT_MILLISECONDS.'ms']);
+            $connection->scalar("select set_config('statement_timeout', ?, false)", [self::STATEMENT_TIMEOUT_MILLISECONDS.'ms']);
+        }
+
         if ($primary->getDriverName() !== 'pgsql'
             || $secondary->getDriverName() !== 'pgsql'
             || $primaryPdo === $secondaryPdo
             || $primary->scalar('select current_database()') !== $this->databaseName()
             || $secondary->scalar('select current_database()') !== $this->databaseName()
+            || $primary->scalar('show application_name') !== 'bfc-p6-primary'
+            || $secondary->scalar('show application_name') !== 'bfc-p6-secondary'
             || $primary->scalar('show lock_timeout') !== self::LOCK_TIMEOUT_MILLISECONDS.'ms'
             || $secondary->scalar('show lock_timeout') !== self::LOCK_TIMEOUT_MILLISECONDS.'ms'
+            || $primary->scalar("select (extract(epoch from current_setting('statement_timeout')::interval) * 1000)::bigint::text") !== (string) self::STATEMENT_TIMEOUT_MILLISECONDS
+            || $secondary->scalar("select (extract(epoch from current_setting('statement_timeout')::interval) * 1000)::bigint::text") !== (string) self::STATEMENT_TIMEOUT_MILLISECONDS
             || $primary->scalar('select pg_backend_pid()') === $secondary->scalar('select pg_backend_pid()')) {
             throw new RuntimeException('The PostgreSQL lane did not establish two distinct bounded target connections.');
         }
