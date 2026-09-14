@@ -369,6 +369,7 @@ try {
         p6LiveFail('The fresh host support directory could not be created.');
     }
     p6LiveCopy(__DIR__.'/P6LiveState.php', $host.'/app/Support/P6LiveState.php');
+    p6LiveCopy(__DIR__.'/P6LiveManagedUser.php', $host.'/app/Support/P6LiveManagedUser.php');
     p6LiveCopy(__DIR__.'/P6LiveServiceProvider.php', $host.'/app/Providers/P6LiveServiceProvider.php');
     p6LiveCopy(__DIR__.'/p6c-host-cli.php', $host.'/p6c-host-cli.php');
     file_put_contents(

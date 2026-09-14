@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Support\P6LiveManagedUser;
 use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyring;
@@ -80,24 +81,7 @@ if ($action === 'managed') {
         'managed_connection_status' => 'active',
         'managed_connection_generation' => 7,
     ]);
-    $user = User::query()->create([
-        'name' => 'P6 Managed User',
-        'email' => 'p6-managed@example.test',
-        'role' => 'member',
-        'status' => 'active',
-        'scalpels_issuer' => 'https://p6-authority.test',
-        'scalpels_connection_id' => 'p6-connection',
-        'scalpels_id' => 'p6-managed-subject',
-        'membership_confirmed_at' => now()->subMinutes(10),
-        'membership_checked_at' => now()->subMinutes(10),
-        'membership_response_at' => now()->subMinutes(10),
-        'managed_membership_status' => 'active',
-        'managed_membership_role' => 'member',
-        'managed_membership_generation' => 7,
-        'managed_membership_roster_version' => 1,
-        'managed_membership_response_sequence' => 1,
-        'managed_membership_responded_at' => now()->subMinutes(10),
-    ]);
+    $user = P6LiveManagedUser::create();
     fwrite(STDOUT, json_encode(['user_id' => (string) $user->getKey()], JSON_THROW_ON_ERROR));
     exit(0);
 }
