@@ -28,7 +28,7 @@ final class LandingPageRegistrar
 
     private function assertRootIsAvailable(Router $router): void
     {
-        foreach ($router->getRoutes() as $route) {
+        foreach ($router->getRoutes()->getRoutes() as $route) {
             $rootCollision = $route->getDomain() === null
                 && $route->uri() === '/'
                 && array_intersect($route->methods(), ['GET', 'HEAD']) !== [];

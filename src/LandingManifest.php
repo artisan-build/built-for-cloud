@@ -36,7 +36,6 @@ final readonly class LandingManifest
             $values[$key] = $value;
         }
 
-        /** @var array{name: string, slug: string, description: string, icon: string, product_url: string} $values */
         if (preg_match('/^[a-z0-9]+(?:-[a-z0-9]+)*$/D', $values['slug']) !== 1) {
             throw new RuntimeException('The built-for-cloud landing manifest [slug] must be lower-kebab-case.');
         }
