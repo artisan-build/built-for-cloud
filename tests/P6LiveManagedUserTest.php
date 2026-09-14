@@ -17,6 +17,10 @@ require_once __DIR__.'/Live/P6LiveManagedUser.php';
 
 uses(RefreshDatabase::class);
 
+afterEach(function (): void {
+    CarbonImmutable::setTestNow();
+});
+
 it('persists a bound stale managed user that enters the authority refresh path', function (): void {
     CarbonImmutable::setTestNow('2026-09-15T12:00:00+00:00');
     DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
