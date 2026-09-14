@@ -11,6 +11,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialAuthenticator;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthManager;
@@ -77,7 +78,11 @@ final class CredentialGuard implements Guard
 
     private ?Credential $credential = null;
 
-    private bool $attempted = false;
+    private ?Credential $resolvedCredential = null;
+
+    private bool $resolutionAttempted = false;
+
+    private bool $authenticationAttempted = false;
 
     private ?Request $resolvedFor = null;
 
@@ -104,22 +109,43 @@ final class CredentialGuard implements Guard
     public function user(): ?Authenticatable
     {
         $request = $this->request();
+        $this->resetForRequest($request);
 
-        // The auth manager caches guard instances across requests (long-lived
-        // workers, multiple calls in one test); a principal resolved for an
-        // earlier request must never leak into this one.
-        if ($this->resolvedFor !== $request) {
-            $this->user = null;
-            $this->credential = null;
-            $this->attempted = false;
-            $this->resolvedFor = $request;
-        }
-
-        if ($this->user !== null || $this->attempted) {
+        if ($this->authenticationAttempted && ! $this->resolutionAttempted) {
+            // A principal explicitly supplied through Guard::setUser() keeps
+            // the framework contract; no credential purpose exists to check.
             return $this->user;
         }
 
-        $this->attempted = true;
+        $credential = $this->credentialForPurposes([
+            CredentialPurpose::Consumption,
+            CredentialPurpose::SystemDeployment,
+        ]);
+
+        return $credential === null ? null : $this->user;
+    }
+
+    /**
+     * Resolve once for this request, but authorize the resolved row against
+     * every caller's own protocol-purpose set.
+     *
+     * @param  list<CredentialPurpose>  $purposes
+     */
+    public function credentialForPurposes(array $purposes): ?Credential
+    {
+        $request = $this->request();
+        $this->resetForRequest($request);
+
+        if ($this->authenticationAttempted && ! $this->resolutionAttempted) {
+            // setUser() published a principal without authenticating a
+            // credential, matching the Guard contract's existing behavior.
+            return null;
+        }
+
+        if (! $this->resolutionAttempted) {
+            $this->resolutionAttempted = true;
+            $this->resolvedCredential = $this->resolveCredential($request);
+        }
 
         // Full account containment (PRD 1.15, SEC-V3-04) needs no check
         // here: the resolver itself refuses an offboarded principal —
@@ -127,11 +153,17 @@ final class CredentialGuard implements Guard
         // offboarded subject, or a credential bound to a deactivated
         // user, never resolves in the first place, indistinguishably from
         // an unknown secret.
-        $credential = $this->resolveCredential($request);
+        $credential = $this->resolvedCredential;
 
-        if ($credential === null) {
+        if ($credential === null || ! in_array($credential->purpose, $purposes, true)) {
             return null;
         }
+
+        if ($this->authenticationAttempted) {
+            return $this->credential;
+        }
+
+        $this->authenticationAttempted = true;
 
         try {
             $sessionUser = $this->sessionUser();
@@ -176,7 +208,7 @@ final class CredentialGuard implements Guard
         $this->credential = $credential;
         $this->user = $principal;
 
-        return $this->user;
+        return $this->credential;
     }
 
     public function id(): int|string|null
@@ -195,12 +227,22 @@ final class CredentialGuard implements Guard
             return false;
         }
 
-        return $this->resolver->resolve(CredentialKind::Bearer, $secret) !== null
-            || $this->resolver->resolve(CredentialKind::Basic, $secret) !== null;
+        $purposes = [CredentialPurpose::Consumption, CredentialPurpose::SystemDeployment];
+        $bearer = $this->resolver->resolve(CredentialKind::Bearer, $secret);
+
+        if ($bearer !== null && in_array($bearer->purpose, $purposes, true)) {
+            return true;
+        }
+
+        $basic = $this->resolver->resolve(CredentialKind::Basic, $secret);
+
+        return $basic !== null && in_array($basic->purpose, $purposes, true);
     }
 
     public function hasUser(): bool
     {
+        $this->resetForRequest($this->request());
+
         return $this->user !== null;
     }
 
@@ -209,9 +251,9 @@ final class CredentialGuard implements Guard
      */
     public function setUser(Authenticatable $user): self
     {
+        $this->resetForRequest($this->request());
         $this->user = $user;
-        $this->attempted = true;
-        $this->resolvedFor = $this->request();
+        $this->authenticationAttempted = true;
 
         return $this;
     }
@@ -221,9 +263,28 @@ final class CredentialGuard implements Guard
      */
     public function credential(): ?Credential
     {
-        $this->user();
+        return $this->credentialForPurposes([
+            CredentialPurpose::Consumption,
+            CredentialPurpose::SystemDeployment,
+        ]);
+    }
 
-        return $this->credential;
+    /**
+     * The AuthManager reuses guard instances in long-lived workers. Every
+     * cache in this guard is request-local and must turn over together.
+     */
+    private function resetForRequest(Request $request): void
+    {
+        if ($this->resolvedFor === $request) {
+            return;
+        }
+
+        $this->user = null;
+        $this->credential = null;
+        $this->resolvedCredential = null;
+        $this->resolutionAttempted = false;
+        $this->authenticationAttempted = false;
+        $this->resolvedFor = $request;
     }
 
     private function resolveCredential(Request $request): ?Credential

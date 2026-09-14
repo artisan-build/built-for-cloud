@@ -14,6 +14,7 @@ use ArtisanBuild\BuiltForCloud\Console\ConsoleEntryRefusalReason;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Console\RequestAssertion;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
 use ArtisanBuild\BuiltForCloud\Exceptions\AssertionRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleEntryRefused;
@@ -97,15 +98,18 @@ final class AuthenticateMcp
         }
 
         $credential = $this->credentials->resolve(CredentialKind::Bearer, $bearer);
+        $compoundAdmin = $credential?->purpose === CredentialPurpose::OperatorManagement
+            && $credential->subject_type === SubjectType::Operator
+            && $credential->hasAbility(OperatorAbility::Admin->value);
 
-        if ($credential === null || ! $this->usage->recordUsage($credential)) {
+        if (($credential?->purpose !== CredentialPurpose::Mcp && ! $compoundAdmin)
+            || ! $this->usage->recordUsage($credential)) {
             return $this->refuseToken();
         }
 
         $this->clientIdentities->recordClientIdentityFromRequest($request, $credential);
 
-        if ($credential->subject_type === SubjectType::Operator
-            && $credential->hasAbility(OperatorAbility::Admin->value)) {
+        if ($compoundAdmin) {
             $request->attributes->set('bfc.actor_credential_id', $credential->id);
         }
 

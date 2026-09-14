@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
 use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
@@ -120,17 +121,11 @@ final class EnsureDashboardCredential
             abort(401);
         }
 
-        if ($guard->guest()) {
-            // Anonymous denials are deliberately NOT audited: this route
-            // is unauthenticated-reachable, and auditing strangers would
-            // hand them a database-write amplifier on the one branch
-            // they can reach without a credential.
-            abort(401);
-        }
-
-        $credential = $guard->credential();
+        $credential = $guard->credentialForPurposes([CredentialPurpose::DashboardMetadata]);
 
         if ($credential === null) {
+            // Anonymous and wrong-purpose denials are deliberately NOT
+            // audited: neither has an actor this protocol admitted.
             abort(401);
         }
 

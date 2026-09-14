@@ -145,6 +145,6 @@ it('enforces the exact admin-equivalent set without granting MCP or dashboard ab
 
     $this->get('/admin-not-mcp', ['Authorization' => $admin->bearerHeader()])->assertForbidden();
     $this->get('/admin-not-metadata', ['Authorization' => $admin->bearerHeader()])->assertForbidden();
-    $this->get('/exact-mcp-admin', ['Authorization' => $admin->bearerHeader()])->assertForbidden();
-    $this->get('/exact-dashboard', ['Authorization' => $admin->bearerHeader()])->assertForbidden();
+    $this->get('/exact-mcp-admin', ['Authorization' => $admin->bearerHeader()])->assertUnauthorized();
+    $this->get('/exact-dashboard', ['Authorization' => $admin->bearerHeader()])->assertUnauthorized();
 });

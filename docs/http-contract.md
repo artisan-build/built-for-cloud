@@ -2015,7 +2015,9 @@ any dashboard read path. That is EXCLUSIVITY, not membership, and this route enf
 four separate conditions:
 
 1. **The credential authenticates through the unified `bfc` guard.** Missing, unknown, expired,
-   revoked, and offboarded credentials all receive the same `401` and write no audit event.
+   revoked, offboarded, and non-`dashboard_metadata` credentials all receive the same `401` and
+   write no audit event. Purpose is checked before declaration, usage, actor publication, or
+   ability inspection.
 2. **The credential holds `metadata:read`** — and the app's own declaration authorizes it for
    that ability. Unlike every operator verb route, this one is not mounted behind the operator
    gate, because that gate grants a break-glass credential whatever ability a route names; a
@@ -2187,7 +2189,8 @@ would make a dashboard poll a database and mail amplifier. The outbox row is sti
 the same transaction and is delivered by the next drain (`bfc:outbox:drain`, or the next
 mutating request).
 
-- **401** — no credential, an unknown one, an expired or revoked one, or an offboarded principal's.
+- **401** — no credential, an unknown one, an expired or revoked one, an offboarded principal's,
+  or a credential whose purpose is not `dashboard_metadata`.
   All are indistinguishable from one another, and **none of them is audited** — this route is reachable without a
   credential, and auditing anonymous refusals would hand a stranger a database-write amplifier
   on the one branch they can reach. (An earlier revision said the audit stream kept the
@@ -2217,8 +2220,12 @@ The only carrier is `Authorization: Bearer <credential>`. Dispatch is exclusive 
 - A bearer beginning with `v4.public.` is handled only as a Console assertion. A signature,
   keyring, issuer, audience, clock, TTL, purpose, replay, or containment failure never falls
   through to credential resolution.
-- Every other bearer is handled only by `CredentialResolver::resolve()`. An unknown or expired
-  credential never falls through to assertion verification.
+- Every other bearer is handled only by `CredentialResolver::resolve()`. It is admitted only for
+  purpose `mcp`, except for the bounded operator integration escape
+  (`operator_management` + `operator` subject + `credential:admin`). An unknown, expired, revoked,
+  or wrong-purpose credential never falls through to assertion verification and reaches no usage,
+  client identity, actor publication, or dispatch. Ordinary `mcp` credentials publish no admin
+  actor; only the bounded escape publishes `bfc.actor_credential_id`.
 
 A deployment whose `built-for-cloud.token_prefix` is configured as `v4.public.` creates a carrier
 collision: generated registry tokens would select the assertion path. That is an invalid

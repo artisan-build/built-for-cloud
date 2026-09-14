@@ -134,14 +134,13 @@ function mcpRequest(array $overrides = [], string $keyId = 'k1', ?AsymmetricSecr
 /** @param list<string>|null $abilities */
 function mcpStoreCredential(
     string $secret,
-    SubjectType $subjectType = SubjectType::Application,
+    SubjectType $subjectType = SubjectType::ExternalConsumer,
     ?array $abilities = null,
+    CredentialPurpose $purpose = CredentialPurpose::Mcp,
 ): Credential {
     return Credential::query()->create([
         'kind' => CredentialKind::Bearer,
-        'purpose' => $subjectType === SubjectType::Operator
-            ? CredentialPurpose::OperatorManagement
-            : CredentialPurpose::SystemDeployment,
+        'purpose' => $purpose,
         'subject_type' => $subjectType,
         'subject_ref' => 'mcp-'.bin2hex(random_bytes(8)),
         'name' => 'mcp credential',
@@ -343,6 +342,49 @@ it('uniformly refuses a credential that dies between resolution and usage', func
     expect(CredentialAuditEvent::query()->where('credential_id', $credential->id)->count())->toBe(0);
 });
 
+it('refuses wrong-purpose unknown and revoked store bearers before usage identity actor or dispatch', function (): void {
+    $wrongSecret = 'wrong-purpose-'.bin2hex(random_bytes(16));
+    $wrong = Credential::query()->create([
+        'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::SystemDeployment,
+        'subject_type' => SubjectType::Application,
+        'subject_ref' => 'wrong-protocol',
+        'name' => 'wrong protocol',
+        'abilities' => [OperatorAbility::McpRead->value, OperatorAbility::Admin->value],
+        'secret_hash' => hash('sha256', $wrongSecret),
+    ]);
+    $revokedSecret = 'revoked-mcp-'.bin2hex(random_bytes(16));
+    $revoked = mcpStoreCredential($revokedSecret, abilities: [OperatorAbility::McpRead->value]);
+    $revoked->forceFill(['revoked_at' => now()])->save();
+
+    $dispatched = 0;
+    $wrongRequest = Request::create('/mcp-probe', 'POST', server: [
+        'HTTP_AUTHORIZATION' => 'Bearer '.$wrongSecret,
+        'HTTP_X_BFC_CLIENT_ID' => 'wrong-purpose-client',
+    ]);
+    $wrongResponse = app(AuthenticateMcp::class)->handle(
+        $wrongRequest,
+        function () use (&$dispatched): SymfonyResponse {
+            $dispatched++;
+
+            return response('dispatched');
+        },
+    );
+    expect($wrongResponse->getStatusCode())->toBe(401);
+    $unknownResponse = $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer unknown'])->assertUnauthorized();
+    $revokedResponse = $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$revokedSecret])->assertUnauthorized();
+
+    expect($wrongResponse->getContent())->toBe($unknownResponse->getContent())
+        ->and($revokedResponse->getContent())->toBe($unknownResponse->getContent())
+        ->and($wrong->refresh()->last_used_at)->toBeNull()
+        ->and($wrong->client_identity)->toBeNull()
+        ->and($wrong->client_identity_last_seen_at)->toBeNull()
+        ->and($wrongRequest->attributes->get('bfc.actor_credential_id'))->toBeNull()
+        ->and($wrongRequest->user())->toBeNull()
+        ->and($dispatched)->toBe(0)
+        ->and(CredentialAuditEvent::query()->where('credential_id', $wrong->id)->count())->toBe(0);
+});
+
 it('keeps local and browser-session consumers closed to a request assertion', function (): void {
     foreach (['/mcp-admin-probe', '/mcp-local-auth-probe'] as $uri) {
         $this->postJson($uri, [], ['Authorization' => 'Bearer '.mcpAssertion()])
@@ -356,7 +398,7 @@ it('keeps local and browser-session consumers closed to a request assertion', fu
 
 it('gives a non-admin unified bearer no admin attribution', function (): void {
     $plaintext = 'non-admin-'.bin2hex(random_bytes(16));
-    $credential = mcpStoreCredential($plaintext, SubjectType::Operator, [OperatorAbility::McpRead->value]);
+    $credential = mcpStoreCredential($plaintext, SubjectType::ExternalConsumer, [OperatorAbility::McpRead->value]);
 
     $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$plaintext])
         ->assertOk()
@@ -375,7 +417,12 @@ it('gives a non-admin unified bearer no admin attribution', function (): void {
 
 it('attributes only an operator credential with credential admin ability', function (): void {
     $plaintext = 'operator-admin-'.bin2hex(random_bytes(16));
-    $credential = mcpStoreCredential($plaintext, SubjectType::Operator, [OperatorAbility::Admin->value]);
+    $credential = mcpStoreCredential(
+        $plaintext,
+        SubjectType::Operator,
+        [OperatorAbility::Admin->value],
+        CredentialPurpose::OperatorManagement,
+    );
 
     $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$plaintext])
         ->assertOk()
@@ -391,7 +438,7 @@ it('attributes only an operator credential with credential admin ability', funct
 
 it('gives a non-operator with credential admin ability no admin attribution', function (): void {
     $plaintext = 'application-admin-'.bin2hex(random_bytes(16));
-    $credential = mcpStoreCredential($plaintext, SubjectType::Application, [OperatorAbility::Admin->value]);
+    $credential = mcpStoreCredential($plaintext, SubjectType::ExternalConsumer, [OperatorAbility::Admin->value]);
 
     $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$plaintext])
         ->assertOk()

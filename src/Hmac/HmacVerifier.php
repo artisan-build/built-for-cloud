@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Hmac;
 
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
 use ArtisanBuild\BuiltForCloud\ManagedAccountAccess;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
@@ -92,6 +93,7 @@ final class HmacVerifier
         /** @var Credential|null $credential */
         $credential = Credential::query()
             ->where('kind', CredentialKind::Hmac->value)
+            ->where('purpose', CredentialPurpose::Signing->value)
             ->where('subject_type', $subject->type->value)
             ->where('subject_ref', $subject->ref)
             ->whereKey($envelope->keyId)

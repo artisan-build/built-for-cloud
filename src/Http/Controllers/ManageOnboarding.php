@@ -713,6 +713,14 @@ final class ManageOnboarding extends OperatorRouteController
         try {
             $credential = app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $bearer);
 
+            if (! in_array($credential?->purpose, [
+                CredentialPurpose::Consumption,
+                CredentialPurpose::OperatorManagement,
+                CredentialPurpose::Enrollment,
+            ], true)) {
+                $credential = null;
+            }
+
             if ($credential !== null && ! app(CredentialUsageRecorder::class)->recordUsage($credential)) {
                 $credential = null;
             }
@@ -730,13 +738,12 @@ final class ManageOnboarding extends OperatorRouteController
             CredentialPurpose::Consumption => Scope::Consume,
             CredentialPurpose::OperatorManagement => Scope::Admin,
             CredentialPurpose::Enrollment => Scope::Onboard,
-            default => null,
         };
 
         return response()->json([
             'ok' => true,
             'name' => $credential->name,
-            'scope' => $scope?->value,
+            'scope' => $scope->value,
         ]);
     }
 

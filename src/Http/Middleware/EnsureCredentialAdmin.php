@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\ClientIdentityRecorder;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
@@ -92,6 +93,13 @@ final class EnsureCredentialAdmin
         // below, use unrecorded, indistinguishable from an unknown
         // secret.
         $credential = $this->credentials->resolve(CredentialKind::Bearer, $bearer);
+
+        if ($credential !== null && $credential->purpose !== CredentialPurpose::OperatorManagement) {
+            // A secret valid for another protocol is anonymous here. Do not
+            // stamp it, observe its claimed client identity, publish an actor,
+            // or create a valid-secret denial oracle.
+            abort(401);
+        }
 
         if ($credential !== null) {
             if (! $this->usage->recordUsage($credential)) {

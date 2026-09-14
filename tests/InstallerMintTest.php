@@ -113,7 +113,7 @@ it('refuses a non-operator unified credential on the /bfc/credentials verbs', fu
         'abilities' => [OperatorAbility::Admin->value],
     ]);
 
-    $this->getJson('/bfc/credentials', ['Authorization' => $nonOperator->bearerHeader()])->assertForbidden();
+    $this->getJson('/bfc/credentials', ['Authorization' => $nonOperator->bearerHeader()])->assertUnauthorized();
 
     // Right subject, missing ability: same refusal.
     $unableOperator = $this->mintCredential([
@@ -125,8 +125,37 @@ it('refuses a non-operator unified credential on the /bfc/credentials verbs', fu
 
     $this->getJson('/bfc/credentials', ['Authorization' => $unableOperator->bearerHeader()])->assertForbidden();
 
+    $revoked = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
+        'subject_type' => SubjectType::Operator,
+        'abilities' => [OperatorAbility::Admin->value],
+        'revoked_at' => now(),
+    ]);
+    $this->getJson('/bfc/credentials', ['Authorization' => $revoked->bearerHeader()])->assertUnauthorized();
+
     // A secret that resolves nothing stays 401.
     $this->getJson('/bfc/credentials', ['Authorization' => 'Bearer tok_'.str_repeat('0', 64)])->assertUnauthorized();
+});
+
+it('refuses a wrong-purpose operator before usage client identity actor or denial attribution', function (): void {
+    $wrong = $this->mintCredential([
+        'purpose' => CredentialPurpose::DashboardMetadata,
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => 'dashboard-only',
+        'abilities' => [OperatorAbility::CredentialRead->value],
+    ]);
+
+    $this->getJson('/bfc/credentials', [
+        'Authorization' => $wrong->bearerHeader(),
+        'X-BfC-Client-Id' => 'wrong-protocol-client',
+    ])->assertUnauthorized();
+
+    $wrong->credential->refresh();
+
+    expect($wrong->credential->last_used_at)->toBeNull()
+        ->and($wrong->credential->client_identity)->toBeNull()
+        ->and($wrong->credential->client_identity_last_seen_at)->toBeNull()
+        ->and(CredentialAuditEvent::query()->count())->toBe(0);
 });
 
 it('skips the mint with a notice when a live operator credential exists, unless forced', function (): void {
