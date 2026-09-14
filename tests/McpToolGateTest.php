@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -95,6 +96,7 @@ it('denies a revoked credential the destructive tool even when it holds mcp:admi
 
 it('never lets the operator break-glass ability stand in for an mcp ability', function (): void {
     $breakGlass = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'control-plane',
         'abilities' => [OperatorAbility::Admin->value],

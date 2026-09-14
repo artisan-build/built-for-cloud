@@ -206,6 +206,7 @@ final class SubjectsAuthorityTest extends TestCase
 
         $credential = Credential::factory()->create([
             'name' => 'observed',
+            'purpose' => CredentialPurpose::SystemDeployment,
             'subject_type' => SubjectType::Installation->value,
             'subject_ref' => 'install-9',
         ]);

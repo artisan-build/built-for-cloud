@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\LogsAuthorizationHeaderMiddleware;
@@ -37,7 +38,10 @@ it('leaks nothing when a bearer credential authenticates', function (): void {
 });
 
 it('leaks nothing when a basic credential authenticates', function (): void {
-    $minted = $this->mintCredential(['kind' => CredentialKind::Basic]);
+    $minted = $this->mintCredential([
+        'kind' => CredentialKind::Basic,
+        'purpose' => CredentialPurpose::SystemDeployment,
+    ]);
 
     $response = $this->assertNoSecretLeakage($minted->plaintext(), function () use ($minted): TestResponse {
         return $this->getJson('/bfc-guarded', ['Authorization' => $minted->basicHeader()]);
@@ -69,7 +73,10 @@ it('would catch a middleware that logs the authorization header on the basic pat
     Route::middleware([LogsAuthorizationHeaderMiddleware::class, 'auth:bfc'])
         ->get('/bfc-guarded-leaky', fn (): array => ['ok' => true]);
 
-    $minted = $this->mintCredential(['kind' => CredentialKind::Basic]);
+    $minted = $this->mintCredential([
+        'kind' => CredentialKind::Basic,
+        'purpose' => CredentialPurpose::SystemDeployment,
+    ]);
 
     $failure = null;
 

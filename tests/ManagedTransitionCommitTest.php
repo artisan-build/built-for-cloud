@@ -6,6 +6,7 @@ use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTransitions;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
@@ -231,6 +232,7 @@ function p4dCompletedExit(): array
     ]);
     $exitDeploymentSecret = 'exit-deployment-secret';
     $exitDeployment = Credential::factory()->create([
+        'purpose' => CredentialPurpose::SystemDeployment,
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'transition-installation',
         'name' => 'exit-deployment-survives',
@@ -331,6 +333,7 @@ it('atomically applies every adoption disposition and invalidates local authorit
     }
     $deploymentSecret = 'adopt-deployment-secret';
     $deployment = Credential::factory()->create([
+        'purpose' => CredentialPurpose::SystemDeployment,
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'transition-installation',
         'name' => 'deployment-survives',

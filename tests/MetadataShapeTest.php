@@ -50,9 +50,10 @@ uses(RefreshDatabase::class, WithCredentials::class, ContractAssertions::class);
  * this package serves has its expected 2xx shape written out, and this
  * file drives all of them plus the mutations each must refuse.
  */
-function metadataOperator(OperatorAbility $ability): MintedTestCredential
+function metadataOperator(OperatorAbility $ability, CredentialPurpose $purpose): MintedTestCredential
 {
     return test()->mintCredential([
+        'purpose' => $purpose,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'op-'.bin2hex(random_bytes(4)),
         'abilities' => [$ability->value],
@@ -62,6 +63,7 @@ function metadataOperator(OperatorAbility $ability): MintedTestCredential
 function metadataOwner(): MintedTestCredential
 {
     return test()->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'metadata-owner-'.bin2hex(random_bytes(4)),
         'abilities' => [OperatorAbility::OwnershipRelease->value],
@@ -468,7 +470,7 @@ it('holds the classification on the metadata-classified endpoints the package se
 
     $this->assertBuiltForCloudMetadataEndpoint(
         $this->getJson('/bfc/console/vitals', [
-            'Authorization' => metadataOperator(OperatorAbility::MetadataRead)->bearerHeader(),
+            'Authorization' => metadataOperator(OperatorAbility::MetadataRead, CredentialPurpose::DashboardMetadata)->bearerHeader(),
         ])->assertOk(),
         'GET /bfc/console/vitals',
     );
@@ -485,7 +487,7 @@ it('holds the classification on the metadata-classified endpoints the package se
         $this->postJson('/bfc/subjects/offboard', [
             'subject_type' => SubjectType::ExternalConsumer->value,
             'subject_ref' => 'acme',
-        ], ['Authorization' => metadataOperator(OperatorAbility::SubjectOffboard)->bearerHeader()])->assertOk(),
+        ], ['Authorization' => metadataOperator(OperatorAbility::SubjectOffboard, CredentialPurpose::OperatorManagement)->bearerHeader()])->assertOk(),
         'POST /bfc/subjects/offboard',
     );
 
@@ -497,7 +499,7 @@ it('holds the classification on the metadata-classified endpoints the package se
             'event_id' => 'evt-metadata-1',
             'entitlement_version' => 1,
             'external_subject' => 'sponsor-login',
-        ], ['Authorization' => metadataOperator(OperatorAbility::SubjectOffboard)->bearerHeader()])
+        ], ['Authorization' => metadataOperator(OperatorAbility::SubjectOffboard, CredentialPurpose::OperatorManagement)->bearerHeader()])
             ->assertStatus(202),
         'POST /bfc/subjects/offboard',
     );
@@ -506,7 +508,7 @@ it('holds the classification on the metadata-classified endpoints the package se
 
     $this->assertBuiltForCloudMetadataEndpoint(
         $this->deleteJson('/bfc/credentials/'.$target->credential->id, [], [
-            'Authorization' => metadataOperator(OperatorAbility::CredentialRevoke)->bearerHeader(),
+            'Authorization' => metadataOperator(OperatorAbility::CredentialRevoke, CredentialPurpose::OperatorManagement)->bearerHeader(),
         ])->assertNoContent(),
         'DELETE /bfc/credentials/{id}',
     );
@@ -521,7 +523,7 @@ it('holds the classification on the console key-custody row', function (): void 
     $filed = $this->postJson('/bfc/console/re-key', [
         'key_id' => 'K2.metadata-probe',
         'public_key' => consoleKeypair()->getPublicKey()->toHexString(),
-    ], ['Authorization' => metadataOperator(OperatorAbility::ConsoleKeyWrite)->bearerHeader()])
+    ], ['Authorization' => metadataOperator(OperatorAbility::ConsoleKeyWrite, CredentialPurpose::OperatorManagement)->bearerHeader()])
         ->assertCreated();
 
     $this->assertBuiltForCloudMetadataEndpoint($filed, 'POST /bfc/console/re-key');
@@ -531,7 +533,7 @@ it('holds the classification on the console key-retirement row', function (): vo
     OwnershipClaim::query()->create(['token_hash' => OwnershipClaim::hashToken('metadata-retire-owner')]);
     $this->postJson('/bfc/ownership/claim', ['token' => 'metadata-retire-owner'])->assertCreated();
 
-    $writer = metadataOperator(OperatorAbility::ConsoleKeyWrite);
+    $writer = metadataOperator(OperatorAbility::ConsoleKeyWrite, CredentialPurpose::OperatorManagement);
 
     // Two keys, so the retirement below is not the last-active-key case
     // and answers its ordinary success shape. The capital is deliberate:

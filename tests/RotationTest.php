@@ -51,6 +51,7 @@ function rotationAdminHeaders(): array
 {
     $credential = test()->mintCredential([
         'name' => 'rotation-admin-'.bin2hex(random_bytes(4)),
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'rotation-operator',
         'abilities' => [OperatorAbility::Admin->value],
@@ -88,6 +89,7 @@ function rotationEventsFor(string $credentialId): array
 function rotatableSource(array $overrides = []): Credential
 {
     return Credential::factory()->create(array_merge([
+        'purpose' => CredentialPurpose::SystemDeployment,
         'subject_ref' => 'acme',
         'name' => 'ci',
         'abilities' => [OperatorAbility::CredentialRead->value],
@@ -920,7 +922,10 @@ it('resolves the graced row until the exact grace end and not after it', functio
 // ------------------------------------------------------- per-kind (AC 6)
 
 it('rotates a basic credential into a fresh auth.json pair', function (): void {
-    $source = rotatableSource(['kind' => CredentialKind::Basic]);
+    $source = rotatableSource([
+        'kind' => CredentialKind::Basic,
+        'purpose' => CredentialPurpose::SystemDeployment,
+    ]);
 
     $response = $this->postJson('/bfc/credentials/'.$source->id.'/rotate', [], rotationAdminHeaders())
         ->assertCreated();

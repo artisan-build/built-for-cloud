@@ -99,6 +99,7 @@ final class ClientIdentityObservationTest extends TestCase
 
         Credential::factory()->create([
             'name' => 'consume',
+            'purpose' => CredentialPurpose::SystemDeployment,
             'secret_hash' => hash('sha256', 'consume-secret'),
             'subject_type' => SubjectType::Application,
             'abilities' => [OperatorAbility::CredentialRead->value],
@@ -130,6 +131,7 @@ final class ClientIdentityObservationTest extends TestCase
 
         Credential::factory()->create([
             'name' => 'consume',
+            'purpose' => CredentialPurpose::SystemDeployment,
             'secret_hash' => hash('sha256', 'consume-secret'),
             'subject_type' => SubjectType::Application,
             'abilities' => [OperatorAbility::CredentialRead->value],
@@ -209,6 +211,7 @@ final class ClientIdentityObservationTest extends TestCase
 
         Credential::factory()->create([
             'name' => 'consume',
+            'purpose' => CredentialPurpose::SystemDeployment,
             'secret_hash' => hash('sha256', 'consume-secret'),
             'subject_type' => SubjectType::Application,
             'abilities' => [OperatorAbility::CredentialRead->value],

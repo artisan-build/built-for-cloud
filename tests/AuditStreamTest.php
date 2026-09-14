@@ -13,6 +13,7 @@ use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\SubjectType;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -90,6 +91,7 @@ it('audits exchange and links both revocations old-to-new with supersession line
     $liveDurable = Credential::factory()->create([
         'name' => 'lineage@example.test',
         'purpose' => CredentialPurpose::Consumption,
+        'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'lineage@example.test',
         'abilities' => null,
     ]);

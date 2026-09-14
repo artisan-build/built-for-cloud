@@ -313,6 +313,7 @@ function mintOnboardingOperator(string $name, array $abilities): string
 {
     return test()->mintCredential([
         'name' => $name,
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => $name,
         'abilities' => $abilities,

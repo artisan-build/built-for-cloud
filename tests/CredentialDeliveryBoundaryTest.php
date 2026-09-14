@@ -7,6 +7,7 @@ use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\DeliveryShape;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
@@ -158,6 +159,7 @@ it('resolves a stored secret only in the installation store that contains its ha
     $secret = 'installation-local-secret';
     $credential = Credential::factory()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::SystemDeployment,
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'installation-a',
         'user_id' => null,
@@ -182,6 +184,7 @@ it('resolves a stored secret only in the installation store that contains its ha
     Schema::connection('separate_installation')->create('credentials', function (Blueprint $table): void {
         $table->uuid('id')->primary();
         $table->string('kind', 32);
+        $table->string('purpose', 32);
         $table->string('subject_type', 32);
         $table->string('subject_ref');
         $table->string('user_id')->nullable();
@@ -211,6 +214,7 @@ it('resolves a stored secret only in the installation store that contains its ha
         DB::connection()->table('credentials')->insert([
             'id' => $credential->id,
             'kind' => $credential->kind->value,
+            'purpose' => CredentialPurpose::SystemDeployment->value,
             'subject_type' => $credential->subject_type->value,
             'subject_ref' => $credential->subject_ref,
             'user_id' => null,

@@ -88,6 +88,7 @@ beforeEach(function (): void {
 function keyCustodyOperator(?array $abilities, array $attributes = []): MintedTestCredential
 {
     return test()->mintCredential(array_merge([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'console-'.bin2hex(random_bytes(4)),
         'abilities' => $abilities,

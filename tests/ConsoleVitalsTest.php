@@ -81,6 +81,7 @@ beforeEach(function (): void {
 function vitalsReader(): MintedTestCredential
 {
     return test()->mintCredential([
+        'purpose' => CredentialPurpose::DashboardMetadata,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'console-'.bin2hex(random_bytes(4)),
         'abilities' => [OperatorAbility::MetadataRead->value],
@@ -207,6 +208,7 @@ it('refuses every credential but metadata:read, including break-glass', function
     // reason the route is not mounted behind the operator gate: that gate
     // grants `credential:admin` whatever ability a route asks for.
     $breakGlass = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'control-plane',
         'abilities' => [OperatorAbility::Admin->value],
@@ -223,6 +225,7 @@ it('refuses every credential but metadata:read, including break-glass', function
 
     foreach ($others as $ability) {
         $credential = $this->mintCredential([
+            'purpose' => CredentialPurpose::OperatorManagement,
             'subject_type' => SubjectType::Operator,
             'subject_ref' => 'op-'.bin2hex(random_bytes(4)),
             'abilities' => [$ability->value],
@@ -234,6 +237,7 @@ it('refuses every credential but metadata:read, including break-glass', function
 
     foreach ([null, []] as $empty) {
         $bare = $this->mintCredential([
+            'purpose' => CredentialPurpose::OperatorManagement,
             'subject_type' => SubjectType::Operator,
             'subject_ref' => 'bare-'.bin2hex(random_bytes(4)),
             'abilities' => $empty,
@@ -246,6 +250,7 @@ it('refuses every credential but metadata:read, including break-glass', function
 
 it('audits a denied dashboard read with the acting credential', function (): void {
     $breakGlass = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'control-plane',
         'abilities' => [OperatorAbility::Admin->value],
@@ -268,6 +273,7 @@ it('audits a denied dashboard read with the acting credential', function (): voi
 
 it('refuses no credential, an unknown one and an expired or revoked one indistinguishably', function (): void {
     $expired = $this->mintCredential([
+        'purpose' => CredentialPurpose::DashboardMetadata,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'expired',
         'abilities' => [OperatorAbility::MetadataRead->value],
@@ -275,6 +281,7 @@ it('refuses no credential, an unknown one and an expired or revoked one indistin
     ]);
 
     $revoked = $this->mintCredential([
+        'purpose' => CredentialPurpose::DashboardMetadata,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'revoked',
         'abilities' => [OperatorAbility::MetadataRead->value],
@@ -316,6 +323,7 @@ it('refuses no credential, an unknown one and an expired or revoked one indistin
  */
 it('refuses a credential that holds metadata:read alongside another ability', function (): void {
     $combined = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'combined',
         'abilities' => [OperatorAbility::MetadataRead->value, OperatorAbility::Admin->value],
@@ -332,6 +340,7 @@ it('refuses a credential that holds metadata:read alongside another ability', fu
     // A narrower combination is refused too: the rule is "exactly
     // metadata:read", not "nothing admin-equivalent".
     $alsoRead = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'combined-read',
         'abilities' => [OperatorAbility::MetadataRead->value, OperatorAbility::CredentialRead->value],
@@ -341,6 +350,7 @@ it('refuses a credential that holds metadata:read alongside another ability', fu
 
     // Order does not matter — the check is on the SET.
     $reordered = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'reordered',
         'abilities' => [OperatorAbility::Admin->value, OperatorAbility::MetadataRead->value],
@@ -355,8 +365,13 @@ it('refuses a credential that holds metadata:read alongside another ability', fu
 it('refuses a non-operator subject holding metadata:read, and admits an operator one', function (): void {
     // The contract heads this route "operator credential"; until the
     // exclusivity gate landed, nothing checked the subject at all.
-    foreach ([SubjectType::Application, SubjectType::ExternalConsumer, SubjectType::UserPrincipal] as $subjectType) {
+    foreach ([
+        [SubjectType::Application, CredentialPurpose::SystemDeployment],
+        [SubjectType::ExternalConsumer, CredentialPurpose::Consumption],
+        [SubjectType::UserPrincipal, CredentialPurpose::Consumption],
+    ] as [$subjectType, $purpose]) {
         $wrongSubject = $this->mintCredential([
+            'purpose' => $purpose,
             'subject_type' => $subjectType,
             'subject_ref' => 'subject-'.bin2hex(random_bytes(4)),
             'abilities' => [OperatorAbility::MetadataRead->value],
@@ -371,6 +386,7 @@ it('refuses a non-operator subject holding metadata:read, and admits an operator
 
 it('audits an exclusivity refusal with the acting credential', function (): void {
     $combined = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'combined',
         'abilities' => [OperatorAbility::MetadataRead->value, OperatorAbility::Admin->value],

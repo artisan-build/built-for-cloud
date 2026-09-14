@@ -146,15 +146,14 @@ function p3cConfirmationCalls(ManagedAuthorityFixture $fixture): int
 function p3cAccountCredential(
     User $user,
     string $secret,
+    CredentialPurpose $purpose,
     CredentialKind $kind = CredentialKind::Bearer,
     SubjectType $subjectType = SubjectType::UserPrincipal,
     ?array $abilities = null,
 ): Credential {
     return Credential::query()->create([
         'kind' => $kind,
-        'purpose' => $kind === CredentialKind::Asymmetric
-            ? CredentialPurpose::Enrollment
-            : CredentialPurpose::Consumption,
+        'purpose' => $purpose,
         'subject_type' => $subjectType,
         'subject_ref' => (string) $user->scalpels_id,
         'name' => 'account-'.$user->scalpels_id,
@@ -453,7 +452,7 @@ it('preserves the stored role dimension while applying an accepted membership de
     CarbonImmutable::setTestNow('2026-09-10T12:05:00+00:00');
     p3cConfigureAuthority();
     $user = p3cUser('denied-role-subject', 'admin', 10);
-    $accountCredential = p3cAccountCredential($user, 'denied-role-account-secret');
+    $accountCredential = p3cAccountCredential($user, 'denied-role-account-secret', CredentialPurpose::Consumption);
     $deploymentCredential = p3cDeploymentCredential($user, 'denied-role-deployment-secret');
     p3cSession($user, 'denied-role-session');
     $responses = app(ManagedMembershipResponses::class);
@@ -590,7 +589,7 @@ it('applies a non-active callback denial without running the active upsert or re
     CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
     p3cConfigureAuthority();
     $user = p3cUser(sequence: 10);
-    $accountCredential = p3cAccountCredential($user, 'callback-account-secret');
+    $accountCredential = p3cAccountCredential($user, 'callback-account-secret', CredentialPurpose::Consumption);
     $deploymentCredential = p3cDeploymentCredential($user, 'callback-deployment-secret');
     p3cSession($user, 'callback-session');
     $beforeConfirmed = $user->membership_confirmed_at?->toAtomString();
@@ -714,10 +713,10 @@ it('keeps membership denial subject-local and connection denial installation-wid
     $foreign = p3cUser('blast-foreign', sequence: 10);
     $foreign->forceFill(['scalpels_connection_id' => 'another-connection'])->save();
     $credentials = [
-        'a' => p3cAccountCredential($a, 'blast-a-secret'),
-        'b' => p3cAccountCredential($b, 'blast-b-secret'),
-        'c' => p3cAccountCredential($c, 'blast-c-secret'),
-        'foreign' => p3cAccountCredential($foreign, 'blast-foreign-secret'),
+        'a' => p3cAccountCredential($a, 'blast-a-secret', CredentialPurpose::Consumption),
+        'b' => p3cAccountCredential($b, 'blast-b-secret', CredentialPurpose::Consumption),
+        'c' => p3cAccountCredential($c, 'blast-c-secret', CredentialPurpose::Consumption),
+        'foreign' => p3cAccountCredential($foreign, 'blast-foreign-secret', CredentialPurpose::Consumption),
     ];
     $deployment = p3cDeploymentCredential($a, 'blast-deployment-secret');
 
@@ -812,7 +811,7 @@ it('refuses unknown or absent roles without defaulting to member or treating mal
     CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
     $fixture = p3cConfigureAuthority();
     $user = p3cUser('unknown-role-subject', 'admin', 10);
-    $credential = p3cAccountCredential($user, 'unknown-role-secret');
+    $credential = p3cAccountCredential($user, 'unknown-role-secret', CredentialPurpose::Consumption);
     p3cSession($user, 'unknown-role-session');
     $confirmedAt = $user->membership_confirmed_at?->toAtomString();
     $responseAt = $user->membership_response_at?->toAtomString();
@@ -852,7 +851,7 @@ it('treats every authority failure class as infrastructure without revoking acco
     CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
     $fixture = p3cConfigureAuthority();
     $user = p3cUser('infrastructure-subject', sequence: 10);
-    $credential = p3cAccountCredential($user, 'infrastructure-secret');
+    $credential = p3cAccountCredential($user, 'infrastructure-secret', CredentialPurpose::Consumption);
     p3cSession($user, 'infrastructure-session');
     $confirmedAt = $user->membership_confirmed_at?->toAtomString();
     $responseAt = $user->membership_response_at?->toAtomString();
@@ -899,7 +898,7 @@ it('ends the expired browser session without revoking and resolves the same cred
     $fixture = p3cConfigureAuthority();
     p3cConfigureCredentialGuard();
     $user = p3cUser('restored-subject');
-    $credential = p3cAccountCredential($user, 'restored-account-secret');
+    $credential = p3cAccountCredential($user, 'restored-account-secret', CredentialPurpose::Consumption);
     $userId = $user->getKey();
     $credentialId = $credential->id;
     Route::middleware(['web', 'bfc.auth'])->get('/managed-ingress/browser', static fn (): string => 'allowed');
@@ -946,7 +945,7 @@ it('enforces deadline and authoritative denial on the bfc guard through BearerAu
     p3cConfigureCredentialGuard();
     $user = p3cUser('bearer-ingress-'.$outcome);
     $secret = 'bearer-ingress-'.$outcome.'-secret';
-    $credential = p3cAccountCredential($user, $secret);
+    $credential = p3cAccountCredential($user, $secret, CredentialPurpose::Consumption);
     Route::middleware('auth:bfc')->get('/managed-ingress/bearer-'.$outcome, static fn (): string => 'allowed');
     $this->getJson('/managed-ingress/bearer-'.$outcome, [
         'Authorization' => 'Bearer '.$secret,
@@ -978,7 +977,7 @@ it('enforces deadline and authoritative denial on the bfc guard through BasicAut
     p3cConfigureCredentialGuard();
     $user = p3cUser('basic-ingress-'.$outcome);
     $secret = 'basic-ingress-'.$outcome.'-secret';
-    $credential = p3cAccountCredential($user, $secret, CredentialKind::Basic);
+    $credential = p3cAccountCredential($user, $secret, CredentialPurpose::Consumption, CredentialKind::Basic);
     Route::middleware('auth:bfc')->get('/managed-ingress/basic-'.$outcome, static fn (): string => 'allowed');
     $this->getJson('/managed-ingress/basic-'.$outcome, [
         'Authorization' => 'Basic '.base64_encode('credential:'.$secret),
@@ -1054,7 +1053,12 @@ it('enforces deadline and authoritative denial through EnsureCredentialAbility',
     p3cConfigureCredentialGuard();
     $user = p3cUser('ability-'.$outcome);
     $secret = 'ability-'.$outcome.'-secret';
-    $credential = p3cAccountCredential($user, $secret, abilities: [OperatorAbility::CredentialRead->value]);
+    $credential = p3cAccountCredential(
+        $user,
+        $secret,
+        CredentialPurpose::Consumption,
+        abilities: [OperatorAbility::CredentialRead->value],
+    );
     Route::middleware(['auth:bfc', 'bfc.ability:'.OperatorAbility::CredentialRead->value])
         ->get('/managed-ingress/ability-'.$outcome, static fn (): string => 'allowed');
     $this->getJson('/managed-ingress/ability-'.$outcome, [
@@ -1088,6 +1092,7 @@ it('resets an operator ingress grace deadline on success and enforces its exact 
     $credential = p3cAccountCredential(
         $user,
         $secret,
+        CredentialPurpose::OperatorManagement,
         subjectType: SubjectType::Operator,
         abilities: [OperatorAbility::Admin->value],
     );
@@ -1137,6 +1142,7 @@ it('enforces authoritative denial through the converged operator ingress', funct
     $credential = p3cAccountCredential(
         $user,
         $secret,
+        CredentialPurpose::OperatorManagement,
         subjectType: SubjectType::Operator,
         abilities: [OperatorAbility::Admin->value],
     );
@@ -1157,7 +1163,12 @@ it('resets the MCP store bearer grace deadline on success and enforces its exact
     $fixture = p3cConfigureAuthority();
     $user = p3cUser('mcp-store-boundary');
     $secret = 'mcp-store-boundary-secret';
-    $credential = p3cAccountCredential($user, $secret, subjectType: SubjectType::Application);
+    $credential = p3cAccountCredential(
+        $user,
+        $secret,
+        CredentialPurpose::SystemDeployment,
+        subjectType: SubjectType::Application,
+    );
     Route::middleware('bfc.mcp')->post('/managed-ingress/mcp-store-boundary', static fn (): string => 'allowed');
     $fixture->confirmationResponder = static fn (): mixed => Http::response([
         'contract_version' => 'managed-auth-v1',
@@ -1199,7 +1210,12 @@ it('enforces authoritative denial through the existing MCP store bearer branch',
     $fixture = p3cConfigureAuthority();
     $user = p3cUser('mcp-store-authoritative');
     $secret = 'mcp-store-authoritative-secret';
-    $credential = p3cAccountCredential($user, $secret, subjectType: SubjectType::Application);
+    $credential = p3cAccountCredential(
+        $user,
+        $secret,
+        CredentialPurpose::SystemDeployment,
+        subjectType: SubjectType::Application,
+    );
     Route::middleware('bfc.mcp')->post('/managed-ingress/mcp-store-authoritative', static fn (): string => 'allowed');
 
     $fixture->confirmationOverrides = ['membership_status' => 'removed'];
@@ -1220,6 +1236,7 @@ it('enforces deadline and authoritative denial through EnsureDashboardCredential
     $credential = p3cAccountCredential(
         $user,
         $secret,
+        CredentialPurpose::DashboardMetadata,
         subjectType: SubjectType::Operator,
         abilities: [OperatorAbility::MetadataRead->value],
     );

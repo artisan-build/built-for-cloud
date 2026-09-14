@@ -56,9 +56,14 @@ it('stores rows of every credential kind without schema alteration', function ()
 
 it('stores rows for every subject type', function (): void {
     foreach (SubjectType::cases() as $type) {
+        $purpose = match ($type) {
+            SubjectType::Operator => CredentialPurpose::OperatorManagement,
+            SubjectType::Application, SubjectType::Installation => CredentialPurpose::SystemDeployment,
+            SubjectType::ExternalConsumer, SubjectType::UserPrincipal => CredentialPurpose::Consumption,
+        };
         $credential = Credential::query()->create([
             'kind' => CredentialKind::Bearer,
-            'purpose' => CredentialPurpose::SystemDeployment,
+            'purpose' => $purpose,
             'subject_type' => $type,
             'subject_ref' => 'ref-'.$type->value,
             'secret_hash' => hash('sha256', 'secret-'.$type->value),
@@ -252,6 +257,7 @@ it('fetches the active public keys for a subject', function (): void {
         'subject_ref' => 'install-2',
     ]);
     Credential::factory()->create([
+        'purpose' => CredentialPurpose::SystemDeployment,
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'install-1',
     ]);
