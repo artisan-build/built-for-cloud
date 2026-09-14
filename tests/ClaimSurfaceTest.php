@@ -565,6 +565,8 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     // Its new purpose prose also made one existing absolute block a
     // residue note, leaving paired fixed while absolute and unpaired each
     // fell by one.
+    // P5-purpose-d added one directly cited app-mapping contract block,
+    // increasing blocks, absolute, and paired together.
     $gateSurfaces = [
         'src/Console', 'src/Audit', 'src/Http/Controllers/ConsoleEnter.php',
         'src/Http/Controllers/ConsoleChromeScript.php', 'resources/views', 'resources/js',
@@ -575,9 +577,9 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1352,
-        'absolute' => 427,
-        'paired' => 112,
+        'blocks' => 1353,
+        'absolute' => 428,
+        'paired' => 113,
         'unpaired' => 315,
     ]);
 

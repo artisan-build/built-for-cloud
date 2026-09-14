@@ -22,6 +22,7 @@ use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\OffboardOptions;
+use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
 use ArtisanBuild\BuiltForCloud\Subject;
@@ -41,6 +42,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
 use Symfony\Component\Process\Process;
@@ -693,6 +695,112 @@ it('refuses a self-service credential kind the app has not opted in', function (
     $this->postJson('/bfc/me/credentials', ['name' => 'default-kind'])->assertCreated();
 
     expect(Credential::query()->where('name', 'default-kind')->sole()->kind)->toBe(CredentialKind::Bearer);
+});
+
+it('drives declaration-opted personal asymmetric enrollment as pending keyless and revocable', function (): void {
+    $this->travelTo('2026-09-14T12:00:00+00:00');
+    config(['built-for-cloud.credentials.declaration' => SelfServicePolicyDeclaration::class]);
+    SelfServicePolicyDeclaration::$kinds = [CredentialKind::Bearer, CredentialKind::Asymmetric];
+    SelfServicePolicyDeclaration::$abilities = [OperatorAbility::McpRead->value];
+
+    $mine = personalUser('asymmetric@example.test');
+    $victim = personalUser('asymmetric-victim@example.test');
+
+    $mint = $this->assertNoSecretLeakageOfMinted(
+        fn () => $this->actingAsVersioned($mine, 'web')->postJson('/bfc/me/credentials', [
+            'kind' => CredentialKind::Asymmetric->value,
+            'name' => 'personal enrollment',
+            'code_ttl_seconds' => 120,
+            'purpose' => CredentialPurpose::Signing->value,
+            'subject_type' => SubjectType::Operator->value,
+            'subject_ref' => personalSubjectRef($victim),
+            'user_id' => (string) $victim->getKey(),
+            'abilities' => [OperatorAbility::Admin->value],
+        ])->assertCreated(),
+        fn (TestResponse $response): string => (string) $response->json('delivery.enrollment_code'),
+    );
+
+    $code = (string) $mint->json('delivery.enrollment_code');
+    $credentialId = (string) $mint->json('credential.id');
+
+    $mint->assertJsonPath('delivery.shape', 'enrollment_code')
+        ->assertJsonPath('credential.kind', CredentialKind::Asymmetric->value)
+        ->assertJsonPath('credential.purpose', CredentialPurpose::Enrollment->value)
+        ->assertJsonPath('credential.subject_type', SubjectType::UserPrincipal->value)
+        ->assertJsonPath('credential.subject_ref', personalSubjectRef($mine))
+        ->assertJsonPath('credential.status', CredentialStatus::Pending->value);
+
+    expect($code)->toMatch('/^[0-9a-f]{64}$/')
+        ->and($mint->getContent())->not->toContain('private_key', 'public_key', 'signing_key');
+    $this->assertRevealsSecretExactlyOnce((string) $mint->getContent(), $code);
+
+    $credential = Credential::query()->findOrFail($credentialId);
+    $stored = DB::table('credentials')->where('id', $credentialId)->sole();
+    $codeRow = OnboardingToken::query()->where('durable_credential_id', $credentialId)->sole();
+
+    expect(Credential::query()->count())->toBe(1)
+        ->and($credential->kind)->toBe(CredentialKind::Asymmetric)
+        ->and($credential->purpose)->toBe(CredentialPurpose::Enrollment)
+        ->and($credential->subject_type)->toBe(SubjectType::UserPrincipal)
+        ->and($credential->subject_ref)->toBe(personalSubjectRef($mine))
+        ->and($credential->user_id)->toBe((string) $mine->getKey())
+        ->and($credential->abilities)->toBe([OperatorAbility::McpRead->value])
+        ->and($credential->status)->toBe(CredentialStatus::Pending)
+        ->and($stored->public_key)->toBeNull()
+        ->and($stored->secret_hash)->toBeNull()
+        ->and($stored->secret_ciphertext)->toBeNull()
+        ->and(collect(Schema::getColumnListing('credentials'))->contains(
+            static fn (string $column): bool => str_contains($column, 'private_key'),
+        ))->toBeFalse()
+        ->and($codeRow->token_hash)->toBe(OnboardingToken::hashToken($code))
+        ->and($codeRow->consumed_at)->toBeNull()
+        ->and($codeRow->expires_at->toAtomString())->toBe('2026-09-14T12:02:00+00:00')
+        ->and(OnboardingToken::query()->pending()->where('durable_credential_id', $credentialId)->count())->toBe(1);
+
+    $this->assertResponseCarriesNoSecret(
+        $this->actingAsVersioned($mine, 'web')->getJson('/bfc/me/credentials')->assertOk(),
+        $code,
+    );
+
+    $this->actingAsVersioned($mine, 'web')
+        ->deleteJson('/bfc/me/credentials/'.$credentialId)
+        ->assertNoContent();
+
+    $consumedAt = $codeRow->refresh()->consumed_at?->toAtomString();
+
+    expect($credential->refresh()->revoked_at)->not->toBeNull()
+        ->and($consumedAt)->toBe('2026-09-14T12:00:00+00:00')
+        ->and(OnboardingToken::resolve($code))->toBeNull();
+
+    $this->postJson('/bfc/onboarding/exchange', ['token' => $code])
+        ->assertStatus(409)
+        ->assertJsonPath('error', 'code_already_claimed');
+
+    $this->actingAsVersioned($mine, 'web')
+        ->deleteJson('/bfc/me/credentials/'.$credentialId)
+        ->assertNoContent();
+
+    expect($codeRow->refresh()->consumed_at?->toAtomString())->toBe($consumedAt)
+        ->and(CredentialAuditEvent::query()
+            ->where('credential_id', $credentialId)
+            ->where('event', LifecycleEventType::Revoked)
+            ->count())->toBe(1);
+});
+
+it('refuses personal asymmetric enrollment by default before every effect', function (): void {
+    $mine = personalUser('asymmetric-default-refusal@example.test');
+
+    $response = $this->actingAsVersioned($mine, 'web')->postJson('/bfc/me/credentials', [
+        'kind' => CredentialKind::Asymmetric->value,
+        'name' => 'must not exist',
+        'code_ttl_seconds' => 120,
+    ])->assertForbidden()
+        ->assertJsonPath('message', fn (string $message): bool => str_contains($message, 'does not offer'));
+
+    expect($response->json('delivery'))->toBeNull()
+        ->and(Credential::query()->count())->toBe(0)
+        ->and(OnboardingToken::query()->count())->toBe(0)
+        ->and(CredentialAuditEvent::query()->count())->toBe(0);
 });
 
 it('mints and uses an account-bound hmac key once the self-service policy opts it in', function (): void {

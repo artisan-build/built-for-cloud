@@ -1557,6 +1557,14 @@ authenticates as its holder and holds no operator, MCP or signing power.
 alone, so `hmac` (which delivers signing key material) and `asymmetric` (an enrollment code) are
 not reachable by naming them — a refusal is a `403` naming the kind.
 
+When the declaration explicitly offers `asymmetric`, this same authenticated POST derives
+`purpose: "enrollment"`, the `user_principal` subject and the numeric-string `user_id` server-side.
+It returns an `enrollment_code` delivery linked to one `pending` row with no public key, secret hash,
+or secret ciphertext. This is intentionally partial: the package generates and stores no private
+key, and the current surface does not complete key registration or asymmetric authentication. The
+bounded code and pending row are listable and revocable; revocation consumes the code so later claim
+attempts fail. Client-supplied purpose, subject, user, and abilities fields remain unread.
+
 `expires_at` is the caller's and stays optional: a durable's expiry is never defaulted (PRD 1.3 /
 D1b). Lifetime is not the escalation vector; abilities are, and abilities are what fails closed.
 An application that does want a lifetime ceiling declares one the normal way, and the mint verb
