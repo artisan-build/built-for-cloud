@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Actions\ListCredentials;
 use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
 use ArtisanBuild\BuiltForCloud\Actions\RevokeCredential;
+use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipal;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
@@ -81,6 +82,7 @@ final readonly class PersonalCredentialSurface
         private ListCredentials $list,
         private MintCredential $mint,
         private RevokeCredential $revoke,
+        private RotateCredential $rotate,
     ) {}
 
     /**
@@ -132,7 +134,49 @@ final readonly class PersonalCredentialSurface
     {
         $subject = $this->requireSubject($request);
 
-        return ($this->mint)($subject, $this->selfServiceOptions($options, $subject), $this->actor());
+        return ($this->mint)($subject, $this->selfServiceOptions(
+            $options,
+            $subject,
+            $this->defaultPurpose($options->kind, $subject),
+        ), $this->actor());
+    }
+
+    public function mintMineForPurpose(
+        Request $request,
+        CredentialPurpose $purpose,
+        MintOptions $options,
+    ): MintResult {
+        $subject = $this->requireSubject($request);
+
+        return ($this->mint)(
+            $subject,
+            $this->selfServiceOptions($options, $subject, $purpose),
+            $this->actor(),
+        );
+    }
+
+    /** @return list<CredentialKind> */
+    public function admittedKinds(Request $request): array
+    {
+        $subject = $this->requireSubject($request);
+        $declaration = $this->declaration();
+        $kinds = $declaration instanceof DeclaresSelfServiceMintPolicy
+            ? $declaration->selfServiceKinds($subject)
+            : self::DEFAULT_SELF_SERVICE_KINDS;
+
+        return array_values(array_unique($kinds, SORT_REGULAR));
+    }
+
+    public function rotateMine(Request $request, string $id, RotateOptions $options): ?RotationResult
+    {
+        $subject = $this->requireSubject($request);
+
+        return ($this->rotate)(
+            $id,
+            $options,
+            $this->actor(),
+            CredentialManagementScope::personal($subject),
+        );
     }
 
     /**
@@ -256,7 +300,11 @@ final readonly class PersonalCredentialSurface
      *
      * @throws CredentialVerbRefused
      */
-    private function selfServiceOptions(MintOptions $options, Subject $subject): MintOptions
+    private function selfServiceOptions(
+        MintOptions $options,
+        Subject $subject,
+        CredentialPurpose $purpose,
+    ): MintOptions
     {
         $policy = $this->declaration();
         $policy = $policy instanceof DeclaresSelfServiceMintPolicy ? $policy : null;
@@ -274,15 +322,7 @@ final readonly class PersonalCredentialSurface
 
         return new MintOptions(
             kind: $options->kind,
-            purpose: match ($options->kind) {
-                CredentialKind::Hmac => CredentialPurpose::Signing,
-                CredentialKind::Asymmetric => CredentialPurpose::Enrollment,
-                CredentialKind::Bearer, CredentialKind::Basic => match ($subject->type) {
-                    SubjectType::Operator => CredentialPurpose::OperatorManagement,
-                    SubjectType::Application, SubjectType::Installation => CredentialPurpose::SystemDeployment,
-                    SubjectType::ExternalConsumer, SubjectType::UserPrincipal => CredentialPurpose::Consumption,
-                },
-            },
+            purpose: $purpose,
             name: $options->name,
             // The one canonical empty, matching MintOptions::fromInput():
             // null and [] both grant nothing, and summaries serialize null.
@@ -291,6 +331,19 @@ final readonly class PersonalCredentialSurface
             userId: $this->sessionUserId(),
             codeTtlSeconds: $options->codeTtlSeconds,
         );
+    }
+
+    private function defaultPurpose(CredentialKind $kind, Subject $subject): CredentialPurpose
+    {
+        return match ($kind) {
+            CredentialKind::Hmac => CredentialPurpose::Signing,
+            CredentialKind::Asymmetric => CredentialPurpose::Enrollment,
+            CredentialKind::Bearer, CredentialKind::Basic => match ($subject->type) {
+                SubjectType::Operator => CredentialPurpose::OperatorManagement,
+                SubjectType::Application, SubjectType::Installation => CredentialPurpose::SystemDeployment,
+                SubjectType::ExternalConsumer, SubjectType::UserPrincipal => CredentialPurpose::Consumption,
+            },
+        };
     }
 
     /**

@@ -21,6 +21,7 @@ final readonly class CredentialManagementScope
         private CredentialOwnership $ownership,
         private array $subjectTypes,
         private array $excludedAbilities,
+        private ?Subject $subject = null,
     ) {}
 
     public static function memberInstallation(): self
@@ -29,6 +30,16 @@ final readonly class CredentialManagementScope
             CredentialOwnership::Installation,
             [SubjectType::Application->value, SubjectType::Installation->value],
             OperatorAbility::vocabulary(),
+        );
+    }
+
+    public static function personal(Subject $subject): self
+    {
+        return new self(
+            CredentialOwnership::Account,
+            [$subject->type->value],
+            [],
+            $subject,
         );
     }
 
@@ -51,6 +62,10 @@ final readonly class CredentialManagementScope
             : $query->whereNotNull('user_id');
 
         $query->whereIn('subject_type', $this->subjectTypes);
+
+        if ($this->subject !== null) {
+            $query->where('subject_ref', $this->subject->ref);
+        }
 
         foreach ($this->excludedAbilities as $ability) {
             $query->where(static function (Builder $query) use ($ability): void {

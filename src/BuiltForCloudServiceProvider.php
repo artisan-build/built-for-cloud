@@ -55,6 +55,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\StandalonePasswordRecovery;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneSessions;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiLogout;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\UiPersonalCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
@@ -473,6 +474,19 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $uiRoutes[] = $router->post('/bfc/ui/logout', UiLogout::class)
             ->middleware([...$personal, EnsureUiAuthority::class, EnsureUserIsAuthenticated::class])
             ->name('bfc.ui.logout');
+        $personalUiMiddleware = ['throttle:bfc-personal', ...$personal, EnsureUiAuthority::class, EnsureUserIsAuthenticated::class];
+        $uiRoutes[] = $router->get('/bfc/ui/credentials/personal', [UiPersonalCredentials::class, 'index'])
+            ->middleware($personalUiMiddleware)
+            ->name('bfc.ui.personal-credentials.index');
+        $uiRoutes[] = $router->post('/bfc/ui/credentials/personal', [UiPersonalCredentials::class, 'store'])
+            ->middleware($personalUiMiddleware)
+            ->name('bfc.ui.personal-credentials.store');
+        $uiRoutes[] = $router->post('/bfc/ui/credentials/personal/{id}/rotate', [UiPersonalCredentials::class, 'rotate'])
+            ->middleware($personalUiMiddleware)
+            ->name('bfc.ui.personal-credentials.rotate');
+        $uiRoutes[] = $router->delete('/bfc/ui/credentials/personal/{id}', [UiPersonalCredentials::class, 'destroy'])
+            ->middleware($personalUiMiddleware)
+            ->name('bfc.ui.personal-credentials.destroy');
 
         $router->get('/bfc/managed/login', [ManagedAuthentication::class, 'create'])
             ->middleware([EnsureManagedAuthority::class, ...$personal])

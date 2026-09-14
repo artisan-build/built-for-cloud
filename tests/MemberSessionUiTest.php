@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiLogout;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\UiPersonalCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUiAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
@@ -91,6 +92,10 @@ final class MemberSessionUiTest extends TestCase
         $this->assertSame([
             ['bfc.ui.home', 'GET', 'bfc/ui', UiHome::class],
             ['bfc.ui.logout', 'POST', 'bfc/ui/logout', UiLogout::class],
+            ['bfc.ui.personal-credentials.index', 'GET', 'bfc/ui/credentials/personal', UiPersonalCredentials::class.'@index'],
+            ['bfc.ui.personal-credentials.store', 'POST', 'bfc/ui/credentials/personal', UiPersonalCredentials::class.'@store'],
+            ['bfc.ui.personal-credentials.rotate', 'POST', 'bfc/ui/credentials/personal/{id}/rotate', UiPersonalCredentials::class.'@rotate'],
+            ['bfc.ui.personal-credentials.destroy', 'DELETE', 'bfc/ui/credentials/personal/{id}', UiPersonalCredentials::class.'@destroy'],
         ], $routes->map(static fn (RoutingRoute $route): array => [
             $route->getName(),
             $route->methods()[0],
@@ -110,6 +115,10 @@ final class MemberSessionUiTest extends TestCase
             $this->assertContains(PreventRequestForgery::class, $middleware);
             $this->assertContains(EnsureUiAuthority::class, $middleware);
             $this->assertContains(EnsureUserIsAuthenticated::class, $middleware);
+
+            if (str_starts_with((string) $route->getName(), 'bfc.ui.personal-credentials.')) {
+                $this->assertContains('throttle:bfc-personal', $route->middleware());
+            }
         }
 
         $response = $this->actingAsVersioned($this->user(UserRole::Owner))->get('/bfc/ui');

@@ -26,7 +26,7 @@
             <a data-testid="ui-nav-managed-transitions" href="{{ route('bfc.transitions.index', $transitionDirection->value) }}">Authority</a>
         @endif
         @if ($personalCredentials)
-            <a data-testid="ui-nav-personal-credentials" href="{{ url('/bfc/ui/credentials/personal') }}">Personal credentials</a>
+            <a data-testid="ui-nav-personal-credentials" href="{{ route('bfc.ui.personal-credentials.index') }}">Personal credentials</a>
         @endif
         @if ($installationCredentials)
             <a data-testid="ui-nav-installation-credentials" href="{{ url('/bfc/ui/credentials/installation') }}">Installation credentials</a>
