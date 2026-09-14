@@ -332,7 +332,11 @@ final class StandaloneRouteOwnership
             'bfc.ui.personal-credentials.index',
             'bfc.ui.personal-credentials.store',
             'bfc.ui.personal-credentials.rotate',
-            'bfc.ui.personal-credentials.destroy' => 'the built-for-cloud package user interface',
+            'bfc.ui.personal-credentials.destroy',
+            'bfc.ui.installation-credentials.index',
+            'bfc.ui.installation-credentials.store',
+            'bfc.ui.installation-credentials.rotate',
+            'bfc.ui.installation-credentials.destroy' => 'the built-for-cloud package user interface',
             default => 'built-for-cloud standalone authentication',
         };
     }
