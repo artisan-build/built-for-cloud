@@ -6,6 +6,7 @@ use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
@@ -23,6 +24,9 @@ function p5bOperatorCredential(string $ability, SubjectType $subjectType = Subje
     $plaintext = 'p5b-'.bin2hex(random_bytes(24));
     $credential = Credential::query()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => $subjectType === SubjectType::Operator
+            ? CredentialPurpose::OperatorManagement
+            : CredentialPurpose::SystemDeployment,
         'subject_type' => $subjectType,
         'subject_ref' => 'p5b-'.bin2hex(random_bytes(4)),
         'abilities' => [$ability],
@@ -38,7 +42,7 @@ function p5bOperatorCredential(string $ability, SubjectType $subjectType = Subje
 
 function p5bClaimedOwnership(?OwnershipClaim $pending = null): Ownership
 {
-    $owner = p5bOperatorCredential(OperatorAbility::ADMIN)['credential'];
+    $owner = p5bOperatorCredential(OperatorAbility::Admin->value)['credential'];
 
     return Ownership::query()->create([
         'owner_credential_id' => $owner->id,
@@ -68,7 +72,7 @@ it('gates ownership release on the exact unified ownership ability with break-gl
     $firstClaim = OwnershipClaim::query()->findOrFail($ownership->refresh()->pending_claim_id);
     expect($firstClaim->consumed_at)->toBeNull();
 
-    $breakGlass = p5bOperatorCredential(OperatorAbility::ADMIN);
+    $breakGlass = p5bOperatorCredential(OperatorAbility::Admin->value);
     $this->postJson('/bfc/ownership/release', [], $breakGlass['headers'])->assertCreated();
 
     expect($firstClaim->refresh()->consumed_at)->not->toBeNull()
@@ -95,7 +99,7 @@ it('gates transfer cancellation on the exact unified ownership ability with brea
 
     $nextPending = p5bPendingOwnershipClaim();
     $ownership->forceFill(['pending_claim_id' => $nextPending->id])->save();
-    $breakGlass = p5bOperatorCredential(OperatorAbility::ADMIN);
+    $breakGlass = p5bOperatorCredential(OperatorAbility::Admin->value);
     $this->postJson('/bfc/ownership/cancel-transfer', [], $breakGlass['headers'])->assertOk();
     expect($ownership->refresh()->pending_claim_id)->toBeNull()
         ->and($nextPending->refresh()->consumed_at)->not->toBeNull();
@@ -121,7 +125,7 @@ it('gates onboarding issue on credential mint and attributes the unified actor',
     expect($issued->actor_type)->toBe(AuditActorType::OperatorIntegration)
         ->and($issued->actor_ref)->toBe($exact['credential']->id);
 
-    $breakGlass = p5bOperatorCredential(OperatorAbility::ADMIN);
+    $breakGlass = p5bOperatorCredential(OperatorAbility::Admin->value);
     $this->postJson('/bfc/onboarding/issue', $payload, $breakGlass['headers'])->assertCreated();
     expect(OnboardingToken::query()->count())->toBe(2);
 });
@@ -139,7 +143,7 @@ it('serves fixed client observations only to credential readers and break-glass'
         ->assertJsonPath('observations', []);
     expect($exact['credential']->refresh()->last_used_at)->not->toBeNull();
 
-    $breakGlass = p5bOperatorCredential(OperatorAbility::ADMIN);
+    $breakGlass = p5bOperatorCredential(OperatorAbility::Admin->value);
     $this->getJson('/bfc/client-observations', $breakGlass['headers'])->assertOk();
     expect($breakGlass['credential']->refresh()->last_used_at)->not->toBeNull();
 });

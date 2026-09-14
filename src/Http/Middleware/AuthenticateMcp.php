@@ -20,6 +20,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleEntryRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\DelegatedActorDeactivated;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use Carbon\CarbonImmutable;
 use Closure;
@@ -104,7 +105,7 @@ final class AuthenticateMcp
         $this->clientIdentities->recordClientIdentityFromRequest($request, $credential);
 
         if ($credential->subject_type === SubjectType::Operator
-            && $credential->hasAbility(EnsureCredentialAdmin::ABILITY)) {
+            && $credential->hasAbility(OperatorAbility::Admin->value)) {
             $request->attributes->set('bfc.actor_credential_id', $credential->id);
         }
 

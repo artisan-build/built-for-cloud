@@ -45,7 +45,7 @@ function hmacClaimMint(string $subjectRef = 'webhook-client', int $ttl = 3600): 
 {
     $result = app(MintCredential::class)(
         new Subject(SubjectType::ExternalConsumer, $subjectRef),
-        MintOptions::fromInput(['kind' => 'hmac', 'code_ttl_seconds' => $ttl]),
+        MintOptions::fromInput(['kind' => 'hmac', 'purpose' => 'signing', 'code_ttl_seconds' => $ttl]),
     );
 
     /** @var Credential $credential */
@@ -105,7 +105,7 @@ it('mints a claim-code delivery when a code ttl is chosen: the key stays undeliv
 it('bounds the hmac claim-code ttl exactly like every other claim code', function (): void {
     app(MintCredential::class)(
         new Subject(SubjectType::ExternalConsumer, 'client'),
-        MintOptions::fromInput(['kind' => 'hmac', 'code_ttl_seconds' => 59]),
+        MintOptions::fromInput(['kind' => 'hmac', 'purpose' => 'signing', 'code_ttl_seconds' => 59]),
     );
 })->throws(InvalidCredentialInput::class);
 
@@ -114,7 +114,7 @@ it('leaks the minted signing key into no side-effect channel on the reveal-once 
     $result = $this->assertNoSecretLeakageOfMinted(
         fn (): MintResult => app(MintCredential::class)(
             new Subject(SubjectType::Application, 'postmaster'),
-            MintOptions::fromInput(['kind' => 'hmac']),
+            MintOptions::fromInput(['kind' => 'hmac', 'purpose' => 'signing']),
         ),
         function (MintResult $result): string {
             assert($result->secret !== null);
@@ -129,7 +129,7 @@ it('leaks the minted signing key into no side-effect channel on the reveal-once 
 it('records issued + delivered on the reveal-once mint, and issued alone on the claim-code mint', function (): void {
     $direct = app(MintCredential::class)(
         new Subject(SubjectType::Application, 'postmaster'),
-        MintOptions::fromInput(['kind' => 'hmac']),
+        MintOptions::fromInput(['kind' => 'hmac', 'purpose' => 'signing']),
     );
 
     expect(CredentialAuditEvent::query()->where('credential_id', $direct->summary->id)->pluck('event')->map(fn ($e) => $e->value)->sort()->values()->all())

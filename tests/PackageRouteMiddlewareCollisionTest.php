@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
@@ -100,9 +101,10 @@ beforeEach(function (): void {
 function collisionOwnership(?string $bearer = null): Ownership
 {
     $owner = Credential::factory()->create([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'collision-owner',
-        'abilities' => [EnsureCredentialAdmin::ABILITY],
+        'abilities' => [OperatorAbility::Admin->value],
         ...($bearer === null ? [] : ['secret_hash' => hash('sha256', $bearer)]),
     ]);
 
@@ -524,6 +526,7 @@ it('refuses one route from each gate family before controller effects under the 
     $this->postJson('/bfc/credentials', [
         'subject_type' => 'external_consumer',
         'subject_ref' => 'collision-target',
+        'purpose' => CredentialPurpose::Consumption->value,
         'name' => 'collision-mint',
     ])->assertUnauthorized();
     $this->get('/bfc/console/chrome.js')

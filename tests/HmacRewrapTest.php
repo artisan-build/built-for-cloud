@@ -5,6 +5,7 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier;
@@ -209,12 +210,14 @@ it('pauses hmac MINTING mid-rewrap on both transports: no ciphertext-producing p
         'subject_type' => 'application',
         'subject_ref' => 'raced-mint',
         'kind' => 'hmac',
+        'purpose' => CredentialPurpose::Signing->value,
     ], $headers)->assertStatus(409);
 
     expect(Artisan::call('bfc:credential:mint', [
         'subject-type' => 'application',
         'subject-ref' => 'raced-mint-cli',
         '--kind' => 'hmac',
+        '--purpose' => CredentialPurpose::Signing->value,
         '--local' => true,
     ]))->toBe(1);
 
@@ -228,6 +231,7 @@ it('pauses hmac MINTING mid-rewrap on both transports: no ciphertext-producing p
     $this->postJson('/bfc/credentials', [
         'subject_type' => 'application',
         'subject_ref' => 'bearer-still-fine',
+        'purpose' => CredentialPurpose::SystemDeployment->value,
     ], $headers)->assertCreated();
 
     // With the cutover complete, hmac minting resumes.
@@ -237,13 +241,14 @@ it('pauses hmac MINTING mid-rewrap on both transports: no ciphertext-producing p
         'subject_type' => 'application',
         'subject_ref' => 'raced-mint',
         'kind' => 'hmac',
+        'purpose' => CredentialPurpose::Signing->value,
     ], $headers)->assertCreated();
 });
 
 it('pauses the exchange RE-KEY mid-rewrap as a retryable claim error, leaving the row untouched; first delivery still works', function (): void {
     $result = app(MintCredential::class)(
         new Subject(SubjectType::ExternalConsumer, 'rekey-raced'),
-        MintOptions::fromInput(['kind' => 'hmac', 'code_ttl_seconds' => 3600]),
+        MintOptions::fromInput(['kind' => 'hmac', 'purpose' => 'signing', 'code_ttl_seconds' => 3600]),
     );
 
     assert($result->secret !== null);
@@ -280,7 +285,7 @@ it('excludes EVERY ciphertext writer while the rewrap lock is held — check-thr
     // ACTIVE key to rotate, and a delivered claim code ready to re-key.
     $mintResult = app(MintCredential::class)(
         new Subject(SubjectType::ExternalConsumer, 'barrier-client'),
-        MintOptions::fromInput(['kind' => 'hmac']),
+        MintOptions::fromInput(['kind' => 'hmac', 'purpose' => 'signing']),
     );
     $this->postJson('/bfc/credentials/'.$mintResult->summary->id.'/activate', [
         'delivery_fingerprint' => (string) $mintResult->deliveryFingerprint,
@@ -288,7 +293,7 @@ it('excludes EVERY ciphertext writer while the rewrap lock is held — check-thr
 
     $claimResult = app(MintCredential::class)(
         new Subject(SubjectType::ExternalConsumer, 'barrier-rekey-client'),
-        MintOptions::fromInput(['kind' => 'hmac', 'code_ttl_seconds' => 3600]),
+        MintOptions::fromInput(['kind' => 'hmac', 'purpose' => 'signing', 'code_ttl_seconds' => 3600]),
     );
     assert($claimResult->secret !== null);
     $claimCode = $claimResult->secret->reveal();
@@ -306,6 +311,7 @@ it('excludes EVERY ciphertext writer while the rewrap lock is held — check-thr
             'subject_type' => 'application',
             'subject_ref' => 'locked-out-mint',
             'kind' => 'hmac',
+            'purpose' => CredentialPurpose::Signing->value,
         ], $headers)->assertStatus(409);
 
         expect((string) $mintRefused->json('message'))->toContain('bfc:hmac:rewrap');
@@ -331,6 +337,7 @@ it('excludes EVERY ciphertext writer while the rewrap lock is held — check-thr
         'subject_type' => 'application',
         'subject_ref' => 'locked-out-mint',
         'kind' => 'hmac',
+        'purpose' => CredentialPurpose::Signing->value,
     ], $headers)->assertCreated();
 
     $this->postJson('/bfc/credentials/'.$mintResult->summary->id.'/rotate', [], $headers)->assertCreated();

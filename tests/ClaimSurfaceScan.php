@@ -33,10 +33,10 @@ use SplFileInfo;
  * their evidence:
  *
  *  - **What the counts reject is a GATE.** Over the guarantee-bearing
- *    surfaces the withdrawn instrument finds 423 of 1,347 prose blocks
- *    carrying its vocabulary and 311 of those carrying neither a
+ *    surfaces the withdrawn instrument finds 422 of 1,347 prose blocks
+ *    carrying its vocabulary and 310 of those carrying neither a
  *    citation nor a residue note, so requiring every occurrence to be
- *    paired means writing 311 annotations, most onto sentences already
+ *    paired means writing 310 annotations, most onto sentences already
  *    true and already enforced. **That is an argument against a gate
  *    and against nothing else** — a pinned baseline over the same
  *    blocks, or a detector firing only where prose CHANGED, would cost

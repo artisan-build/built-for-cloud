@@ -95,6 +95,7 @@ $case = new class('testProbe') extends TestCase
             'credential' => $credential === null ? null : [
                 'id' => $credential->id,
                 'kind' => $credential->kind->value,
+                'purpose' => $credential->purpose?->value,
                 'subject_type' => $credential->subject_type->value,
                 'subject_ref' => $credential->subject_ref,
                 'abilities' => $credential->abilities,

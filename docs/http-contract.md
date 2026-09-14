@@ -141,6 +141,13 @@ with the three things that WOULD have moved the major and none of which happened
 
 - New unified-store verb routes: `GET /bfc/credentials`, `POST /bfc/credentials`,
   `DELETE /bfc/credentials/{id}`.
+- Unified credentials now carry a required protocol `purpose`, exposed in every summary row and
+  copied unchanged by rotation. Generic minting enforces the kind/subject/purpose matrix documented
+  below. The upgrade migration does not guess a purpose for existing rows: it retires every one as
+  a visible tombstone with `purpose: null`, and operators must re-mint replacement credentials.
+- Persisted abilities are now closed over the documented `OperatorAbility` vocabulary. Claim scopes
+  such as `consume` and `onboard` are wire vocabulary, not stored abilities, and unknown ability
+  input is rejected before a credential, audit event, or delivery is created.
 - New `capabilities` entry `app-action-audit-emit`, and the app-action audit stream's schema and
   emission (Console PRD D17). Additive: no request or response shape changes, and the stream has
   no read transport — see [the app-action audit stream](#the-app-action-audit-stream).
@@ -327,30 +334,16 @@ API listing shape.
   each MCP tool (read vs destructive administration — distinct grants, checked exact-match;
   no operator ability implies either). `metadata:read` is the Console dashboard's read ability
   ([`GET /bfc/console/vitals`](#get-bfcconsolevitals)) and the ONE name in this vocabulary the
-  break-glass below cannot reach — enforced not by the MCP primitive but by that route's own
-  gate, which requires an operator subject and an abilities list EXACTLY equal to
+  break-glass below cannot reach. That route's own gate also requires an operator subject and an abilities list EXACTLY equal to
   `{metadata:read}`. There is **no wildcard**; a credential with no abilities can do nothing. The
   one admin-equivalent name is **`credential:admin`** — the explicit break-glass, expanding
   to exactly the eight operator abilities `credential:read`, `credential:mint`,
   `credential:rotate`, `credential:revoke`, `subject:offboard`, `ownership:release`, `audit:read` and
   `console:key:write` (never the MCP pair); it is what
   `bfc:install:operator-credential` mints, and holding that literal name in the abilities
-  list is how a break-glass credential is marked.
-
-  Two precise things about that list, because "exactly" is doing more work in the sentence
-  above than the code does:
-
-  - **It is a declared inventory, not the enforcement path.** The operator gate grants a
-    credential holding `credential:admin` *whatever* ability the route asks for; it does not
-    consult the list. The list is therefore an accurate statement of what the operator routes
-    ask for TODAY — every one of them names an ability on it — rather than a ceiling the gate
-    would enforce if a future route named an ability deliberately left off. Read it as "these
-    are the abilities break-glass currently reaches", not as "break-glass is confined to
-    these". (The `never the MCP pair` half IS enforced, but by a different middleware: the
-    per-tool MCP gate checks exact-match and no operator ability satisfies it.)
-  - **A package test pins this sentence to `OperatorAbility::adminEquivalent()`** — the names,
-    their order, and the spelled count — so the document and that method cannot disagree. It
-    pins nothing else; see that test's own docblock for what it deliberately does not cover.
+  list is how a break-glass credential is marked. The operator gate enforces that exact
+  `OperatorAbility::adminEquivalent()` set; an enum ability outside it is not inherited. The MCP
+  pair and `metadata:read` are outside the expansion.
 
   **Caveat — an app with a declared mint ceiling cannot mint `console:key:write` until it
   edits its own declaration.** This affects one specific kind of app: one whose credential
@@ -376,8 +369,8 @@ API listing shape.
 
     The `credential:admin` exception is real and is a third way out: a ceiling written before
     this release may well permit the break-glass name, and an operator credential carrying it
-    is both mintable under that ceiling and sufficient for this route — because the gate grants
-    `credential:admin` whatever ability a route names (see the inventory note above). Check the
+    is both mintable under that ceiling and sufficient for this route because
+    `console:key:write` is explicitly in the bounded admin-equivalent set. Check the
     declaration's `grantableAbilities()` before concluding the route is unreachable.
 
   **Two paths work meanwhile, neither of which needs a deploy:**
@@ -1111,7 +1104,8 @@ Input validation is shared: both transports normalize options through one input 
 reject the same junk with the same message (HTTP as a `422 {"message": ...}`, the CLI as a
 failure exit). A non-integer `code_ttl_seconds` (e.g. `"60junk"`) is rejected, never truncated;
 a negative one hits the same bounds error on both transports. `abilities` is bounded: at most
-32 entries, each at most 128 characters. **An empty `abilities` list normalizes to `null`** —
+32 entries, each at most 128 characters, and every entry must be a backed value from the closed
+operator ability vocabulary above. **An empty `abilities` list normalizes to `null`** —
 both grant nothing, and summaries always serialize the one canonical shape (`null`).
 
 Summary rows share one shape:
@@ -1120,10 +1114,11 @@ Summary rows share one shape:
 {
   "id": "9d3f...",
   "kind": "bearer",
+  "purpose": "consumption",
   "subject_type": "external_consumer",
   "subject_ref": "acme",
   "name": "ci" ,
-  "abilities": ["consume"],
+  "abilities": ["credential:read"],
   "status": "active",
   "created_at": "2026-08-28T12:00:00+00:00",
   "last_used_at": null,
@@ -1135,14 +1130,17 @@ Summary rows share one shape:
 }
 ```
 
-`kind` is `bearer` / `basic` / `asymmetric` / `hmac`; `status` is `pending` / `active` /
+`kind` is `bearer` / `basic` / `asymmetric` / `hmac`; `purpose` is one of
+`operator_management`, `dashboard_metadata`, `consumption`, `mcp`, `signing`, `signing_root`,
+`enrollment`, or `system_deployment`; `status` is `pending` / `active` /
 `expired` / `revoked` (`unknown` reserved). **`unsupported` is the declared-unsupported
 discrimination:** a field named there is one the app's declaration says this store structurally
 cannot express — it is serialized null *and* listed, so null-and-listed means "unknowable here"
 while null-and-not-listed means "absent". Consumers must not render or alert on unsupported
 fields. `rotated_at` is rotation provenance: non-null names a row superseded by rotation and
 living out its grace window — expected to appear beside its active replacement until the grace
-expiry passes.
+expiry passes. A retired pre-purpose tombstone is the sole nullable-purpose case: it lists with
+`purpose: null`, `status: "revoked"`, and its preserved `revoked_at`.
 
 ### GET /bfc/credentials
 
@@ -1161,15 +1159,28 @@ because the row does not exist yet.
   "subject_type": "external_consumer",
   "subject_ref": "acme",
   "kind": "bearer",
+  "purpose": "consumption",
   "name": "ci",
-  "abilities": ["consume"],
+  "abilities": ["credential:read"],
   "expires_at": null,
   "user_id": null,
   "code_ttl_seconds": null
 }
 ```
 
-`subject_type` and `subject_ref` are required; everything else optional. `expires_at` omitted
+`subject_type`, `subject_ref`, and `purpose` are required; everything else is optional. Unknown,
+missing, or matrix-invalid purposes are rejected. The generic mint matrix is exact:
+
+| kind | subject type | admitted purpose |
+|---|---|---|
+| `bearer` / `basic` | `operator` | `operator_management`, `dashboard_metadata` |
+| `bearer` / `basic` | `application`, `installation` | `system_deployment` |
+| `bearer` / `basic` | `external_consumer`, `user_principal` | `consumption`, `mcp` |
+| `hmac` | any ordinary subject admitted by the declaration | `signing` |
+| `asymmetric` | any subject admitted by the declaration | `enrollment` |
+
+Generic minting refuses `signing_root` and the reserved
+`(installation, bfc:signing-root)` identity. `expires_at` omitted
 means **no expiry** — the package never defaults one. `code_ttl_seconds` is required (60–604800)
 when `kind` is `asymmetric`; for `kind: "hmac"` it is **optional and selects the delivery**
 (present → a claim code for an outside counterparty; absent → the reveal-once `signing_key`
@@ -1208,7 +1219,8 @@ upgrade path for any case that cannot accept it.
   Identical refusals on the CLI transport.
 - **409** — `{"message": "..."}`: an hmac mint while an APP_KEY rewrap is in progress — every
   ciphertext-producing path pauses mid-cutover; retry after `bfc:hmac:rewrap` completes.
-- **422** — validation (unknown `subject_type`/`kind`, out-of-bounds `code_ttl_seconds`, …).
+- **422** — validation (unknown `subject_type`/`kind`/`purpose`/ability, missing or matrix-invalid
+  `purpose`, out-of-bounds `code_ttl_seconds`, …).
 
 Emits an `issued` audit event (ids only, never values) in the mint's own transaction, on both
 transports.
@@ -1227,9 +1239,9 @@ Rotate by id — the primary verb (there is no name path over HTTP; `bfc:credent
 --name` is a CLI convenience that refuses on ambiguity). Make-before-break: the replacement is
 minted FIRST, then the old row is retired into its grace window.
 
-**Default rotation preserves EXACTLY**: the ability set, the subject binding
+**Default rotation preserves EXACTLY**: the purpose, the ability set, the subject binding
 (`subject_type` / `subject_ref` / `user_id`), the decorative name, and the remaining expiry of
-the row it replaces — never widening, never lifetime extension, silently. The old row is
+the row it replaces. Rotation accepts no purpose override. The old row is
 stamped `rotated_at`, stays resolvable through a one-hour grace window (unless its own expiry
 comes sooner — rotation never extends any lifetime), and dies at grace end by its own expiry.
 No reaper is involved.

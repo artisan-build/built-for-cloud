@@ -11,6 +11,7 @@ use ArtisanBuild\BuiltForCloud\Console\ConsoleKey;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyring;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
@@ -75,6 +76,7 @@ beforeEach(function (): void {
 function retirementOperator(?array $abilities): MintedTestCredential
 {
     return test()->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'retire-'.bin2hex(random_bytes(4)),
         'abilities' => $abilities,
@@ -336,7 +338,7 @@ it('gates retirement on console:key:write and refuses every other credential', f
 
     // …so does the explicit break-glass, a marking an operator chose…
     $this->postJson(retirementUrl('k2'), [], [
-        'Authorization' => retirementOperator([OperatorAbility::ADMIN])->bearerHeader(),
+        'Authorization' => retirementOperator([OperatorAbility::Admin->value])->bearerHeader(),
     ])->assertOk();
 
     expect(ConsoleKey::query()->whereNotNull('retired_at')->pluck('key_id')->sort()->values()->all())

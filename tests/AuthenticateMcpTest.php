@@ -15,11 +15,12 @@ use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Exceptions\AssertionRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\SelfServiceUnavailable;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use Carbon\CarbonImmutable;
@@ -138,6 +139,9 @@ function mcpStoreCredential(
 ): Credential {
     return Credential::query()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => $subjectType === SubjectType::Operator
+            ? CredentialPurpose::OperatorManagement
+            : CredentialPurpose::SystemDeployment,
         'subject_type' => $subjectType,
         'subject_ref' => 'mcp-'.bin2hex(random_bytes(8)),
         'name' => 'mcp credential',
@@ -299,7 +303,7 @@ it('authenticates a unified bearer, records its use and does not leak the prior 
     mcpRequest(['sub' => 'first-request'])->assertOk();
 
     $plaintext = 'credential-'.bin2hex(random_bytes(16));
-    $credential = mcpStoreCredential($plaintext, abilities: ['apps:call']);
+    $credential = mcpStoreCredential($plaintext, abilities: [OperatorAbility::McpRead->value]);
 
     expect($credential->last_used_at)->toBeNull();
 
@@ -352,7 +356,7 @@ it('keeps local and browser-session consumers closed to a request assertion', fu
 
 it('gives a non-admin unified bearer no admin attribution', function (): void {
     $plaintext = 'non-admin-'.bin2hex(random_bytes(16));
-    $credential = mcpStoreCredential($plaintext, SubjectType::Operator, ['apps:call']);
+    $credential = mcpStoreCredential($plaintext, SubjectType::Operator, [OperatorAbility::McpRead->value]);
 
     $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$plaintext])
         ->assertOk()
@@ -371,7 +375,7 @@ it('gives a non-admin unified bearer no admin attribution', function (): void {
 
 it('attributes only an operator credential with credential admin ability', function (): void {
     $plaintext = 'operator-admin-'.bin2hex(random_bytes(16));
-    $credential = mcpStoreCredential($plaintext, SubjectType::Operator, [EnsureCredentialAdmin::ABILITY]);
+    $credential = mcpStoreCredential($plaintext, SubjectType::Operator, [OperatorAbility::Admin->value]);
 
     $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$plaintext])
         ->assertOk()
@@ -387,7 +391,7 @@ it('attributes only an operator credential with credential admin ability', funct
 
 it('gives a non-operator with credential admin ability no admin attribution', function (): void {
     $plaintext = 'application-admin-'.bin2hex(random_bytes(16));
-    $credential = mcpStoreCredential($plaintext, SubjectType::Application, [EnsureCredentialAdmin::ABILITY]);
+    $credential = mcpStoreCredential($plaintext, SubjectType::Application, [OperatorAbility::Admin->value]);
 
     $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$plaintext])
         ->assertOk()
@@ -411,7 +415,7 @@ it('never falls through between store bearer and assertion authentication paths'
 
     $foreign = consoleKeypair();
     $assertion = mcpAssertion([], 'not-filed', $foreign);
-    $credential = mcpStoreCredential($assertion, abilities: ['apps:call']);
+    $credential = mcpStoreCredential($assertion, abilities: [OperatorAbility::McpRead->value]);
 
     // Prefix selects assertion exclusively even though these exact bytes are
     // also a resolvable unified credential.

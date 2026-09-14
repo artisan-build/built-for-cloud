@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
@@ -16,13 +17,10 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
  * Credential::hasAbility}), and there is NO wildcard value — `*` is not an
  * ability and matches nothing anywhere in the package.
  *
- * The one admin-equivalent name is {@see self::ADMIN} (`credential:admin`,
- * shipped in PRD 1.20 as {@see EnsureCredentialAdmin::ABILITY}): on the
+ * The one admin-equivalent name is {@see self::Admin} (`credential:admin`): on the
  * operator surfaces it satisfies every ability those routes name, and
- * {@see self::adminEquivalent} is the declared inventory of what that
- * is today — an inventory the gate does not read, not a bound it
- * enforces (that method's docblock says exactly what follows from the
- * difference). It is the explicit break-glass marking: a credential holding
+ * {@see self::adminEquivalent} is the enforced bound of what that is
+ * today. It is the explicit break-glass marking: a credential holding
  * `credential:admin` in its abilities list IS the break-glass credential,
  * deliberately minted with that literal name (the installer's operator
  * credential is one); nothing acquires the equivalence implicitly, and
@@ -68,6 +66,9 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
  */
 enum OperatorAbility: string
 {
+    /** Explicit break-glass access to the bounded operator surfaces. */
+    case Admin = 'credential:admin';
+
     /** Read the credential listings — an audited sensitive read. */
     case CredentialRead = 'credential:read';
 
@@ -127,12 +128,9 @@ enum OperatorAbility: string
      * made every break-glass credential a valid dashboard credential and
      * left nothing enforcing D16 at all.
      *
-     * The absence alone would not be enough, because
-     * {@see EnsureCredentialAdmin} does not consult that method: it
-     * grants `credential:admin` whatever ability a route names. So the
-     * route does not use that gate. It is mounted behind
-     * {@see EnsureDashboardCredential} — ALONE, no ability middleware in
-     * front of it — which admits only an operator-subject credential
+     * The route is mounted behind {@see EnsureDashboardCredential} —
+     * alone, with no ability middleware in front of it — which admits only
+     * an operator-subject credential
      * whose abilities list is exactly `{metadata:read}`. A credential
      * holding `credential:admin` fails that whether or not it also holds
      * this name, which is what D16's "unable to touch
@@ -153,72 +151,23 @@ enum OperatorAbility: string
     case McpAdmin = 'mcp:admin';
 
     /**
-     * The admin-equivalent break-glass ability
-     * ({@see EnsureCredentialAdmin::ABILITY} — one name, asserted equal in
-     * the test suite). On the operator surfaces, holding it satisfies
-     * whatever ability the route names — see {@see self::adminEquivalent}
-     * for what that is today, and for why the method is an inventory
-     * rather than the bound.
-     */
-    public const string ADMIN = 'credential:admin';
-
-    /**
      * Every ability reserved to an operator-authority credential.
      *
      * @return list<string>
      */
     public static function vocabulary(): array
     {
-        $abilities = array_map(
+        return array_map(
             static fn (self $ability): string => $ability->value,
             self::cases(),
         );
-        $abilities[] = self::ADMIN;
-
-        return $abilities;
     }
 
     /**
-     * The DECLARED inventory of what `credential:admin` reaches on the
-     * operator surfaces — every ability those routes ask for today.
-     *
-     * Read the next sentence before relying on it, because the method's
-     * name promises more than the code delivers: **nothing consults
-     * this.** {@see EnsureCredentialAdmin} grants a `credential:admin`
-     * credential whatever ability the route names, and this method
-     * appears nowhere in `src/` outside docblocks. The list is accurate
-     * because every operator route happens to name an ability on it, not
-     * because it is enforced — so a future route naming an ability
-     * deliberately left off would still be satisfied by break-glass, and
-     * this list would quietly become a description of the past.
-     *
-     * What IS enforced, by two different mechanisms neither of which is
-     * this list:
-     *
-     * The MCP pair's absence — {@see EnsureCredentialAbility} checks
-     * exact-match, so no operator ability satisfies a gate mounted with
-     * it, and `mcp:read` / `mcp:admin` are reached only by a credential
-     * literally holding them.
-     *
-     * {@see self::MetadataRead}'s absence — but NOT by that mechanism,
-     * and the distinction matters because the wrong reason would go
-     * stale the moment the route moved. Its route is mounted behind
-     * {@see EnsureDashboardCredential} alone, which requires an operator
-     * subject and an abilities list EXACTLY equal to `{metadata:read}`.
-     * So a break-glass credential is refused there twice over: it does
-     * not hold the name, and holding it as well would still fail the
-     * exact-set check.
-     *
-     * All three absences are therefore real bounds rather than
-     * descriptions — because of what their routes' own gates require,
-     * not because anything consults this list.
-     *
-     * The contract doc's admin-equivalent sentence is pinned to this
-     * method by `HttpContractDocTest`, so the two cannot disagree; that
-     * test's docblock names what the pinning does and does not cover.
-     * Making the gate consult this method would turn the inventory into
-     * the bound the name implies. It is not done here, and is tracked as
-     * mutation debt rather than left to be rediscovered.
+     * The enforced inventory of what `credential:admin` reaches on the
+     * operator surfaces. {@see EnsureCredentialAdmin} consults this exact
+     * set, so a future enum ability is not granted until it is deliberately
+     * added here. MCP and dashboard metadata remain outside the expansion.
      *
      * @return list<self>
      */
@@ -234,5 +183,26 @@ enum OperatorAbility: string
             self::AuditRead,
             self::ConsoleKeyWrite,
         ];
+    }
+
+    /**
+     * @param  list<string>|null  $abilities
+     * @return list<string>|null
+     */
+    public static function parseValues(?array $abilities): ?array
+    {
+        self::assertValues($abilities);
+
+        return $abilities;
+    }
+
+    /** @param list<string>|null $abilities */
+    public static function assertValues(?array $abilities): void
+    {
+        foreach ($abilities ?? [] as $ability) {
+            if (self::tryFrom($ability) === null) {
+                throw InvalidCredentialInput::unknownAbility($ability);
+            }
+        }
     }
 }

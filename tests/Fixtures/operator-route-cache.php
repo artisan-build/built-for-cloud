@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\BuiltForCloudServiceProvider;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
@@ -189,8 +190,9 @@ $case = new class('testProbe') extends TestCase
 
         $owner = Credential::factory()->create([
             'name' => 'cache-owner',
+            'purpose' => CredentialPurpose::OperatorManagement,
             'subject_type' => SubjectType::Operator,
-            'abilities' => [OperatorAbility::ADMIN],
+            'abilities' => [OperatorAbility::Admin->value],
         ]);
         $ownership = Ownership::query()->create(['owner_credential_id' => $owner->getKey()]);
         $credentialLookups = 0;

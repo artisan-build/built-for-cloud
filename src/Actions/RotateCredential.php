@@ -29,6 +29,7 @@ use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintedSecret;
 use ArtisanBuild\BuiltForCloud\MintResult;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\ReportedStatus;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\RotationResult;
@@ -44,7 +45,7 @@ use Throwable;
  * `POST /bfc/credentials/{id}/rotate`. One implementation; neither
  * transport can rotate anything the other cannot.
  *
- * The default preserves EXACTLY: the ability set, the subject binding
+ * The default preserves EXACTLY: the purpose, the ability set, the subject binding
  * (subject_type / subject_ref / user_id), the decorative name, and the
  * remaining expiry of the row it replaces. Never widening, never lifetime
  * extension, silently — ANY provided change (narrowing included:
@@ -113,6 +114,8 @@ final class RotateCredential
         ?AuditActor $actor = null,
         ?CredentialManagementScope $managementScope = null,
     ): ?RotationResult {
+        OperatorAbility::assertValues($options->abilities);
+
         $phaseOne = fn (): ?RotationResult => DB::transaction(
             fn (): ?RotationResult => $this->mintReplacement($id, $options, $actor, $managementScope),
         );
@@ -213,6 +216,8 @@ final class RotateCredential
         if ($source === null) {
             return null;
         }
+
+        $source->assertValidStoredPurpose();
 
         // The matrix consults the subject the ROW declares — never
         // anything the caller supplies (SEC-V3-07).
@@ -415,6 +420,7 @@ final class RotateCredential
         $replacement = new Credential;
         $replacement->forceFill([
             'kind' => CredentialKind::Hmac,
+            'purpose' => $source->purpose,
             'subject_type' => $source->subject_type,
             'subject_ref' => $source->subject_ref,
             'name' => $source->name,
@@ -510,6 +516,7 @@ final class RotateCredential
 
         $replacement = Credential::query()->create([
             'kind' => $source->kind,
+            'purpose' => $source->purpose,
             'subject_type' => $source->subject_type,
             'subject_ref' => $source->subject_ref,
             'name' => $source->name,
@@ -553,6 +560,7 @@ final class RotateCredential
 
         $replacement = Credential::query()->create([
             'kind' => CredentialKind::Asymmetric,
+            'purpose' => $source->purpose,
             'subject_type' => $source->subject_type,
             'subject_ref' => $source->subject_ref,
             'name' => $source->name,

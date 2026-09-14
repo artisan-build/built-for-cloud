@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -38,7 +39,10 @@ it('authenticates a bearer credential and stamps last_used_at', function (): voi
 });
 
 it('authenticates an http basic credential in the auth.json shape', function (): void {
-    $minted = $this->mintCredential(['kind' => CredentialKind::Basic]);
+    $minted = $this->mintCredential([
+        'kind' => CredentialKind::Basic,
+        'purpose' => CredentialPurpose::SystemDeployment,
+    ]);
 
     $this->getJson('/bfc-guarded', ['Authorization' => $minted->basicHeader('any-username')])
         ->assertOk()
@@ -48,7 +52,10 @@ it('authenticates an http basic credential in the auth.json shape', function ():
 });
 
 it('does not authenticate a bearer presentation against a basic credential or vice versa', function (): void {
-    $basic = $this->mintCredential(['kind' => CredentialKind::Basic]);
+    $basic = $this->mintCredential([
+        'kind' => CredentialKind::Basic,
+        'purpose' => CredentialPurpose::SystemDeployment,
+    ]);
     $bearer = $this->mintCredential();
 
     $this->getJson('/bfc-guarded', ['Authorization' => $basic->bearerHeader()])

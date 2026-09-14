@@ -6,8 +6,9 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -62,7 +63,7 @@ it('mints a claim that the claim endpoint exchanges for a credential-admin owner
         ->and($ownerCredential->subject_type)->toBe(SubjectType::Operator)
         ->and($ownerCredential->subject_ref)->toBe('owner')
         ->and($ownerCredential->name)->toBe('owner')
-        ->and($ownerCredential->abilities)->toBe([EnsureCredentialAdmin::ABILITY])
+        ->and($ownerCredential->abilities)->toBe([OperatorAbility::Admin->value])
         ->and($ownerCredential->status)->toBe(CredentialStatus::Active)
         ->and($ownerCredential->secret_hash)->toBe(hash('sha256', (string) $response->json('owner_token')));
 
@@ -151,10 +152,11 @@ it('remints the owner token for the current owner and revokes the previous one',
     $previousCredentialId = $ownership?->owner_credential_id;
     $otherOwnerCredential = Credential::factory()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'owner',
         'name' => 'renamed-owner',
-        'abilities' => [EnsureCredentialAdmin::ABILITY],
+        'abilities' => [OperatorAbility::Admin->value],
     ]);
     $newPlaintext = 'reminted-owner-token';
 
@@ -175,7 +177,7 @@ it('remints the owner token for the current owner and revokes the previous one',
         ->and($reminted?->webhook_secret)->toBe($ownership?->webhook_secret)
         ->and($newCredential->subject_type)->toBe(SubjectType::Operator)
         ->and($newCredential->subject_ref)->toBe('owner')
-        ->and($newCredential->abilities)->toBe([EnsureCredentialAdmin::ABILITY])
+        ->and($newCredential->abilities)->toBe([OperatorAbility::Admin->value])
         ->and($newCredential->secret_hash)->toBe(hash('sha256', $newPlaintext))
         ->and($previousCredential->revoked_at)->not->toBeNull()
         ->and($otherOwnerCredential->refresh()->revoked_at)->not->toBeNull()

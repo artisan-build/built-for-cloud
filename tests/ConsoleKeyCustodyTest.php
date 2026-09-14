@@ -16,6 +16,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresBurnMode;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
@@ -87,6 +88,7 @@ beforeEach(function (): void {
 function keyCustodyOperator(?array $abilities, array $attributes = []): MintedTestCredential
 {
     return test()->mintCredential(array_merge([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'console-'.bin2hex(random_bytes(4)),
         'abilities' => $abilities,
@@ -834,7 +836,7 @@ it('gates the re-key verb on its own console:key:write ability (AC14)', function
 
     // …and so does the explicit break-glass, which is a marking an
     // operator chose rather than a family that widened under them.
-    $breakGlass = keyCustodyOperator([OperatorAbility::ADMIN]);
+    $breakGlass = keyCustodyOperator([OperatorAbility::Admin->value]);
 
     $this->postJson('/bfc/console/re-key', ['key_id' => 'break-glass', 'public_key' => keyCustodyPublicKey()], [
         'Authorization' => $breakGlass->bearerHeader(),
@@ -1345,6 +1347,7 @@ it('lets the deployment OWNER re-key with the credential its own claim minted (A
     $minted = $this->postJson('/bfc/credentials', [
         'subject_type' => 'operator',
         'subject_ref' => 'self-granted',
+        'purpose' => CredentialPurpose::OperatorManagement->value,
         'abilities' => [OperatorAbility::ConsoleKeyWrite->value],
     ], ['Authorization' => 'Bearer '.$ownerToken]);
 

@@ -5,8 +5,9 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
@@ -31,8 +32,9 @@ it('mints a credential locally with --local, printing the secret once and emitti
             expect(Artisan::call('bfc:credential:mint', [
                 'subject-type' => 'application',
                 'subject-ref' => 'local-app',
+                '--purpose' => CredentialPurpose::SystemDeployment->value,
                 '--name' => 'local-app',
-                '--abilities' => 'consume',
+                '--abilities' => OperatorAbility::CredentialRead->value,
                 '--local' => true,
             ]))->toBe(Command::SUCCESS);
 
@@ -53,7 +55,7 @@ it('mints a credential locally with --local, printing the secret once and emitti
     $token = Credential::query()->where('name', 'local-app')->sole();
 
     expect($token->secret_hash)->toBe(hash('sha256', $plaintext))
-        ->and($token->abilities)->toBe(['consume']);
+        ->and($token->abilities)->toBe([OperatorAbility::CredentialRead->value]);
 
     // The mint appears in the lifecycle stream.
     $event = CredentialAuditEvent::query()->where('credential_id', $token->getKey())->sole();
@@ -144,7 +146,7 @@ it('remints the owner credential locally with --local, revoking the previous own
     $replacement = Credential::query()->where('secret_hash', hash('sha256', $plaintext))->sole();
 
     expect(substr_count($output, $plaintext))->toBe(1)
-        ->and($replacement->abilities)->toBe([EnsureCredentialAdmin::ABILITY])
+        ->and($replacement->abilities)->toBe([OperatorAbility::Admin->value])
         ->and(Ownership::query()->sole()->owner_credential_id)->toBe((string) $replacement->getKey())
         ->and($old->refresh()->revoked_at)->not->toBeNull();
 

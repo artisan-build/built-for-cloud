@@ -7,11 +7,12 @@ namespace ArtisanBuild\BuiltForCloud\Tests\Fixtures;
 use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Subject;
 use Illuminate\Http\Request;
 
 /**
- * A declaration with mint ceilings: only `consume` is grantable and no
+ * A declaration with mint ceilings: only `credential:read` is grantable and no
  * credential may live longer than an hour. The widening-refusal fixture
  * (locked AC 2).
  */
@@ -19,7 +20,7 @@ final class ConstrainedMintDeclaration implements ConstrainsMintedCredentials, C
 {
     public function grantableAbilities(Subject $subject): ?array
     {
-        return ['consume'];
+        return [OperatorAbility::CredentialRead->value];
     }
 
     public function maxCredentialLifetimeSeconds(Subject $subject): ?int

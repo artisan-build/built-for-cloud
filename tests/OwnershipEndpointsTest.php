@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\Credential;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -42,7 +42,7 @@ it('claims an unowned environment with a claim token and returns an admin owner 
 
     $ownerCredential = Credential::query()->whereKey($ownership?->owner_credential_id)->firstOrFail();
 
-    expect($ownerCredential->abilities)->toBe([EnsureCredentialAdmin::ABILITY]);
+    expect($ownerCredential->abilities)->toBe([OperatorAbility::Admin->value]);
 
     $this->getJson('/bfc/credentials', ownerHeaders($ownerPlaintext))->assertOk();
     $this->postJson('/bfc/ownership/claim', ['token' => $claimToken])->assertUnauthorized();

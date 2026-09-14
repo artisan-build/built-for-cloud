@@ -19,6 +19,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\DeclaresBurnMode;
 use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleKeyRefused;
@@ -725,10 +726,17 @@ final class ManageOnboarding extends OperatorRouteController
 
         app(ClientIdentityRecorder::class)->recordClientIdentityFromRequest($request, $credential);
 
+        $scope = match ($credential->purpose) {
+            CredentialPurpose::Consumption => Scope::Consume,
+            CredentialPurpose::OperatorManagement => Scope::Admin,
+            CredentialPurpose::Enrollment => Scope::Onboard,
+            default => null,
+        };
+
         return response()->json([
             'ok' => true,
             'name' => $credential->name,
-            'scope' => $credential->abilities[0] ?? null,
+            'scope' => $scope?->value,
         ]);
     }
 
@@ -809,7 +817,7 @@ final class ManageOnboarding extends OperatorRouteController
     /**
      * The unified-store half of the D1d sweep: same exclusions, expressed
      * on `credentials` columns. The tenancy key here is `subject_ref` (the
-     * minter sets it from the claim's name), the scope is an ability, and a
+     * minter sets it from the claim's name), the scope maps to purpose, and a
      * row superseded by rotation survives because the sweep killing it would
      * break the make-before-break window rotation exists to provide.
      *
@@ -824,6 +832,12 @@ final class ManageOnboarding extends OperatorRouteController
      */
     private function revokeActiveUnifiedDurable(string $name, string $scope, string $exchangingCodeId): array
     {
+        $purpose = match (Scope::from($scope)) {
+            Scope::Consume => CredentialPurpose::Consumption,
+            Scope::Admin => CredentialPurpose::OperatorManagement,
+            Scope::Onboard => CredentialPurpose::Enrollment,
+        };
+
         /** @var list<Credential> $credentials */
         $credentials = Credential::query()
             ->where('kind', CredentialKind::Bearer->value)
@@ -844,7 +858,7 @@ final class ManageOnboarding extends OperatorRouteController
         $revoked = [];
 
         foreach ($credentials as $credential) {
-            if (! $credential->hasAbility($scope)) {
+            if ($credential->purpose !== $purpose) {
                 continue;
             }
 

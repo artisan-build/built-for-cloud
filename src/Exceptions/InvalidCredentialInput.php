@@ -23,6 +23,31 @@ final class InvalidCredentialInput extends InvalidArgumentException
         return new self(sprintf('Unknown credential kind "%s".', $kind));
     }
 
+    public static function missingPurpose(): self
+    {
+        return new self('A credential purpose is required.');
+    }
+
+    public static function unknownPurpose(string $purpose): self
+    {
+        return new self(sprintf('Unknown credential purpose "%s".', $purpose));
+    }
+
+    public static function purposeNotAllowed(): self
+    {
+        return new self('The credential purpose is not allowed for this kind and subject.');
+    }
+
+    public static function unknownAbility(string $ability): self
+    {
+        return new self(sprintf('Unknown credential ability "%s".', $ability));
+    }
+
+    public static function unknownScope(): self
+    {
+        return new self('Unknown claim scope.');
+    }
+
     public static function unknownSubjectType(string $subjectType): self
     {
         return new self(sprintf('Unknown subject type "%s".', $subjectType));

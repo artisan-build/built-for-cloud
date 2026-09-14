@@ -7,8 +7,9 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesCredentialVerbs;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
@@ -63,12 +64,14 @@ final class SubjectsAuthorityTest extends TestCase
 
         $own = Credential::factory()->create([
             'name' => 'client-key',
+            'purpose' => CredentialPurpose::Consumption,
             'secret_hash' => hash('sha256', 'own-secret'),
             'subject_type' => SubjectType::ExternalConsumer->value,
             'subject_ref' => 'tenant-a',
         ]);
         $foreign = Credential::factory()->create([
             'name' => 'client-key',
+            'purpose' => CredentialPurpose::Consumption,
             'secret_hash' => hash('sha256', 'foreign-secret'),
             'subject_type' => SubjectType::ExternalConsumer->value,
             'subject_ref' => 'tenant-b',
@@ -94,6 +97,7 @@ final class SubjectsAuthorityTest extends TestCase
 
         $foreign = Credential::factory()->create([
             'name' => 'client-key',
+            'purpose' => CredentialPurpose::Consumption,
             'secret_hash' => hash('sha256', 'crafted-target-secret'),
             'subject_type' => SubjectType::ExternalConsumer->value,
             'subject_ref' => 'tenant-b',
@@ -117,6 +121,7 @@ final class SubjectsAuthorityTest extends TestCase
 
         Credential::factory()->create([
             'name' => 'half-declared',
+            'purpose' => CredentialPurpose::Consumption,
             'subject_type' => SubjectType::ExternalConsumer->value,
             'subject_ref' => null,
         ]);
@@ -141,11 +146,13 @@ final class SubjectsAuthorityTest extends TestCase
 
         Credential::factory()->create([
             'name' => 'visible',
+            'purpose' => CredentialPurpose::Consumption,
             'subject_type' => SubjectType::ExternalConsumer->value,
             'subject_ref' => 'tenant-a',
         ]);
         Credential::factory()->create([
             'name' => 'hidden',
+            'purpose' => CredentialPurpose::Consumption,
             'subject_type' => SubjectType::ExternalConsumer->value,
             'subject_ref' => 'tenant-b',
         ]);
@@ -177,6 +184,7 @@ final class SubjectsAuthorityTest extends TestCase
         $this->postJson('/bfc/credentials', [
             'subject_type' => SubjectType::ExternalConsumer->value,
             'subject_ref' => 'refused',
+            'purpose' => CredentialPurpose::Consumption->value,
             'name' => 'refused',
         ], $headers)->assertForbidden();
 
@@ -198,6 +206,7 @@ final class SubjectsAuthorityTest extends TestCase
 
         $credential = Credential::factory()->create([
             'name' => 'observed',
+            'purpose' => CredentialPurpose::SystemDeployment,
             'subject_type' => SubjectType::Installation->value,
             'subject_ref' => 'install-9',
         ]);
@@ -242,11 +251,12 @@ final class SubjectsAuthorityTest extends TestCase
     private function adminHeaders(string $plaintext = 'authority-admin-secret'): array
     {
         Credential::factory()->create([
+            'purpose' => CredentialPurpose::OperatorManagement,
             'subject_type' => SubjectType::Operator,
             'subject_ref' => 'authority-admin',
             'name' => 'admin',
             'secret_hash' => hash('sha256', $plaintext),
-            'abilities' => [EnsureCredentialAdmin::ABILITY],
+            'abilities' => [OperatorAbility::Admin->value],
         ]);
 
         return ['Authorization' => 'Bearer '.$plaintext];

@@ -10,8 +10,10 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
+use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
@@ -104,6 +106,7 @@ function personalCredentialFor(User $user, array $attributes = []): Credential
     /** @var Credential */
     return Credential::query()->create(array_merge([
         'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::UserPrincipal,
         'subject_ref' => personalSubjectRef($user),
         'user_id' => (string) $user->getAuthIdentifier(),
@@ -243,6 +246,7 @@ it('binds a mint to the session-derived subject and never to a crafted one', fun
     $credential = Credential::query()->where('name', 'ci')->sole();
 
     expect($credential->subject_type)->toBe(SubjectType::UserPrincipal)
+        ->and($credential->purpose)->toBe(CredentialPurpose::Consumption)
         ->and($credential->subject_ref)->toBe(personalSubjectRef($mine))
         ->and($credential->user_id)->toBe((string) $mine->getAuthIdentifier());
 
@@ -273,6 +277,32 @@ it('ignores a crafted subject even when the surface is called directly, not over
 
     expect($credential->subject_ref)->toBe(personalSubjectRef($mine))
         ->and($credential->user_id)->toBe((string) $mine->getAuthIdentifier());
+});
+
+it('cannot mint the reserved signing-root identity through the personal adapter', function (): void {
+    $mine = personalUser('reserved-root@example.test');
+    $this->actingAsVersioned($mine);
+
+    app()->instance(CredentialDeclaration::class, new class implements CredentialDeclaration
+    {
+        public function resolveSubject(Request $request): ?Subject
+        {
+            return new Subject(SubjectType::Installation, CredentialPurpose::SIGNING_ROOT_SUBJECT_REF);
+        }
+
+        public function authorize(Credential $credential, ?string $ability, Request $request): bool
+        {
+            return true;
+        }
+    });
+
+    $request = Request::create('/bfc/me/credentials', 'POST');
+    $request->setUserResolver(fn (): User => $mine);
+    $before = Credential::query()->count();
+
+    expect(fn () => app(PersonalCredentialSurface::class)->mintMine($request, new MintOptions))
+        ->toThrow(InvalidCredentialInput::class, 'not allowed');
+    expect(Credential::query()->count())->toBe($before);
 });
 
 // ------------------------------------------------------- AC3: reveal once (D7)
@@ -381,14 +411,14 @@ it('distinguishes declared-unsupported from null-but-supported and renders less 
 
     // A supported-but-empty field: `expires_at` is null because nothing
     // set one, not because the store cannot express it.
-    personalCredentialFor($mine, ['name' => 'laptop', 'abilities' => ['consume']]);
+    personalCredentialFor($mine, ['name' => 'laptop', 'abilities' => [OperatorAbility::CredentialRead->value]]);
 
     $full = $this->actingAsVersioned($mine)->getJson('/bfc/me/credentials')->assertOk();
 
     expect($full->json('fields.supported'))->toBe(['name', 'abilities', 'last_used_at', 'expires_at'])
         ->and($full->json('fields.unsupported'))->toBe([])
         ->and($full->json('credentials.0.name'))->toBe('laptop')
-        ->and($full->json('credentials.0.abilities'))->toBe(['consume'])
+        ->and($full->json('credentials.0.abilities'))->toBe([OperatorAbility::CredentialRead->value])
         ->and($full->json('credentials.0.expires_at'))->toBeNull()
         ->and($full->json('credentials.0.unsupported'))->toBe([]);
 
@@ -573,7 +603,7 @@ it('mints no abilities at all when the app declares no self-service policy, so a
     $secret = (string) $this->actingAsVersioned($mine, 'web')
         ->postJson('/bfc/me/credentials', [
             'name' => 'ci',
-            'abilities' => [OperatorAbility::McpAdmin->value, OperatorAbility::ADMIN],
+            'abilities' => [OperatorAbility::McpAdmin->value, OperatorAbility::Admin->value],
         ])
         ->assertCreated()
         ->json('delivery.secret');
@@ -583,7 +613,7 @@ it('mints no abilities at all when the app declares no self-service policy, so a
 
     expect($credential->abilities)->toBeNull()
         ->and($credential->hasAbility(OperatorAbility::McpAdmin->value))->toBeFalse()
-        ->and($credential->hasAbility(OperatorAbility::ADMIN))->toBeFalse();
+        ->and($credential->hasAbility(OperatorAbility::Admin->value))->toBeFalse();
 
     // And the ability is not merely absent from a column: the credential
     // cannot invoke the destructive tool, or the read tool, or the

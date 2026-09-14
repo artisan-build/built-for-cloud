@@ -7,6 +7,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
@@ -69,11 +70,17 @@ it('mints and verifies every accepted scope as an exactly linked unified bearer'
     $secret = (string) $response->json('durable_token');
     $credential = Credential::query()->where('subject_ref', $email)->sole();
     $code = OnboardingToken::query()->where('token_hash', OnboardingToken::hashToken($claimCode))->sole();
+    [$purpose, $subjectType, $abilities] = match ($scope) {
+        Scope::Consume => [CredentialPurpose::Consumption, SubjectType::ExternalConsumer, null],
+        Scope::Admin => [CredentialPurpose::OperatorManagement, SubjectType::Operator, [OperatorAbility::Admin->value]],
+        Scope::Onboard => [CredentialPurpose::Enrollment, SubjectType::ExternalConsumer, null],
+    };
 
     expect($credential->kind)->toBe(CredentialKind::Bearer)
-        ->and($credential->subject_type)->toBe(SubjectType::ExternalConsumer)
+        ->and($credential->purpose)->toBe($purpose)
+        ->and($credential->subject_type)->toBe($subjectType)
         ->and($credential->subject_ref)->toBe($email)
-        ->and($credential->abilities)->toBe([$scope->value])
+        ->and($credential->abilities)->toBe($abilities)
         ->and($credential->secret_hash)->toBe(hash('sha256', $secret))
         ->and($code->durable_credential_id)->toBe($credential->id)
         ->and($code->consumed_at)->toBeNull();
@@ -147,7 +154,8 @@ it('replaces an already revoked linked credential with a live credential', funct
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'relink@example.test',
         'name' => 'relink@example.test',
-        'abilities' => [Scope::Consume->value],
+        'purpose' => CredentialPurpose::Consumption,
+        'abilities' => null,
     ]);
     $code = OnboardingToken::query()->create([
         'id' => (string) Str::uuid(),
@@ -169,12 +177,14 @@ it('sweeps the live same-subject credential while sparing one governed by anothe
     $standing = Credential::factory()->create([
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'sweep@example.test',
-        'abilities' => [Scope::Consume->value],
+        'purpose' => CredentialPurpose::Consumption,
+        'abilities' => null,
     ]);
     $governed = Credential::factory()->create([
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'sweep@example.test',
-        'abilities' => [Scope::Consume->value],
+        'purpose' => CredentialPurpose::Consumption,
+        'abilities' => null,
     ]);
     OnboardingToken::query()->create([
         'id' => (string) Str::uuid(),
@@ -196,14 +206,16 @@ it('spares a unified row in rotation grace from the exchange sweep', function ()
     $graced = Credential::factory()->create([
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'rotated@example.test',
-        'abilities' => [Scope::Consume->value],
+        'purpose' => CredentialPurpose::Consumption,
+        'abilities' => null,
         'rotated_at' => now(),
         'expires_at' => now()->addHour(),
     ]);
     $unmarked = Credential::factory()->create([
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'rotated@example.test',
-        'abilities' => [Scope::Consume->value],
+        'purpose' => CredentialPurpose::Consumption,
+        'abilities' => null,
     ]);
 
     $code = auditIssueCode('rotated@example.test');
@@ -217,14 +229,16 @@ it('sweeps malformed rotation-grace shapes', function (): void {
     $unbounded = Credential::factory()->create([
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'stamped@example.test',
-        'abilities' => [Scope::Consume->value],
+        'purpose' => CredentialPurpose::Consumption,
+        'abilities' => null,
         'rotated_at' => now(),
         'expires_at' => null,
     ]);
     $overlong = Credential::factory()->create([
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'stamped@example.test',
-        'abilities' => [Scope::Consume->value],
+        'purpose' => CredentialPurpose::Consumption,
+        'abilities' => null,
         'rotated_at' => now(),
         'expires_at' => now()->addDays(30),
     ]);
@@ -261,14 +275,20 @@ it('persists exchange and verification across fresh processes for every accepted
 
             $secret = $exchange['body']['durable_token'];
             $credential = $inspection['credential'];
+            [$purpose, $subjectType, $abilities] = match ($scope) {
+                Scope::Consume => [CredentialPurpose::Consumption, SubjectType::ExternalConsumer, null],
+                Scope::Admin => [CredentialPurpose::OperatorManagement, SubjectType::Operator, [OperatorAbility::Admin->value]],
+                Scope::Onboard => [CredentialPurpose::Enrollment, SubjectType::ExternalConsumer, null],
+            };
 
             expect($exchange['status'])->toBe(201)
                 ->and($inspection['durable_credential_id'])->toBe($credential['id'])
                 ->and($inspection['credentials'])->toBe(1)
                 ->and($credential['kind'])->toBe(CredentialKind::Bearer->value)
-                ->and($credential['subject_type'])->toBe(SubjectType::ExternalConsumer->value)
+                ->and($credential['purpose'])->toBe($purpose->value)
+                ->and($credential['subject_type'])->toBe($subjectType->value)
                 ->and($credential['subject_ref'])->toBe($scopeValue.'@fresh-process.test')
-                ->and($credential['abilities'])->toBe([$scopeValue])
+                ->and($credential['abilities'])->toBe($abilities)
                 ->and($credential['secret_hash'])->toBe(hash('sha256', $secret));
 
             $verified = runUnifiedClaimProcess('verify', $database, $secret);

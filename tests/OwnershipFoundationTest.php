@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 use ArtisanBuild\BuiltForCloud\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -92,6 +93,7 @@ it('returns unauthenticated bfc meta for unclaimed and claimed environments', fu
 
     $credential = Credential::factory()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'owner',
     ]);

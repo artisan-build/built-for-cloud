@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\Support\PostgresLane;
@@ -81,6 +82,7 @@ function p3cPgCredential(User $user, string $secret): Credential
 {
     return Credential::query()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::UserPrincipal,
         'subject_ref' => (string) $user->scalpels_id,
         'user_id' => (string) $user->getKey(),

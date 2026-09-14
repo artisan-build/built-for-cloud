@@ -7,6 +7,7 @@ use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\DeliveryShape;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
@@ -68,7 +69,15 @@ it('holds the per-kind direct delivery boundary', function (
     $result = $this->assertNoSecretLeakageOfMinted(
         fn (): MintResult => app(MintCredential::class)(
             $subject,
-            MintOptions::fromInput(['kind' => $kind->value, ...$input]),
+            MintOptions::fromInput([
+                'kind' => $kind->value,
+                'purpose' => match ($kind) {
+                    CredentialKind::Bearer, CredentialKind::Basic => 'consumption',
+                    CredentialKind::Hmac => 'signing',
+                    CredentialKind::Asymmetric => 'enrollment',
+                },
+                ...$input,
+            ]),
         ),
         function (MintResult $mint) use (&$revealed): string {
             expect($mint->secret)->not->toBeNull();
@@ -150,6 +159,7 @@ it('resolves a stored secret only in the installation store that contains its ha
     $secret = 'installation-local-secret';
     $credential = Credential::factory()->create([
         'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::SystemDeployment,
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'installation-a',
         'user_id' => null,
@@ -174,6 +184,7 @@ it('resolves a stored secret only in the installation store that contains its ha
     Schema::connection('separate_installation')->create('credentials', function (Blueprint $table): void {
         $table->uuid('id')->primary();
         $table->string('kind', 32);
+        $table->string('purpose', 32);
         $table->string('subject_type', 32);
         $table->string('subject_ref');
         $table->string('user_id')->nullable();
@@ -203,6 +214,7 @@ it('resolves a stored secret only in the installation store that contains its ha
         DB::connection()->table('credentials')->insert([
             'id' => $credential->id,
             'kind' => $credential->kind->value,
+            'purpose' => CredentialPurpose::SystemDeployment->value,
             'subject_type' => $credential->subject_type->value,
             'subject_ref' => $credential->subject_ref,
             'user_id' => null,
@@ -260,7 +272,7 @@ it('delivers a distinct exchange-minted bearer once on both response faces', fun
 it('delivers an hmac key at exchange without activating or exposing it later', function (): void {
     $mint = app(MintCredential::class)(
         new Subject(SubjectType::ExternalConsumer, 'matrix-hmac-exchange'),
-        MintOptions::fromInput(['kind' => 'hmac', 'code_ttl_seconds' => 900]),
+        MintOptions::fromInput(['kind' => 'hmac', 'purpose' => 'signing', 'code_ttl_seconds' => 900]),
     );
     $claimCode = $mint->secret?->reveal();
     expect($claimCode)->toBeString()->not->toBe('');

@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintOptions;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
@@ -58,7 +59,7 @@ function mintedActiveHmacKey(string $subjectRef = 'webhook-client', array $optio
 {
     $result = app(MintCredential::class)(
         hmacRotationSubject($subjectRef),
-        MintOptions::fromInput(['kind' => 'hmac', ...$options]),
+        MintOptions::fromInput(['kind' => 'hmac', 'purpose' => 'signing', ...$options]),
     );
 
     test()->postJson('/bfc/credentials/'.$result->summary->id.'/activate', [
@@ -206,8 +207,9 @@ it('preserves the exact ability set, subject binding, name and expiry on the pen
         hmacRotationSubject('scoped-client'),
         MintOptions::fromInput([
             'kind' => 'hmac',
+            'purpose' => 'signing',
             'name' => 'webhooks',
-            'abilities' => ['consume'],
+            'abilities' => [OperatorAbility::CredentialRead->value],
             'user_id' => '42',
             'expires_at' => now()->addDays(30)->toIso8601String(),
         ]),
@@ -225,7 +227,7 @@ it('preserves the exact ability set, subject binding, name and expiry on the pen
 
     expect($replacement->subject_ref)->toBe('scoped-client')
         ->and($replacement->name)->toBe('webhooks')
-        ->and($replacement->abilities)->toBe(['consume'])
+        ->and($replacement->abilities)->toBe([OperatorAbility::CredentialRead->value])
         ->and($replacement->user_id)->toBe('42')
         ->and($replacement->expires_at?->toDateString())->toBe(now()->addDays(30)->toDateString())
         ->and($replacement->status)->toBe(CredentialStatus::Pending);

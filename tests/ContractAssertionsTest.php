@@ -6,7 +6,6 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
-use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -38,9 +37,9 @@ it('preserves the public token helpers on the unified credential store', functio
     $consumeCredential = Credential::query()->where('secret_hash', hash('sha256', $consume))->firstOrFail();
 
     expect($adminCredential->subject_type)->toBe(SubjectType::Operator)
-        ->and($adminCredential->abilities)->toBe([OperatorAbility::ADMIN])
+        ->and($adminCredential->abilities)->toBe([OperatorAbility::Admin->value])
         ->and($consumeCredential->subject_type)->toBe(SubjectType::ExternalConsumer)
-        ->and($consumeCredential->abilities)->toBe([Scope::Consume->value]);
+        ->and($consumeCredential->abilities)->toBeNull();
 });
 
 it('exercises the consumer thin-host conformance wrapper', function (): void {

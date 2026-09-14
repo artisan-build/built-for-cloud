@@ -61,7 +61,7 @@ final class InstallationCredentials
 
         try {
             $options = MintOptions::fromInput($request->only([
-                'kind', 'name', 'abilities', 'expires_at', 'code_ttl_seconds',
+                'kind', 'purpose', 'name', 'abilities', 'expires_at', 'code_ttl_seconds',
             ]));
             $refusedAbility = $managementScope->firstExcludedAbility($options->abilities);
 
@@ -73,6 +73,7 @@ final class InstallationCredentials
                 new Subject(SubjectType::from($validated['subject_type']), $validated['subject_ref']),
                 new MintOptions(
                     kind: $options->kind,
+                    purpose: $options->purpose,
                     name: $options->name,
                     abilities: $options->abilities,
                     expiresAt: $options->expiresAt,

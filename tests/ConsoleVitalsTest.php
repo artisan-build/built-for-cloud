@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresHeadlineStat;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\DefaultCredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
@@ -80,6 +81,7 @@ beforeEach(function (): void {
 function vitalsReader(): MintedTestCredential
 {
     return test()->mintCredential([
+        'purpose' => CredentialPurpose::DashboardMetadata,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'console-'.bin2hex(random_bytes(4)),
         'abilities' => [OperatorAbility::MetadataRead->value],
@@ -206,9 +208,10 @@ it('refuses every credential but metadata:read, including break-glass', function
     // reason the route is not mounted behind the operator gate: that gate
     // grants `credential:admin` whatever ability a route asks for.
     $breakGlass = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'control-plane',
-        'abilities' => [OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::Admin->value],
     ]);
 
     $this->getJson('/bfc/console/vitals', ['Authorization' => $breakGlass->bearerHeader()])->assertForbidden();
@@ -222,6 +225,7 @@ it('refuses every credential but metadata:read, including break-glass', function
 
     foreach ($others as $ability) {
         $credential = $this->mintCredential([
+            'purpose' => CredentialPurpose::OperatorManagement,
             'subject_type' => SubjectType::Operator,
             'subject_ref' => 'op-'.bin2hex(random_bytes(4)),
             'abilities' => [$ability->value],
@@ -233,6 +237,7 @@ it('refuses every credential but metadata:read, including break-glass', function
 
     foreach ([null, []] as $empty) {
         $bare = $this->mintCredential([
+            'purpose' => CredentialPurpose::OperatorManagement,
             'subject_type' => SubjectType::Operator,
             'subject_ref' => 'bare-'.bin2hex(random_bytes(4)),
             'abilities' => $empty,
@@ -245,9 +250,10 @@ it('refuses every credential but metadata:read, including break-glass', function
 
 it('audits a denied dashboard read with the acting credential', function (): void {
     $breakGlass = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'control-plane',
-        'abilities' => [OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::Admin->value],
     ]);
 
     $this->getJson('/bfc/console/vitals', ['Authorization' => $breakGlass->bearerHeader()])->assertForbidden();
@@ -267,6 +273,7 @@ it('audits a denied dashboard read with the acting credential', function (): voi
 
 it('refuses no credential, an unknown one and an expired or revoked one indistinguishably', function (): void {
     $expired = $this->mintCredential([
+        'purpose' => CredentialPurpose::DashboardMetadata,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'expired',
         'abilities' => [OperatorAbility::MetadataRead->value],
@@ -274,6 +281,7 @@ it('refuses no credential, an unknown one and an expired or revoked one indistin
     ]);
 
     $revoked = $this->mintCredential([
+        'purpose' => CredentialPurpose::DashboardMetadata,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'revoked',
         'abilities' => [OperatorAbility::MetadataRead->value],
@@ -315,9 +323,10 @@ it('refuses no credential, an unknown one and an expired or revoked one indistin
  */
 it('refuses a credential that holds metadata:read alongside another ability', function (): void {
     $combined = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'combined',
-        'abilities' => [OperatorAbility::MetadataRead->value, OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::MetadataRead->value, OperatorAbility::Admin->value],
     ]);
 
     $this->getJson('/bfc/console/vitals', ['Authorization' => $combined->bearerHeader()])->assertForbidden();
@@ -331,6 +340,7 @@ it('refuses a credential that holds metadata:read alongside another ability', fu
     // A narrower combination is refused too: the rule is "exactly
     // metadata:read", not "nothing admin-equivalent".
     $alsoRead = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'combined-read',
         'abilities' => [OperatorAbility::MetadataRead->value, OperatorAbility::CredentialRead->value],
@@ -340,9 +350,10 @@ it('refuses a credential that holds metadata:read alongside another ability', fu
 
     // Order does not matter — the check is on the SET.
     $reordered = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'reordered',
-        'abilities' => [OperatorAbility::ADMIN, OperatorAbility::MetadataRead->value],
+        'abilities' => [OperatorAbility::Admin->value, OperatorAbility::MetadataRead->value],
     ]);
 
     $this->getJson('/bfc/console/vitals', ['Authorization' => $reordered->bearerHeader()])->assertForbidden();
@@ -354,8 +365,13 @@ it('refuses a credential that holds metadata:read alongside another ability', fu
 it('refuses a non-operator subject holding metadata:read, and admits an operator one', function (): void {
     // The contract heads this route "operator credential"; until the
     // exclusivity gate landed, nothing checked the subject at all.
-    foreach ([SubjectType::Application, SubjectType::ExternalConsumer, SubjectType::UserPrincipal] as $subjectType) {
+    foreach ([
+        [SubjectType::Application, CredentialPurpose::SystemDeployment],
+        [SubjectType::ExternalConsumer, CredentialPurpose::Consumption],
+        [SubjectType::UserPrincipal, CredentialPurpose::Consumption],
+    ] as [$subjectType, $purpose]) {
         $wrongSubject = $this->mintCredential([
+            'purpose' => $purpose,
             'subject_type' => $subjectType,
             'subject_ref' => 'subject-'.bin2hex(random_bytes(4)),
             'abilities' => [OperatorAbility::MetadataRead->value],
@@ -370,9 +386,10 @@ it('refuses a non-operator subject holding metadata:read, and admits an operator
 
 it('audits an exclusivity refusal with the acting credential', function (): void {
     $combined = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'combined',
-        'abilities' => [OperatorAbility::MetadataRead->value, OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::MetadataRead->value, OperatorAbility::Admin->value],
     ]);
 
     $this->getJson('/bfc/console/vitals', ['Authorization' => $combined->bearerHeader()])->assertForbidden();
@@ -871,14 +888,16 @@ it('never drains the outbox from the polled read', function (): void {
     // leaves one behind, and the vitals read must leave it exactly
     // where it found it.
     $admin = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'control-plane',
-        'abilities' => [OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::Admin->value],
     ]);
 
     $this->postJson('/bfc/credentials', [
         'subject_type' => 'external_consumer',
         'subject_ref' => 'acme',
+        'purpose' => CredentialPurpose::Consumption->value,
     ], ['Authorization' => $admin->bearerHeader()])->assertCreated();
 
     // Warm the reader first. A credential's FIRST presentation emits
@@ -913,20 +932,23 @@ it('never drains the outbox from a refused poll either', function (): void {
     // last round: an outer `bfc.ability` gate refused a
     // wrong-ability credential and drained on the way out.
     $admin = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'control-plane',
-        'abilities' => [OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::Admin->value],
     ]);
 
     $this->postJson('/bfc/credentials', [
         'subject_type' => 'external_consumer',
         'subject_ref' => 'acme',
+        'purpose' => CredentialPurpose::Consumption->value,
     ], ['Authorization' => $admin->bearerHeader()])->assertCreated();
 
     // A credential that authenticates and is refused. Warmed first, so
     // the once-per-credential `first_used` transition is not what we
     // are measuring.
     $wrongAbility = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'reader',
         'abilities' => [OperatorAbility::CredentialRead->value],

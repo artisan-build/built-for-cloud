@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Database\Factories;
 
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -27,6 +28,7 @@ final class CredentialFactory extends Factory
     {
         return [
             'kind' => CredentialKind::Bearer,
+            'purpose' => CredentialPurpose::SystemDeployment,
             'subject_type' => SubjectType::Application,
             'subject_ref' => fake()->slug(2),
             'name' => fake()->word(),
@@ -45,6 +47,7 @@ final class CredentialFactory extends Factory
     {
         return $this->state(fn (): array => [
             'kind' => CredentialKind::Asymmetric,
+            'purpose' => CredentialPurpose::Enrollment,
             'secret_hash' => null,
             'public_key' => $publicKey ?? self::generatePublicKey(),
         ]);
@@ -88,6 +91,7 @@ final class CredentialFactory extends Factory
 
             return [
                 'kind' => CredentialKind::Hmac,
+                'purpose' => CredentialPurpose::Signing,
                 'status' => CredentialStatus::Pending,
                 'secret_hash' => null,
                 'secret_ciphertext' => $encrypted->ciphertext,

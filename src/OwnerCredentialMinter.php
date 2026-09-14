@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use InvalidArgumentException;
 
 final class OwnerCredentialMinter
@@ -17,10 +16,11 @@ final class OwnerCredentialMinter
 
         return Credential::query()->create([
             'kind' => CredentialKind::Bearer,
+            'purpose' => CredentialPurpose::OperatorManagement,
             'subject_type' => SubjectType::Operator,
             'subject_ref' => 'owner',
             'name' => 'owner',
-            'abilities' => [EnsureCredentialAdmin::ABILITY],
+            'abilities' => [OperatorAbility::Admin->value],
             'secret_hash' => $hash,
             'status' => CredentialStatus::Active,
         ]);

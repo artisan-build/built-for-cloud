@@ -40,6 +40,7 @@ use InvalidArgumentException;
  *
  * @property string $id
  * @property CredentialKind $kind
+ * @property CredentialPurpose|null $purpose Null only on retired pre-purpose tombstones.
  * @property SubjectType $subject_type
  * @property string $subject_ref
  * @property string|null $name
@@ -82,6 +83,7 @@ final class Credential extends Model implements Authenticatable
     protected $fillable = [
         'id',
         'kind',
+        'purpose',
         'subject_type',
         'subject_ref',
         'name',
@@ -131,6 +133,7 @@ final class Credential extends Model implements Authenticatable
     {
         return [
             'kind' => CredentialKind::class,
+            'purpose' => CredentialPurpose::class,
             'subject_type' => SubjectType::class,
             'status' => CredentialStatus::class,
             'abilities' => 'array',
@@ -153,6 +156,19 @@ final class Credential extends Model implements Authenticatable
     protected static function booted(): void
     {
         self::saving(function (Credential $credential): void {
+            $rawPurpose = $credential->getAttributes()['purpose'] ?? null;
+
+            $historicalTombstone = $credential->exists
+                && $credential->getRawOriginal('purpose') === null
+                && $credential->revoked_at !== null
+                && $rawPurpose === null;
+
+            if (! $historicalTombstone) {
+                $credential->assertValidStoredPurpose();
+            }
+
+            OperatorAbility::assertValues($credential->abilities);
+
             if ($credential->kind === CredentialKind::Asymmetric && $credential->secret_hash !== null) {
                 throw new InvalidArgumentException(
                     'An asymmetric credential carries a public key only and never stores secret material.',
@@ -225,6 +241,32 @@ final class Credential extends Model implements Authenticatable
                 );
             }
         });
+    }
+
+    public function assertValidStoredPurpose(): void
+    {
+        $rawPurpose = $this->getAttributes()['purpose'] ?? null;
+        $purpose = is_string($rawPurpose) ? CredentialPurpose::tryFrom($rawPurpose) : null;
+
+        if ($purpose === null) {
+            throw new InvalidArgumentException('A live credential requires a known protocol purpose.');
+        }
+
+        $rawKind = $this->getAttributes()['kind'] ?? null;
+        $kind = is_string($rawKind) ? CredentialKind::tryFrom($rawKind) : null;
+        $rawSubjectType = $this->getAttributes()['subject_type'] ?? null;
+        $subjectType = is_string($rawSubjectType) ? SubjectType::tryFrom($rawSubjectType) : null;
+        $subjectRef = $this->getAttributes()['subject_ref'] ?? null;
+
+        // Existing schema constraints own malformed partial subjects. Purpose
+        // validity applies once there is a complete known tuple to validate.
+        if ($kind === null || $subjectType === null || ! is_string($subjectRef)) {
+            return;
+        }
+
+        if (! $purpose->validForStorage($kind, $subjectType, $subjectRef)) {
+            throw new InvalidArgumentException('A live credential requires a purpose valid for its kind and subject.');
+        }
     }
 
     /**

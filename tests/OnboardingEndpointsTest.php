@@ -5,8 +5,9 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\Credential;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
@@ -22,7 +23,7 @@ it('requires an owner token to issue claim codes', function (): void {
         'ttl_seconds' => 3600,
     ])->assertUnauthorized();
 
-    $consumeToken = mintOnboardingOperator('consume-owner', [Scope::Consume->value]);
+    $consumeToken = mintOnboardingOperator('consume-owner', [OperatorAbility::McpRead->value]);
 
     $this->postJson('/bfc/onboarding/issue', [
         'email' => 'person@example.test',
@@ -31,7 +32,7 @@ it('requires an owner token to issue claim codes', function (): void {
 });
 
 it('issues a claim code without leaking it anywhere but the documented field', function (): void {
-    $ownerToken = mintOnboardingOperator('owner', [EnsureCredentialAdmin::ABILITY]);
+    $ownerToken = mintOnboardingOperator('owner', [OperatorAbility::Admin->value]);
 
     $this->beginLeakWatch('marker-not-yet-known');
 
@@ -60,7 +61,7 @@ it('issues a claim code without leaking it anywhere but the documented field', f
 });
 
 it('requires ttl_seconds and enforces the package bounds on the code alone', function (): void {
-    $ownerToken = mintOnboardingOperator('owner', [EnsureCredentialAdmin::ABILITY]);
+    $ownerToken = mintOnboardingOperator('owner', [OperatorAbility::Admin->value]);
 
     $this->postJson('/bfc/onboarding/issue', [
         'email' => 'person@example.test',
@@ -100,7 +101,7 @@ it('sets the code expiry to exactly issue time plus ttl_seconds with no hidden d
 });
 
 it('issues an unaddressed claim code and keeps working with an email', function (): void {
-    $ownerToken = mintOnboardingOperator('owner', [EnsureCredentialAdmin::ABILITY]);
+    $ownerToken = mintOnboardingOperator('owner', [OperatorAbility::Admin->value]);
 
     $unaddressed = $this->postJson('/bfc/onboarding/issue', [
         'ttl_seconds' => 3600,
@@ -144,7 +145,8 @@ it('exchanges a claim code for a durable scoped token and verifies it', function
 
     $row = Credential::query()->where('name', 'person@example.test')->firstOrFail();
 
-    expect($row->abilities)->toBe([Scope::Consume->value]);
+    expect($row->purpose)->toBe(CredentialPurpose::Consumption)
+        ->and($row->abilities)->toBeNull();
 
     // Redemption alone does not burn (make-before-break): the code is
     // still pending until the durable's first successful use.
@@ -292,7 +294,7 @@ it('maps every failure path onto the claim error enum with secret-free messages'
 
 function issueOnboardingToken(string $email, string $scope = Scope::Consume->value, int $ttlSeconds = 3600): string
 {
-    $ownerToken = mintOnboardingOperator('owner-'.bin2hex(random_bytes(4)), [EnsureCredentialAdmin::ABILITY]);
+    $ownerToken = mintOnboardingOperator('owner-'.bin2hex(random_bytes(4)), [OperatorAbility::Admin->value]);
     $response = test()->postJson('/bfc/onboarding/issue', [
         'email' => $email,
         'scope' => $scope,
@@ -311,6 +313,7 @@ function mintOnboardingOperator(string $name, array $abilities): string
 {
     return test()->mintCredential([
         'name' => $name,
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => $name,
         'abilities' => $abilities,

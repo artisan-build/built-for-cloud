@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
@@ -65,6 +66,7 @@ beforeEach(function (): void {
 function offboardHeaders(): array
 {
     $operator = test()->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'offboard-operator-'.bin2hex(random_bytes(4)),
         'abilities' => [OperatorAbility::SubjectOffboard->value],
@@ -119,12 +121,14 @@ it('contains the whole account in one action: every credential state, codes, inv
 
     // The subject's credentials, one per lifecycle state:
     $active = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'acme',
         'user_id' => (string) $user->getKey(),
     ]);
 
     $grace = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'acme',
         'expires_at' => now()->addMinutes(30),
@@ -133,6 +137,7 @@ it('contains the whole account in one action: every credential state, codes, inv
     Credential::query()->whereKey($grace->credential->id)->update(['rotated_at' => now()]);
 
     $pendingBearer = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'acme',
         'status' => 'pending',
@@ -141,7 +146,7 @@ it('contains the whole account in one action: every credential state, codes, inv
     // A pending hmac signing key WITH its outstanding delivery claim code.
     $hmacResult = app(MintCredential::class)(
         new Subject(SubjectType::ExternalConsumer, 'acme'),
-        MintOptions::fromInput(['kind' => 'hmac', 'code_ttl_seconds' => 3600]),
+        MintOptions::fromInput(['kind' => 'hmac', 'purpose' => 'signing', 'code_ttl_seconds' => 3600]),
     );
 
     // The principal's pending claim code, invitation, reset token, session.
@@ -234,18 +239,21 @@ it('revokes every credential bound to a resolved user across subjects without du
     ]);
 
     $offboardedSubjectCredential = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'acme',
         'user_id' => (string) $user->getKey(),
     ]);
 
     $sameUserOtherSubject = $this->mintCredential([
+        'purpose' => CredentialPurpose::SystemDeployment,
         'subject_type' => SubjectType::Application,
         'subject_ref' => 'other-app',
         'user_id' => (string) $user->getKey(),
     ]);
 
     $alreadyRevoked = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'already-dead',
         'user_id' => (string) $user->getKey(),
@@ -253,6 +261,7 @@ it('revokes every credential bound to a resolved user across subjects without du
     ]);
 
     $unrelated = $this->mintCredential([
+        'purpose' => CredentialPurpose::SystemDeployment,
         'subject_type' => SubjectType::Application,
         'subject_ref' => 'unrelated-app',
     ]);
@@ -337,6 +346,7 @@ it('rejects and invalidates a surviving session — the stated compensation for 
 
 it('is idempotent: a second offboard is a no-op with the same response shape and no new audit rows', function (): void {
     $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'acme',
     ]);
@@ -384,6 +394,7 @@ it('rides the shared version gate: a replayed or older offboard event is transac
     );
 
     $credential = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'sponsor-login',
     ]);
@@ -415,6 +426,7 @@ it('rides the shared version gate: a replayed or older offboard event is transac
     // A REPLAY of the applied event id: acknowledged, and a credential
     // minted since is untouched — the replay re-contains nothing.
     $later = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'sponsor-login',
     ]);
@@ -509,6 +521,7 @@ it('reports an incomplete containment step through the integration acknowledgeme
     ]);
 
     $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'sponsor-y',
         'user_id' => (string) $user->getKey(),
@@ -573,6 +586,7 @@ it('makes a concurrent first offboard idempotent via the registry\'s unique subj
     // insert violates the unique key, the attempt rolls back whole, and
     // the bounded retry re-decides — never a 500, never a double write.
     $credential = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'acme',
     ]);
@@ -614,6 +628,7 @@ it('consumes a pending code linked to an already-revoked durable (Fix 7)', funct
     // code is still outstanding (RevokeCredential's action consumes it,
     // but a raw revocation — or one from another path — does not).
     $revoked = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'acme',
         'revoked_at' => now()->subHour(),
@@ -676,6 +691,7 @@ it('contains the accounts accepted integration invitations created (Fix 1)', fun
     ]);
 
     $boundCredential = $this->mintCredential([
+        'purpose' => CredentialPurpose::SystemDeployment,
         'subject_type' => SubjectType::Application,
         'subject_ref' => 'unrelated-app',
         'user_id' => (string) $created->getKey(),
@@ -808,6 +824,7 @@ it('contains an arbitrarily deep accepted-invitation chain to its fixed point (r
     ]);
 
     $deepestCredential = $this->mintCredential([
+        'purpose' => CredentialPurpose::SystemDeployment,
         'subject_type' => SubjectType::Application,
         'subject_ref' => 'unrelated-app',
         'user_id' => $deepest,
@@ -898,6 +915,7 @@ it('binds the version gate to the offboard target: a decoy external subject cann
     seedOffboardIntegrationInvite('ns', 'evt-invite-7', 7, 'victim');
 
     $victim = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'victim',
     ]);
@@ -974,6 +992,7 @@ it('refuses a decoy NAMESPACE for a subject gate-bound elsewhere (r3 Fix 2)', fu
     seedOffboardIntegrationInvite('ns', 'evt-invite-7', 7, 'victim');
 
     $victim = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'victim',
     ]);
@@ -1029,6 +1048,7 @@ it('refuses a decoy NAMESPACE for a subject gate-bound elsewhere (r3 Fix 2)', fu
     // A subject with no history ANYWHERE can be gate-established by any
     // authorized namespace — the refusal is a binding rule, not a lockout.
     $fresh = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'fresh-subject',
     ]);
@@ -1045,6 +1065,7 @@ it('refuses a decoy NAMESPACE for a subject gate-bound elsewhere (r3 Fix 2)', fu
 
 it('runs the identical action on the CLI transport, --local required', function (): void {
     $credential = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::ExternalConsumer,
         'subject_ref' => 'acme',
     ]);
@@ -1114,6 +1135,7 @@ it('never resolves an offboarded principal anywhere — the resolver is the cont
     // Bound to the user under an unrelated subject: the user-bound sweep
     // must physically revoke it and consume its unified claim code.
     $minted = $this->mintCredential([
+        'purpose' => CredentialPurpose::SystemDeployment,
         'subject_type' => SubjectType::Application,
         'subject_ref' => 'unrelated-app',
         'user_id' => (string) $user->getKey(),
@@ -1154,6 +1176,7 @@ it('never resolves an offboarded principal anywhere — the resolver is the cont
     // subject itself resolves to null too: the registry keys on the
     // subject, so the choke point catches rows born after the sweep.
     $postMint = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
         'subject_type' => SubjectType::UserPrincipal,
         'subject_ref' => 'person@example.com',
     ]);
@@ -1163,6 +1186,7 @@ it('never resolves an offboarded principal anywhere — the resolver is the cont
     // The registry remains the choke point for a differently-subjected
     // credential created after the sweep can no longer reach the row.
     $postUserBoundMint = $this->mintCredential([
+        'purpose' => CredentialPurpose::SystemDeployment,
         'subject_type' => SubjectType::Application,
         'subject_ref' => 'late-unrelated-app',
         'user_id' => (string) $user->getKey(),
@@ -1187,9 +1211,10 @@ it('rejects an offboarded bound user\'s operator credential on the operator gate
     // An operator credential under a DIFFERENT subject, bound to the user
     // — fully authorized on the operator gate before containment.
     $operator = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'control-plane',
-        'abilities' => [OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::Admin->value],
         'user_id' => (string) $user->getKey(),
     ]);
 
@@ -1205,9 +1230,10 @@ it('rejects an offboarded bound user\'s operator credential on the operator gate
     // A same-user operator credential created after containment proves the
     // operator gate still enforces the registry independently of the sweep.
     $postContainmentOperator = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'control-plane',
-        'abilities' => [OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::Admin->value],
         'user_id' => (string) $user->getKey(),
     ]);
 
@@ -1219,6 +1245,7 @@ it('rejects an offboarded bound user\'s operator credential on the operator gate
     $this->postJson('/bfc/credentials', [
         'subject_type' => 'external_consumer',
         'subject_ref' => 'someone',
+        'purpose' => CredentialPurpose::Consumption->value,
     ], ['Authorization' => $postContainmentOperator->bearerHeader()])->assertUnauthorized();
 });
 
@@ -1266,9 +1293,10 @@ it('rejects credentials minted AFTER containment for the offboarded subject on e
     // A post-containment operator mint for the offboarded subject: active
     // row, admin-equivalent abilities — and still dead everywhere.
     $postMint = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
         'subject_type' => SubjectType::Operator,
         'subject_ref' => 'rogue-plane',
-        'abilities' => [OperatorAbility::ADMIN],
+        'abilities' => [OperatorAbility::Admin->value],
     ]);
 
     $this->getJson('/offboard-guarded', ['Authorization' => $postMint->bearerHeader()])->assertUnauthorized();
