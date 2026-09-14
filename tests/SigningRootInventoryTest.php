@@ -72,8 +72,11 @@ it('derives material-free delivery summary list audit command and HTTP surfaces'
         'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootLifecycle::provision|writes=1|note=absent',
         'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootLifecycle::rotate|writes=2|note=absent',
     ])->and($inventory['command_surfaces'])->toBe([
+        'ArtisanBuild\\BuiltForCloud\\Commands\\CredentialRotateCommand=bfc:credential:rotate',
         'ArtisanBuild\\BuiltForCloud\\Commands\\SigningRootProvisionCommand=bfc:signing-root:provision',
-    ])->and($inventory['http_surfaces'])->toBe([])
+    ])->and($inventory['http_surfaces'])->toBe([
+        'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageCredentials::rotate',
+    ])
         ->and($inventory['surface_leaks'])->toBe([])
         ->and($inventory['violations'])->toBe([])
         ->and($inventory['limits'])->toBe(SigningRootDisclosureInventory::LIMITS);

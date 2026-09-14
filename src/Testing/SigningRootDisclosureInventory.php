@@ -70,6 +70,12 @@ final class SigningRootDisclosureInventory
 
             foreach (self::methods($source) as $method => $code) {
                 $member = $className.'::'.$method;
+                $genericRootRotationTransport = ($className === 'ArtisanBuild\\BuiltForCloud\\Commands\\CredentialRotateCommand'
+                    && $method === 'handle')
+                    || (str_contains($path, DIRECTORY_SEPARATOR.'Http'.DIRECTORY_SEPARATOR)
+                        && $method === 'rotate'
+                        && str_contains($code, 'RotateCredential $')
+                        && ! str_contains($code, 'CredentialManagementScope::memberInstallation()'));
 
                 if (str_contains($code, 'SigningRootMac::excludeReservedFrom(')) {
                     $listExclusions[] = $member;
@@ -95,20 +101,21 @@ final class SigningRootDisclosureInventory
                     }
                 }
 
-                if (self::rootRelated($className, $code) && self::returnsForbiddenMaterial($member, $code)) {
+                if ((self::rootRelated($className, $code) || $genericRootRotationTransport)
+                    && self::returnsForbiddenMaterial($member, $code)) {
                     $surfaceLeaks[] = $member;
                     $violations[] = 'root-surface-leak:'.$member;
+                }
+
+                if ($genericRootRotationTransport
+                    && str_contains($path, DIRECTORY_SEPARATOR.'Http'.DIRECTORY_SEPARATOR)) {
+                    $httpSurfaces[] = $member;
                 }
             }
 
             if (preg_match('/protected\s+\$signature\s*=\s*[\'"]([^\s\'"]+)/', $source, $signature) === 1
-                && str_contains($signature[1], 'signing-root')) {
+                && in_array($signature[1], ['bfc:signing-root:provision', 'bfc:credential:rotate'], true)) {
                 $commandSurfaces[] = $className.'='.$signature[1];
-            }
-
-            if (str_contains($path, DIRECTORY_SEPARATOR.'Http'.DIRECTORY_SEPARATOR)
-                && (str_contains($source, 'SigningRootLifecycle') || str_contains($source, 'bfc:signing-root'))) {
-                $httpSurfaces[] = $className;
             }
         }
 
@@ -135,11 +142,16 @@ final class SigningRootDisclosureInventory
             $violations[] = 'missing-root-list-exclusion:'.$missing;
         }
 
-        if ($commandSurfaces !== ['ArtisanBuild\\BuiltForCloud\\Commands\\SigningRootProvisionCommand=bfc:signing-root:provision']) {
+        if (self::sortedUnique($commandSurfaces) !== [
+            'ArtisanBuild\\BuiltForCloud\\Commands\\CredentialRotateCommand=bfc:credential:rotate',
+            'ArtisanBuild\\BuiltForCloud\\Commands\\SigningRootProvisionCommand=bfc:signing-root:provision',
+        ]) {
             $violations[] = 'root-command-surface-set';
         }
 
-        if ($httpSurfaces !== []) {
+        if (self::sortedUnique($httpSurfaces) !== [
+            'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageCredentials::rotate',
+        ]) {
             $violations[] = 'root-http-surface-set';
         }
 

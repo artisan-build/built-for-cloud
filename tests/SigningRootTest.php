@@ -30,6 +30,7 @@ use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
+use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -142,6 +143,8 @@ it('keeps root material out of action summary list HTTP CLI and audit surfaces',
 });
 
 it('delegates unchanged public rotation to direct-active make-before-break and verifies the old id only through grace', function (): void {
+    $cutover = CarbonImmutable::parse('2026-09-14 12:00:00 UTC');
+    $this->travelTo($cutover);
     $old = signingRoot();
     $bytes = 'signed before rotation';
     $oldMac = app(SigningRootMac::class)->mac($bytes);
@@ -160,17 +163,24 @@ it('delegates unchanged public rotation to direct-active make-before-break and v
     expect($newMac->keyId)->toBe($result->mint->summary->id)
         ->and($newMac->keyId)->not->toBe($old->id)
         ->and($old->rotated_at)->not->toBeNull()
-        ->and($old->expires_at?->diffInSeconds(now()->addHour(), true))->toBeLessThan(1.0)
+        ->and($old->rotated_at?->equalTo($cutover))->toBeTrue()
+        ->and($old->expires_at?->equalTo($cutover->addHour()))->toBeTrue()
         ->and(app(SigningRootMac::class)->verify($old->id, $bytes, $oldMac->lowercaseHexMac))->toBeTrue()
         ->and(app(SigningRootMac::class)->verify($newMac->keyId, $bytes, $newMac->lowercaseHexMac))->toBeTrue();
 
-    $this->travel(3600)->seconds();
+    $this->travelTo($cutover->addHour()->subSecond());
+
+    expect(app(SigningRootMac::class)->verify($old->id, $bytes, $oldMac->lowercaseHexMac))->toBeTrue();
+
+    $this->travelTo($cutover->addHour());
 
     expect(app(SigningRootMac::class)->verify($old->id, $bytes, $oldMac->lowercaseHexMac))->toBeFalse()
         ->and(app(SigningRootMac::class)->verify($newMac->keyId, $bytes, $newMac->lowercaseHexMac))->toBeTrue();
 });
 
 it('ends old verification at an emergency rotation cutover', function (): void {
+    $cutover = CarbonImmutable::parse('2026-09-14 13:00:00 UTC');
+    $this->travelTo($cutover);
     $old = signingRoot();
     $oldMac = app(SigningRootMac::class)->mac('emergency bytes');
 
@@ -178,9 +188,88 @@ it('ends old verification at an emergency rotation cutover', function (): void {
 
     expect($result)->not->toBeNull()
         ->and(app(SigningRootMac::class)->verify($old->id, 'emergency bytes', $oldMac->lowercaseHexMac))->toBeFalse()
-        ->and($old->refresh()->expires_at?->diffInSeconds(now(), true))->toBeLessThan(1.0)
+        ->and($old->refresh()->rotated_at?->equalTo($cutover))->toBeTrue()
+        ->and($old->expires_at?->equalTo($cutover))->toBeTrue()
         ->and(app(SigningRootMac::class)->mac('emergency bytes')->keyId)->toBe($result->mint->summary->id);
 });
+
+it('never extends a signing root whose existing expiry is earlier than ordinary grace', function (): void {
+    $cutover = CarbonImmutable::parse('2026-09-14 14:00:00 UTC');
+    $earlierExpiry = $cutover->addMinutes(10);
+    $this->travelTo($cutover);
+    $old = signingRoot();
+    $old->forceFill(['expires_at' => $earlierExpiry])->save();
+    $oldMac = app(SigningRootMac::class)->mac('earlier expiry bytes');
+
+    app(SigningRootLifecycle::class)->rotate($old->id, false);
+
+    expect($old->refresh()->expires_at?->equalTo($earlierExpiry))->toBeTrue();
+
+    $this->travelTo($earlierExpiry->subSecond());
+    expect(app(SigningRootMac::class)->verify($old->id, 'earlier expiry bytes', $oldMac->lowercaseHexMac))->toBeTrue();
+
+    $this->travelTo($earlierExpiry);
+    expect(app(SigningRootMac::class)->verify($old->id, 'earlier expiry bytes', $oldMac->lowercaseHexMac))->toBeFalse();
+});
+
+it('keeps generic signing-root rotation transports and their audits material-free', function (string $transport, bool $emergency): void {
+    $this->travelTo(CarbonImmutable::parse('2026-09-14 15:00:00 UTC'));
+    $old = signingRoot();
+    $plaintext = app(HmacKeyring::class)->decrypt((string) $old->secret_ciphertext, $old->secret_key_version);
+    $mac = app(SigningRootMac::class)->mac('transport disclosure bytes')->lowercaseHexMac;
+
+    if ($transport === 'cli') {
+        $exit = $this->assertNoSecretLeakage($plaintext, fn (): int => Artisan::call('bfc:credential:rotate', [
+            'id' => $old->id,
+            '--emergency' => $emergency,
+            '--local' => true,
+        ]));
+        $output = Artisan::output();
+
+        expect($exit)->toBe(0)
+            ->and($output)->not->toContain($plaintext, (string) $old->secret_ciphertext, $old->secret_key_version, $mac);
+        $this->assertConsoleOutputCarriesNoSecret($output, $plaintext);
+    } else {
+        $response = $this->assertNoSecretLeakage(
+            $plaintext,
+            fn () => $this->postJson('/bfc/credentials/'.$old->id.'/rotate', [
+                'emergency' => $emergency,
+            ], [
+                'Authorization' => 'Bearer '.auditOperatorCredential('root-rotation-'.($emergency ? 'emergency' : 'ordinary')),
+            ]),
+        );
+
+        $response->assertCreated()->assertJsonPath('delivery.shape', DeliveryShape::None->value);
+        expect($response->json('delivery'))->toBe(['shape' => DeliveryShape::None->value])
+            ->and($response->getContent())->not->toContain(
+                $plaintext,
+                (string) $old->secret_ciphertext,
+                $old->secret_key_version,
+                $mac,
+                'delivery_fingerprint',
+            );
+        $this->assertResponseCarriesNoSecret($response, $plaintext);
+    }
+
+    $replacement = Credential::query()
+        ->where('purpose', CredentialPurpose::SigningRoot->value)
+        ->whereKeyNot($old->id)
+        ->sole();
+    $audit = CredentialAuditEvent::query()
+        ->whereIn('credential_id', [$old->id, $replacement->id])
+        ->get()
+        ->map(static fn (CredentialAuditEvent $event): array => $event->getAttributes())
+        ->all();
+
+    expect($audit)->toHaveCount(3)
+        ->and(array_filter($audit, static fn (array $event): bool => $event['note'] !== null))->toBe([])
+        ->and(serialize($audit))->not->toContain($plaintext, (string) $old->secret_ciphertext, $old->secret_key_version, $mac);
+})->with([
+    'ordinary CLI' => ['cli', false],
+    'emergency CLI' => ['cli', true],
+    'ordinary HTTP' => ['http', false],
+    'emergency HTTP' => ['http', true],
+]);
 
 it('refuses generic root mutations and option-changing rotation before committing an ordinary path', function (RotateOptions $options): void {
     $root = signingRoot();
