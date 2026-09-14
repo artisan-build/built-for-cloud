@@ -23,6 +23,7 @@ final class AppPurposeConsumerInventory
         'dynamic or concatenated config keys',
         'runtime aliases, wrappers, and reflection',
         'generated non-PHP code and host-application consumers',
+        'only class declarations under src; traits, enums, interfaces, and class-less files are not scanned',
         'data flow beyond one lexical method body',
     ];
 

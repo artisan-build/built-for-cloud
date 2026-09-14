@@ -738,11 +738,12 @@ it('drives declaration-opted personal asymmetric enrollment as pending keyless a
     $stored = DB::table('credentials')->where('id', $credentialId)->sole();
     $codeRow = OnboardingToken::query()->where('durable_credential_id', $credentialId)->sole();
 
-    expect($credential->kind)->toBe(CredentialKind::Asymmetric)
+    expect(Credential::query()->count())->toBe(1)
+        ->and($credential->kind)->toBe(CredentialKind::Asymmetric)
         ->and($credential->purpose)->toBe(CredentialPurpose::Enrollment)
         ->and($credential->subject_type)->toBe(SubjectType::UserPrincipal)
         ->and($credential->subject_ref)->toBe(personalSubjectRef($mine))
-        ->and((string) $credential->user_id)->toBe((string) $mine->getKey())
+        ->and($credential->user_id)->toBe((string) $mine->getKey())
         ->and($credential->abilities)->toBe([OperatorAbility::McpRead->value])
         ->and($credential->status)->toBe(CredentialStatus::Pending)
         ->and($stored->public_key)->toBeNull()
