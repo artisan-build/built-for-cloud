@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
@@ -44,7 +45,21 @@ function runSigningRootOnConnection(string $connection, callable $action): mixed
     }
 }
 
+function seedSigningRootPostgresAuthority(): void
+{
+    DB::table('bfc_authority')->updateOrInsert(
+        ['key' => \ArtisanBuild\BuiltForCloud\InstallationAuthority::KEY],
+        [
+            'mode' => AuthorityMode::Standalone->value,
+            'generation' => 1,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ],
+    );
+}
+
 it('serializes concurrent provisioning on the installation authority row and commits one root', function (): void {
+    seedSigningRootPostgresAuthority();
     $main = $this->postgresLaneConnection();
     $probe = $this->postgresLaneProbe();
     $main->beginTransaction();
@@ -76,6 +91,7 @@ it('serializes concurrent provisioning on the installation authority row and com
 });
 
 it('keeps the old root signing until a serialized rotation commits, then exposes only the replacement', function (): void {
+    seedSigningRootPostgresAuthority();
     $old = app(SigningRootLifecycle::class)->provision();
     $before = app(SigningRootMac::class)->mac('postgres rotation bytes');
     $main = $this->postgresLaneConnection();
@@ -127,6 +143,7 @@ it('keeps the old root signing until a serialized rotation commits, then exposes
 });
 
 it('rolls back invalid multiple and foreign current-root rotation states without mutation', function (string $subjectRef): void {
+    seedSigningRootPostgresAuthority();
     $root = app(SigningRootLifecycle::class)->provision();
     $encrypted = app(HmacKeyring::class)->encrypt(bin2hex(random_bytes(32)));
 
