@@ -113,6 +113,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $this->app->singleton(UsageReporter::class, NullUsageReporter::class);
         $this->app->singleton(SystemAuthorityContext::class);
         $this->app->singleton(SystemAuthorityQueueScope::class);
+        $this->app->singleton(LandingManifest::class, static fn (): LandingManifest => LandingManifest::fromConfiguration());
 
         // P5b's forward-only carry: exchange has one durable destination.
         $this->app->bind(DurableCredentialMinter::class, UnifiedStoreCredentialMinter::class);
@@ -352,6 +353,8 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     {
         /** @var list<array{route: Route, gate: string}> $operatorRoutes */
         $operatorRoutes = [];
+        $landingRoute = $this->app->make(LandingPageRegistrar::class)->mount($router);
+        $landingRoutes = $landingRoute instanceof Route ? [$landingRoute] : [];
 
         $router->get('/bfc/meta', MetaController::class)
             ->middleware('throttle:bfc-public');
@@ -587,12 +590,14 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             ...$installationCredentialRoutes,
         ]);
 
-        $this->app->booted(function () use ($packageMiddlewareRoutes, $router, $standaloneRoutes): void {
-            StandaloneRouteOwnership::assertOwned($router, $standaloneRoutes);
+        $ownedNamedRoutes = [...$landingRoutes, ...$standaloneRoutes];
+
+        $this->app->booted(function () use ($ownedNamedRoutes, $packageMiddlewareRoutes, $router): void {
+            StandaloneRouteOwnership::assertOwned($router, $ownedNamedRoutes);
             StandaloneRouteOwnership::assertPackageMiddlewareOwned($router, $packageMiddlewareRoutes);
         });
-        Event::listen(RouteMatched::class, static function (RouteMatched $event) use ($bearerRoutes, $packageMiddlewareRoutes, $router, $standaloneRoutes): void {
-            StandaloneRouteOwnership::assertMatched($router, $event->route, $standaloneRoutes);
+        Event::listen(RouteMatched::class, static function (RouteMatched $event) use ($bearerRoutes, $ownedNamedRoutes, $packageMiddlewareRoutes, $router): void {
+            StandaloneRouteOwnership::assertMatched($router, $event->route, $ownedNamedRoutes);
             StandaloneRouteOwnership::assertPackageMiddlewareMatched($router, $event->route, $packageMiddlewareRoutes);
 
             if (in_array($event->route, $bearerRoutes, true)) {

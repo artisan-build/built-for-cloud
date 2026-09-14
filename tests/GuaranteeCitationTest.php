@@ -164,6 +164,7 @@ $exemptFromCitation = [
     'resources/views/auth/reset-password.blade.php' => 'package form template; structural rendering and request-owned data are driven by StandaloneHumanLifecycleTest',
     'resources/views/auth/sessions.blade.php' => 'package form template; structural rendering and test-created sessions are driven by StandaloneDatabaseSessionsTest',
     'resources/views/auth/styles.blade.php' => 'presentation-only shared CSS with no security guarantee',
+    'resources/views/landing.blade.php' => 'package landing template; package-layout use, structural rendering, and escaped test-created manifest values are driven by LandingPageTest',
     'src/Audit/AppActionEventBuilder.php' => 'a two-line binding of the shared AppendOnlyBuilder to one model; it adds and overrides nothing, and every claim is on the base',
     'src/Audit/AppActionLedgerBuilder.php' => 'a two-line binding of the shared AppendOnlyBuilder to one model; it adds and overrides nothing, and every claim is on the base',
     'src/Audit/AppActionReason.php' => 'a bounded enum: the closed app-action reason vocabulary, whose doc-to-code check is HttpContractDocTest\'s',

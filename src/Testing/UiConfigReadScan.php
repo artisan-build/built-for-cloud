@@ -4,6 +4,11 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Testing;
 
+use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTransitions;
+use ArtisanBuild\BuiltForCloud\LandingManifest;
+use ArtisanBuild\BuiltForCloud\LandingPageRegistrar;
+use ArtisanBuild\BuiltForCloud\UiCredentialPurposes;
 use FilesystemIterator;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
@@ -25,14 +30,85 @@ use SplFileInfo;
  */
 final class UiConfigReadScan
 {
+    /** @var array<string, 'display'|'mapper'|'mount'> */
+    public const array PUBLISHED_DISPOSITIONS = [
+        AppPurposeRegistry::class.'|built-for-cloud.credentials.app_purposes|1' => 'mapper',
+        ManageTransitions::class.'|built-for-cloud.ui.managed_transitions|1' => 'display',
+        LandingManifest::class.'|built-for-cloud.manifest|1' => 'display',
+        LandingPageRegistrar::class.'|built-for-cloud.ui.landing_page|1' => 'mount',
+        UiCredentialPurposes::class.'|built-for-cloud.ui.credential_purposes|1' => 'display',
+    ];
+
+    /** @var list<'display'|'mapper'|'mount'> */
+    private const array NAMED_DISPOSITIONS = ['display', 'mapper', 'mount'];
+
     /**
      * @return list<string> `<consumer>|<exact key>|<ordinal>` identities
      */
     public static function discover(string $root): array
     {
+        return self::discoverMatching(
+            $root,
+            static fn (string $key): bool => str_starts_with($key, 'built-for-cloud.ui.'),
+            false,
+        );
+    }
+
+    /**
+     * @return list<string> `<consumer>|<exact key>|<ordinal>` identities
+     */
+    public static function discoverPublishedConfiguration(string $root): array
+    {
+        return self::discoverMatching(
+            $root,
+            static fn (string $key): bool => $key === 'built-for-cloud.manifest'
+                || str_starts_with($key, 'built-for-cloud.manifest.')
+                || str_starts_with($key, 'built-for-cloud.ui.')
+                || $key === 'built-for-cloud.credentials.app_purposes',
+            true,
+        );
+    }
+
+    /**
+     * @param  list<string>  $additionalRoots
+     * @return array<string, 'display'|'mapper'|'mount'>
+     */
+    public static function assertPublishedConfigurationDispositions(string $sourceRoot, array $additionalRoots = []): array
+    {
+        $reads = self::discoverPublishedConfiguration($sourceRoot);
+
+        foreach ($additionalRoots as $root) {
+            array_push($reads, ...self::discoverPublishedConfiguration($root));
+        }
+
+        sort($reads);
+        $expectedReads = array_keys(self::PUBLISHED_DISPOSITIONS);
+        $unknownDispositions = array_diff(array_values(self::PUBLISHED_DISPOSITIONS), self::NAMED_DISPOSITIONS);
+
+        if ($reads !== $expectedReads || $unknownDispositions !== []) {
+            $unknownReads = array_values(array_diff($reads, $expectedReads));
+            $missingReads = array_values(array_diff($expectedReads, $reads));
+
+            throw new RuntimeException(sprintf(
+                'Published configuration read dispositions drifted (unknown reads: [%s]; missing reads: [%s]; unknown dispositions: [%s]).',
+                implode(', ', $unknownReads),
+                implode(', ', $missingReads),
+                implode(', ', $unknownDispositions),
+            ));
+        }
+
+        return self::PUBLISHED_DISPOSITIONS;
+    }
+
+    /**
+     * @param  callable(string): bool  $matches
+     * @return list<string>
+     */
+    private static function discoverMatching(string $root, callable $matches, bool $productionOnly): array
+    {
         $reads = [];
 
-        foreach (self::phpFiles($root) as $relativePath => $file) {
+        foreach (self::phpFiles($root, $productionOnly) as $relativePath => $file) {
             $contents = file_get_contents($file->getPathname());
 
             if (! is_string($contents)) {
@@ -44,7 +120,7 @@ final class UiConfigReadScan
             $ordinals = [];
 
             foreach (self::literalConfigReads($tokens) as $key) {
-                if (! str_starts_with($key, 'built-for-cloud.ui.')) {
+                if (! $matches($key)) {
                     continue;
                 }
 
@@ -60,7 +136,7 @@ final class UiConfigReadScan
 
     public static function countPhpFiles(string $root): int
     {
-        return count(iterator_to_array(self::phpFiles($root)));
+        return count(iterator_to_array(self::phpFiles($root, false)));
     }
 
     /**
@@ -475,16 +551,25 @@ final class UiConfigReadScan
     /**
      * @return iterable<string, SplFileInfo>
      */
-    private static function phpFiles(string $root): iterable
+    private static function phpFiles(string $root, bool $productionOnly): iterable
     {
+        if (is_file($root)) {
+            yield basename($root) => new SplFileInfo($root);
+
+            return;
+        }
+
         $files = new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
         );
 
         /** @var SplFileInfo $file */
         foreach ($files as $file) {
-            if ($file->isFile() && $file->getExtension() === 'php') {
-                yield substr($file->getPathname(), strlen($root) + 1) => $file;
+            $relativePath = substr($file->getPathname(), strlen($root) + 1);
+
+            if ($file->isFile() && $file->getExtension() === 'php'
+                && (! $productionOnly || ! str_starts_with($relativePath, 'Testing'.DIRECTORY_SEPARATOR))) {
+                yield $relativePath => $file;
             }
         }
     }

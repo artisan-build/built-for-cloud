@@ -182,6 +182,26 @@ trait ContractAssertions
     }
 
     /**
+     * @param  array<string, mixed>  $canonicalCatalogEntry
+     */
+    public function assertBuiltForCloudManifestMatches(array $canonicalCatalogEntry): void
+    {
+        $manifest = config('built-for-cloud.manifest');
+
+        Assert::assertIsArray($manifest, 'The built-for-cloud manifest must be an array.');
+
+        foreach (['name', 'slug', 'description', 'icon', 'product_url'] as $field) {
+            Assert::assertArrayHasKey($field, $canonicalCatalogEntry, "The canonical catalog entry is missing [{$field}].");
+            Assert::assertArrayHasKey($field, $manifest, "The built-for-cloud manifest is missing [{$field}].");
+            Assert::assertSame(
+                $canonicalCatalogEntry[$field],
+                $manifest[$field],
+                "The built-for-cloud manifest [{$field}] does not match the canonical catalog entry.",
+            );
+        }
+    }
+
+    /**
      * The unified credential listing shape. Every summary field is present,
      * while secret material and hashes never appear.
      */
