@@ -31,7 +31,7 @@ use SplFileInfo;
  */
 final class UiConfigReadScan
 {
-    /** @var array<string, 'display'|'mapper'|'mount'> */
+    /** @var array<string, 'display'|'mapper'|'mount'|'transport-validator'> */
     public const array PUBLISHED_DISPOSITIONS = [
         AppPurposeRegistry::class.'|built-for-cloud.credentials.app_purposes|1' => 'mapper',
         ManageTransitions::class.'|built-for-cloud.ui.managed_transitions|1' => 'display',
@@ -42,11 +42,24 @@ final class UiConfigReadScan
         UiHome::class.'|built-for-cloud.ui.session_management|1' => 'display',
         LandingManifest::class.'|built-for-cloud.manifest|1' => 'display',
         LandingPageRegistrar::class.'|built-for-cloud.ui.landing_page|1' => 'mount',
-        UiCredentialPurposes::class.'|built-for-cloud.ui.credential_purposes|1' => 'display',
+        UiCredentialPurposes::class.'|built-for-cloud.ui.credential_purposes|1' => 'transport-validator',
     ];
 
-    /** @var list<'display'|'mapper'|'mount'> */
-    private const array NAMED_DISPOSITIONS = ['display', 'mapper', 'mount'];
+    /** @var array<string, 'display'|'mount'|'transport-validator'> */
+    public const array UI_DISPOSITIONS = [
+        ManageTransitions::class.'|built-for-cloud.ui.managed_transitions|1' => 'display',
+        UiHome::class.'|built-for-cloud.ui.installation_credentials|1' => 'display',
+        UiHome::class.'|built-for-cloud.ui.managed_transitions|1' => 'display',
+        UiHome::class.'|built-for-cloud.ui.member_management|1' => 'display',
+        UiHome::class.'|built-for-cloud.ui.personal_credentials|1' => 'display',
+        UiHome::class.'|built-for-cloud.ui.session_management|1' => 'display',
+        LandingPageRegistrar::class.'|built-for-cloud.ui.landing_page|1' => 'mount',
+        UiCredentialPurposes::class.'|built-for-cloud.ui.credential_purposes|1' => 'transport-validator',
+        'auth\\members.blade|built-for-cloud.ui.managed_transitions|1' => 'display',
+    ];
+
+    /** @var list<'display'|'mapper'|'mount'|'transport-validator'> */
+    private const array NAMED_DISPOSITIONS = ['display', 'mapper', 'mount', 'transport-validator'];
 
     /**
      * @return list<string> `<consumer>|<exact key>|<ordinal>` identities
@@ -77,7 +90,7 @@ final class UiConfigReadScan
 
     /**
      * @param  list<string>  $additionalRoots
-     * @return array<string, 'display'|'mapper'|'mount'>
+     * @return array<string, 'display'|'mapper'|'mount'|'transport-validator'>
      */
     public static function assertPublishedConfigurationDispositions(string $sourceRoot, array $additionalRoots = []): array
     {
@@ -107,6 +120,37 @@ final class UiConfigReadScan
     }
 
     /**
+     * @param  list<string>  $additionalRoots
+     * @return array<string, 'display'|'mount'|'transport-validator'>
+     */
+    public static function assertUiConfigurationDispositions(string $sourceRoot, array $additionalRoots = []): array
+    {
+        $reads = self::discover($sourceRoot);
+
+        foreach ($additionalRoots as $root) {
+            array_push($reads, ...self::discover($root));
+        }
+
+        sort($reads);
+        $expectedReads = array_keys(self::UI_DISPOSITIONS);
+        $unknownDispositions = array_diff(array_values(self::UI_DISPOSITIONS), self::NAMED_DISPOSITIONS);
+
+        if ($reads !== $expectedReads || $unknownDispositions !== []) {
+            $unknownReads = array_values(array_diff($reads, $expectedReads));
+            $missingReads = array_values(array_diff($expectedReads, $reads));
+
+            throw new RuntimeException(sprintf(
+                'UI configuration read dispositions drifted (unknown reads: [%s]; missing reads: [%s]; unknown dispositions: [%s]).',
+                implode(', ', $unknownReads),
+                implode(', ', $missingReads),
+                implode(', ', $unknownDispositions),
+            ));
+        }
+
+        return self::UI_DISPOSITIONS;
+    }
+
+    /**
      * @param  callable(string): bool  $matches
      * @return list<string>
      */
@@ -125,7 +169,14 @@ final class UiConfigReadScan
             $consumer = self::consumer($tokens) ?? str_replace('/', '\\', substr($relativePath, 0, -4));
             $ordinals = [];
 
-            foreach (self::literalConfigReads($tokens) as $key) {
+            $keys = self::literalConfigReads($tokens);
+
+            if (str_ends_with($relativePath, '.blade.php')) {
+                preg_match_all('/\bconfig\s*\(\s*([\'\"])(built-for-cloud\.ui\.[A-Za-z0-9_.-]+)\1/', $contents, $bladeMatches);
+                array_push($keys, ...$bladeMatches[2]);
+            }
+
+            foreach ($keys as $key) {
                 if (! $matches($key)) {
                     continue;
                 }
