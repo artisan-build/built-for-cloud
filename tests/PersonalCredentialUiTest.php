@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
+use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
@@ -16,10 +17,12 @@ use ArtisanBuild\BuiltForCloud\Database\Factories\CredentialFactory;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
+use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
+use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiPersonalCredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\UiCredentialPurposes;
@@ -31,6 +34,8 @@ use Illuminate\Http\Request;
 use Illuminate\Routing\Router;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Testing\TestResponse;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -169,6 +174,9 @@ final class PersonalCredentialUiTest extends TestCase
         $this->assertSame($rotationSource->abilities, $replacement->abilities);
         $this->assertNotNull($rotationSource->refresh()->rotated_at);
         $this->assertSame(1, substr_count((string) $rotate->getContent(), $rotationSecret));
+        $rotationRevisit = $this->actingAsVersioned($user, 'web')->get(route('bfc.ui.personal-credentials.index'));
+        $rotationRevisit->assertOk()->assertDontSeeHtml('data-testid="personal-credentials-delivery"');
+        $this->assertStringNotContainsString($rotationSecret, (string) $rotationRevisit->getContent());
 
         if ($kind === CredentialKind::Hmac) {
             $this->assertHmacAuthenticates($user, $issued->id, $secret);
@@ -212,6 +220,7 @@ final class PersonalCredentialUiTest extends TestCase
         $victim = $this->user(UserRole::Member);
         $foreign = $this->personalCredential($victim);
         $this->actingAsVersioned($actor, 'web');
+        $this->get(route('bfc.ui.personal-credentials.index'))->assertOk()->assertDontSee($foreign->name);
 
         foreach ([
             fn (): TestResponse => $this->post(route('bfc.ui.personal-credentials.rotate', $foreign->id)),
@@ -260,6 +269,37 @@ final class PersonalCredentialUiTest extends TestCase
             'kind' => CredentialKind::Hmac->value,
         ])->assertForbidden()->assertDontSeeHtml('data-testid="personal-credentials-delivery"');
         $this->assertSame($before, $this->effects());
+
+        $this->allFlagsOff();
+        UiPersonalCredentialDeclaration::$kinds = CredentialKind::cases();
+        $this->get(route('bfc.ui.personal-credentials.index'))->assertOk()->assertDontSee($foreign->name);
+
+        foreach ([
+            fn (): TestResponse => $this->post(route('bfc.ui.personal-credentials.rotate', $foreign->id)),
+            fn (): TestResponse => $this->delete(route('bfc.ui.personal-credentials.destroy', $foreign->id)),
+            fn (): TestResponse => $this->post(route('bfc.ui.personal-credentials.rotate', '00000000-0000-0000-0000-000000000000')),
+            fn (): TestResponse => $this->delete(route('bfc.ui.personal-credentials.destroy', '00000000-0000-0000-0000-000000000000')),
+        ] as $request) {
+            $before = $this->effects();
+            $request()->assertNotFound()->assertDontSeeHtml('data-testid="personal-credentials-delivery"');
+            $this->assertSame($before, $this->effects());
+        }
+
+        foreach ([
+            [],
+            ['app_purpose' => ['test.consume'], 'kind' => 'bearer'],
+            ['app_purpose' => 'test.hidden', 'kind' => 'bearer'],
+            ['app_purpose' => 'test.unmapped', 'kind' => 'bearer'],
+            ['app_purpose' => 'test.root', 'kind' => 'hmac'],
+            ['app_purpose' => 'test.consume', 'kind' => 'unknown-kind'],
+            ['app_purpose' => 'test.sign', 'kind' => CredentialKind::Bearer->value],
+        ] as $payload) {
+            $before = $this->effects();
+            $this->post(route('bfc.ui.personal-credentials.store'), $payload)
+                ->assertUnprocessable()
+                ->assertDontSeeHtml('data-testid="personal-credentials-delivery"');
+            $this->assertSame($before, $this->effects());
+        }
     }
 
     public function test_declaration_refusals_and_all_flags_off_direct_refusals_preserve_every_effect(): void
@@ -308,13 +348,21 @@ final class PersonalCredentialUiTest extends TestCase
             }
         }
 
-        UiPersonalCredentialDeclaration::$deniedVerbs = [CredentialVerb::Issue];
-        $before = $this->effects();
-        try {
-            $surface->mintMineForPurpose($request, CredentialPurpose::Consumption, new MintOptions);
-            $this->fail('Expected the flags-off declaration refusal.');
-        } catch (CredentialVerbRefused) {
-            $this->assertSame($before, $this->effects());
+        foreach ([CredentialVerb::Issue, CredentialVerb::Rotate, CredentialVerb::Revoke] as $verb) {
+            UiPersonalCredentialDeclaration::$deniedVerbs = [$verb];
+            $before = $this->effects();
+
+            try {
+                match ($verb) {
+                    CredentialVerb::Issue => $surface->mintMineForPurpose($request, CredentialPurpose::Consumption, new MintOptions),
+                    CredentialVerb::Rotate => $surface->rotateMine($request, $credential->id, new RotateOptions),
+                    CredentialVerb::Revoke => $surface->revokeMine($request, $credential->id),
+                    default => throw new \LogicException('Unexpected verb.'),
+                };
+                $this->fail('Expected the flags-off declaration refusal.');
+            } catch (CredentialVerbRefused) {
+                $this->assertSame($before, $this->effects());
+            }
         }
     }
 
@@ -357,16 +405,60 @@ final class PersonalCredentialUiTest extends TestCase
         $this->actingAsVersioned($user, 'web');
         app()->instance('env', 'local');
 
-        foreach ([
-            fn (): TestResponse => $this->post(route('bfc.ui.personal-credentials.store'), [
-                'app_purpose' => 'test.consume', 'kind' => 'bearer', '_token' => 'invalid',
-            ]),
-            fn (): TestResponse => $this->post(route('bfc.ui.personal-credentials.rotate', $credential->id), ['_token' => 'invalid']),
-            fn (): TestResponse => $this->delete(route('bfc.ui.personal-credentials.destroy', $credential->id), ['_token' => 'invalid']),
-        ] as $request) {
-            $before = $this->effects();
-            $request()->assertStatus(419)->assertDontSeeHtml('data-testid="personal-credentials-delivery"');
-            $this->assertSame($before, $this->effects());
+        foreach ([false, true] as $flagsOff) {
+            if ($flagsOff) {
+                $this->allFlagsOff();
+            }
+
+            foreach ([
+                fn (): TestResponse => $this->post(route('bfc.ui.personal-credentials.store'), [
+                    'app_purpose' => 'test.consume', 'kind' => 'bearer', '_token' => 'invalid',
+                ]),
+                fn (): TestResponse => $this->post(route('bfc.ui.personal-credentials.rotate', $credential->id), ['_token' => 'invalid']),
+                fn (): TestResponse => $this->delete(route('bfc.ui.personal-credentials.destroy', $credential->id), ['_token' => 'invalid']),
+            ] as $request) {
+                $before = $this->effects();
+                $request()->assertStatus(419)->assertDontSeeHtml('data-testid="personal-credentials-delivery"');
+                $this->assertSame($before, $this->effects());
+            }
+        }
+    }
+
+    public function test_stale_and_denied_managed_memberships_refuse_every_personal_verb_with_flags_on_or_off(): void
+    {
+        $this->setManagedAuthority();
+        Http::fake(Http::response([], 503));
+
+        foreach (['removed', 'disabled', 'stale'] as $state) {
+            foreach ([false, true] as $flagsOff) {
+                if ($flagsOff) {
+                    $this->allFlagsOff();
+                } else {
+                    config([
+                        'built-for-cloud.ui.personal_credentials' => true,
+                        'built-for-cloud.ui.credential_purposes' => [
+                            'test.consume', 'test.mcp', 'test.sign', 'test.enroll',
+                        ],
+                    ]);
+                }
+
+                $user = $this->managedUser($state);
+                $credential = $this->personalCredential($user);
+                $this->actingAsVersioned($user, 'web');
+
+                foreach ([
+                    fn (): TestResponse => $this->get(route('bfc.ui.personal-credentials.index')),
+                    fn (): TestResponse => $this->post(route('bfc.ui.personal-credentials.store'), [
+                        'app_purpose' => 'test.consume', 'kind' => 'bearer',
+                    ]),
+                    fn (): TestResponse => $this->post(route('bfc.ui.personal-credentials.rotate', $credential->id)),
+                    fn (): TestResponse => $this->delete(route('bfc.ui.personal-credentials.destroy', $credential->id)),
+                ] as $request) {
+                    $before = $this->effects();
+                    $request()->assertRedirect()->assertDontSeeHtml('data-testid="personal-credentials-delivery"');
+                    $this->assertSame($before, $this->effects());
+                }
+            }
         }
     }
 
@@ -416,6 +508,42 @@ final class PersonalCredentialUiTest extends TestCase
             'built-for-cloud.ui.managed_transitions' => false,
             'built-for-cloud.ui.credential_purposes' => [],
         ]);
+    }
+
+    private function setManagedAuthority(): void
+    {
+        DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
+            'mode' => AuthorityMode::Managed->value,
+            'generation' => 2,
+            'issuer' => 'https://issuer.example.test',
+            'connection_id' => 'ui-connection',
+            'organization_id' => 'ui-organization',
+            'installation_id' => 'ui-installation',
+            'authority_base_url' => 'https://authority.example.test',
+            'managed_connection_status' => 'active',
+            'managed_connection_generation' => 2,
+            'managed_connection_roster_version' => 3,
+            'managed_connection_response_sequence' => 4,
+        ]);
+    }
+
+    private function managedUser(string $state): User
+    {
+        $user = $this->user(UserRole::Member);
+        $user->forceFill([
+            'scalpels_issuer' => 'https://issuer.example.test',
+            'scalpels_connection_id' => 'ui-connection',
+            'scalpels_id' => 'subject-'.$user->getKey(),
+            'managed_membership_status' => $state === 'stale' ? 'active' : $state,
+            'managed_membership_role' => UserRole::Member->value,
+            'managed_membership_generation' => 2,
+            'managed_membership_roster_version' => 3,
+            'managed_membership_response_sequence' => 4,
+            'managed_membership_responded_at' => now()->toAtomString(),
+            'membership_confirmed_at' => $state === 'stale' ? now()->subHour() : now(),
+        ])->save();
+
+        return $user;
     }
 
     private function user(UserRole $role): User
