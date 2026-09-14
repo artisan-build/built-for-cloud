@@ -427,6 +427,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/onboarding/verify` | `content` | carries the free-text credential name |
 | `GET /bfc/managed/login` | `content` | redirect carrying an opaque one-time browser state, plus the initiating session cookie |
 | `GET /bfc/managed/callback` | `content` | redirect plus a newly established authenticated session cookie |
+| `GET /bfc/ui` | `content` | package-owned HTML containing configured manifest identity and local account navigation |
 | `GET /bfc/login` | `content` | package-owned HTML login form |
 | `POST /bfc/login` | `content` | redirect plus a newly established session cookie |
 | `POST /bfc/logout` | `metadata` | redirect after session invalidation |
@@ -869,6 +870,19 @@ this one**, exactly as reserved — additively, without an `api_version` bump:
 
 An envelope carrying no `console_key` behaves in every respect as it did before, response keys
 included, which is what makes both slots additive rather than a version bump.
+
+---
+
+## Authenticated package UI
+
+### GET /bfc/ui
+
+Renders the package-owned authenticated home through `bfc::layout` for an active local Owner,
+Admin, or Member under either valid authority mode. An unauthenticated request is redirected to
+the authority mode's real login route with a validated same-origin relative intended path.
+Invalid authority and delegated console principals refuse. Manifest identity and structural
+navigation come from published package configuration; affordance flags affect presentation,
+not route mounting or action authority.
 
 ---
 

@@ -129,6 +129,7 @@ final class PersonalSurfaceWebGroupTest extends TestCase
             'GET /bfc/reset-password',
             'GET /bfc/transitions/proposals/{transition}',
             'GET /bfc/transitions/{direction}/prepare',
+            'GET /bfc/ui',
             'POST /bfc/console/enter',
             'POST /bfc/forgot-password',
             'POST /bfc/installation/credentials',
