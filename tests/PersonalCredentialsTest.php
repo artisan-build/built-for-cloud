@@ -697,7 +697,7 @@ it('refuses a self-service credential kind the app has not opted in', function (
     expect(Credential::query()->where('name', 'default-kind')->sole()->kind)->toBe(CredentialKind::Bearer);
 });
 
-it('live-verifies declaration-opted personal asymmetric enrollment as pending keyless and revocable', function (): void {
+it('drives declaration-opted personal asymmetric enrollment as pending keyless and revocable', function (): void {
     $this->travelTo('2026-09-14T12:00:00+00:00');
     config(['built-for-cloud.credentials.declaration' => SelfServicePolicyDeclaration::class]);
     SelfServicePolicyDeclaration::$kinds = [CredentialKind::Bearer, CredentialKind::Asymmetric];
