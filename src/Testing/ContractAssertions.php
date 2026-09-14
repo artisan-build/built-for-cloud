@@ -80,7 +80,7 @@ trait ContractAssertions
         foreach (['/bfc/ownership/release', '/bfc/ownership/cancel-transfer'] as $uri) {
             $this->postJson($uri)->assertUnauthorized();
             $this->postJson($uri, [], $this->builtForCloudBearerHeaders($wrongAbility))->assertForbidden();
-            $this->postJson($uri, [], $this->builtForCloudBearerHeaders($consumeToken))->assertForbidden();
+            $this->postJson($uri, [], $this->builtForCloudBearerHeaders($consumeToken))->assertUnauthorized();
         }
 
         $this->postJson('/bfc/ownership/claim', ['token' => 'invalid-contract-claim'])
@@ -108,7 +108,7 @@ trait ContractAssertions
             '/bfc/onboarding/issue',
             ['email' => 'contract@example.test'],
             $this->builtForCloudBearerHeaders($consumeToken),
-        )->assertForbidden();
+        )->assertUnauthorized();
 
         // The claim surfaces speak the claim contract's error enum: clients
         // branch on `error`, the statuses follow the contract's guidance.

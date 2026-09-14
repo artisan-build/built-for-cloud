@@ -88,6 +88,19 @@ function frozenCredentialClassification(): array
     ]);
 }
 
+/** @return list<string> */
+function frozenPurposeDispositions(): array
+{
+    return sortedCredentialInventory([
+        'resolver-caller:ArtisanBuild\\BuiltForCloud\\Auth\\BasicAuthenticator::credential|purpose=guard:{consumption,system_deployment}',
+        'resolver-caller:ArtisanBuild\\BuiltForCloud\\Auth\\BearerAuthenticator::credential|purpose=guard:{consumption,system_deployment}',
+        'resolver-caller:ArtisanBuild\\BuiltForCloud\\Auth\\CredentialGuard::validate|purpose={consumption,system_deployment}',
+        'resolver-caller:ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::verifyUnifiedDurable|purpose={consumption,operator_management,enrollment}->scope',
+        'resolver-caller:ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\AuthenticateMcp::handle|purpose=mcp|{operator_management+operator+credential:admin}',
+        'resolver-caller:ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCredentialAdmin::handle|purpose=operator_management',
+    ]);
+}
+
 /**
  * P5-AC12's oracle is Part 1.1's seven discoverable path identities with
  * every Part 1.2b row undiscovered, while the independently
@@ -210,6 +223,113 @@ it('reports every deliberate control through its assigned derivation root', func
             'operator-ingress:'.DecoyResolverCredentialGate::class.'=>ArtisanBuild\BuiltForCloud\Auth\CredentialResolver::resolve',
         )
         ->and($devicePaths)->toBe([]);
+});
+
+it('compares the exact AC2 resolver and ordinary HMAC purpose dispositions', function (): void {
+    $inventory = CredentialPathInventory::comparePurposePolicy(dirname(__DIR__).'/src');
+
+    expect($inventory['violations'])->toBe([])
+        ->and($inventory['resolver_callers'])->toBe([
+            'ArtisanBuild\\BuiltForCloud\\Auth\\BasicAuthenticator::credential|expressions=1',
+            'ArtisanBuild\\BuiltForCloud\\Auth\\BearerAuthenticator::credential|expressions=1',
+            'ArtisanBuild\\BuiltForCloud\\Auth\\CredentialGuard::validate|expressions=2',
+            'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::verifyUnifiedDurable|expressions=1',
+            'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\AuthenticateMcp::handle|expressions=1',
+            'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCredentialAdmin::handle|expressions=1',
+        ])
+        ->and($inventory['resolver_expression_count'])->toBe(7)
+        ->and($inventory['hmac_selectors'])->toBe([
+            'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacSigner',
+            'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacVerifier',
+        ])
+        ->and($inventory['dispositions'])->toBe(frozenPurposeDispositions());
+});
+
+it('fails AC2 comparison for identity drift and purpose-omitting caller and HMAC controls', function (): void {
+    $root = sys_get_temp_dir().'/bfc-purpose-controls-'.bin2hex(random_bytes(8));
+    $namespace = 'ArtisanBuild\\BuiltForCloud\\Tests\\PurposeControls';
+
+    mkdir($root, 0777, true);
+    file_put_contents($root.'/PurposeOmittedResolverCaller.php', <<<PHP
+<?php
+namespace {$namespace};
+use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
+final class PurposeOmittedResolverCaller
+{
+    public function __construct(private CredentialResolver \$resolver) {}
+    public function authenticate(string \$secret): mixed
+    {
+        return \$this->resolver->resolve(CredentialKind::Bearer, \$secret);
+    }
+}
+PHP);
+    file_put_contents($root.'/PurposeOmittedHmacSelector.php', <<<PHP
+<?php
+namespace {$namespace};
+use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
+final class PurposeOmittedHmacSelector
+{
+    public function __construct(private mixed \$keyring) {}
+    public function select(): mixed
+    {
+        \$credential = Credential::query()->where('kind', CredentialKind::Hmac->value)->first();
+        return \$this->keyring->decrypt(\$credential->secret_ciphertext, \$credential->secret_key_version);
+    }
+}
+PHP);
+
+    $inventory = CredentialPathInventory::comparePurposePolicy(dirname(__DIR__).'/src', [$root]);
+
+    expect($inventory['violations'])->toContain(
+        'unexpected-resolver-caller:'.$namespace.'\\PurposeOmittedResolverCaller::authenticate',
+        'missing-purpose-rule:'.$namespace.'\\PurposeOmittedResolverCaller::authenticate',
+        'unexpected-hmac-selector:'.$namespace.'\\PurposeOmittedHmacSelector',
+        'missing-signing-purpose:'.$namespace.'\\PurposeOmittedHmacSelector',
+    );
+
+    $writeAdminShadow = static function (string $directory, bool $withPurpose): void {
+        mkdir($directory, 0777, true);
+        $purposeCheck = $withPurpose
+            ? <<<'PHP'
+        if ($credential->purpose !== CredentialPurpose::OperatorManagement) {
+            abort(401);
+        }
+PHP
+            : '';
+
+        file_put_contents($directory.'/EnsureCredentialAdmin.php', <<<PHP
+<?php
+namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
+use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
+final class EnsureCredentialAdmin
+{
+    public function __construct(private CredentialResolver \$resolver) {}
+    public function handle(string \$secret): mixed
+    {
+        \$credential = \$this->resolver->resolve(CredentialKind::Bearer, \$secret);
+{$purposeCheck}
+        \$this->recordUsage(\$credential);
+        return \$credential;
+    }
+}
+PHP);
+    };
+
+    $intactRoot = $root.'/intact';
+    $omittedRoot = $root.'/omitted';
+    $writeAdminShadow($intactRoot, true);
+    $writeAdminShadow($omittedRoot, false);
+
+    expect(CredentialPathInventory::comparePurposePolicy(dirname(__DIR__).'/src', [$intactRoot])['violations'])
+        ->toBe([])
+        ->and(CredentialPathInventory::comparePurposePolicy(dirname(__DIR__).'/src', [$omittedRoot])['violations'])
+        ->toBe([
+            'missing-purpose-rule:ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCredentialAdmin::handle',
+        ]);
 });
 
 it('reports a second credential store across query forms', function (string $query): void {

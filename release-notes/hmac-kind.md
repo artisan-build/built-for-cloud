@@ -24,7 +24,8 @@ message in the gap. The contract:
 
 - **A pending key signs nothing and verifies nothing.** Not a phrase: the signer refuses a
   subject whose only keys are pending (naming why), and the verifier's selection admits
-  active-or-in-grace rows only.
+  active-or-in-grace rows only. Both ordinary selectors require `purpose=signing` in their
+  database predicate before any keyring decryption.
 - **Activation is its own verb** — `bfc:credential:activate <id> --fingerprint=<fp> --local`
   / `POST /bfc/credentials/{id}/activate` — behind its own matrix verb (`activate`), so a
   declaration can allow rotation while reserving the cutover. It refuses an undelivered key

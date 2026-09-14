@@ -6,8 +6,10 @@ namespace ArtisanBuild\BuiltForCloud\Hmac;
 
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacSigningRefused;
 use ArtisanBuild\BuiltForCloud\Subject;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * The signing half of the pair the package ships (PRD 1.21, SEC-V3-07):
@@ -62,8 +64,15 @@ final class HmacSigner
 
     private function activeSigningKey(Subject $subject): Credential
     {
+        // Rollback leaves retired rows in place but removes their purpose.
+        // Without that column no row can prove signing authority.
+        if (! Schema::hasColumn('credentials', 'purpose')) {
+            throw HmacSigningRefused::noActiveKey($subject, 0);
+        }
+
         $candidates = Credential::query()
             ->where('kind', CredentialKind::Hmac->value)
+            ->where('purpose', CredentialPurpose::Signing->value)
             ->where('subject_type', $subject->type->value)
             ->where('subject_ref', $subject->ref)
             ->whereNotNull('secret_ciphertext')
@@ -84,6 +93,7 @@ final class HmacSigner
         if ($signer === null) {
             $pendingKeys = Credential::query()
                 ->where('kind', CredentialKind::Hmac->value)
+                ->where('purpose', CredentialPurpose::Signing->value)
                 ->where('subject_type', $subject->type->value)
                 ->where('subject_ref', $subject->ref)
                 ->where('status', 'pending')

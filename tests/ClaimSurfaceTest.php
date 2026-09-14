@@ -575,10 +575,10 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1347,
-        'absolute' => 422,
+        'blocks' => 1348,
+        'absolute' => 424,
         'paired' => 112,
-        'unpaired' => 310,
+        'unpaired' => 312,
     ]);
 
     // The surfaces the restatement map runs over are wider than the

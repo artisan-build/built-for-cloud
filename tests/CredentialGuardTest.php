@@ -2,12 +2,18 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
+use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
+use ArtisanBuild\BuiltForCloud\LifecycleEventType;
+use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
@@ -279,4 +285,207 @@ it('still authenticates when no session guard is configured at all', function ()
     $this->getJson('/bfc-guarded', ['Authorization' => $minted->bearerHeader()])
         ->assertOk()
         ->assertJsonPath('principal', $minted->credential->id);
+});
+
+it('refuses wrong-purpose bearer and Basic secrets before declaration usage or principal publication', function (CredentialKind $kind): void {
+    $declaration = new class implements CredentialDeclaration
+    {
+        public int $calls = 0;
+
+        public function resolveSubject(Request $request): ?Subject
+        {
+            return null;
+        }
+
+        public function authorize(Credential $credential, ?string $ability, Request $request): bool
+        {
+            $this->calls++;
+
+            return true;
+        }
+    };
+    app()->instance(CredentialDeclaration::class, $declaration);
+
+    $wrong = $this->mintCredential([
+        'kind' => $kind,
+        'purpose' => CredentialPurpose::DashboardMetadata,
+        'subject_type' => 'operator',
+        'abilities' => ['metadata:read'],
+    ]);
+    $header = $kind === CredentialKind::Basic ? $wrong->basicHeader() : $wrong->bearerHeader();
+
+    $this->getJson('/bfc-guarded', ['Authorization' => $header])->assertUnauthorized();
+
+    expect($declaration->calls)->toBe(0)
+        ->and($wrong->credential->refresh()->last_used_at)->toBeNull()
+        ->and(Auth::guard('bfc')->hasUser())->toBeFalse()
+        ->and(CredentialAuditEvent::query()->where('event', LifecycleEventType::FirstUsed->value)->count())->toBe(0);
+})->with([CredentialKind::Bearer, CredentialKind::Basic]);
+
+it('keeps validate purpose-aware and effect-free for bearer and Basic credentials', function (): void {
+    $declaration = new class implements CredentialDeclaration
+    {
+        public int $calls = 0;
+
+        public function resolveSubject(Request $request): ?Subject
+        {
+            return null;
+        }
+
+        public function authorize(Credential $credential, ?string $ability, Request $request): bool
+        {
+            $this->calls++;
+
+            return true;
+        }
+    };
+    app()->instance(CredentialDeclaration::class, $declaration);
+
+    $bearer = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
+        'subject_type' => 'external_consumer',
+    ]);
+    $basic = $this->mintCredential([
+        'kind' => CredentialKind::Basic,
+        'purpose' => CredentialPurpose::SystemDeployment,
+    ]);
+    $wrongBearer = $this->mintCredential([
+        'purpose' => CredentialPurpose::DashboardMetadata,
+        'subject_type' => 'operator',
+    ]);
+    $wrongBasic = $this->mintCredential([
+        'kind' => CredentialKind::Basic,
+        'purpose' => CredentialPurpose::OperatorManagement,
+        'subject_type' => 'operator',
+    ]);
+    $revoked = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
+        'subject_type' => 'external_consumer',
+        'revoked_at' => now(),
+    ]);
+
+    /** @var CredentialGuard $guard */
+    $guard = Auth::guard('bfc');
+
+    expect($guard->validate(['secret' => $bearer->plaintext()]))->toBeTrue()
+        ->and($guard->validate(['secret' => $basic->plaintext()]))->toBeTrue()
+        ->and($guard->validate(['secret' => $wrongBearer->plaintext()]))->toBeFalse()
+        ->and($guard->validate(['secret' => $wrongBasic->plaintext()]))->toBeFalse()
+        ->and($guard->validate(['secret' => $revoked->plaintext()]))->toBeFalse()
+        ->and($guard->validate(['secret' => 'unknown']))->toBeFalse()
+        ->and($declaration->calls)->toBe(0)
+        ->and($guard->hasUser())->toBeFalse()
+        ->and(CredentialAuditEvent::query()->where('event', LifecycleEventType::FirstUsed->value)->count())->toBe(0);
+
+    foreach ([$bearer, $basic, $wrongBearer, $wrongBasic, $revoked] as $minted) {
+        expect($minted->credential->refresh()->last_used_at)->toBeNull();
+    }
+});
+
+it('resolves once per request rechecks every purpose set and runs accepted effects once', function (): void {
+    config(['auth.guards.bfc.provider' => null]);
+    Auth::forgetGuards();
+
+    $declaration = new class implements CredentialDeclaration
+    {
+        public int $calls = 0;
+
+        public function resolveSubject(Request $request): ?Subject
+        {
+            return null;
+        }
+
+        public function authorize(Credential $credential, ?string $ability, Request $request): bool
+        {
+            $this->calls++;
+
+            return true;
+        }
+    };
+    app()->instance(CredentialDeclaration::class, $declaration);
+
+    $minted = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
+        'subject_type' => 'external_consumer',
+    ]);
+    $retrieved = 0;
+    Credential::retrieved(function (Credential $credential) use ($minted, &$retrieved): void {
+        if ($credential->id === $minted->credential->id) {
+            $retrieved++;
+        }
+    });
+    app()->instance('request', Request::create('/one', server: [
+        'HTTP_AUTHORIZATION' => $minted->bearerHeader(),
+    ]));
+
+    /** @var CredentialGuard $guard */
+    $guard = Auth::guard('bfc');
+
+    expect($guard->credentialForPurposes([CredentialPurpose::Consumption])?->id)->toBe($minted->credential->id)
+        ->and($guard->credentialForPurposes([CredentialPurpose::Mcp]))->toBeNull()
+        ->and($guard->credentialForPurposes([CredentialPurpose::Consumption])?->id)->toBe($minted->credential->id)
+        ->and($guard->credential()?->id)->toBe($minted->credential->id)
+        ->and($guard->user()?->getAuthIdentifier())->toBe($minted->credential->id)
+        ->and($retrieved)->toBe(1)
+        ->and($declaration->calls)->toBe(1)
+        ->and(CredentialAuditEvent::query()
+            ->where('credential_id', $minted->credential->id)
+            ->where('event', LifecycleEventType::FirstUsed->value)
+            ->count())->toBe(1);
+});
+
+it('does not let a purpose-specific cache authorize the ordinary guard set', function (): void {
+    config(['auth.guards.bfc.provider' => null]);
+    Auth::forgetGuards();
+
+    $minted = $this->mintCredential([
+        'purpose' => CredentialPurpose::Mcp,
+        'subject_type' => 'external_consumer',
+    ]);
+    app()->instance('request', Request::create('/mcp', server: [
+        'HTTP_AUTHORIZATION' => $minted->bearerHeader(),
+    ]));
+
+    /** @var CredentialGuard $guard */
+    $guard = Auth::guard('bfc');
+
+    expect($guard->credentialForPurposes([CredentialPurpose::Mcp])?->id)->toBe($minted->credential->id)
+        ->and($guard->user())->toBeNull()
+        ->and($guard->credential())->toBeNull()
+        ->and($guard->check())->toBeFalse()
+        ->and($guard->guest())->toBeTrue()
+        ->and($guard->id())->toBeNull()
+        ->and($guard->credentialForPurposes([CredentialPurpose::Mcp])?->id)->toBe($minted->credential->id)
+        ->and(CredentialAuditEvent::query()
+            ->where('credential_id', $minted->credential->id)
+            ->where('event', LifecycleEventType::FirstUsed->value)
+            ->count())->toBe(1);
+});
+
+it('discards every cached row and principal when the Request object changes', function (): void {
+    config(['auth.guards.bfc.provider' => null]);
+    Auth::forgetGuards();
+
+    $first = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
+        'subject_type' => 'external_consumer',
+    ]);
+    $second = $this->mintCredential(['purpose' => CredentialPurpose::SystemDeployment]);
+
+    app()->instance('request', Request::create('/first', server: [
+        'HTTP_AUTHORIZATION' => $first->bearerHeader(),
+    ]));
+
+    /** @var CredentialGuard $guard */
+    $guard = Auth::guard('bfc');
+    expect($guard->credential()?->id)->toBe($first->credential->id);
+
+    app()->instance('request', Request::create('/second', server: [
+        'HTTP_AUTHORIZATION' => $second->bearerHeader(),
+    ]));
+
+    expect($guard->credential()?->id)->toBe($second->credential->id)
+        ->and($guard->id())->toBe($second->credential->id)
+        ->and($first->credential->refresh()->last_used_at)->not->toBeNull()
+        ->and($second->credential->refresh()->last_used_at)->not->toBeNull();
 });

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
@@ -13,6 +14,7 @@ use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Testing\TestResponse;
 
 uses(RefreshDatabase::class, DetectsSecretLeaks::class, WithCredentials::class);
@@ -290,6 +292,62 @@ it('maps every failure path onto the claim error enum with secret-free messages'
     });
     $unresolved->assertNotFound()->assertJsonPath('error', 'code_not_found');
     $this->assertResponseCarriesNoSecret($unresolved, $bogusBearer);
+});
+
+it('derives consume admin and onboard verification scopes from admitted purposes', function (): void {
+    $consumption = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
+        'subject_type' => SubjectType::ExternalConsumer,
+    ]);
+    $operator = $this->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
+        'subject_type' => SubjectType::Operator,
+    ]);
+    $enrollment = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
+        'subject_type' => SubjectType::ExternalConsumer,
+    ]);
+    // Enrollment is ordinarily asymmetric; this raw test row drives the
+    // durable-verification compatibility disposition itself.
+    DB::table('credentials')->where('id', $enrollment->credential->id)->update([
+        'purpose' => CredentialPurpose::Enrollment->value,
+    ]);
+
+    foreach ([
+        [$consumption, Scope::Consume],
+        [$operator, Scope::Admin],
+        [$enrollment, Scope::Onboard],
+    ] as [$minted, $scope]) {
+        $this->postJson('/bfc/onboarding/verify', [], bearerHeaders($minted->plaintext()))
+            ->assertOk()
+            ->assertJsonPath('scope', $scope->value);
+    }
+});
+
+it('collapses wrong-purpose unknown and revoked verification before usage and client identity', function (): void {
+    $wrong = $this->mintCredential([
+        'purpose' => CredentialPurpose::SystemDeployment,
+        'subject_type' => SubjectType::Application,
+    ]);
+    $revoked = $this->mintCredential([
+        'purpose' => CredentialPurpose::Consumption,
+        'subject_type' => SubjectType::ExternalConsumer,
+        'revoked_at' => now(),
+    ]);
+
+    $wrongResponse = $this->postJson('/bfc/onboarding/verify', [], [
+        ...bearerHeaders($wrong->plaintext()),
+        'X-BfC-Client-Id' => 'wrong-purpose-client',
+    ])->assertNotFound();
+    $unknownResponse = $this->postJson('/bfc/onboarding/verify', [], bearerHeaders('unknown'))->assertNotFound();
+    $revokedResponse = $this->postJson('/bfc/onboarding/verify', [], bearerHeaders($revoked->plaintext()))->assertNotFound();
+
+    expect($wrongResponse->getContent())->toBe($unknownResponse->getContent())
+        ->and($revokedResponse->getContent())->toBe($unknownResponse->getContent())
+        ->and($wrong->credential->refresh()->last_used_at)->toBeNull()
+        ->and($wrong->credential->client_identity)->toBeNull()
+        ->and($wrong->credential->client_identity_last_seen_at)->toBeNull()
+        ->and(CredentialAuditEvent::query()->count())->toBe(0);
 });
 
 function issueOnboardingToken(string $email, string $scope = Scope::Consume->value, int $ttlSeconds = 3600): string

@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
 use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
@@ -51,14 +52,16 @@ use Throwable;
  *  2. **An authenticated unified-store credential.** The guard resolves
  *     that store only, and an expired, revoked or offboarded principal
  *     resolves to nothing. Every one of those is the same 401.
- *  3. **The app's declaration authorizing it** for `metadata:read` —
+ *  3. **Purpose exactly `dashboard_metadata`.** A secret admitted by another
+ *     protocol is an anonymous 401 here, before usage or attribution.
+ *  4. **The app's declaration authorizing it** for `metadata:read` —
  *     the hook {@see EnsureCredentialAbility} calls, kept because an app
  *     narrowing its own credentials must be able to narrow this one too.
- *  4. **An operator subject.** The contract heads this route "operator
+ *  5. **An operator subject.** The contract heads this route "operator
  *     credential"; the ability vocabulary is an operator vocabulary, and
  *     a credential minted for an application principal is not an
  *     operator however its abilities list reads.
- *  5. **An ability set exactly equal to `{metadata:read}`.** Not a
+ *  6. **An ability set exactly equal to `{metadata:read}`.** Not a
  *     superset. D16 does not say "a credential that has
  *     `metadata:read`"; it says the dashboard credential is
  *     "least-privilege, read-audited, **unable to touch
@@ -120,17 +123,11 @@ final class EnsureDashboardCredential
             abort(401);
         }
 
-        if ($guard->guest()) {
-            // Anonymous denials are deliberately NOT audited: this route
-            // is unauthenticated-reachable, and auditing strangers would
-            // hand them a database-write amplifier on the one branch
-            // they can reach without a credential.
-            abort(401);
-        }
-
-        $credential = $guard->credential();
+        $credential = $guard->credentialForPurposes([CredentialPurpose::DashboardMetadata]);
 
         if ($credential === null) {
+            // Anonymous and wrong-purpose denials are deliberately NOT
+            // audited: neither has an actor this protocol admitted.
             abort(401);
         }
 

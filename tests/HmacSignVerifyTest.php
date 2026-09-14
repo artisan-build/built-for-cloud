@@ -5,6 +5,7 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\ResolvesHmacSubjects;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacSigningRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
@@ -14,9 +15,13 @@ use ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class, DetectsSecretLeaks::class);
@@ -161,6 +166,79 @@ it('refuses to sign for a subject whose only keys are pending, saying so explici
 it('refuses to sign for a subject with no hmac keys at all', function (): void {
     app(HmacSigner::class)->sign(hmacSubject('nobody'), 'body', 'evt');
 })->throws(HmacSigningRefused::class, 'No ACTIVE hmac signing key');
+
+it('refuses a wrong-purpose HMAC row before decrypt replay rate nonce or usage effects', function (): void {
+    $credential = activeKeyFor('wrong-purpose');
+    $nonce = bin2hex(random_bytes(16));
+    $header = headerSignedBy($credential, 'body', nonce: $nonce);
+
+    // Make any attempted decrypt observably fail, then move the row outside
+    // signing purpose without invoking the model's write-time matrix guard.
+    DB::table('credentials')->where('id', $credential->id)->update([
+        'purpose' => CredentialPurpose::Consumption->value,
+        'secret_key_version' => 'purpose-check-must-precede-decrypt',
+    ]);
+
+    expect(fn (): string => app(HmacSigner::class)->sign(hmacSubject('wrong-purpose'), 'body', 'evt'))
+        ->toThrow(HmacSigningRefused::class);
+
+    try {
+        app(HmacVerifier::class)->verify(hmacSubject('wrong-purpose'), $header, 'body');
+        $this->fail('Wrong-purpose HMAC verification should have refused.');
+    } catch (HmacVerificationFailed $failed) {
+        expect($failed->reason)->toBe('unusable_key');
+    }
+
+    $nonceKey = 'bfc:hmac:nonce:'.hash('sha256', $credential->id.'|'.$nonce);
+    $rateKey = 'bfc:hmac:rate:'.$credential->id;
+
+    expect(Cache::has($nonceKey))->toBeFalse()
+        ->and(Cache::has($rateKey))->toBeFalse()
+        ->and($credential->refresh()->last_used_at)->toBeNull();
+});
+
+it('refuses a revoked HMAC row at both ordinary selectors', function (): void {
+    $credential = activeKeyFor('revoked-purpose-control');
+    $header = headerSignedBy($credential, 'body');
+    $credential->forceFill(['revoked_at' => now()])->save();
+
+    expect(fn (): string => app(HmacSigner::class)->sign(hmacSubject('revoked-purpose-control'), 'body', 'evt'))
+        ->toThrow(HmacSigningRefused::class)
+        ->and(fn (): Credential => app(HmacVerifier::class)->verify(
+            hmacSubject('revoked-purpose-control'),
+            $header,
+            'body',
+        ))->toThrow(HmacVerificationFailed::class);
+
+    expect($credential->refresh()->last_used_at)->toBeNull();
+});
+
+it('fails closed without decrypting or resurrecting an active pre-purpose HMAC row after rollback', function (): void {
+    $credential = activeKeyFor('pre-purpose-rollback');
+    $nonce = bin2hex(random_bytes(16));
+    $header = headerSignedBy($credential, 'body', nonce: $nonce);
+
+    DB::table('credentials')->where('id', $credential->id)->update([
+        'secret_key_version' => 'rollback-must-refuse-before-decrypt',
+    ]);
+    Schema::table('credentials', function (Blueprint $table): void {
+        $table->dropColumn('purpose');
+    });
+
+    expect(fn (): string => app(HmacSigner::class)->sign(hmacSubject('pre-purpose-rollback'), 'body', 'evt'))
+        ->toThrow(HmacSigningRefused::class);
+
+    try {
+        app(HmacVerifier::class)->verify(hmacSubject('pre-purpose-rollback'), $header, 'body');
+        $this->fail('A pre-purpose HMAC row must not verify after rollback.');
+    } catch (HmacVerificationFailed $failed) {
+        expect($failed->reason)->toBe('unusable_key');
+    }
+
+    expect(Cache::has('bfc:hmac:nonce:'.hash('sha256', $credential->id.'|'.$nonce)))->toBeFalse()
+        ->and(Cache::has('bfc:hmac:rate:'.$credential->id))->toBeFalse()
+        ->and(DB::table('credentials')->where('id', $credential->id)->value('last_used_at'))->toBeNull();
+});
 
 it('keeps signing with the stamped old key between rotate and activate, then cuts over to the unstamped replacement', function (): void {
     // Between rotate and activate: old is stamped, replacement pending.

@@ -5,7 +5,9 @@ health, contract and app versions, deploy recency, queue backlog, and one app-de
 stat. `api_version` stays **2**; the route and its fields are additive.
 
 The `metadata:read` ability moves from RESERVED to **enforced**, and the route is gated on it
-exclusively — an operator subject whose abilities are exactly `{metadata:read}`, nothing more.
+exclusively — a `dashboard_metadata` credential with an operator subject whose abilities are
+exactly `{metadata:read}`, nothing more. Another purpose is refused as an ordinary 401 before
+usage, declaration, attribution, or ability inspection.
 D16 forbids the ownership/admin credential on any dashboard read path, so `credential:admin`
 does not reach this route, a legacy admin `api_tokens` secret does not authenticate on it, and a
 credential that *also* holds another ability is refused rather than admitted.

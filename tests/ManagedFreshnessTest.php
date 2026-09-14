@@ -1166,8 +1166,7 @@ it('resets the MCP store bearer grace deadline on success and enforces its exact
     $credential = p3cAccountCredential(
         $user,
         $secret,
-        CredentialPurpose::SystemDeployment,
-        subjectType: SubjectType::Application,
+        CredentialPurpose::Mcp,
     );
     Route::middleware('bfc.mcp')->post('/managed-ingress/mcp-store-boundary', static fn (): string => 'allowed');
     $fixture->confirmationResponder = static fn (): mixed => Http::response([

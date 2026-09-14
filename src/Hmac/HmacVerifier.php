@@ -6,11 +6,13 @@ namespace ArtisanBuild\BuiltForCloud\Hmac;
 
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
 use ArtisanBuild\BuiltForCloud\ManagedAccountAccess;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\Subject;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * The verifying half of the pair (PRD 1.21, SEC-V3-07). The candidate key
@@ -89,9 +91,16 @@ final class HmacVerifier
             throw HmacVerificationFailed::staleTimestamp($tolerance);
         }
 
+        // Rollback leaves retired rows in place but removes their purpose.
+        // Without that column no row can prove verification authority.
+        if (! Schema::hasColumn('credentials', 'purpose')) {
+            throw HmacVerificationFailed::unusableKey();
+        }
+
         /** @var Credential|null $credential */
         $credential = Credential::query()
             ->where('kind', CredentialKind::Hmac->value)
+            ->where('purpose', CredentialPurpose::Signing->value)
             ->where('subject_type', $subject->type->value)
             ->where('subject_ref', $subject->ref)
             ->whereKey($envelope->keyId)

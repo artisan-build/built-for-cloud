@@ -67,11 +67,17 @@ Route::middleware('auth:bfc')->get('/api/thing', ...);
 ```
 
 `bearer` and `basic` presentations resolve by hash against active,
-unrevoked, unexpired, non-pending rows. A valid presentation stamps
+unrevoked, unexpired, non-pending rows. The ordinary guard and its effect-free
+`validate()` admit only `consumption` and `system_deployment`. A valid presentation stamps
 `last_used_at`. A user-bound credential resolves your user as the request
 principal; an unbound credential is its own principal. Expired, revoked,
-pending, unknown and malformed presentations are all the same
+pending, wrong-purpose, unknown and malformed presentations are all the same
 indistinguishable 401.
+
+Resolution and acceptance are cached separately per request. Repeated calls resolve the presented
+secret once and run mismatch, declaration, first-use/usage, and principal publication once, while
+each purpose-aware gate still rechecks its own admitted set. Replacing the framework `Request`
+object clears both caches, which keeps a long-lived auth-manager guard request-local.
 
 **The guard never accepts `FALLBACK_TOKEN`** (or any other env
 pseudo-credential). There is no code path from the `bfc` guard to
@@ -303,7 +309,9 @@ guard backed by its `users` table.
 
 `bfc.ability:<ability>` requires the authenticated credential to hold an
 explicit ability, and **fails closed**: null or empty abilities are denied
-everything, and registering the middleware without an ability string throws.
+everything, and registering the middleware without an ability string throws. It admits only
+`mcp` and `consumption` before checking the exact ability or app declaration, so a
+`system_deployment` credential accepted by an outer `auth:bfc` layer is still a 401 here.
 
 ```php
 Route::middleware(['auth:bfc', 'bfc.ability:credential:read'])->get(...);

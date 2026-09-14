@@ -63,7 +63,7 @@ it('gates ownership release on the exact unified ownership ability with break-gl
     $nonOperator = p5bOperatorCredential(OperatorAbility::OwnershipRelease->value, SubjectType::Application);
 
     $this->postJson('/bfc/ownership/release', [], $wrong['headers'])->assertForbidden();
-    $this->postJson('/bfc/ownership/release', [], $nonOperator['headers'])->assertForbidden();
+    $this->postJson('/bfc/ownership/release', [], $nonOperator['headers'])->assertUnauthorized();
     expect($ownership->refresh()->pending_claim_id)->toBeNull();
 
     $exact = p5bOperatorCredential(OperatorAbility::OwnershipRelease->value);
@@ -86,7 +86,7 @@ it('gates transfer cancellation on the exact unified ownership ability with brea
     $nonOperator = p5bOperatorCredential(OperatorAbility::OwnershipRelease->value, SubjectType::Application);
 
     $this->postJson('/bfc/ownership/cancel-transfer', [], $wrong['headers'])->assertForbidden();
-    $this->postJson('/bfc/ownership/cancel-transfer', [], $nonOperator['headers'])->assertForbidden();
+    $this->postJson('/bfc/ownership/cancel-transfer', [], $nonOperator['headers'])->assertUnauthorized();
     expect($ownership->refresh()->pending_claim_id)->toBe($pending->id)
         ->and($pending->refresh()->consumed_at)->toBeNull();
 
@@ -111,7 +111,7 @@ it('gates onboarding issue on credential mint and attributes the unified actor',
     $payload = ['ttl_seconds' => 3600];
 
     $this->postJson('/bfc/onboarding/issue', $payload, $wrong['headers'])->assertForbidden();
-    $this->postJson('/bfc/onboarding/issue', $payload, $nonOperator['headers'])->assertForbidden();
+    $this->postJson('/bfc/onboarding/issue', $payload, $nonOperator['headers'])->assertUnauthorized();
     expect(OnboardingToken::query()->count())->toBe(0);
 
     $exact = p5bOperatorCredential(OperatorAbility::CredentialMint->value);
@@ -135,7 +135,7 @@ it('serves fixed client observations only to credential readers and break-glass'
     $nonOperator = p5bOperatorCredential(OperatorAbility::CredentialRead->value, SubjectType::Application);
 
     $this->getJson('/bfc/client-observations', $wrong['headers'])->assertForbidden();
-    $this->getJson('/bfc/client-observations', $nonOperator['headers'])->assertForbidden();
+    $this->getJson('/bfc/client-observations', $nonOperator['headers'])->assertUnauthorized();
 
     $exact = p5bOperatorCredential(OperatorAbility::CredentialRead->value);
     $this->getJson('/bfc/client-observations', $exact['headers'])

@@ -35,6 +35,117 @@ use SplFileInfo;
 final class CredentialPathInventory
 {
     /**
+     * Derive and compare P5P-AC2's direct resolver callers and ordinary HMAC
+     * selectors. This is a syntax inventory, not data-flow analysis: it sees
+     * literal CredentialResolver dependencies/calls and query-builder HMAC
+     * selectors in PHP source, but not aliases assembled dynamically,
+     * container calls hidden behind wrappers, runtime rebinding, generated
+     * code, or host application code. Required purpose tokens are checked at
+     * named method or selector-class granularity; this does not prove that
+     * every resolve expression, enforcement predicate, or selection query is
+     * individually guarded. Behavioral tests own those per-path order claims.
+     *
+     * @param  list<string>  $additionalRoots
+     * @return array{
+     *   resolver_callers: list<string>,
+     *   resolver_expression_count: int,
+     *   hmac_selectors: list<string>,
+     *   dispositions: list<string>,
+     *   violations: list<string>
+     * }
+     */
+    public static function comparePurposePolicy(string $sourceRoot, array $additionalRoots = []): array
+    {
+        $classes = self::classes(self::sourceFiles([$sourceRoot, ...$additionalRoots]));
+        $expectedCallers = [
+            'ArtisanBuild\\BuiltForCloud\\Auth\\BasicAuthenticator::credential' => 1,
+            'ArtisanBuild\\BuiltForCloud\\Auth\\BearerAuthenticator::credential' => 1,
+            'ArtisanBuild\\BuiltForCloud\\Auth\\CredentialGuard::validate' => 2,
+            'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::verifyUnifiedDurable' => 1,
+            'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\AuthenticateMcp::handle' => 1,
+            'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCredentialAdmin::handle' => 1,
+        ];
+        $expectedSelectors = [
+            'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacSigner',
+            'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacVerifier',
+        ];
+        $callers = [];
+        $selectors = [];
+        $violations = [];
+
+        foreach ($classes as $class => $record) {
+            if (str_contains($record['code'], 'CredentialResolver')) {
+                preg_match_all(
+                    '/->resolve\s*\(\s*CredentialKind::(?:Bearer|Basic)\b/',
+                    $record['code'],
+                    $expressions,
+                    PREG_OFFSET_CAPTURE,
+                );
+
+                foreach ($expressions[0] as [, $offset]) {
+                    $method = self::methodAtOffset($record['code'], $offset);
+                    $identity = $class.'::'.$method;
+                    $callers[$identity] = ($callers[$identity] ?? 0) + 1;
+                }
+            }
+
+            if (str_contains($record['code'], 'Credential::query()')
+                && str_contains($record['code'], 'CredentialKind::Hmac')
+                && preg_match('/\$this->keyring->decrypt\s*\(/', $record['code']) === 1) {
+                $selectors[] = $class;
+            }
+        }
+
+        ksort($callers);
+        $selectors = self::sortedUnique($selectors);
+
+        foreach (array_diff(array_keys($expectedCallers), array_keys($callers)) as $missing) {
+            $violations[] = 'missing-resolver-caller:'.$missing;
+        }
+
+        foreach (array_diff(array_keys($callers), array_keys($expectedCallers)) as $unexpected) {
+            $violations[] = 'unexpected-resolver-caller:'.$unexpected;
+            $violations[] = 'missing-purpose-rule:'.$unexpected;
+        }
+
+        foreach ($expectedCallers as $caller => $count) {
+            if (isset($callers[$caller]) && $callers[$caller] !== $count) {
+                $violations[] = 'resolver-expression-count:'.$caller.' expected='.$count.' actual='.$callers[$caller];
+            }
+        }
+
+        foreach (array_diff($expectedSelectors, $selectors) as $missing) {
+            $violations[] = 'missing-hmac-selector:'.$missing;
+        }
+
+        foreach (array_diff($selectors, $expectedSelectors) as $unexpected) {
+            $violations[] = 'unexpected-hmac-selector:'.$unexpected;
+        }
+
+        $dispositions = self::purposeDispositions($classes, $violations);
+
+        foreach ($selectors as $selector) {
+            $code = $classes[$selector]['code'];
+
+            if (preg_match('/->where\s*\(\s*[\'"]purpose[\'"]\s*,\s*CredentialPurpose::Signing->value\s*\)/', $code) !== 1) {
+                $violations[] = 'missing-signing-purpose:'.$selector;
+            }
+        }
+
+        return [
+            'resolver_callers' => array_map(
+                static fn (string $caller, int $count): string => $caller.'|expressions='.$count,
+                array_keys($callers),
+                array_values($callers),
+            ),
+            'resolver_expression_count' => array_sum($callers),
+            'hmac_selectors' => $selectors,
+            'dispositions' => self::sortedUnique($dispositions),
+            'violations' => self::sortedUnique($violations),
+        ];
+    }
+
+    /**
      * @param  list<string>  $additionalRoots
      * @return array{
      *   mechanisms: list<string>,
@@ -276,6 +387,90 @@ final class CredentialPathInventory
         }
 
         return $items;
+    }
+
+    /**
+     * @param  array<string, array{code: string, imports: array<string, string>}>  $classes
+     * @param  list<string>  $violations
+     * @return list<string>
+     */
+    private static function purposeDispositions(array $classes, array &$violations): array
+    {
+        $checks = [
+            'ArtisanBuild\\BuiltForCloud\\Auth\\BasicAuthenticator::credential' => [
+                'source' => 'ArtisanBuild\\BuiltForCloud\\Auth\\CredentialGuard::user',
+                'tokens' => ['CredentialPurpose::Consumption', 'CredentialPurpose::SystemDeployment', 'credentialForPurposes'],
+                'rule' => 'guard:{consumption,system_deployment}',
+            ],
+            'ArtisanBuild\\BuiltForCloud\\Auth\\BearerAuthenticator::credential' => [
+                'source' => 'ArtisanBuild\\BuiltForCloud\\Auth\\CredentialGuard::user',
+                'tokens' => ['CredentialPurpose::Consumption', 'CredentialPurpose::SystemDeployment', 'credentialForPurposes'],
+                'rule' => 'guard:{consumption,system_deployment}',
+            ],
+            'ArtisanBuild\\BuiltForCloud\\Auth\\CredentialGuard::validate' => [
+                'source' => 'ArtisanBuild\\BuiltForCloud\\Auth\\CredentialGuard::validate',
+                'tokens' => ['CredentialPurpose::Consumption', 'CredentialPurpose::SystemDeployment', 'in_array'],
+                'rule' => '{consumption,system_deployment}',
+            ],
+            'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::verifyUnifiedDurable' => [
+                'source' => 'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::verifyUnifiedDurable',
+                'tokens' => ['CredentialPurpose::Consumption', 'CredentialPurpose::OperatorManagement', 'CredentialPurpose::Enrollment', 'recordUsage'],
+                'rule' => '{consumption,operator_management,enrollment}->scope',
+            ],
+            'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\AuthenticateMcp::handle' => [
+                'source' => 'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\AuthenticateMcp::handle',
+                'tokens' => ['CredentialPurpose::Mcp', 'CredentialPurpose::OperatorManagement', 'SubjectType::Operator', 'OperatorAbility::Admin', 'recordUsage'],
+                'rule' => 'mcp|{operator_management+operator+credential:admin}',
+            ],
+            'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCredentialAdmin::handle' => [
+                'source' => 'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCredentialAdmin::handle',
+                'tokens' => ['CredentialPurpose::OperatorManagement', 'recordUsage'],
+                'rule' => 'operator_management',
+            ],
+        ];
+        $dispositions = [];
+
+        foreach ($checks as $caller => $check) {
+            [$class, $method] = explode('::', $check['source'], 2);
+            $code = isset($classes[$class]) ? self::methodCode($classes[$class]['code'], $method) : '';
+
+            foreach ($check['tokens'] as $token) {
+                if (! str_contains($code, $token)) {
+                    $violations[] = 'missing-purpose-rule:'.$caller;
+
+                    continue 2;
+                }
+            }
+
+            $dispositions[] = 'resolver-caller:'.$caller.'|purpose='.$check['rule'];
+        }
+
+        return $dispositions;
+    }
+
+    private static function methodAtOffset(string $code, int $offset): string
+    {
+        preg_match_all('/\bfunction\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/', substr($code, 0, $offset), $methods);
+
+        return $methods[1] === [] ? '<class-scope>' : (string) end($methods[1]);
+    }
+
+    private static function methodCode(string $code, string $method): string
+    {
+        preg_match_all('/\bfunction\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/', $code, $methods, PREG_OFFSET_CAPTURE);
+
+        foreach ($methods[1] as $index => [$name]) {
+            if ($name !== $method) {
+                continue;
+            }
+
+            $start = $methods[0][$index][1];
+            $end = $methods[0][$index + 1][1] ?? strlen($code);
+
+            return substr($code, $start, $end - $start);
+        }
+
+        return '';
     }
 
     /**
