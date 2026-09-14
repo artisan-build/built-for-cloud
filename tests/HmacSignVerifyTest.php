@@ -15,11 +15,13 @@ use ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class, DetectsSecretLeaks::class);
@@ -209,6 +211,33 @@ it('refuses a revoked HMAC row at both ordinary selectors', function (): void {
         ))->toThrow(HmacVerificationFailed::class);
 
     expect($credential->refresh()->last_used_at)->toBeNull();
+});
+
+it('fails closed without decrypting or resurrecting an active pre-purpose HMAC row after rollback', function (): void {
+    $credential = activeKeyFor('pre-purpose-rollback');
+    $nonce = bin2hex(random_bytes(16));
+    $header = headerSignedBy($credential, 'body', nonce: $nonce);
+
+    DB::table('credentials')->where('id', $credential->id)->update([
+        'secret_key_version' => 'rollback-must-refuse-before-decrypt',
+    ]);
+    Schema::table('credentials', function (Blueprint $table): void {
+        $table->dropColumn('purpose');
+    });
+
+    expect(fn (): string => app(HmacSigner::class)->sign(hmacSubject('pre-purpose-rollback'), 'body', 'evt'))
+        ->toThrow(HmacSigningRefused::class);
+
+    try {
+        app(HmacVerifier::class)->verify(hmacSubject('pre-purpose-rollback'), $header, 'body');
+        $this->fail('A pre-purpose HMAC row must not verify after rollback.');
+    } catch (HmacVerificationFailed $failed) {
+        expect($failed->reason)->toBe('unusable_key');
+    }
+
+    expect(Cache::has('bfc:hmac:nonce:'.hash('sha256', $credential->id.'|'.$nonce)))->toBeFalse()
+        ->and(Cache::has('bfc:hmac:rate:'.$credential->id))->toBeFalse()
+        ->and(DB::table('credentials')->where('id', $credential->id)->value('last_used_at'))->toBeNull();
 });
 
 it('keeps signing with the stamped old key between rotate and activate, then cuts over to the unstamped replacement', function (): void {
