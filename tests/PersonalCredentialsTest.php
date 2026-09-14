@@ -13,7 +13,7 @@ use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
-use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
+use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
@@ -301,7 +301,7 @@ it('cannot mint the reserved signing-root identity through the personal adapter'
     $before = Credential::query()->count();
 
     expect(fn () => app(PersonalCredentialSurface::class)->mintMine($request, new MintOptions))
-        ->toThrow(InvalidCredentialInput::class, 'not allowed');
+        ->toThrow(CredentialVerbRefused::class, 'reserved for its dedicated lifecycle');
     expect(Credential::query()->count())->toBe($before);
 });
 
