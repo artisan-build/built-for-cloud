@@ -42,7 +42,10 @@ final class StandaloneAuthentication
         $request->session()->put(StandaloneAccess::SESSION_VERSION_KEY, $user->auth_session_version);
         $user->forceFill(['last_authenticated_at' => now()])->save();
 
-        return redirect()->to(ConsoleReturnTo::firstRelative([$credentials['intended'] ?? null]));
+        return redirect()->to(ConsoleReturnTo::firstRelative([
+            $credentials['intended'] ?? null,
+            route('bfc.ui.home', absolute: false),
+        ]));
     }
 
     public function destroy(Request $request): RedirectResponse

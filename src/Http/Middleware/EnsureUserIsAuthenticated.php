@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
 
+use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleReturnTo;
+use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\ManagedAccountAccess;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
@@ -144,6 +147,26 @@ final class EnsureUserIsAuthenticated
     {
         if ($request->expectsJson()) {
             abort(401);
+        }
+
+        if ($request->is('bfc/ui', 'bfc/ui/*')) {
+            $authority = InstallationAuthority::current();
+
+            if (! $authority->isValid()) {
+                abort(404);
+            }
+
+            $login = match ($authority->mode) {
+                AuthorityMode::Standalone => 'bfc.login',
+                AuthorityMode::Managed => 'bfc.managed.login',
+                default => abort(404),
+            };
+            $intended = ConsoleReturnTo::firstRelative([
+                $request->getRequestUri(),
+                route('bfc.ui.home', absolute: false),
+            ]);
+
+            return redirect()->route($login, ['intended' => $intended]);
         }
 
         if (Route::has('bfc.login')) {

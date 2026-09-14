@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Testing;
 
 use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTransitions;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome;
 use ArtisanBuild\BuiltForCloud\LandingManifest;
 use ArtisanBuild\BuiltForCloud\LandingPageRegistrar;
 use ArtisanBuild\BuiltForCloud\UiCredentialPurposes;
@@ -34,6 +35,11 @@ final class UiConfigReadScan
     public const array PUBLISHED_DISPOSITIONS = [
         AppPurposeRegistry::class.'|built-for-cloud.credentials.app_purposes|1' => 'mapper',
         ManageTransitions::class.'|built-for-cloud.ui.managed_transitions|1' => 'display',
+        UiHome::class.'|built-for-cloud.ui.installation_credentials|1' => 'display',
+        UiHome::class.'|built-for-cloud.ui.managed_transitions|1' => 'display',
+        UiHome::class.'|built-for-cloud.ui.member_management|1' => 'display',
+        UiHome::class.'|built-for-cloud.ui.personal_credentials|1' => 'display',
+        UiHome::class.'|built-for-cloud.ui.session_management|1' => 'display',
         LandingManifest::class.'|built-for-cloud.manifest|1' => 'display',
         LandingPageRegistrar::class.'|built-for-cloud.ui.landing_page|1' => 'mount',
         UiCredentialPurposes::class.'|built-for-cloud.ui.credential_purposes|1' => 'display',

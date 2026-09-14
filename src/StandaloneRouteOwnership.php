@@ -237,9 +237,7 @@ final class StandaloneRouteOwnership
                     $router->resolveMiddleware($named[0]->middleware(), $named[0]->excludedMiddleware()),
                     true,
                 ))) {
-                $owner = self::requiresStandaloneAuthority($ownedRoute)
-                    ? 'built-for-cloud standalone authentication'
-                    : 'the built-for-cloud landing page';
+                $owner = self::reservedOwner($ownedRoute);
 
                 throw new RuntimeException("The route name [{$name}] is reserved by {$owner}.");
             }
@@ -250,9 +248,7 @@ final class StandaloneRouteOwnership
                 $occupant = $byMethod[$method][$domainAndUri] ?? null;
 
                 if (! $occupant instanceof Route || ! self::occupiesReservedShape($occupant, $ownedRoute)) {
-                    $owner = self::requiresStandaloneAuthority($ownedRoute)
-                        ? 'built-for-cloud standalone authentication'
-                        : 'the built-for-cloud landing page';
+                    $owner = self::reservedOwner($ownedRoute);
 
                     throw new RuntimeException("The route [{$method} {$ownedRoute->uri()}] is reserved by {$owner}.");
                 }
@@ -316,7 +312,16 @@ final class StandaloneRouteOwnership
 
     private static function requiresStandaloneAuthority(Route $route): bool
     {
-        return $route->getName() !== 'bfc.landing';
+        return ! in_array($route->getName(), ['bfc.landing', 'bfc.ui.home'], true);
+    }
+
+    private static function reservedOwner(Route $route): string
+    {
+        return match ($route->getName()) {
+            'bfc.landing' => 'the built-for-cloud landing page',
+            'bfc.ui.home' => 'the built-for-cloud package user interface',
+            default => 'built-for-cloud standalone authentication',
+        };
     }
 
     /** @return list<string> */

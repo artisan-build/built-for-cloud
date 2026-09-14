@@ -13,6 +13,8 @@ final class ManagedHandoff
 {
     public const string SESSION_NONCE_KEY = 'bfc.managed_session_nonce';
 
+    public const string SESSION_INTENDED_KEY = 'bfc.managed_intended';
+
     public function __construct(
         private readonly ManagedAuthClient $client,
         private readonly ManagedHandoffClaim $claim,
