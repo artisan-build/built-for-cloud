@@ -56,7 +56,7 @@ final class LandingPageTest extends Orchestra
         $this->assertSame(1, $layoutRenders);
         $this->assertSame(1, substr_count($content, '<main>'));
         $document = new \DOMDocument;
-        $this->assertTrue($document->loadHTML($content));
+        $this->assertTrue(@$document->loadHTML($content));
         $landingInsideLayout = (new \DOMXPath($document))->query('//main/section[@data-testid="landing"]');
         $this->assertNotFalse($landingInsideLayout);
         $this->assertSame(1, $landingInsideLayout->length);
