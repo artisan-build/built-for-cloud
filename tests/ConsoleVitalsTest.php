@@ -10,7 +10,6 @@ use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\DefaultCredentialDeclaration;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\HttpContract;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;

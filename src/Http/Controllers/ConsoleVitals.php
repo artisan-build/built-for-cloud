@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\AuditActor;
-use ArtisanBuild\BuiltForCloud\HttpContract;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
+use ArtisanBuild\BuiltForCloud\HttpContract;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Vitals\CollectVitals;
