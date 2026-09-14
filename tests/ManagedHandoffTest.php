@@ -96,10 +96,12 @@ function managedUser(): User
 }
 
 /** @return array{state: string, nonce: string, session_id: string} */
-function beginManagedHandoff(ManagedAuthorityFixture $fixture): array
+function beginManagedHandoff(ManagedAuthorityFixture $fixture, ?string $intended = null): array
 {
     Http::fake(fn (ClientRequest $request) => $fixture->respond($request));
-    $response = test()->get('/bfc/managed/login');
+    $response = test()->get('/bfc/managed/login'.($intended === null ? '' : '?'.http_build_query([
+        'intended' => $intended,
+    ])));
     expect($fixture->calls)->toHaveCount(1)
         ->and(DB::table('bfc_managed_handoffs')->count())->toBe(1)
         ->and(session(ManagedHandoff::SESSION_NONCE_KEY))->toBeString();
@@ -220,6 +222,38 @@ it('binds callback to the initiating browser, claims once, exchanges server-side
     $replay->assertStatus(404)->assertSeeText('Not Found');
     expect($fixture->calls)->toHaveCount(2);
 });
+
+it('carries only a safe UI destination through the managed handoff and callback', function (string $role, string $intended, string $expected): void {
+    config(['built-for-cloud.manifest' => [
+        'name' => 'Managed Test Application',
+        'slug' => 'managed-test-application',
+        'description' => 'Managed handoff application description',
+        'icon' => 'https://assets.example.test/managed-icon.svg',
+        'product_url' => 'https://scalpels.app/products/managed-test-application',
+    ]]);
+    ['baseUrl' => $baseUrl, 'secret' => $secret] = managedConnection();
+    $fixture = managedFixture($baseUrl, $secret);
+    $fixture->exchangeOverrides = ['role' => $role];
+    managedUser();
+    $handoff = beginManagedHandoff($fixture, $intended);
+
+    $callback = $this->withSession([ManagedHandoff::SESSION_NONCE_KEY => $handoff['nonce']])
+        ->get('/bfc/managed/callback?'.http_build_query([
+            'state' => $handoff['state'],
+            'code' => 'valid-ui-exchange-code',
+        ]));
+
+    $callback->assertRedirect($expected);
+    $this->get($expected)
+        ->assertOk()
+        ->assertSeeHtml('data-testid="ui-shell"')
+        ->assertSee('Managed Test Application');
+    expect(session(ManagedHandoff::SESSION_INTENDED_KEY))->toBeNull();
+})->with([
+    'owner relative' => ['owner', '/bfc/ui?test-created-section=credentials', '/bfc/ui?test-created-section=credentials'],
+    'admin off-site' => ['admin', 'https://outside.example.test/bfc/ui', '/bfc/ui'],
+    'member scheme-relative' => ['member', '//outside.example.test/bfc/ui', '/bfc/ui'],
+]);
 
 it('refuses foreign authorization origins, insecure bases, and missing client credentials without correlation writes', function (string $case): void {
     ['baseUrl' => $baseUrl] = managedConnection($case === 'insecure' ? 'http://authority.example.test' : 'https://authority.example.test');

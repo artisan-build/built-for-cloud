@@ -65,7 +65,7 @@ function loginStandalone(TestCase $test, User $user, string $password = 'correct
     ])->post('/bfc/login', [
         'email' => $user->email,
         'password' => $password,
-    ])->assertRedirect('/');
+    ])->assertRedirect(route('bfc.ui.home', absolute: false));
 }
 
 function beginStandaloneHandoff(TestCase $test, string $routeName, string $token): TestResponse
@@ -148,7 +148,7 @@ it('authenticates only eligible canonical users with generic refusals and a loca
         'email' => $eligible->email,
         'password' => 'correct horse battery staple',
         'intended' => 'https://outside.example/path',
-    ])->assertRedirect('/');
+    ])->assertRedirect(route('bfc.ui.home', absolute: false));
 
     $this->assertAuthenticatedAs($eligible);
     expect($eligible->refresh()->last_authenticated_at)->not->toBeNull()

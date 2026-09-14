@@ -53,6 +53,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneInvitations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneMemberships;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\StandalonePasswordRecovery;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneSessions;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
@@ -60,6 +61,7 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureManagedAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUiAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\ExpireStandaloneHandoffOnRefusal;
@@ -113,7 +115,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $this->app->singleton(UsageReporter::class, NullUsageReporter::class);
         $this->app->singleton(SystemAuthorityContext::class);
         $this->app->singleton(SystemAuthorityQueueScope::class);
-        $this->app->singleton(LandingManifest::class, static fn (): LandingManifest => LandingManifest::fromConfiguration());
+        $this->app->singleton(LandingManifest::class, static fn (): ?LandingManifest => LandingManifest::fromOptionalConfiguration());
 
         // P5b's forward-only carry: exchange has one durable destination.
         $this->app->bind(DurableCredentialMinter::class, UnifiedStoreCredentialMinter::class);
@@ -463,6 +465,11 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // rotate or revoke credentials.
         $personal = $this->browserSessionMiddleware($router);
 
+        $uiRoutes = [];
+        $uiRoutes[] = $router->get('/bfc/ui', UiHome::class)
+            ->middleware([...$personal, EnsureUiAuthority::class, EnsureUserIsAuthenticated::class])
+            ->name('bfc.ui.home');
+
         $router->get('/bfc/managed/login', [ManagedAuthentication::class, 'create'])
             ->middleware([EnsureManagedAuthority::class, ...$personal])
             ->name('bfc.managed.login');
@@ -585,12 +592,13 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
 
         $packageMiddlewareRoutes = StandaloneRouteOwnership::packageMiddlewareInventory([
+            ...$uiRoutes,
             ...$standaloneRoutes,
             ...$personalCredentialRoutes,
             ...$installationCredentialRoutes,
         ]);
 
-        $ownedNamedRoutes = [...$landingRoutes, ...$standaloneRoutes];
+        $ownedNamedRoutes = [...$landingRoutes, ...$uiRoutes, ...$standaloneRoutes];
 
         $this->app->booted(function () use ($ownedNamedRoutes, $packageMiddlewareRoutes, $router): void {
             StandaloneRouteOwnership::assertOwned($router, $ownedNamedRoutes);

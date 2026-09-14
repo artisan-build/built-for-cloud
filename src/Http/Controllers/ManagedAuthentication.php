@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
+use ArtisanBuild\BuiltForCloud\Console\ConsoleReturnTo;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;
 use ArtisanBuild\BuiltForCloud\ManagedHandoff;
@@ -19,7 +20,18 @@ final class ManagedAuthentication
     public function create(Request $request, ManagedHandoff $handoff): RedirectResponse|Response
     {
         try {
-            return redirect()->away($handoff->begin($request));
+            $authorizationUrl = $handoff->begin($request);
+
+            if ($request->query->has('intended')) {
+                $request->session()->put(ManagedHandoff::SESSION_INTENDED_KEY, ConsoleReturnTo::firstRelative([
+                    $request->query('intended'),
+                    route('bfc.ui.home', absolute: false),
+                ]));
+            } else {
+                $request->session()->forget(ManagedHandoff::SESSION_INTENDED_KEY);
+            }
+
+            return redirect()->away($authorizationUrl);
         } catch (ManagedAuthRefused) {
             return $this->refusal();
         }
@@ -45,7 +57,10 @@ final class ManagedAuthentication
             $request->session()->put(StandaloneAccess::SESSION_VERSION_KEY, $user->auth_session_version);
             $request->session()->forget(ManagedHandoff::SESSION_NONCE_KEY);
 
-            return redirect()->to('/');
+            return redirect()->to(ConsoleReturnTo::firstRelative([
+                $request->session()->pull(ManagedHandoff::SESSION_INTENDED_KEY),
+                '/',
+            ]));
         } catch (ManagedAuthRefused) {
             return $this->refusal();
         }

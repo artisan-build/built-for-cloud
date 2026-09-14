@@ -133,6 +133,7 @@ it('derives the seven discoverable paths with no transitional rows from all five
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureManagedAuthority',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority',
+            'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUiAuthority',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\ExpireStandaloneHandoffOnRefusal',

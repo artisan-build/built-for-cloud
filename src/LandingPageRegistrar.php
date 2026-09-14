@@ -5,15 +5,12 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud;
 
 use ArtisanBuild\BuiltForCloud\Http\Controllers\LandingPage;
-use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
 use RuntimeException;
 
 final class LandingPageRegistrar
 {
-    public function __construct(private readonly Application $app) {}
-
     public function mount(Router $router): ?Route
     {
         if (config('built-for-cloud.ui.landing_page') !== true) {
@@ -21,7 +18,7 @@ final class LandingPageRegistrar
         }
 
         $this->assertRootIsAvailable($router);
-        $this->app->make(LandingManifest::class);
+        LandingManifest::fromConfiguration();
 
         return $router->get('/', LandingPage::class)->name('bfc.landing');
     }
