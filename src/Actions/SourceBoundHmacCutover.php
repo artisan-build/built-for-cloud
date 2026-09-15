@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Actions;
 
+use ArtisanBuild\BuiltForCloud\Actions\Concerns\RetiresSupersededCredentials;
 use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
 use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
@@ -18,10 +19,13 @@ use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacCredentialTransferRefused;
 use ArtisanBuild\BuiltForCloud\IssuerHmacCutoverReceipt;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
+use Illuminate\Support\Facades\DB;
 
 /** Trusted issuer-side activation and idempotent cutover status projection. */
 final class SourceBoundHmacCutover
 {
+    use RetiresSupersededCredentials;
+
     public function __construct(
         private readonly ActivateCredential $activateCredential,
         private readonly AppPurposeRegistry $appPurposes,
@@ -44,33 +48,51 @@ final class SourceBoundHmacCutover
         ?string $predecessorId,
         string $replacementId,
     ): IssuerHmacCutoverReceipt {
-        [$replacement, $predecessor] = $this->assertLineage(
-            $scope,
-            $predecessorId,
-            $replacementId,
-            CredentialStatus::Active,
-        );
+        return DB::transaction(function () use ($scope, $predecessorId, $replacementId): IssuerHmacCutoverReceipt {
+            [$replacement, $predecessor] = $this->assertLineage(
+                $scope,
+                $predecessorId,
+                $replacementId,
+                CredentialStatus::Active,
+                true,
+            );
 
-        if ($replacement->activated_at === null
-            || ($predecessor !== null && $predecessor->expires_at === null)) {
-            throw new HmacCredentialTransferRefused;
-        }
+            if ($replacement->activated_at === null) {
+                throw new HmacCredentialTransferRefused;
+            }
 
-        $emergency = $predecessorId !== null && CredentialAuditEvent::query()
-            ->where('credential_id', $predecessorId)
-            ->where('superseded_by_credential_id', $replacementId)
-            ->where('event', LifecycleEventType::Rotated->value)
-            ->where('reason_code', AuditReason::Emergency->value)
-            ->exists();
+            if ($predecessor !== null && $predecessor->expires_at === null) {
+                if ($predecessor->status !== CredentialStatus::Active || $predecessor->revoked_at !== null) {
+                    throw new HmacCredentialTransferRefused;
+                }
 
-        return IssuerHmacCutoverReceipt::fromIssuerResponse(
-            $predecessorId,
-            $replacementId,
-            $scope,
-            $replacement->activated_at->toImmutable(),
-            $predecessor?->expires_at?->toImmutable(),
-            $emergency,
-        );
+                $this->retireAt(
+                    $predecessor->id,
+                    $replacement->activated_at->toImmutable()->addSeconds(RotateCredential::GRACE_SECONDS),
+                );
+                $predecessor->refresh();
+
+                if ($predecessor->expires_at === null) {
+                    throw new HmacCredentialTransferRefused;
+                }
+            }
+
+            $emergency = $predecessorId !== null && CredentialAuditEvent::query()
+                ->where('credential_id', $predecessorId)
+                ->where('superseded_by_credential_id', $replacementId)
+                ->where('event', LifecycleEventType::Rotated->value)
+                ->where('reason_code', AuditReason::Emergency->value)
+                ->exists();
+
+            return IssuerHmacCutoverReceipt::fromIssuerResponse(
+                $predecessorId,
+                $replacementId,
+                $scope,
+                $replacement->activated_at->toImmutable(),
+                $predecessor?->expires_at?->toImmutable(),
+                $emergency,
+            );
+        });
     }
 
     /** @return array{Credential, Credential|null} */
@@ -79,17 +101,28 @@ final class SourceBoundHmacCutover
         ?string $predecessorId,
         string $replacementId,
         CredentialStatus $replacementStatus,
+        bool $lock = false,
     ): array {
         if ($this->appPurposes->purpose($scope->appPurpose) !== CredentialPurpose::Signing) {
             throw new HmacCredentialTransferRefused;
         }
 
+        $ids = array_values(array_filter([$predecessorId, $replacementId]));
+        sort($ids, SORT_STRING);
+        $credentials = [];
+
+        foreach ($ids as $id) {
+            /** @var Credential|null $credential */
+            $credential = Credential::query()->whereKey($id)->when($lock, fn ($query) => $query->lockForUpdate())->first();
+            $credentials[$id] = $credential;
+        }
+
         /** @var Credential|null $replacement */
-        $replacement = Credential::query()->whereKey($replacementId)->first();
+        $replacement = $credentials[$replacementId] ?? null;
         /** @var CredentialProtocolBinding|null $replacementBinding */
         $replacementBinding = CredentialProtocolBinding::query()->whereKey($replacementId)->first();
         /** @var Credential|null $predecessor */
-        $predecessor = $predecessorId === null ? null : Credential::query()->whereKey($predecessorId)->first();
+        $predecessor = $predecessorId === null ? null : ($credentials[$predecessorId] ?? null);
         /** @var CredentialProtocolBinding|null $predecessorBinding */
         $predecessorBinding = $predecessorId === null ? null : CredentialProtocolBinding::query()->whereKey($predecessorId)->first();
 

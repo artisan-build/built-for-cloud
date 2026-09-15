@@ -95,9 +95,18 @@ final class InstallHmacCredentialFromClaim
             $locked[$id] = $credential;
         }
 
+        $plaintext = $claimed->secret->reveal();
+
+        if (preg_match('/\A[0-9a-f]{64}\z/D', $plaintext) !== 1
+            || ! hash_equals($transfer->deliveryFingerprint, $this->keyring->deliveryFingerprint($plaintext, $transfer->deliveryGeneration))) {
+            throw new HmacCredentialTransferRefused;
+        }
+
         $existing = $locked[$transfer->issuerCredentialId] ?? null;
 
         if ($existing !== null) {
+            unset($plaintext);
+
             return $this->idempotentResult($scope, $transfer->issuerCredentialId, $transfer->deliveryFingerprint, $transfer->predecessorCredentialId)
                 ?? throw new HmacCredentialTransferRefused;
         }
@@ -108,13 +117,6 @@ final class InstallHmacCredentialFromClaim
 
         if (($transfer->predecessorCredentialId !== null && ! $predecessor instanceof Credential)
             || ($predecessor instanceof Credential && ! $this->validPredecessor($predecessor, $scope, $transfer->deliveryGeneration))) {
-            throw new HmacCredentialTransferRefused;
-        }
-
-        $plaintext = $claimed->secret->reveal();
-
-        if (preg_match('/\A[0-9a-f]{64}\z/D', $plaintext) !== 1
-            || ! hash_equals($transfer->deliveryFingerprint, $this->keyring->deliveryFingerprint($plaintext, $transfer->deliveryGeneration))) {
             throw new HmacCredentialTransferRefused;
         }
 

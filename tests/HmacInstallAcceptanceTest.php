@@ -196,10 +196,7 @@ it('keeps exact installation idempotence free of decrypt rewrite and duplicate a
 
     $again = app(InstallHmacCredentialFromClaim::class)(
         $scope,
-        ac1Issuer(ac1Claimed($scope, str_repeat('f', 64), [
-            'id' => $id,
-            'fingerprint' => $stored->delivery_fingerprint,
-        ])),
+        ac1Issuer(ac1Claimed($scope, $key, ['id' => $id])),
         str_repeat('e', 64),
     );
 
@@ -207,12 +204,27 @@ it('keeps exact installation idempotence free of decrypt rewrite and duplicate a
         ->and($stored->refresh()->secret_ciphertext)->toBe($ciphertext)
         ->and(ac1State())->toBe($before);
 
+    foreach ([
+        'changed key with stored descriptor' => str_repeat('f', 64),
+        'malformed key with stored descriptor' => str_repeat('g', 64),
+    ] as $label => $repeatedKey) {
+        expect(fn () => app(InstallHmacCredentialFromClaim::class)(
+            $scope,
+            ac1Issuer(ac1Claimed($scope, $repeatedKey, [
+                'id' => $id,
+                'fingerprint' => $stored->delivery_fingerprint,
+            ])),
+            str_repeat('e', 64),
+        ))->toThrow(HmacCredentialTransferRefused::class);
+        expect(ac1State())->toBe($before, $label);
+    }
+
     expect(fn () => app(InstallHmacCredentialFromClaim::class)(
         $scope,
         ac1Issuer(ac1Claimed($scope, $key, ['id' => $id, 'fingerprint' => str_repeat('1', 16)])),
         str_repeat('e', 64),
-    ))->toThrow(HmacCredentialTransferRefused::class)
-        ->and(ac1State())->toBe($before);
+    ))->toThrow(HmacCredentialTransferRefused::class);
+    expect(ac1State())->toBe($before);
 });
 
 it('commits no receiver state when the HMAC writer barrier cannot be acquired', function (): void {

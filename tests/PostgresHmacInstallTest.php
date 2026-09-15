@@ -7,8 +7,11 @@ use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\CredentialProtocolBinding;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Tests\Support\PostgresLane;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Symfony\Component\Process\Process;
 
@@ -106,6 +109,73 @@ it('serializes concurrent receiver installers into one write and one exact idemp
 
         if ($main->transactionLevel() > 0) {
             $main->rollBack();
+        }
+    }
+});
+
+it('keeps a writer fenced through commit after its cache lease can be reacquired', function (): void {
+    $oldKey = (string) config('app.key');
+    $newKey = 'base64:'.base64_encode(str_repeat('n', 32));
+    $process = null;
+    $rival = null;
+
+    try {
+        $credentialId = app(HmacWriterBarrier::class)->exclusive('lease-expiry test writer', function () use ($oldKey, $newKey, &$process, &$rival): string {
+            $encrypted = app(HmacKeyring::class)->encrypt(str_repeat('7', 64));
+            $credential = Credential::factory()->hmac()->create([
+                'secret_ciphertext' => $encrypted->ciphertext,
+                'secret_key_version' => $encrypted->keyVersion,
+            ]);
+
+            Cache::lock(HmacWriterBarrier::LOCK)->forceRelease();
+            $rival = Cache::lock(HmacWriterBarrier::LOCK, 600);
+            expect($rival->get())->toBeTrue();
+
+            $process = new Process([PHP_BINARY, __DIR__.'/Fixtures/hmac-rewrap-worker.php']);
+            $process->setInput(json_encode(['old_key' => $oldKey, 'new_key' => $newKey], JSON_THROW_ON_ERROR));
+            $process->start();
+
+            foreach (range(1, 5000) as $ignored) {
+                if (! $process->isRunning()) {
+                    throw new RuntimeException('The rewrap worker exited before writer commit: '.$process->getOutput().$process->getErrorOutput());
+                }
+
+                $blocked = (int) $this->postgresLaneProbe()->scalar(<<<'SQL'
+                    select count(*) from pg_stat_activity
+                    where datname = current_database()
+                      and application_name = 'bfc-hmac-rewrap-worker'
+                      and state = 'active'
+                      and wait_event_type = 'Lock'
+                      and query like '%bfc_hmac_writer_barriers%'
+                    SQL);
+
+                if ($blocked === 1) {
+                    break;
+                }
+            }
+
+            expect($blocked ?? 0)->toBe(1)
+                ->and($this->postgresLaneProbe()->table('credentials')->where('id', $credential->id)->exists())->toBeFalse();
+            $rival->release();
+            $rival = null;
+
+            return $credential->id;
+        });
+
+        $process->wait();
+        expect($process->isSuccessful())->toBeTrue($process->getErrorOutput());
+        $result = json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+        config()->set('app.key', $newKey);
+        config()->set('app.previous_keys', [$oldKey]);
+
+        expect($result['exit'] ?? null)->toBe(0)
+            ->and($result['output'] ?? '')->toContain('Verified zero old-version rows')
+            ->and(Credential::query()->findOrFail($credentialId)->secret_key_version)->toBe(app(HmacKeyring::class)->writeVersion());
+    } finally {
+        $rival?->release();
+
+        if ($process?->isRunning()) {
+            $process->stop();
         }
     }
 });

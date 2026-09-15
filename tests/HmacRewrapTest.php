@@ -20,6 +20,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 uses(RefreshDatabase::class, DetectsSecretLeaks::class);
 
@@ -45,6 +46,19 @@ function stageAppKeyRotation(): string
 
     return $oldVersion;
 }
+
+it('owns a rollback-safe singleton database fence row', function (): void {
+    $migration = require __DIR__.'/../database/migrations/2026_09_15_200001_create_hmac_writer_barriers_table.php';
+
+    expect(Schema::hasTable(HmacWriterBarrier::FENCE_TABLE))->toBeTrue()
+        ->and(DB::table(HmacWriterBarrier::FENCE_TABLE)->where('name', HmacWriterBarrier::FENCE_NAME)->count())->toBe(1);
+
+    $migration->down();
+    expect(Schema::hasTable(HmacWriterBarrier::FENCE_TABLE))->toBeFalse();
+
+    $migration->up();
+    expect(DB::table(HmacWriterBarrier::FENCE_TABLE)->where('name', HmacWriterBarrier::FENCE_NAME)->count())->toBe(1);
+});
 
 it('rewraps every hmac ciphertext — active, pending, grace, revoked — and verifies zero old-version rows (locked AC 6)', function (): void {
     $knownKey = bin2hex(random_bytes(32));

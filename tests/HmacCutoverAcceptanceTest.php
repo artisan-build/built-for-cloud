@@ -22,6 +22,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\CrossStoreCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacCredentialTransferRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacSigningRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
+use ArtisanBuild\BuiltForCloud\Exceptions\RotationCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacSigner;
@@ -34,15 +35,17 @@ use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\SensitiveString;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class);
 
 /** @return array{Credential, string} */
-function ac3VerificationCopy(BoundCredentialScope $scope, string $key, ?CarbonImmutable $expiry = null): array
+function ac3VerificationCopy(BoundCredentialScope $scope, string $key, ?CarbonImmutable $expiry = null, ?string $id = null): array
 {
     $encrypted = app(HmacKeyring::class)->encrypt($key);
     $credential = Credential::factory()->hmac()->activated()->create([
+        ...($id === null ? [] : ['id' => $id]),
         'subject_type' => $scope->subject->type,
         'subject_ref' => $scope->subject->ref,
         'secret_ciphertext' => $encrypted->ciphertext,
@@ -190,6 +193,124 @@ it('reports a non-secret incomplete cutover and recovers from authenticated stat
     ac3Lineage($old, $new);
     $result = app(CoordinateImportedHmacCutover::class)->recover($scope, $issuer, $old->id, $new->id);
     expect($result->predecessorExpiresAt->getTimestamp())->toBe($deadline->getTimestamp());
+});
+
+it('repairs a committed source activation whose first predecessor retirement failed', function (): void {
+    testsConfigureBoundPurposes();
+    $scope = testsBoundScope('matte.callback');
+    $receiverConnection = DB::getDefaultConnection();
+    $sourceConnection = 'hmac_cutover_source';
+    config()->set('database.connections.'.$sourceConnection, [
+        'driver' => 'sqlite',
+        'database' => ':memory:',
+        'prefix' => '',
+        'foreign_key_constraints' => true,
+    ]);
+    DB::purge($sourceConnection);
+    Artisan::call('migrate:fresh', [
+        '--database' => $sourceConnection,
+        '--path' => dirname(__DIR__).'/database/migrations',
+        '--realpath' => true,
+        '--force' => true,
+    ]);
+
+    try {
+        DB::setDefaultConnection($sourceConnection);
+        $mint = app(MintCredential::class)($scope->subject, new MintOptions(
+            kind: CredentialKind::Hmac,
+            purpose: CredentialPurpose::Signing,
+            codeTtlSeconds: 3600,
+            boundScope: $scope,
+        ));
+        $first = $this->postJson('/bfc/onboarding/exchange', [
+            'token' => $mint->secret?->reveal(),
+        ])->assertCreated()->json();
+        app(ActivateCredential::class)($mint->summary->id, (string) $first['delivery_fingerprint']);
+        $rotation = app(RotateCredential::class)($mint->summary->id, new RotateOptions(codeTtlSeconds: 3600));
+        $replacementId = (string) $rotation?->mint->summary->id;
+        $second = $this->postJson('/bfc/onboarding/exchange', [
+            'token' => $rotation?->mint->secret?->reveal(),
+        ])->assertCreated()->json();
+        $predecessorId = $mint->summary->id;
+
+        DB::unprepared(<<<SQL
+            CREATE TRIGGER fail_hmac_predecessor_retirement
+            BEFORE UPDATE OF expires_at ON credentials
+            WHEN OLD.id = '{$predecessorId}' AND OLD.expires_at IS NULL AND NEW.expires_at IS NOT NULL
+            BEGIN
+                SELECT RAISE(ABORT, 'forced predecessor retirement failure');
+            END
+            SQL);
+
+        expect(fn () => app(SourceBoundHmacCutover::class)->activate(
+            $scope,
+            $predecessorId,
+            $replacementId,
+            (string) $second['delivery_fingerprint'],
+        ))->toThrow(RotationCutoverIncomplete::class);
+
+        $activatedAt = Credential::query()->findOrFail($replacementId)->activated_at?->toImmutable();
+        expect($activatedAt)->not->toBeNull()
+            ->and(Credential::query()->findOrFail($replacementId)->status->value)->toBe('active')
+            ->and(Credential::query()->findOrFail($predecessorId)->expires_at)->toBeNull();
+        DB::unprepared('DROP TRIGGER fail_hmac_predecessor_retirement');
+
+        DB::setDefaultConnection($receiverConnection);
+        [$receiverPredecessor] = ac3VerificationCopy($scope, str_repeat('2', 64), id: $predecessorId);
+        ac3VerificationCopy($scope, str_repeat('3', 64), id: $replacementId);
+        ac3Lineage($receiverPredecessor, Credential::query()->findOrFail($replacementId));
+
+        $issuer = new class($sourceConnection) implements HmacCredentialIssuerClient
+        {
+            public function __construct(private readonly string $sourceConnection) {}
+
+            public function claim(BoundCredentialScope $expectedScope, SensitiveString $claimCode): ClaimedHmacCredential
+            {
+                throw new LogicException('Not used.');
+            }
+
+            public function activate(BoundCredentialScope $expectedScope, ?string $predecessorId, string $replacementId, string $deliveryFingerprint): IssuerHmacCutoverReceipt
+            {
+                throw new LogicException('Not used.');
+            }
+
+            public function cutoverStatus(BoundCredentialScope $expectedScope, ?string $predecessorId, string $replacementId): IssuerHmacCutoverReceipt
+            {
+                $receiverConnection = DB::getDefaultConnection();
+                DB::setDefaultConnection($this->sourceConnection);
+
+                try {
+                    return app(SourceBoundHmacCutover::class)->status($expectedScope, $predecessorId, $replacementId);
+                } finally {
+                    DB::setDefaultConnection($receiverConnection);
+                }
+            }
+        };
+
+        $result = app(CoordinateImportedHmacCutover::class)->recover(
+            $scope,
+            $issuer,
+            $predecessorId,
+            $replacementId,
+        );
+        $expectedDeadline = $activatedAt?->addSeconds(RotateCredential::GRACE_SECONDS);
+
+        expect($result->predecessorExpiresAt->getTimestamp())->toBe($expectedDeadline?->getTimestamp())
+            ->and($receiverPredecessor->refresh()->expires_at?->getTimestamp())->toBe($expectedDeadline?->getTimestamp());
+
+        DB::setDefaultConnection($sourceConnection);
+        expect(Credential::query()->findOrFail($predecessorId)->expires_at?->getTimestamp())->toBe($expectedDeadline?->getTimestamp())
+            ->and(fn () => app(SourceBoundHmacCutover::class)->activate(
+                $scope,
+                $predecessorId,
+                $replacementId,
+                (string) $second['delivery_fingerprint'],
+            ))->toThrow(HmacCredentialTransferRefused::class)
+            ->and(Credential::query()->findOrFail($predecessorId)->expires_at?->getTimestamp())->toBe($expectedDeadline?->getTimestamp());
+    } finally {
+        DB::setDefaultConnection($receiverConnection);
+        DB::purge($sourceConnection);
+    }
 });
 
 it('refuses imported verification copies as both bound and legacy signers', function (): void {

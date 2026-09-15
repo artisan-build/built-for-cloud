@@ -39,8 +39,11 @@ use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\SensitiveString;
 use Carbon\CarbonImmutable;
+use GuzzleHttp\Psr7\Request as Psr7Request;
+use GuzzleHttp\TransferStats;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Factory;
+use Illuminate\Http\Client\Response as ClientResponse;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -160,7 +163,7 @@ it('delivers a bound HMAC descriptor once and leaves legacy unbound response byt
     expect(array_keys((array) $legacy->json()))->toBe(['signing_key', 'key_id', 'kind', 'status', 'delivery_fingerprint']);
 });
 
-it('pins the HTTP issuer origin and rejects unknown, oversized, and non-JSON response shapes', function (): void {
+it('pins the HTTP issuer transport and rejects invalid claim responses', function (): void {
     testsConfigureBoundPurposes();
     $scope = testsBoundScope('matte.callback');
     $secret = str_repeat('a', 64);
@@ -185,17 +188,67 @@ it('pins the HTTP issuer origin and rejects unknown, oversized, and non-JSON res
     Http::fakeSequence()
         ->push($payload, 201, ['Content-Type' => 'application/json'])
         ->push($payload + ['unknown' => true], 201, ['Content-Type' => 'application/json'])
-        ->push(str_repeat('x', 24 * 1024 + 1), 201, ['Content-Type' => 'application/json']);
+        ->push(str_repeat('x', 24 * 1024 + 1), 201, ['Content-Type' => 'application/json'])
+        ->push($payload, 302, ['Content-Type' => 'application/json', 'Location' => 'https://redirected.example/claim'])
+        ->push($payload, 500, ['Content-Type' => 'application/json'])
+        ->push(json_encode($payload, JSON_THROW_ON_ERROR), 201, ['Content-Type' => 'text/html']);
     $client = new HttpHmacCredentialIssuerClient(app(Factory::class), 'https://issuer.example', static fn (): array => ['Authorization' => 'Bearer protected']);
 
     expect($client->claim($scope, new SensitiveString(str_repeat('b', 64)))->transfer->scope)->toEqual($scope);
 
-    foreach (range(1, 2) as $attempt) {
+    foreach (range(1, 5) as $attempt) {
         expect(fn () => $client->claim($scope, new SensitiveString(str_repeat('c', 64))))
             ->toThrow(HmacCredentialTransferRefused::class);
     }
 
     expect(fn () => new HttpHmacCredentialIssuerClient(app(Factory::class), 'http://issuer.example', static fn (): array => ['Authorization' => 'x']))
+        ->toThrow(HmacCredentialTransferRefused::class);
+});
+
+it('sets no-redirect and timeout bounds and converts connection failure to transfer refusal', function (): void {
+    testsConfigureBoundPurposes();
+    $scope = testsBoundScope('matte.callback');
+    $failedConnection = Factory::failedConnection('timed out');
+
+    Http::fake(function ($request, array $options) use ($failedConnection) {
+        expect($options['allow_redirects'] ?? null)->toBeFalse()
+            ->and($options['timeout'] ?? null)->toBe(8);
+
+        return $failedConnection($request);
+    });
+
+    $client = new HttpHmacCredentialIssuerClient(app(Factory::class), 'https://issuer.example', static fn (): array => ['Authorization' => 'Bearer protected']);
+
+    expect(fn () => $client->claim($scope, new SensitiveString(str_repeat('b', 64))))
+        ->toThrow(HmacCredentialTransferRefused::class);
+});
+
+it('rejects an off-origin effective response URL at the owned response predicate', function (): void {
+    testsConfigureBoundPurposes();
+    $scope = testsBoundScope('matte.callback');
+    $client = new HttpHmacCredentialIssuerClient(app(Factory::class), 'https://issuer.example', static fn (): array => ['Authorization' => 'Bearer protected']);
+    $psrResponse = Factory::psr7Response([], 201, ['Content-Type' => 'application/json']);
+    $response = new ClientResponse($psrResponse);
+    $response->transferStats = new TransferStats(
+        new Psr7Request('POST', 'https://elsewhere.example/bfc/onboarding/exchange'),
+        $psrResponse,
+        handlerStats: ['url' => 'https://elsewhere.example/bfc/onboarding/exchange'],
+    );
+    $payload = new ReflectionMethod(HttpHmacCredentialIssuerClient::class, 'payload');
+
+    expect(fn () => $payload->invoke($client, $response, 201, []))
+        ->toThrow(HmacCredentialTransferRefused::class);
+});
+
+it('rejects a non-success protected cutover receipt', function (): void {
+    testsConfigureBoundPurposes();
+    $scope = testsBoundScope('matte.callback');
+    Http::fake([
+        'https://issuer.example'.HttpHmacCredentialIssuerClient::STATUS_PATH => Http::response([], 503, ['Content-Type' => 'application/json']),
+    ]);
+    $client = new HttpHmacCredentialIssuerClient(app(Factory::class), 'https://issuer.example', static fn (): array => ['Authorization' => 'Bearer protected']);
+
+    expect(fn () => $client->cutoverStatus($scope, (string) Str::uuid(), (string) Str::uuid()))
         ->toThrow(HmacCredentialTransferRefused::class);
 });
 
