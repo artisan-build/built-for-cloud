@@ -50,6 +50,29 @@ it('keeps the standalone authority gate effective on every owned route', functio
     }
 });
 
+it('recognises a parameterized standalone authority alias during ownership checks', function (): void {
+    /** @var Router $router */
+    $router = app('router');
+    $route = Route::getRoutes()->getByName('bfc.login.store');
+
+    expect($route)->not->toBeNull();
+
+    $action = $route->getAction();
+    $middleware = (array) ($action['middleware'] ?? []);
+
+    expect($middleware)->toContain(EnsureStandaloneAuthority::class);
+
+    $action['middleware'] = array_map(
+        static fn (string $entry): string => $entry === EnsureStandaloneAuthority::class
+            ? 'bfc.standalone:product'
+            : $entry,
+        $middleware,
+    );
+    $route->setAction($action);
+
+    StandaloneRouteOwnership::assertOwned($router, [$route]);
+});
+
 it('exempts only the finite shipped UI route names from standalone authority', function (): void {
     $method = new ReflectionMethod(StandaloneRouteOwnership::class, 'requiresStandaloneAuthority');
     $future = (new RoutingRoute(['GET'], '/bfc/ui/future', static fn (): null => null))->name('bfc.ui.future');
