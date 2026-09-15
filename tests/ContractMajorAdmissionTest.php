@@ -240,6 +240,37 @@ it('registers the exact alias and resolves admission before every package authen
         ->and(array_values(array_intersect($resolved, $authentication)))->toBe($declaredAuthentication);
 });
 
+it('reorders a parameterized contract-major alias without dropping its parameters', function (): void {
+    /** @var Router $router */
+    $router = app('router');
+    $route = Route::get('/contract-major-parameterized-order-probe', fn (): array => ['ok' => true])
+        ->middleware(['bfc.mcp', 'bfc.contract-major:product']);
+
+    Event::dispatch(new RouteMatched($route, Request::create('/contract-major-parameterized-order-probe')));
+
+    expect($router->gatherRouteMiddleware($route))->toBe([
+        EnsureContractMajor::class.':product',
+        AuthenticateMcp::class,
+    ]);
+});
+
+it('reorders parameterized admission past non-string resolved middleware', function (): void {
+    /** @var Router $router */
+    $router = app('router');
+    $inline = static fn (Request $request, Closure $next): mixed => $next($request);
+    $router->aliasMiddleware('contract-major-inline-probe', $inline);
+    $route = Route::get('/contract-major-inline-order-probe', fn (): array => ['ok' => true])
+        ->middleware(['contract-major-inline-probe', 'bfc.mcp', 'bfc.contract-major:product']);
+
+    Event::dispatch(new RouteMatched($route, Request::create('/contract-major-inline-order-probe')));
+
+    expect($router->gatherRouteMiddleware($route))->toBe([
+        $inline,
+        EnsureContractMajor::class.':product',
+        AuthenticateMcp::class,
+    ]);
+});
+
 it('leaves the global middleware priority byte-identical to the framework baseline', function (): void {
     $kernel = app(Kernel::class);
 

@@ -114,3 +114,30 @@ it('pins an unknown package-namespace middleware without a hardcoded gate list',
     'FQCN group' => 'group',
     'FQCN exclusion' => 'exclusion',
 ]);
+
+it('recognises a parameterized alias when resolving an inventoried package middleware class', function (): void {
+    /** @var Router $router */
+    $router = app('router');
+    $route = $router->getRoutes()->getByName('bfc.members.index');
+
+    if (! $route instanceof Route) {
+        throw new RuntimeException('The standalone members route is unavailable.');
+    }
+
+    $route->middleware(PackageMiddlewareProbe::class);
+    $inventory = StandaloneRouteOwnership::packageMiddlewareInventory([$route]);
+    $router->aliasMiddleware('bfc.package-probe', PackageMiddlewareProbe::class);
+
+    $action = $route->getAction();
+    $action['middleware'] = array_map(
+        static fn (string $entry): string => $entry === PackageMiddlewareProbe::class
+            ? 'bfc.package-probe:product'
+            : $entry,
+        (array) ($action['middleware'] ?? []),
+    );
+    $route->setAction($action);
+
+    StandaloneRouteOwnership::assertPackageMiddlewareOwned($router, $inventory);
+
+    expect(true)->toBeTrue();
+});

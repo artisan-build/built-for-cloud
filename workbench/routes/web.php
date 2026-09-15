@@ -6,6 +6,7 @@ use ArtisanBuild\BuiltForCloud\ClientIdentity;
 use ArtisanBuild\BuiltForCloud\Tests\Support\ContractMajorLiveAuthenticationProbe;
 use ArtisanBuild\BuiltForCloud\Tests\Support\ContractMajorLiveState;
 use ArtisanBuild\BuiltForCloud\Tests\Support\ContractMajorRouteCacheProbe;
+use ArtisanBuild\BuiltForCloud\Tests\Support\McpRouteCacheProbe;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Support\Facades\Route;
@@ -61,4 +62,15 @@ if (getenv('BFC_CONTRACT_MAJOR_ROUTE_CACHE') !== false) {
     Route::post('/_bfc-harness/contract-major-cache/default', ContractMajorRouteCacheProbe::class)
         ->middleware(['auth', 'bfc.contract-major'])
         ->name('bfc-harness.contract-major-cache.default');
+}
+
+if (getenv('BFC_MCP_METADATA_ROUTE_CACHE') !== false) {
+    Route::post('/_bfc-harness/mcp-cache/parameterized', McpRouteCacheProbe::class)
+        ->middleware('bfc.mcp:product')
+        ->name('bfc-harness.mcp-cache.parameterized');
+    Route::post('/_bfc-harness/mcp-cache/plain', McpRouteCacheProbe::class)
+        ->middleware('bfc.mcp')
+        ->name('bfc-harness.mcp-cache.plain');
+    Route::post('/_bfc-harness/mcp-cache/unguarded', McpRouteCacheProbe::class)
+        ->name('bfc-harness.mcp-cache.unguarded');
 }

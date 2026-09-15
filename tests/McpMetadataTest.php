@@ -3,9 +3,13 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcpFoo;
 use ArtisanBuild\BuiltForCloud\Mcp\McpConfiguration;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Route;
+use Symfony\Component\Process\Process;
+
+require_once __DIR__.'/Fixtures/AuthenticateMcpFoo.php';
 
 uses(RefreshDatabase::class);
 
@@ -81,6 +85,49 @@ it('recognises the package middleware alias as the guard, not only the class', f
     Route::post('/mcp', fn (): array => ['ok' => true])->middleware('bfc.mcp');
 
     expect($this->getJson('/bfc/meta')->json('capabilities'))->toContain('mcp-delegated');
+});
+
+it('recognises a parameterized package middleware alias as the exact guard class', function (): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.delegated' => true,
+    ]);
+
+    Route::post('/mcp', fn (): array => ['ok' => true])->middleware('bfc.mcp:product');
+
+    expect($this->getJson('/bfc/meta')->json('capabilities'))->toContain('mcp-delegated');
+});
+
+it('does not recognise a different middleware class that shares the guard prefix', function (): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.delegated' => true,
+    ]);
+
+    Route::post('/mcp', fn (): array => ['ok' => true])->middleware(AuthenticateMcpFoo::class.':product');
+
+    expect($this->getJson('/bfc/meta')->json('capabilities'))->not->toContain('mcp-delegated');
+});
+
+it('reads parameterized plain and unguarded MCP routes from a real compiled route collection', function (): void {
+    $payload = sys_get_temp_dir().'/bfc-mcp-metadata-route-cache-'.bin2hex(random_bytes(8)).'.php';
+
+    try {
+        $generate = new Process([PHP_BINARY, __DIR__.'/Fixtures/mcp-metadata-route-cache.php', 'generate', $payload]);
+        $generate->setTimeout(60);
+        $generate->mustRun();
+
+        expect($generate->getOutput())->toContain('"contains":true');
+
+        $load = new Process([PHP_BINARY, __DIR__.'/Fixtures/mcp-metadata-route-cache.php', 'load', $payload]);
+        $load->setTimeout(60);
+        $load->run();
+
+        expect($load->getExitCode())->toBe(0, $load->getOutput().$load->getErrorOutput())
+            ->and($load->getOutput())->toContain('mcp-metadata-route-cache-ok');
+    } finally {
+        @unlink($payload);
+    }
 });
 
 it('does not count a guarded route at some other path', function (): void {

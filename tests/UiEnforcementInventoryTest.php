@@ -53,7 +53,7 @@ it('pins the exact eleven direct enforcement members dispositions and candidate-
         ['member' => EnsureUserIsAuthenticated::class.'::handle', 'path' => 'src/Http/Middleware/EnsureUserIsAuthenticated.php', 'line' => 76, 'kind' => 'human-or-mode-gate'],
         ['member' => ManagedAccountAccess::class.'::allows', 'path' => 'src/ManagedAccountAccess.php', 'line' => 11, 'kind' => 'managed-human-gate'],
         ['member' => ManagedFreshness::class.'::allows', 'path' => 'src/ManagedFreshness.php', 'line' => 29, 'kind' => 'managed-human-gate'],
-        ['member' => StandaloneRouteOwnership::class.'::assertMatched', 'path' => 'src/StandaloneRouteOwnership.php', 'line' => 262, 'kind' => 'route-ownership-assertion'],
+        ['member' => StandaloneRouteOwnership::class.'::assertMatched', 'path' => 'src/StandaloneRouteOwnership.php', 'line' => 261, 'kind' => 'route-ownership-assertion'],
         ['member' => StandaloneRouteOwnership::class.'::assertOwned', 'path' => 'src/StandaloneRouteOwnership.php', 'line' => 215, 'kind' => 'route-ownership-assertion'],
         ['member' => StandaloneRouteOwnership::class.'::assertPackageMiddlewareMatched', 'path' => 'src/StandaloneRouteOwnership.php', 'line' => 191, 'kind' => 'route-ownership-assertion'],
         ['member' => StandaloneRouteOwnership::class.'::assertPackageMiddlewareOwned', 'path' => 'src/StandaloneRouteOwnership.php', 'line' => 165, 'kind' => 'route-ownership-assertion'],

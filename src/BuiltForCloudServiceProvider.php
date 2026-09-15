@@ -340,15 +340,19 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 $event->route->gatherMiddleware(),
                 $event->route->excludedMiddleware(),
             );
-            $admission = array_search(EnsureContractMajor::class, $resolved, true);
+            $admission = RouteMiddleware::indexOfClass($resolved, EnsureContractMajor::class);
 
-            if ($admission === false) {
+            if ($admission === null) {
                 return;
             }
 
             $firstAuthentication = null;
 
             foreach ($resolved as $index => $middleware) {
+                if (! is_string($middleware)) {
+                    continue;
+                }
+
                 [$name, $parameters] = array_pad(explode(':', $middleware, 2), 2, null);
                 $usesCredentialGuard = false;
 
@@ -377,8 +381,9 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 return;
             }
 
+            $admissionMiddleware = $resolved[$admission];
             array_splice($resolved, $admission, 1);
-            array_splice($resolved, $firstAuthentication, 0, [EnsureContractMajor::class]);
+            array_splice($resolved, $firstAuthentication, 0, [$admissionMiddleware]);
             $event->route->computedMiddleware = $resolved;
         });
     }

@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Route;
 use PHPUnit\Framework\AssertionFailedError;
 
 uses(RefreshDatabase::class);
@@ -25,6 +28,32 @@ it('passes the reusable built for cloud contract suite against the package harne
 
 it('drives the public credential listing conformance assertion in package', function (): void {
     $this->assertBuiltForCloudCredentialListingContract();
+});
+
+it('accepts parameterized aliases in the reusable human lifecycle middleware assertions', function (): void {
+    $login = Route::getRoutes()->getByName('bfc.login.store');
+    $account = Route::getRoutes()->getByName('bfc.sessions.index');
+
+    expect($login)->not->toBeNull()
+        ->and($account)->not->toBeNull();
+
+    foreach ([
+        [$login, EnsureStandaloneAuthority::class, 'bfc.standalone:product'],
+        [$account, EnsureUserIsAuthenticated::class, 'bfc.auth:product'],
+    ] as [$route, $class, $alias]) {
+        $action = $route->getAction();
+        $middleware = (array) ($action['middleware'] ?? []);
+
+        expect($middleware)->toContain($class);
+
+        $action['middleware'] = array_map(
+            static fn (string $entry): string => $entry === $class ? $alias : $entry,
+            $middleware,
+        );
+        $route->setAction($action);
+    }
+
+    $this->assertBuiltForCloudHumanLifecycleContract();
 });
 
 it('preserves the public token helpers on the unified credential store', function (): void {
