@@ -20,7 +20,7 @@ final readonly class IssuerHmacCutoverReceipt implements JsonSerializable
         public bool $emergency,
     ) {}
 
-    /** @internal Called only by the package issuer-response parser. */
+    /** @internal Constructs a cutover receipt parsed from an issuer response. */
     public static function fromIssuerResponse(
         ?string $predecessorCredentialId,
         string $replacementCredentialId,

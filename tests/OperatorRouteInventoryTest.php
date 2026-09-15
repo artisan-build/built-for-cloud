@@ -2,9 +2,11 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\Http\Controllers\BoundHmacCutovers;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use Symfony\Component\Process\Process;
 
 it('derives the complete operator route inventory with and without the console', function (bool $console, int $expected): void {
@@ -33,9 +35,37 @@ it('derives the complete operator route inventory with and without the console',
 
         return false;
     }));
+    $cutoverRoutes = [];
 
-    expect($operatorRoutes)->toHaveCount($expected);
+    foreach ($operatorRoutes as $route) {
+        if (! str_starts_with($route['uri'], 'bfc/hmac-cutovers/')) {
+            continue;
+        }
+
+        $cutoverRoutes[$route['uri']] = [
+            'method' => $route['method'],
+            'action' => $route['action'],
+            'gate' => array_values(array_filter(
+                $route['middleware'],
+                static fn (string $middleware): bool => str_starts_with($middleware, EnsureCredentialAdmin::class.':'),
+            )),
+        ];
+    }
+
+    expect($operatorRoutes)->toHaveCount($expected)
+        ->and($cutoverRoutes)->toBe([
+            'bfc/hmac-cutovers/activate' => [
+                'method' => 'POST',
+                'action' => BoundHmacCutovers::class.'@activate',
+                'gate' => [EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRotate->value],
+            ],
+            'bfc/hmac-cutovers/status' => [
+                'method' => 'POST',
+                'action' => BoundHmacCutovers::class.'@status',
+                'gate' => [EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRotate->value],
+            ],
+        ]);
 })->with([
-    'console enabled' => [true, 14],
-    'console disabled' => [false, 13],
+    'console enabled' => [true, 16],
+    'console disabled' => [false, 15],
 ]);

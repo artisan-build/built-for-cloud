@@ -23,7 +23,7 @@ final class ImportedHmacSecret implements JsonSerializable
         self::$plaintexts[$this] = $plaintext;
     }
 
-    /** @internal Called only by the package issuer-response parser. */
+    /** @internal Constructs a sealed secret parsed from an issuer response. */
     public static function fromIssuerResponse(#[SensitiveParameter] string $plaintext): self
     {
         return new self($plaintext);

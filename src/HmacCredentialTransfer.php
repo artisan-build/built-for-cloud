@@ -24,7 +24,7 @@ final readonly class HmacCredentialTransfer implements JsonSerializable
         public CarbonImmutable $transferExpiresAt,
     ) {}
 
-    /** @internal Called only by the package issuer-response parser. */
+    /** @internal Constructs transfer metadata parsed from an issuer response. */
     public static function fromIssuerResponse(
         string $issuerCredentialId,
         BoundCredentialScope $scope,

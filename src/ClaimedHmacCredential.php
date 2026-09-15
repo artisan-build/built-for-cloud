@@ -15,7 +15,7 @@ final readonly class ClaimedHmacCredential implements JsonSerializable
         public ImportedHmacSecret $secret,
     ) {}
 
-    /** @internal Called only by the package issuer-response parser. */
+    /** @internal Constructs the client result parsed from an issuer response. */
     public static function fromIssuerResponse(HmacCredentialTransfer $transfer, ImportedHmacSecret $secret): self
     {
         return new self($transfer, $secret);

@@ -6,7 +6,9 @@ use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialAlgorithm;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialMaterialRole;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\DeliveryShape;
@@ -198,6 +200,17 @@ it('resolves a stored secret only in the installation store that contains its ha
         $table->string('subject_type');
         $table->string('subject_ref');
         $table->string('user_id')->default('');
+    });
+    Schema::connection('separate_installation')->create('credential_protocol_bindings', function (Blueprint $table): void {
+        $table->foreignUuid('credential_id')->primary()->constrained('credentials')->cascadeOnDelete();
+        $table->string('app_purpose');
+        $table->string('installation_ref');
+        $table->string('application_ref');
+        $table->string('audience');
+        $table->enum('algorithm', array_column(CredentialAlgorithm::cases(), 'value'));
+        $table->enum('material_role', array_column(CredentialMaterialRole::cases(), 'value'));
+        $table->char('scope_hash', 64)->index();
+        $table->timestamps();
     });
 
     expect(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $secret)?->id)->toBe($credential->id);
