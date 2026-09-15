@@ -123,7 +123,7 @@ function wellFormedAppActionRow(array $overrides = []): array
 
 // ─── AC1: a NEW stream, not an extension ────────────────────────────────────
 
-it('keeps the credential stream at its explicitly shipped shape', function (): void {
+it('leaves the credential stream\'s shape untouched', function (): void {
     // The credential stream remains credential-work only. Additive
     // credential lifecycle correlation must be acknowledged explicitly.
     expect(Schema::getColumnListing('credential_audit_events'))->toBe(shippedCredentialAuditColumns());

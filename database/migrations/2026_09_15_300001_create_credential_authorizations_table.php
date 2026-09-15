@@ -52,6 +52,7 @@ return new class extends Migration
             $table->string('event', 64)->change();
             $table->uuid('credential_authorization_id')->nullable()->index()->after('credential_id');
         });
+        $this->restoreSqliteCredentialAuditGuards();
 
         $this->addShapeConstraints();
     }
@@ -63,8 +64,33 @@ return new class extends Migration
             $table->dropColumn('credential_authorization_id');
             $table->string('event', 32)->change();
         });
+        $this->restoreSqliteCredentialAuditGuards();
 
         Schema::dropIfExists('credential_authorizations');
+    }
+
+    private function restoreSqliteCredentialAuditGuards(): void
+    {
+        if (Schema::getConnection()->getDriverName() !== 'sqlite') {
+            return;
+        }
+
+        DB::unprepared('DROP TRIGGER IF EXISTS credential_audit_events_no_update');
+        DB::unprepared('DROP TRIGGER IF EXISTS credential_audit_events_no_delete');
+        DB::unprepared(<<<'SQL'
+            CREATE TRIGGER credential_audit_events_no_update
+            BEFORE UPDATE ON credential_audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'credential_audit_events is append-only');
+            END
+            SQL);
+        DB::unprepared(<<<'SQL'
+            CREATE TRIGGER credential_audit_events_no_delete
+            BEFORE DELETE ON credential_audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'credential_audit_events is append-only');
+            END
+            SQL);
     }
 
     private function addShapeConstraints(): void

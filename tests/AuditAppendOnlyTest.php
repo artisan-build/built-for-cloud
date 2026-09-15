@@ -71,6 +71,21 @@ it('rejects raw query-builder update and delete at the database layer on sqlite'
     expect(CredentialAuditEvent::query()->findOrFail($row->id)->note)->toBeNull();
 })->skip(fn (): bool => DB::connection()->getDriverName() !== 'sqlite', 'database-layer enforcement is per-driver; this suite runs sqlite');
 
+it('restores raw update and delete guards when the authorization migration rolls back on sqlite', function (): void {
+    $migration = require dirname(__DIR__).'/database/migrations/2026_09_15_300001_create_credential_authorizations_table.php';
+    $row = appendAuditRow();
+    $migration->down();
+
+    try {
+        expect(fn (): int => DB::table('credential_audit_events')->where('id', $row->id)->update(['note' => 'tampered']))
+            ->toThrow(QueryException::class, 'append-only');
+        expect(fn (): int => DB::table('credential_audit_events')->where('id', $row->id)->delete())
+            ->toThrow(QueryException::class, 'append-only');
+    } finally {
+        $migration->up();
+    }
+})->skip(fn (): bool => DB::connection()->getDriverName() !== 'sqlite', 'sqlite table alterations rebuild the guarded table');
+
 it('stores hostile reason notes verbatim and neutralizes them through the export helper', function (string $hostile): void {
     $row = appendAuditRow($hostile);
 
