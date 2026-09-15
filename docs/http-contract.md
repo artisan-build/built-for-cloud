@@ -182,7 +182,8 @@ with the three things that WOULD have moved the major and none of which happened
   store. Summary rows gained the nullable `rotated_at` field (rotation provenance). A row
   already superseded by rotation never mints again (the lineage never forks): with a live
   successor, re-invoking the rotate route performs the retirement-only **cutover completion**
-  (a `200` with `completed_cutover: true` and no secret); without one it refuses. The
+  (a `200` with `completed_cutover: true` and no secret), except while an hmac successor awaits
+  activation or a bound asymmetric successor awaits public-key enrollment; without one it refuses. The
   onboarding exchange sweep spares rows in rotation grace when they have the shape rotation
   actually leaves (the stamp plus a grace-bounded expiry), and `rotated_at` is not
   mass-assignable, so the exemption cannot be forged.
@@ -218,6 +219,14 @@ with the three things that WOULD have moved the major and none of which happened
   activation. Every ciphertext-producing hmac path (mint, rotate, exchange redelivery) pauses
   while an APP_KEY rewrap is in progress. Summary rows are unchanged. The lifecycle event
   stream gains `activated`.
+
+- **Bound asymmetric signing enrollment ships additively.** A server-owned
+  `BoundCredentialScope` can mint an installation-owned pending asymmetric signing credential,
+  and the new public `POST /bfc/asymmetric-enrollments/{application}` route accepts its code plus
+  one canonicalizable RSA public key. The client retains the private key; the package stores and
+  returns no private material. Exact-scope, model-free verification-key lookup and bound-only
+  enrollment-time rotation cutover ship with it. Generic unbound asymmetric enrollment and its UI
+  choices are unchanged.
 
 - New route `POST /bfc/claim` — the hitch claim contract (PRD 1.12 / OSS-8), additive: the
   same claim-code primitive as the onboarding exchange, in hitch's published wire shape
@@ -441,6 +450,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/onboarding/issue` | `content` | single reveal of the claim code, plus a free-text email address |
 | `POST /bfc/claim` | `content` | single reveal of the durable secret (`token`), plus the free-text suggested name |
 | `POST /bfc/onboarding/exchange` | `content` | single reveal of the durable secret, plus the free-text credential name |
+| `POST /bfc/asymmetric-enrollments/{application}` | `metadata` | a bounded credential id and the fixed `RS256` algorithm; no key or code is returned |
 | `POST /bfc/onboarding/verify` | `content` | carries the free-text credential name |
 | `GET /bfc/managed/login` | `content` | redirect carrying an opaque one-time browser state, plus the initiating session cookie |
 | `GET /bfc/managed/callback` | `content` | redirect plus a newly established authenticated session cookie |
@@ -861,6 +871,57 @@ Every newly exchanged durable lands in a unified `credentials` row. Each code re
 through `durable_credential_id`, and make-before-break revokes the previously linked credential
 before minting its replacement.
 
+Bound asymmetric enrollment codes are not generic claim codes. Both this route and
+`POST /bfc/claim` refuse a code linked to a protocol-bound asymmetric credential before burning
+it or changing its pending row. Complete it only through the asymmetric enrollment route below.
+
+### POST /bfc/asymmetric-enrollments/{application}
+
+Public (`bfc-claim` throttle). Complete one protocol-bound asymmetric signing enrollment. The
+`application` path value is only a lookup hint: the host's
+`ResolvesAsymmetricEnrollmentScope::resolve(Request $request, string $application)` implementation
+derives the expected `BoundCredentialScope` from server-owned state. The package default resolver
+returns `null`, so an unconfigured endpoint fails closed. No caller-authored purpose, subject,
+installation, application, audience or algorithm is accepted. The route mounts no authentication,
+session or CSRF middleware.
+
+The closed JSON object has exactly these two string fields:
+
+```json
+{
+  "enrollment_code": "64 lowercase hexadecimal characters",
+  "public_key": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----\n"
+}
+```
+
+The raw request body is limited to 24 KiB and is rejected before controller validation or key
+construction; the `public_key` value is limited to 16 KiB before OpenSSL. The key must contain
+exactly one inline `BEGIN PUBLIC KEY` / `END PUBLIC KEY` SubjectPublicKeyInfo block. File paths,
+URLs, PKCS#1 `RSA PUBLIC KEY`, certificates, extra blocks or payload, malformed base64, private and
+encrypted-private markers, EC/Ed25519 keys, and RSA keys below 2048 or above 8192 bits are refused.
+Transport-only outer ASCII whitespace and CRLF are tolerated. Accepted material is re-exported as
+canonical SPKI with LF line endings and one terminal LF; the algorithm is fixed to `RS256` and is
+never request-selected.
+
+- **201** with `Cache-Control: no-store` and exactly
+  `{"credential_id":"<id>","algorithm":"RS256"}`. The code is consumed and the pending row
+  becomes active atomically with its canonical public key and `exchanged` / `activated` audit
+  events. For a routine bound rotation, the predecessor enters its never-extended one-hour grace
+  in that same transaction.
+- **422** `{"message":"..."}` for malformed or non-canonicalizable input. No key, code, audit or
+  lifecycle state is partially written.
+- **404** `{"message":"This asymmetric enrollment is unavailable."}` for the default resolver,
+  a missing, reused, expired or mismatched code/scope, a dead or wrong-shaped row, or a lost
+  concurrent claim. The response deliberately does not distinguish these cases.
+- **500** `{"message":"The server hit an unexpected error. It is safe to retry."}` for an
+  unexpected failure. Logs contain the exception class only. Nothing commits on this response.
+
+The client-safe flow needs no server package in the monitored client host: generate an RSA keypair
+locally with OpenSSL, retain the private key locally, and send only the public SPKI plus code over
+HTTPS. The route never deliberately persists, echoes or logs the submitted code or key and rejects
+private-key markers. `artisan-build/bfc-client` has no enrollment helper in this release; a client
+may call this frozen wire directly without installing `artisan-build/built-for-cloud`.
+
 ### POST /bfc/onboarding/verify
 
 Public (`bfc-public` throttle). Verify a durable credential works. Present it as
@@ -1187,9 +1248,10 @@ Summary rows share one shape:
 discrimination:** a field named there is one the app's declaration says this store structurally
 cannot express — it is serialized null *and* listed, so null-and-listed means "unknowable here"
 while null-and-not-listed means "absent". Consumers must not render or alert on unsupported
-fields. `rotated_at` is rotation provenance: non-null names a row superseded by rotation and
-living out its grace window — expected to appear beside its active replacement until the grace
-expiry passes. A retired pre-purpose tombstone is the sole nullable-purpose case: it lists with
+fields. `rotated_at` is rotation provenance: non-null names a row superseded by rotation and its
+lineage successor. Depending on kind and binding, the predecessor may still own live signing while
+hmac activation or bound asymmetric enrollment is pending, or may be living out its grace window
+beside an active replacement. A retired pre-purpose tombstone is the sole nullable-purpose case: it lists with
 `purpose: null`, `status: "revoked"`, and its preserved `revoked_at`.
 
 ### GET /bfc/credentials
@@ -1260,7 +1322,7 @@ upgrade path for any case that cannot accept it.
 |---|---|---|
 | `bearer` | `secret` | present as `Authorization: Bearer <secret>` |
 | `basic_auth` | `username`, `password` | the Composer `auth.json` pair; the username is presentation-only and grants nothing |
-| `enrollment_code` | `enrollment_code` | a claim-primitive code (ttl = `code_ttl_seconds`); the client redeems it by generating its own keypair. The code never carries key material, and the credential row is `pending` until enrollment completes. The enrollment-completing exchange ships with the first asymmetric consumer's rebuild; until then the code is issued, listable and revocable, but completes no enrollment |
+| `enrollment_code` | `enrollment_code` | a claim-primitive code (ttl = `code_ttl_seconds`); the client redeems it by generating its own keypair. The code never carries key material, and the credential row is `pending` until enrollment completes. Generic unbound `purpose: enrollment` codes remain listable and revocable but are not accepted by the bound signing enrollment route |
 | `signing_key` | `signing_key`, `key_id`, `delivery_fingerprint` | the reveal-once delivery of a PENDING hmac signing key — the operator-controlled-counterparty path. `key_id` is the (non-secret) row id the signature header will carry; `delivery_fingerprint` (non-secret) names THIS delivery, and the activation verb requires it. The key signs nothing until activated |
 | `signing_key_code` | `claim_code` | a claim-primitive code (ttl = `code_ttl_seconds`) whose [exchange](#post-bfconboardingexchange) delivers the PENDING hmac key — and its `delivery_fingerprint` — to an outside counterparty, and **never activates it** (SEC-V3-01) |
 | `none` | — | the secret was never ours to hand over |
@@ -1275,6 +1337,37 @@ upgrade path for any case that cannot accept it.
 
 Emits an `issued` audit event (ids only, never values) in the mint's own transaction, on both
 transports.
+
+### Bound asymmetric PHP APIs
+
+Bound asymmetric signing is intentionally not added to the generic HTTP mint matrix or UI purpose
+choices. A reviewed host maps an app adoption purpose such as `reel.application.signing` to package
+purpose `signing`, constructs
+`BoundCredentialScope(string $appPurpose, Subject $subject, string $installation, string $application, string $audience)`,
+and calls `MintCredential` with `MintOptions(kind: Asymmetric, purpose: Signing,
+codeTtlSeconds: ..., boundScope: $scope)`. The subject must be installation-owned (`user_id = null`),
+and every action re-resolves the configured app-purpose mapping at use time. Scope strings are
+non-empty valid UTF-8 without controls and at most 255 bytes; audience additionally matches
+`^[^,\\s]{1,255}$`.
+
+Completion is the model-free action:
+
+```php
+CompleteAsymmetricEnrollment::__invoke(
+    string $enrollmentCode,
+    BoundCredentialScope $expectedScope,
+    Rs256PublicKey $publicKey,
+): EnrolledAsymmetricCredential;
+```
+
+Its DTO contains credential id, app purpose, subject, installation, application, audience and
+algorithm, never a model or key material. Verification selects through
+`AsymmetricVerificationKeys::for(BoundCredentialScope $scope): array`. It returns ordered
+`AsymmetricVerificationKey` DTOs containing only credential id, canonical public key and `RS256`,
+ordered by `activated_at DESC, created_at DESC, id DESC`. Selection fixes asymmetric/signing,
+installation ownership, originator role and RS256, then compares every exact scope and subject
+field; pending, revoked, expired, unbound, malformed or null-key rows are invisible. The monitored
+client keeps the private key and owns signing; the package API supplies verification keys only.
 
 ### Reserved installation signing root (no HTTP surface)
 
@@ -1311,14 +1404,15 @@ consumes its outstanding enrollment code.
 
 Rotate by id — the primary verb (there is no name path over HTTP; `bfc:credential:rotate
 --name` is a CLI convenience that refuses on ambiguity). Make-before-break: the replacement is
-minted FIRST, then the old row is retired into its grace window.
+minted FIRST. The per-kind rules below decide whether predecessor retirement happens immediately
+or waits for activation/enrollment.
 
 **Default rotation preserves EXACTLY**: the purpose, the ability set, the subject binding
 (`subject_type` / `subject_ref` / `user_id`), the decorative name, and the remaining expiry of
-the row it replaces. Rotation accepts no purpose override. The old row is
-stamped `rotated_at`, stays resolvable through a one-hour grace window (unless its own expiry
-comes sooner — rotation never extends any lifetime), and dies at grace end by its own expiry.
-No reaper is involved.
+the row it replaces. Bound rotation additionally copies the exact app purpose, installation,
+application, audience, algorithm and material role. Rotation accepts no purpose or scope override.
+When an old row enters grace, it stays resolvable for at most one hour (its own earlier expiry
+wins — rotation never extends any lifetime) and dies at that expiry. No reaper is involved.
 
 **Request:**
 
@@ -1328,7 +1422,8 @@ No reaper is involved.
   "override": false,
   "abilities": null,
   "expires_at": null,
-  "code_ttl_seconds": null
+  "code_ttl_seconds": null,
+  "reissue_pending_delivery": false
 }
 ```
 
@@ -1350,14 +1445,16 @@ or lifetime — inherited dimensions included — exceed what a mint of that sha
 authorized for. Its audit events record the `override` reason code plus the delta.
 `code_ttl_seconds` (60–604800) is required when rotating an `asymmetric` credential; optional
 for `hmac`, where it selects claim-code delivery over the reveal-once default; ignored
-otherwise.
+otherwise. `reissue_pending_delivery` defaults to false and is legal only on a bound asymmetric
+originator whose latest non-abandoned successor is still pending, unused and has an unconsumed
+code. It cannot be combined with emergency or override changes.
 
 Per kind:
 
 | kind | rotation semantics |
 |---|---|
 | `bearer` / `basic` | a fresh secret is minted and delivered once, in this response's `delivery` (same shapes as the mint route) |
-| `asymmetric` | a fresh **enrollment code** is delivered against a new `pending` row — the client generates the new keypair itself; no key material ever travels. The old credential's public key keeps verifying through the grace window, so both rows are listed side by side. The enrollment-completing exchange ships with the first asymmetric consumer's rebuild |
+| `asymmetric` | a fresh **enrollment code** is delivered against a new `pending` row — the client generates the new keypair itself; no key material ever travels. Legacy unbound rotation retains immediate one-hour grace. A routine bound originator keeps the old row fully active until the replacement completes through the asymmetric enrollment route; completion then atomically starts grace, during which exact-scope lookup returns old and new. `emergency: true` ends the bound predecessor immediately and accepts an outage until enrollment |
 | `hmac` | the pending→activate dance (D6 point 6 / D9): rotate mints the replacement key **`pending`** — delivered in this response's `delivery` (`signing_key` reveal-once, or `signing_key_code` when `code_ttl_seconds` is provided) — while **the old key keeps signing, unretired**. Delivery installs it receiver-side; [activation](#post-bfccredentialsidactivate) cuts signing over and starts the old key's one-hour verification grace; the old key dies at grace end. `emergency: true` kills the old key **now** instead (a compromised key must not keep signing), at the stated price of a signing outage until the replacement activates. Re-invoking rotate on the stamped row while the replacement is still pending is a `409` pointing at the activate verb; hmac rotation is refused (`409`) while an APP_KEY rewrap is in progress |
 
 - **201:**
@@ -1374,6 +1471,16 @@ Per kind:
 (replacement) and `rotated` (old row, with old → new supersession lineage) audit events in the
 mint's own transaction; if any of those follow-up writes fail, EVERYTHING rolls back — no
 orphan credential — and retrying works.
+
+For a lost bound-asymmetric delivery response, invoke the same route on the predecessor with
+`{"reissue_pending_delivery":true,"code_ttl_seconds":...}`. In one transaction it consumes the old
+code, revokes the unusable pending successor with the additive audit reason
+`delivery_abandoned`, and returns one newly issued pending successor/code. It never redelivers the
+abandoned code or key material. This is permitted once in a predecessor lineage: replay or a
+different/current/active successor creates nothing, reveals nothing and returns the ordinary
+non-revealing `409` refusal. Same-second lineage remains unambiguous because abandoned successors
+are excluded rather than ordered by audit timestamp. The CLI spelling is
+`bfc:credential:rotate <predecessor-id> --reissue-pending-delivery --code-ttl=<seconds> --local`.
 
 - **200 — cutover completion.** Invoking this route on a row **already superseded by
   rotation** (`rotated_at` set) whose lineage-recorded successor is still live never mints
@@ -1401,8 +1508,10 @@ orphan credential — and retrying works.
 - **409** — `{"message": "..."}`: the row is revoked, expired, or a pending row — none of
   which is a rotatable source — or it was already superseded by rotation and its successor is
   **no longer live** (no cutover to complete, re-rotating would fork the lineage; mint fresh),
-  or the successor is an hmac key **still pending activation** (activate it instead), or an
-  hmac rewrap is in progress (retry after `bfc:hmac:rewrap` completes).
+  or the successor is an hmac key **still pending activation** (activate it instead), or a bound
+  asymmetric successor is **still pending public-key enrollment**, or an hmac rewrap is in
+  progress (retry after `bfc:hmac:rewrap` completes). An invalid or replayed bound-delivery
+  reissue is the same non-revealing `409`.
 - **422** — `{"message": "..."}`: shared input validation (a change without `override`,
   out-of-bounds `code_ttl_seconds`, malformed abilities/expiry/booleans, override options on
   a completion) — identical refusals on the CLI transport.
@@ -1608,10 +1717,11 @@ not reachable by naming them — a refusal is a `403` naming the kind.
 When the declaration explicitly offers `asymmetric`, this same authenticated POST derives
 `purpose: "enrollment"`, the `user_principal` subject and the numeric-string `user_id` server-side.
 It returns an `enrollment_code` delivery linked to one `pending` row with no public key, secret hash,
-or secret ciphertext. This is intentionally partial: the package generates and stores no private
-key, and the current surface does not complete key registration or asymmetric authentication. The
-bounded code and pending row are listable and revocable; revocation consumes the code so later claim
-attempts fail. Client-supplied purpose, subject, user, and abilities fields remain unread.
+or secret ciphertext. This generic personal path is intentionally partial: the package generates
+and stores no private key, and the bound signing enrollment route does not accept this unbound
+`purpose: enrollment` row. The bounded code and pending row are listable and revocable; revocation
+consumes the code so later claim attempts fail. Client-supplied purpose, subject, user, and abilities
+fields remain unread.
 
 `expires_at` is the caller's and stays optional: a durable's expiry is never defaulted (PRD 1.3 /
 D1b). Lifetime is not the escalation vector; abilities are, and abilities are what fails closed.

@@ -125,8 +125,10 @@ it('serializes two completion claimants at the token lock with one activation an
         waitForEnrollmentWorkersToBlock($workers, $this->postgresLaneProbe());
         $main->commit();
         $results = finishEnrollmentWorkers($workers);
+        $outcomes = array_count_values(array_column($results, 'outcome'));
+        ksort($outcomes);
 
-        expect(array_count_values(array_column($results, 'outcome')))->toBe(['completed' => 1, 'refused' => 1])
+        expect($outcomes)->toBe(['completed' => 1, 'refused' => 1])
             ->and(Credential::query()->findOrFail($pending['id'])->status)->toBe(CredentialStatus::Active)
             ->and(OnboardingToken::query()->where('durable_credential_id', $pending['id'])->sole()->consumed_at)->not->toBeNull()
             ->and(CredentialAuditEvent::query()->where('credential_id', $pending['id'])->where('event', LifecycleEventType::Exchanged)->count())->toBe(1)

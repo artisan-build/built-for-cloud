@@ -24,18 +24,22 @@ use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
+use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\Rs256PublicKey;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
+use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
+use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
-uses(RefreshDatabase::class);
+uses(RefreshDatabase::class, ContractAssertions::class, WithCredentials::class);
 
 /** @return array{scope: BoundCredentialScope, code: string, id: string} */
 function pendingBoundEnrollment(): array
@@ -72,6 +76,19 @@ function bindEnrollmentScope(BoundCredentialScope $scope): void
     });
 }
 
+/** @return array<string, string> */
+function asymmetricRotationHeaders(): array
+{
+    $credential = test()->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => 'asymmetric-rotation-operator',
+        'abilities' => [OperatorAbility::CredentialRotate->value],
+    ]);
+
+    return ['Authorization' => $credential->bearerHeader()];
+}
+
 it('completes the exact public-only enrollment over HTTP and verifies retained-private-key bytes', function (): void {
     $pending = pendingBoundEnrollment();
     $key = testsRsaKey();
@@ -85,6 +102,7 @@ it('completes the exact public-only enrollment over HTTP and verifies retained-p
         'credential_id' => $pending['id'],
         'algorithm' => 'RS256',
     ]);
+    $this->assertBuiltForCloudMetadataEndpoint($response, 'POST /bfc/asymmetric-enrollments/{application}');
 
     $credential = Credential::query()->findOrFail($pending['id']);
     $token = OnboardingToken::query()->where('durable_credential_id', $pending['id'])->sole();
@@ -557,6 +575,52 @@ it('reissues one lost bound delivery without redelivery or same-second lineage a
     ))->toThrow(RotationRefused::class, 'unavailable');
     expect(Credential::query()->count())->toBe($before);
 });
+
+it('carries bound delivery reissue through both HTTP and CLI transports without replay issuance', function (string $transport): void {
+    Carbon::setTestNow(Carbon::parse('2026-09-15 12:00:00'));
+    $source = pendingBoundEnrollment();
+    app(CompleteAsymmetricEnrollment::class)($source['code'], $source['scope'], new Rs256PublicKey(testsRsaKey()['public']));
+    $first = app(RotateCredential::class)($source['id'], new RotateOptions(codeTtlSeconds: 3600));
+    $firstId = (string) $first?->mint->summary->id;
+    $headers = $transport === 'http' ? asymmetricRotationHeaders() : [];
+    $before = Credential::query()->count();
+
+    if ($transport === 'http') {
+        $this->postJson('/bfc/credentials/'.$source['id'].'/rotate', [
+            'reissue_pending_delivery' => true,
+            'code_ttl_seconds' => 3600,
+        ], $headers)->assertCreated()
+            ->assertJsonPath('superseded_id', $source['id'])
+            ->assertJsonPath('delivery.shape', 'enrollment_code');
+    } else {
+        expect(Artisan::call('bfc:credential:rotate', [
+            'id' => $source['id'],
+            '--reissue-pending-delivery' => true,
+            '--code-ttl' => '3600',
+            '--local' => true,
+        ]))->toBe(0);
+    }
+
+    expect(Credential::query()->count())->toBe($before + 1)
+        ->and(Credential::query()->findOrFail($firstId)->revoked_at)->not->toBeNull();
+    $after = Credential::query()->count();
+
+    if ($transport === 'http') {
+        $this->postJson('/bfc/credentials/'.$source['id'].'/rotate', [
+            'reissue_pending_delivery' => true,
+            'code_ttl_seconds' => 3600,
+        ], $headers)->assertStatus(409);
+    } else {
+        expect(Artisan::call('bfc:credential:rotate', [
+            'id' => $source['id'],
+            '--reissue-pending-delivery' => true,
+            '--code-ttl' => '3600',
+            '--local' => true,
+        ]))->toBe(1);
+    }
+
+    expect(Credential::query()->count())->toBe($after);
+})->with(['http', 'cli']);
 
 it('keeps bound asymmetric codes out of both legacy exchange surfaces before burn', function (): void {
     $pending = pendingBoundEnrollment();
