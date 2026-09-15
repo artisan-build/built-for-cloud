@@ -17,6 +17,10 @@ use Illuminate\Http\Request;
  * accepting one would mean storing an identity that differs from the one presented -- and
  * would let two distinct identities collide on one row. We cannot honour store-verbatim for
  * it on every driver, so we drop it the way we drop any other value we will not accept.
+ *
+ * The domain is also limited to a byte-stable HTTP field value: no leading or trailing SP/HTAB
+ * (HTTP clients trim them) and no control octet 0x00-0x1F or 0x7F (HTTP clients refuse them),
+ * so the identity a client proves and the identity it sends in the header cannot diverge.
  */
 final class ClientIdentity
 {
@@ -52,6 +56,14 @@ final class ClientIdentity
 
         if (str_contains($value, "\0")) {
             return 'contains a null byte';
+        }
+
+        if (strspn($value, " \t") > 0 || strspn(strrev($value), " \t") > 0) {
+            return 'has leading or trailing whitespace';
+        }
+
+        if (preg_match('/[\x00-\x1F\x7F]/', $value) === 1) {
+            return 'contains a control character';
         }
 
         if (! mb_check_encoding($value, 'UTF-8')) {
