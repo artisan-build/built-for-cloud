@@ -29,6 +29,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
@@ -342,6 +343,70 @@ it('suppresses another attempt for at least 30 seconds when Retry-After is short
     expect($freshness->allows($user))->toBeTrue()
         ->and(p3cConfirmationCalls($fixture))->toBe(2);
 });
+
+it('suppresses a charged retry through Redis until the exact boundary', function (): void {
+    $host = getenv('REDIS_HOST');
+
+    if (! is_string($host) || $host === '') {
+        $this->markTestSkipped('REDIS_HOST is not configured; the Redis behaviour lane requires a reachable Redis server.');
+    }
+
+    $port = getenv('REDIS_PORT');
+    $prefix = 'bfc-freshness-'.bin2hex(random_bytes(8)).':';
+    config([
+        'cache.default' => 'redis',
+        'cache.prefix' => $prefix,
+        'cache.stores.redis' => [
+            'driver' => 'redis',
+            'connection' => 'cache',
+            'lock_connection' => 'default',
+        ],
+        'database.redis.client' => 'phpredis',
+        'database.redis.options.prefix' => $prefix,
+        'database.redis.default' => [
+            'host' => $host,
+            'password' => null,
+            'port' => is_string($port) && ctype_digit($port) ? (int) $port : 6379,
+            'database' => 0,
+        ],
+        'database.redis.cache' => [
+            'host' => $host,
+            'password' => null,
+            'port' => is_string($port) && ctype_digit($port) ? (int) $port : 6379,
+            'database' => 1,
+        ],
+    ]);
+
+    try {
+        Cache::put('redis-integer-shape', 12, 60);
+        $redisInteger = Cache::get('redis-integer-shape');
+    } catch (Throwable $exception) {
+        $this->markTestSkipped('REDIS_HOST is not reachable: '.$exception->getMessage());
+    }
+
+    expect($redisInteger)->toBe('12');
+
+    CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
+    $fixture = p3cConfigureAuthority();
+    $user = p3cUser();
+    $freshness = app(ManagedFreshness::class);
+    $fixture->confirmationResponder = static fn (): mixed => Http::response([
+        'contract_version' => 'managed-auth-v1',
+        'error' => 'rate_limited',
+    ], 429, ['Retry-After' => '5']);
+
+    CarbonImmutable::setTestNow('2026-09-10T12:05:00+00:00');
+    expect($freshness->allows($user))->toBeTrue()
+        ->and(p3cConfirmationCalls($fixture))->toBe(1);
+
+    CarbonImmutable::setTestNow('2026-09-10T12:05:29+00:00');
+    expect($freshness->allows($user))->toBeTrue()
+        ->and(p3cConfirmationCalls($fixture))->toBe(1);
+
+    CarbonImmutable::setTestNow('2026-09-10T12:05:30+00:00');
+    expect($freshness->allows($user))->toBeTrue()
+        ->and(p3cConfirmationCalls($fixture))->toBe(2);
+})->group('redis');
 
 it('keeps membership and connection high-water marks independent across subjects in both arrival orders', function (array $order, string $case): void {
     CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');

@@ -1059,6 +1059,24 @@ it('never turns a malformed cached snapshot into a 500', function (): void {
         ->and($response->json('health'))->toBe('ok');
 });
 
+it('accepts canonical integer strings from a cache-backed queue snapshot', function (): void {
+    Cache::shouldReceive('remember')->andReturn([
+        'pending' => '12',
+        'reserved' => '3',
+        'failed' => '1',
+        'oldest_at' => (string) now()->subSeconds(20)->getTimestamp(),
+        'degraded' => false,
+    ]);
+
+    $this->getJson('/bfc/console/vitals', ['Authorization' => vitalsReader()->bearerHeader()])
+        ->assertOk()
+        ->assertJsonPath('queue.pending', 12)
+        ->assertJsonPath('queue.reserved', 3)
+        ->assertJsonPath('queue.failed', 1)
+        ->assertJsonPath('queue.oldest_pending_age_seconds', 20)
+        ->assertJsonPath('health', 'ok');
+});
+
 it('never turns an unavailable cache into a 500', function (): void {
     Cache::shouldReceive('remember')->andThrow(new RuntimeException('the cache store is gone'));
 
