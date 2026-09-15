@@ -35,6 +35,12 @@ final readonly class ConsumerConformance
     /** @var array<string, list<string>> */
     public array $expected;
 
+    /** @var list<string> */
+    public array $sourceRoots;
+
+    /** @var list<string> */
+    public array $providerFiles;
+
     /**
      * @param  list<string>  $sourceRoots
      * @param  list<string>  $providerFiles
@@ -48,8 +54,8 @@ final readonly class ConsumerConformance
         public string $consumer,
         public string $consumerRoot,
         public string $packageRoot,
-        public array $sourceRoots,
-        public array $providerFiles,
+        array $sourceRoots,
+        array $providerFiles,
         public array $runtimeAssertions,
         public array $capabilities,
         public array $purposeMappings,
@@ -60,12 +66,10 @@ final readonly class ConsumerConformance
             throw new InvalidArgumentException('The consumer slug must be non-empty.');
         }
 
-        foreach ([$consumerRoot, $packageRoot] as $root) {
-            self::assertAbsoluteExistingDirectory($root);
-        }
+        $declaredRoots = array_map(self::absoluteExistingDirectory(...), [$consumerRoot, $packageRoot]);
 
-        self::assertSortedUniquePaths($sourceRoots, [$consumerRoot, $packageRoot], false);
-        self::assertSortedUniquePaths($providerFiles, [$consumerRoot, $packageRoot], true);
+        $sourceRoots = self::canonicalPaths($sourceRoots, $declaredRoots, false);
+        $providerFiles = self::canonicalPaths($providerFiles, $declaredRoots, true);
         self::assertSortedUniqueStrings($runtimeAssertions, true);
         self::assertSortedUniqueStrings($capabilities, true);
 
@@ -107,6 +111,8 @@ final readonly class ConsumerConformance
             self::assertSortedUniqueStrings($members, true);
         }
 
+        $this->sourceRoots = $sourceRoots;
+        $this->providerFiles = $providerFiles;
         $this->expected = array_replace(array_fill_keys(self::FAMILIES, []), $expected);
     }
 
@@ -171,11 +177,15 @@ final readonly class ConsumerConformance
         );
     }
 
-    private static function assertAbsoluteExistingDirectory(string $path): void
+    private static function absoluteExistingDirectory(string $path): string
     {
-        if (! str_starts_with($path, DIRECTORY_SEPARATOR) || ! is_dir($path) || realpath($path) === false) {
+        $resolved = realpath($path);
+
+        if (! str_starts_with($path, DIRECTORY_SEPARATOR) || ! is_dir($path) || ! is_string($resolved)) {
             throw new InvalidArgumentException('Conformance roots must be absolute existing directories.');
         }
+
+        return $resolved;
     }
 
     /** @param array<string, mixed> $values
@@ -192,12 +202,19 @@ final readonly class ConsumerConformance
     /**
      * @param  list<string>  $paths
      * @param  list<string>  $declaredRoots
+     * @return list<string>
      */
-    private static function assertSortedUniquePaths(array $paths, array $declaredRoots, bool $files): void
+    private static function canonicalPaths(array $paths, array $declaredRoots, bool $files): array
     {
         self::assertSortedUniqueStrings($paths, false);
 
+        $canonical = [];
+
         foreach ($paths as $path) {
+            if (! str_starts_with($path, DIRECTORY_SEPARATOR)) {
+                throw new InvalidArgumentException('Declared conformance paths must be absolute.');
+            }
+
             $resolved = realpath($path);
 
             if (! is_string($resolved) || ($files ? ! is_file($resolved) : ! is_dir($resolved))) {
@@ -221,7 +238,13 @@ final readonly class ConsumerConformance
             if (! $files && self::phpFileCount($resolved) === 0) {
                 throw new InvalidArgumentException('Every source root must contain a scanner-visible file.');
             }
+
+            $canonical[] = $resolved;
         }
+
+        self::assertSortedUniqueStrings($canonical, false);
+
+        return $canonical;
     }
 
     /** @param list<mixed> $values */

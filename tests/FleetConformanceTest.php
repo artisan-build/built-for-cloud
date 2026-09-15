@@ -317,6 +317,83 @@ it('accepts object members in any order while refusing missing unknown duplicate
         ->toThrow(InvalidArgumentException::class, 'purpose mapping');
 });
 
+it('rejects relative scanner paths and retains canonical paths across working directory changes', function (): void {
+    $expected = packageConformanceExpected();
+    $consumerRoot = __DIR__.'/Fixtures/ThinHost';
+    $packageRoot = dirname(__DIR__);
+
+    expect(fn () => new ConsumerConformance(
+        consumer: 'relative-source-control',
+        consumerRoot: $consumerRoot,
+        packageRoot: $packageRoot,
+        sourceRoots: ['tests/Fixtures/ThinHost'],
+        providerFiles: [$packageRoot.'/src/BuiltForCloudServiceProvider.php'],
+        runtimeAssertions: [],
+        capabilities: [],
+        purposeMappings: [],
+        mcpServer: null,
+        expected: $expected,
+    ))->toThrow(InvalidArgumentException::class, 'must be absolute');
+
+    $input = [
+        'consumer' => 'relative-provider-control',
+        'consumer_root' => $consumerRoot,
+        'package_root' => $packageRoot,
+        'source_roots' => [$consumerRoot],
+        'provider_files' => ['src/BuiltForCloudServiceProvider.php'],
+        'runtime_assertions' => [],
+        'capabilities' => [],
+        'purpose_mappings' => [],
+        'mcp_server' => null,
+        'expected' => $expected,
+    ];
+    expect(fn () => ConsumerConformance::fromArray($input))
+        ->toThrow(InvalidArgumentException::class, 'must be absolute');
+
+    expect(fn () => new ConsumerConformance(
+        consumer: 'canonical-duplicate-control',
+        consumerRoot: $consumerRoot,
+        packageRoot: $packageRoot,
+        sourceRoots: [$consumerRoot, $consumerRoot.'/.'],
+        providerFiles: [$packageRoot.'/src/BuiltForCloudServiceProvider.php'],
+        runtimeAssertions: [],
+        capabilities: [],
+        purposeMappings: [],
+        mcpServer: null,
+        expected: $expected,
+    ))->toThrow(InvalidArgumentException::class, 'sorted and duplicate-free');
+
+    $spec = new ConsumerConformance(
+        consumer: 'canonical-path-control',
+        consumerRoot: $consumerRoot,
+        packageRoot: $packageRoot,
+        sourceRoots: [$consumerRoot.'/.'],
+        providerFiles: [$packageRoot.'/src/../src/BuiltForCloudServiceProvider.php'],
+        runtimeAssertions: [],
+        capabilities: [],
+        purposeMappings: [],
+        mcpServer: null,
+        expected: $expected,
+    );
+    $canonicalSourceRoots = [realpath($consumerRoot)];
+    $canonicalProviderFiles = [realpath($packageRoot.'/src/BuiltForCloudServiceProvider.php')];
+    $workingDirectory = getcwd();
+
+    expect($spec->sourceRoots)->toBe($canonicalSourceRoots)
+        ->and($spec->providerFiles)->toBe($canonicalProviderFiles);
+
+    try {
+        chdir(sys_get_temp_dir());
+
+        expect($spec->sourceRoots)->toBe($canonicalSourceRoots)
+            ->and($spec->providerFiles)->toBe($canonicalProviderFiles);
+    } finally {
+        if (is_string($workingDirectory)) {
+            chdir($workingDirectory);
+        }
+    }
+});
+
 it('does not accept a declared capability without the live meta predicate', function (): void {
     $spec = packageConformanceSpec(
         runtime: ['meta'],
