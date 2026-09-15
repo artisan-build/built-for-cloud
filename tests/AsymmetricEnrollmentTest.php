@@ -435,7 +435,7 @@ it('rejects oversized HTTP bodies and key values before OpenSSL or resolver work
 
     $oversizedPublicKey = str_replace(
         "\n-----END PUBLIC KEY-----",
-        str_repeat("\n", 16385)."-----END PUBLIC KEY-----",
+        str_repeat("\n", 16385).'-----END PUBLIC KEY-----',
         $publicKey,
     );
     $this->postJson('/bfc/asymmetric-enrollments/'.$pending['scope']->application, [
