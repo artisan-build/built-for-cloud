@@ -3,8 +3,8 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
-use ArtisanBuild\BuiltForCloud\Tests\Support\StandaloneSurfaceInventory;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\FutureLocalAuthenticationController;
+use ArtisanBuild\BuiltForCloud\Tests\Support\StandaloneSurfaceInventory;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Route as RouteFacade;
