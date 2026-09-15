@@ -691,26 +691,50 @@ it('rejects a mismatched current subject before managed authority declaration us
         'authority_base_url' => 'https://authority.example.test',
         'managed_connection_status' => 'active',
     ]);
+    config(['built-for-cloud.managed.client_secret' => 'fixture-client-secret']);
     $user->forceFill([
         'scalpels_issuer' => 'https://issuer.example.test',
         'scalpels_connection_id' => 'connection-fixture',
         'scalpels_id' => 'managed-device-user',
-        'membership_confirmed_at' => now()->subHour(),
+        'membership_confirmed_at' => now(),
         'managed_membership_status' => 'active',
     ])->save();
     Cache::flush();
     Http::fake(static fn () => Http::response(['error' => 'must-not-run'], 500));
-    DeviceFlowDeclaration::$resolvedSubject = new Subject(SubjectType::UserPrincipal, 'different-request-subject');
+    DeviceFlowDeclaration::$resolvedSubject = DeviceFlowDeclaration::$profiles[0]->scope->subject;
     DeviceFlowDeclaration::$authorizeCalls = 0;
-    $use = Request::create('/protected', 'GET', server: [
+    $matchingUse = Request::create('/protected', 'GET', server: [
         'HTTP_AUTHORIZATION' => 'Bearer '.$secret,
-        'HTTP_USER_AGENT' => 'subject-binding-canary',
+        'HTTP_USER_AGENT' => 'subject-binding-positive',
+        'HTTP_X_BFC_CLIENT_ID' => 'subject-binding-positive',
     ]);
     $refreshKey = hash('sha256', "https://issuer.example.test\0connection-fixture\0managed-device-user");
+    $authenticated = app(BoundBearerCredentialAuthenticator::class)->authenticate($matchingUse, 'test.device');
+    $afterMatchingUse = Credential::query()->findOrFail($token->credentialId);
 
-    expect(app(BoundBearerCredentialAuthenticator::class)->authenticate($use, 'test.device'))->toBeNull()
+    expect($authenticated)->not->toBeNull()
+        ->and($authenticated?->id)->toBe($token->credentialId)
+        ->and(DeviceFlowDeclaration::$authorizeCalls)->toBe(1)
+        ->and($afterMatchingUse->last_used_at)->not->toBeNull()
+        ->and($afterMatchingUse->client_identity)->toBe('subject-binding-positive')
+        ->and($afterMatchingUse->client_identity_last_seen_at)->not->toBeNull()
+        ->and(Cache::get('bfc:managed-refresh-attempt:'.$refreshKey))->toBeNull();
+    Http::assertNothingSent();
+
+    DeviceFlowDeclaration::$resolvedSubject = new Subject(SubjectType::UserPrincipal, 'different-request-subject');
+    DeviceFlowDeclaration::$authorizeCalls = 0;
+    Carbon::setTestNow(now()->addSecond());
+    $mismatchedUse = Request::create('/protected', 'GET', server: [
+        'HTTP_AUTHORIZATION' => 'Bearer '.$secret,
+        'HTTP_USER_AGENT' => 'subject-binding-canary',
+        'HTTP_X_BFC_CLIENT_ID' => 'subject-binding-mismatch',
+    ]);
+
+    expect(app(BoundBearerCredentialAuthenticator::class)->authenticate($mismatchedUse, 'test.device'))->toBeNull()
         ->and(DeviceFlowDeclaration::$authorizeCalls)->toBe(0)
-        ->and(Credential::query()->findOrFail($token->credentialId)->last_used_at)->toBeNull()
+        ->and(Credential::query()->findOrFail($token->credentialId)->last_used_at?->equalTo($afterMatchingUse->last_used_at))->toBeTrue()
+        ->and(Credential::query()->findOrFail($token->credentialId)->client_identity)->toBe('subject-binding-positive')
+        ->and(Credential::query()->findOrFail($token->credentialId)->client_identity_last_seen_at?->equalTo($afterMatchingUse->client_identity_last_seen_at))->toBeTrue()
         ->and(DB::table('bfc_client_identity_observations')->count())->toBe(0)
         ->and(Cache::get('bfc:managed-refresh-attempt:'.$refreshKey))->toBeNull();
     Http::assertNothingSent();
