@@ -338,7 +338,7 @@ it('pins every published system-authority boundary statement to the code it desc
             ->and($limits)->toContain(class_basename($event));
     }
 
-    // 2. The entry kinds, derived from every file that OPENS the context. A fourth
+    // 2. The entry kinds, derived from every file that OPENS the context. A new
     //    entry kind cannot be added without this failing, which forces the
     //    documents to describe it.
     $openers = [];
@@ -359,6 +359,7 @@ it('pins every published system-authority boundary statement to the code it desc
         'SystemAuthorityBusFrame',   // package queue entries, framed at invocation
         'SystemAuthorityQueueScope', // the same entries, framed again from queue events
         'SystemAuthoritySchedule',   // package-registered schedule callbacks
+        'AuthenticateMcp',           // unbound installation MCP dispatch and stream callbacks
     ]);
 
     foreach (['command', 'schedule'] as $kind) {
@@ -403,6 +404,7 @@ it('pins every published system-authority boundary statement to the code it desc
         // payload, so an unreadable one leaves them outside.
         'That framing depends on the entry being POSITIVELY IDENTIFIED: `handle()` is framed by the bus pipe, which reads the dispatched object and never a payload, while `failed()` and the returned middleware are framed by the queue events, which must read the payload',
         'Each limit above carries an open `risk=security` debt row, so any future package change that reaches one is reviewed against it.',
+        'An unbound installation MCP request is framed during immediate downstream dispatch and again while a returned streamed response callback executes.',
     ];
 
     foreach ($claims as $claim) {

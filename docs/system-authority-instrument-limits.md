@@ -1,9 +1,11 @@
 # System Authority Instrument Limits
 
-Built for Cloud enforces two rules at runtime while one of its requestless entries executes:
+Built for Cloud enforces two rules at runtime while one of its system-attributed entries executes:
 
 - A package command, package `ShouldQueue` job/listener, or package-registered schedule callback cannot authenticate a human through a Laravel guard that dispatches `Authenticated` or `Login`.
 - The same entries cannot create a bound-user audit actor through `AuditActor::boundUser()`.
+
+An unbound installation MCP request is framed during immediate downstream dispatch and again while a returned streamed response callback executes. Like the requestless entries below, it cannot authenticate a human or create a bound-user audit actor while either frame is active.
 
 Every package command inherits the context wrapper, which frames the command's own invocation.
 Package queue entries are framed the same way, at invocation, by a bus pipe: `Dispatcher::dispatchNow()`

@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\SystemAuthorityContext;
@@ -17,18 +18,20 @@ use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use PHPUnit\Framework\Assert;
+use RuntimeException;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
  * Consumer-side proof of the MCP product-admission branches. The helper owns
  * its test users and credential rows so a consuming test imports no concrete
  * package model, credential enum, role enum, or system-context class.
  *
- * Run it in a database-refreshing Laravel feature test. It mounts two random,
- * test-only probes through the application's real `bfc.mcp` alias and asserts
+ * Run it in a database-refreshing Laravel feature test. It mounts random,
+ * test-only probes through the router's real `bfc.mcp` alias and asserts
  * recognized account roles, unknown and unresolved accounts, installation
- * system attribution, the `product` compound exclusion, usage ordering, and
- * context cleanup.
+ * system attribution (including deferred streaming work), the `product`
+ * compound exclusion, usage ordering, and context cleanup.
  *
  * Pinned by `tests/McpProductAdmissionTest.php` — "proves MCP product
  * admission through the reusable consumer helper".
@@ -46,6 +49,16 @@ final class McpProductAdmission
         Route::post($prefix.'/product', static fn (): array => [
             'system_authority' => app(SystemAuthorityContext::class)->active(),
         ])->middleware('bfc.mcp:product');
+        Route::post($prefix.'/stream', static fn (): StreamedResponse => response()->stream(
+            static function (): void {
+                echo app(SystemAuthorityContext::class)->active() ? 'active' : 'inactive';
+            },
+        ))->middleware('bfc.mcp:product');
+        Route::post($prefix.'/stream-throw', static fn (): StreamedResponse => response()->stream(
+            static function (): never {
+                throw new RuntimeException('installation stream probe');
+            },
+        ))->middleware('bfc.mcp:product');
 
         foreach (UserRole::cases() as $role) {
             $account = self::accountCredential($role->value);
@@ -60,7 +73,11 @@ final class McpProductAdmission
             Assert::assertFalse($context->active(), 'System authority leaked after an account-bound MCP request.');
         }
 
-        foreach (['unknown' => self::accountCredential('unknown'), 'unresolved' => self::unresolvedAccountCredential()] as $case => $account) {
+        foreach ([
+            'unknown' => self::accountCredential('unknown'),
+            'unresolved' => self::unresolvedAccountCredential(),
+            'malformed' => self::malformedAccountCredential(),
+        ] as $case => $account) {
             self::assertResponse(
                 self::request($prefix.'/product', $account['plaintext']),
                 Response::HTTP_UNAUTHORIZED,
@@ -91,6 +108,54 @@ final class McpProductAdmission
         );
         Assert::assertNotNull($installation['credential']->refresh()->last_used_at);
         Assert::assertFalse($context->active(), 'System authority leaked after the installation MCP request.');
+
+        $stream = self::request($prefix.'/stream', $installation['plaintext']);
+        Assert::assertInstanceOf(StreamedResponse::class, $stream);
+        Assert::assertFalse($context->active(), 'System authority leaked before the installation stream callback.');
+
+        ob_start();
+        try {
+            $stream->sendContent();
+            $streamOutput = ob_get_contents();
+        } finally {
+            ob_end_clean();
+        }
+
+        Assert::assertSame('active', $streamOutput);
+        Assert::assertFalse($context->active(), 'System authority leaked after the installation stream callback.');
+
+        $immediateException = null;
+        try {
+            app(AuthenticateMcp::class)->handle(
+                self::bearerRequest($prefix.'/throw', $installation['plaintext']),
+                static function (): never {
+                    Assert::assertTrue(
+                        app(SystemAuthorityContext::class)->active(),
+                        'System authority was inactive while immediate installation downstream ran.',
+                    );
+
+                    throw new RuntimeException('installation downstream probe');
+                },
+                'product',
+            );
+        } catch (RuntimeException $exception) {
+            $immediateException = $exception;
+        }
+        Assert::assertInstanceOf(RuntimeException::class, $immediateException);
+        Assert::assertSame('installation downstream probe', $immediateException->getMessage());
+        Assert::assertFalse($context->active(), 'System authority leaked after immediate downstream threw.');
+
+        $throwingStream = self::request($prefix.'/stream-throw', $installation['plaintext']);
+        Assert::assertInstanceOf(StreamedResponse::class, $throwingStream);
+        $streamException = null;
+        try {
+            $throwingStream->sendContent();
+        } catch (RuntimeException $exception) {
+            $streamException = $exception;
+        }
+        Assert::assertInstanceOf(RuntimeException::class, $streamException);
+        Assert::assertSame('installation stream probe', $streamException->getMessage());
+        Assert::assertFalse($context->active(), 'System authority leaked after the installation stream callback threw.');
 
         $compound = self::credential(
             name: 'compound-admin',
@@ -148,6 +213,19 @@ final class McpProductAdmission
             name: 'unresolved-account',
             subjectType: SubjectType::UserPrincipal,
             purpose: CredentialPurpose::Mcp,
+            userId: (string) PHP_INT_MAX,
+        );
+    }
+
+    /**
+     * @return array{credential: Credential, plaintext: string}
+     */
+    private static function malformedAccountCredential(): array
+    {
+        return self::credential(
+            name: 'malformed-account',
+            subjectType: SubjectType::UserPrincipal,
+            purpose: CredentialPurpose::Mcp,
             userId: 'missing-'.bin2hex(random_bytes(8)),
         );
     }
@@ -182,13 +260,16 @@ final class McpProductAdmission
 
     private static function request(string $uri, string $plaintext): Response
     {
-        $request = Request::create($uri, 'POST', server: [
+        return app('router')->dispatch(self::bearerRequest($uri, $plaintext));
+    }
+
+    private static function bearerRequest(string $uri, string $plaintext): Request
+    {
+        return Request::create($uri, 'POST', server: [
             'HTTP_AUTHORIZATION' => 'Bearer '.$plaintext,
             'CONTENT_TYPE' => 'application/json',
             'HTTP_ACCEPT' => 'application/json',
         ]);
-
-        return app('router')->dispatch($request);
     }
 
     /** @param array<string, bool|string> $body */

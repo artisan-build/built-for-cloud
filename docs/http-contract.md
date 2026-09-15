@@ -2380,10 +2380,12 @@ reason-free `401`, before usage. Plain `bfc.mcp` deliberately retains the compou
 that use the package's default operator integration behavior. No second alias is registered.
 
 An unbound installation credential (`subject_type=installation`, `purpose=mcp`, `user_id=null`)
-runs the downstream pipeline inside `SystemAuthorityContext`. That context is request execution
-attribution read by `AuditActor`; it grants no ability or policy permission. It is not active for
-account-bound credentials, delegated assertions, the operator compound, or after downstream
-dispatch returns or throws.
+runs the immediate downstream pipeline inside `SystemAuthorityContext`. If that pipeline returns a
+streamed response, its deferred stream callback runs in a separate system-authority frame. The
+context is inactive between those two frames and is released when either normal or streamed work
+returns or throws. This is request execution attribution read by `AuditActor`; it grants no ability
+or policy permission. It is never activated by this middleware for account-bound credentials,
+delegated assertions, or the operator compound.
 
 A deployment whose `built-for-cloud.token_prefix` is configured as `v4.public.` creates a carrier
 collision: generated registry tokens would select the assertion path. That is an invalid

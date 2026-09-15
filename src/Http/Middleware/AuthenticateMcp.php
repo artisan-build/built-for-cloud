@@ -34,6 +34,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use SensitiveParameter;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 use Throwable;
 
 /**
@@ -133,7 +134,7 @@ final class AuthenticateMcp
         if ($credential->purpose === CredentialPurpose::Mcp
             && $credential->subject_type === SubjectType::Installation
             && $credential->user_id === null) {
-            return app(SystemAuthorityContext::class)->run(static fn (): Response => $next($request));
+            return $this->dispatchAsInstallationSystem($request, $next);
         }
 
         return $next($request);
@@ -145,11 +146,42 @@ final class AuthenticateMcp
             return true;
         }
 
-        $user = User::query()->find($credential->user_id);
+        $userId = filter_var(
+            $credential->user_id,
+            FILTER_VALIDATE_INT,
+            ['options' => ['min_range' => 1]],
+        );
+
+        if (! is_int($userId)) {
+            return false;
+        }
+
+        $user = User::query()->find($userId);
 
         return $user instanceof User
             && hash_equals((string) $user->getAuthIdentifier(), $credential->user_id)
             && RolePolicy::canUseProduct($user->role);
+    }
+
+    /**
+     * @param  Closure(Request): Response  $next
+     */
+    private function dispatchAsInstallationSystem(Request $request, Closure $next): Response
+    {
+        $context = app(SystemAuthorityContext::class);
+        $response = $context->run(static fn (): Response => $next($request));
+
+        if (! $response instanceof StreamedResponse) {
+            return $response;
+        }
+
+        $callback = $response->getCallback();
+
+        if ($callback !== null) {
+            $response->setCallback(static fn (): mixed => $context->run($callback));
+        }
+
+        return $response;
     }
 
     /**

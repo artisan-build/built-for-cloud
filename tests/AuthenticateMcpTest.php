@@ -23,6 +23,7 @@ use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
 use ArtisanBuild\BuiltForCloud\SubjectType;
+use ArtisanBuild\BuiltForCloud\SystemAuthorityContext;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
@@ -70,6 +71,7 @@ beforeEach(function (): void {
             'authorization' => $request->header('Authorization'),
             'server_authorization' => $request->server->get('HTTP_AUTHORIZATION'),
             'redirect_server_authorization' => $request->server->get('REDIRECT_HTTP_AUTHORIZATION'),
+            'system_authority' => app(SystemAuthorityContext::class)->active(),
         ];
     })->middleware('bfc.mcp');
 
@@ -107,7 +109,7 @@ beforeEach(function (): void {
     // A downstream MCP tool that verifies or relays an assertion of its
     // own, exactly what hone and the scalpels relay do.
     Route::post('/mcp-downstream-refusal', function (): never {
-        throw AssertionRefused::because(AssertionRefusalReason::Replayed);
+        throw AssertionRefused::because(AssertionRefusalReason::SignatureInvalid);
     })->middleware('bfc.mcp');
 });
 
@@ -187,7 +189,8 @@ it('publishes the assertion actor and this handoff claims on the request', funct
         ->assertJsonPath('audit_type', AppActorType::DelegatedActor->value)
         ->assertJsonPath('audit_ref', $actor->getAuthIdentifier())
         ->assertJsonPath('audit_agency', 'Acme Agency')
-        ->assertJsonPath('authorization', null);
+        ->assertJsonPath('authorization', null)
+        ->assertJsonPath('system_authority', false);
 
     expect(AssertionBurn::query()->count())->toBe(1);
 });
@@ -320,7 +323,8 @@ it('authenticates a unified bearer, records its use and does not leak the prior 
         ->assertJsonPath('actor_token_id', null)
         ->assertJsonPath('actor_credential_id', null)
         ->assertJsonPath('acting_id', null)
-        ->assertJsonPath('delegated', false);
+        ->assertJsonPath('delegated', false)
+        ->assertJsonPath('system_authority', true);
 
     $credential->refresh();
 
