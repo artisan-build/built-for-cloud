@@ -1814,7 +1814,7 @@ be reachable from at least one app purpose in the host's `built-for-cloud.ui.cre
 list through its configured app-purpose mapping. A supplied purpose outside that displayed list is
 refused with **403**, with no row written and no delivery. If the host declares no displayed app
 purposes, the HTML surface offers no issue choice and this JSON route refuses every supplied purpose;
-omitting `purpose` remains invalid input (**422**) and never selects a default. The optional `kind`,
+omitting `purpose` remains invalid input (**422**) and does not select a default. The optional `kind`,
 `name`, `abilities`, `expires_at` and `code_ttl_seconds` fields have the same validation and delivery
 semantics as [`POST /bfc/credentials`](#post-bfccredentials). Any supplied `user_id` is not read; the
 persisted row is unbound from an individual user.
