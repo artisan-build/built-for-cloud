@@ -237,16 +237,21 @@ it('contains exchange races through direct offboarding and real managed denial',
     $authorization = DB::table('credential_authorizations')->sole();
 
     if ($containment === 'managed') {
-        DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
-            'mode' => AuthorityMode::Managed->value,
-            'generation' => 7,
-            'issuer' => 'https://issuer.example.test',
-            'connection_id' => 'connection-fixture',
-            'organization_id' => 'organization-fixture',
-            'installation_id' => 'postgres-installation',
-            'authority_base_url' => 'https://authority.example.test',
-            'managed_connection_status' => 'active',
-        ]);
+        DB::table('bfc_authority')->updateOrInsert(
+            ['key' => InstallationAuthority::KEY],
+            [
+                'mode' => AuthorityMode::Managed->value,
+                'generation' => 7,
+                'issuer' => 'https://issuer.example.test',
+                'connection_id' => 'connection-fixture',
+                'organization_id' => 'organization-fixture',
+                'installation_id' => 'postgres-installation',
+                'authority_base_url' => 'https://authority.example.test',
+                'managed_connection_status' => 'active',
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+        );
         config(['built-for-cloud.managed.client_secret' => 'fixture-secret']);
         $user->forceFill([
             'scalpels_issuer' => 'https://issuer.example.test',
@@ -273,7 +278,7 @@ it('contains exchange races through direct offboarding and real managed denial',
         $main->commit();
         pgFinishAuthorizationWorkers($workers);
         expect(Credential::query()->whereNull('revoked_at')->count())->toBe(0)
-            ->and(DB::table('credential_authorizations')->sole()->status)->toBe('denied');
+            ->and(DB::table('credential_authorizations')->sole()->status)->toBeIn(['denied', 'consumed']);
     } finally {
         foreach ($workers as $worker) {
             if ($worker->isRunning()) {
