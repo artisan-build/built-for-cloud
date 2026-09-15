@@ -608,8 +608,8 @@ it('refuses a personal start whose request subject differs without writing autho
 
 it('refuses malformed profile authority and exact package-boundary values before writing', function (callable $mutate): void {
     $user = deviceFlowUser();
-    $request = deviceRequest($this, $user);
     DeviceFlowDeclaration::$profiles = [deviceProfile($user)];
+    $request = deviceRequest($this, $user);
     $mutate($user);
 
     expect(fn () => app(StartDeviceAuthorization::class)($request, 'test.device', 'test-created'))
