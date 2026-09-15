@@ -10,7 +10,9 @@ use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
 use ArtisanBuild\BuiltForCloud\CredentialAlgorithm;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialMaterialRole;
+use ArtisanBuild\BuiltForCloud\CredentialAuthorizationOwnership;
 use ArtisanBuild\BuiltForCloud\CredentialProtocolBinding;
+use Carbon\CarbonInterface;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier;
 use ArtisanBuild\BuiltForCloud\ManagedAccountAccess;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
@@ -70,7 +72,14 @@ final class CredentialResolver
         return $credential;
     }
 
-    public function resolveBoundBearer(BoundCredentialScope $scope, ?string $secret): ?Credential
+    /** @param list<string> $abilities */
+    public function resolveBoundBearer(
+        BoundCredentialScope $scope,
+        CredentialAuthorizationOwnership $ownership,
+        array $abilities,
+        ?CarbonInterface $expiresAt,
+        ?string $secret,
+    ): ?Credential
     {
         if ($secret === null || $secret === '') {
             return null;
@@ -97,6 +106,11 @@ final class CredentialResolver
             ->where('binding.algorithm', $algorithm->value)
             ->where('binding.material_role', $role->value)
             ->where('binding.scope_hash', $scopeHash)
+            ->when(
+                $ownership === CredentialAuthorizationOwnership::Installation,
+                static fn ($query) => $query->whereNull('credentials.user_id'),
+                static fn ($query) => $query->whereNotNull('credentials.user_id'),
+            )
             ->active()
             ->first();
 
@@ -109,6 +123,8 @@ final class CredentialResolver
 
         if ($binding === null
             || ! $binding->exactlyMatches($credential, $scope, $purpose, $algorithm, $role)
+            || ($credential->abilities ?? []) !== $abilities
+            || $credential->expires_at?->getTimestamp() !== $expiresAt?->getTimestamp()
             || OffboardedSubject::rejects($credential)
             || ! $this->managedAccess->allowsCredential($credential)) {
             return null;

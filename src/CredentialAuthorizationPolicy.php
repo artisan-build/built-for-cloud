@@ -53,7 +53,13 @@ final readonly class CredentialAuthorizationPolicy
             throw InvalidCredentialInput::boundScopeMismatch();
         }
 
-        $this->canonicalAbilities($profile->abilities);
+        $abilities = $this->canonicalAbilities($profile->abilities);
+
+        if ($profile->ownership === CredentialAuthorizationOwnership::Installation
+            && (! in_array($profile->scope->subject->type, [SubjectType::Application, SubjectType::Installation], true)
+                || array_intersect($abilities, OperatorAbility::vocabulary()) !== [])) {
+            throw InvalidCredentialInput::boundScopeMismatch();
+        }
 
         return [$profile, $purpose];
     }
@@ -106,7 +112,12 @@ final readonly class CredentialAuthorizationPolicy
         return $context;
     }
 
-    public function authority(CredentialAuthorizationProfile $profile, Request $request, string $initiatingUserId): CredentialAuthorizationAuthority
+    public function authority(
+        CredentialAuthorizationProfile $profile,
+        Request $request,
+        string $initiatingUserId,
+        bool $installationExchange = false,
+    ): CredentialAuthorizationAuthority
     {
         if (InstallationAuthority::current()->mode !== AuthorityMode::Managed) {
             return CredentialAuthorizationAuthority::Allowed;
@@ -120,27 +131,68 @@ final readonly class CredentialAuthorizationPolicy
             return CredentialAuthorizationAuthority::Denied;
         }
 
-        if ($profile->ownership === CredentialAuthorizationOwnership::Installation) {
-            return CredentialAuthorizationAuthority::Allowed;
-        }
-
         $principal = $request->user();
         $user = $principal instanceof User && (string) $principal->getAuthIdentifier() === $initiatingUserId
             ? $principal
             : User::query()->find($initiatingUserId);
 
-        if (! $user instanceof User
-            || $user->status !== 'active'
+        if (! $user instanceof User && $installationExchange) {
+            $connection = ManagedAuthConnection::current();
+            $user = User::query()
+                ->where('scalpels_issuer', $connection->issuer)
+                ->where('scalpels_connection_id', $connection->connectionId)
+                ->whereNotNull('scalpels_id')
+                ->first();
+        }
+
+        if (! $user instanceof User) {
+            return $installationExchange
+                ? CredentialAuthorizationAuthority::Unavailable
+                : CredentialAuthorizationAuthority::Denied;
+        }
+
+        $allowed = $this->managedAccess->allows($user);
+        $user->refresh();
+        $connectionStatus = DB::table('bfc_authority')
+            ->where('key', InstallationAuthority::KEY)
+            ->value('managed_connection_status');
+
+        if ($connectionStatus === 'inactive') {
+            return CredentialAuthorizationAuthority::Denied;
+        }
+
+        if ($profile->ownership === CredentialAuthorizationOwnership::Installation && $installationExchange) {
+            if ($allowed) {
+                return CredentialAuthorizationAuthority::Allowed;
+            }
+
+            $responseAt = $this->timestamp($user->membership_response_at);
+            $age = $responseAt === null ? PHP_INT_MAX : now()->getTimestamp() - $responseAt;
+
+            return $age >= 0 && $age < 1800
+                ? CredentialAuthorizationAuthority::Allowed
+                : CredentialAuthorizationAuthority::Unavailable;
+        }
+
+        if ($profile->ownership === CredentialAuthorizationOwnership::Installation
+            && ! RolePolicy::canManageInstallationCredentials($user->role)) {
+            return CredentialAuthorizationAuthority::Denied;
+        }
+
+        if ($user->status !== 'active'
             || in_array($user->managed_membership_status, ['removed', 'disabled'], true)) {
             return CredentialAuthorizationAuthority::Denied;
         }
 
-        return $this->managedAccess->allows($user)
+        return $allowed
             ? CredentialAuthorizationAuthority::Allowed
             : CredentialAuthorizationAuthority::Unavailable;
     }
 
-    /** @return list<string> */
+    /**
+     * @param  array<array-key, mixed>  $abilities
+     * @return list<string>
+     */
     public function canonicalAbilities(array $abilities): array
     {
         if (! array_is_list($abilities)) {
@@ -183,7 +235,7 @@ final readonly class CredentialAuthorizationPolicy
 
         $profiles = $this->declaration->credentialAuthorizationProfiles($request);
 
-        if (! is_array($profiles) || ! array_is_list($profiles)) {
+        if (! array_is_list($profiles)) {
             throw InvalidCredentialInput::invalidAppPurposeMapping();
         }
 

@@ -48,7 +48,13 @@ final class BoundBearerCredentialAuthenticator
         }
 
         $this->attempted = true;
-        $credential = $this->resolver->resolveBoundBearer($profile->scope, $request->bearerToken());
+        $credential = $this->resolver->resolveBoundBearer(
+            $profile->scope,
+            $profile->ownership,
+            $this->policy->canonicalAbilities($profile->abilities),
+            $profile->expiresAt,
+            $request->bearerToken(),
+        );
 
         if ($credential === null
             || ($ability !== null && ! $credential->hasAbility($ability))

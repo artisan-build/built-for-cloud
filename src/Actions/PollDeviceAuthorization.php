@@ -59,7 +59,12 @@ final readonly class PollDeviceAuthorization
                 return CredentialAuthorizationRefused::denied();
             }
 
-            $authority = $this->policy->authority($profile, $context, (string) $authorization->initiating_user_id);
+            $authority = $this->policy->authority(
+                $profile,
+                $context,
+                (string) $authorization->initiating_user_id,
+                $authorization->status === CredentialAuthorizationStatus::Approved->value,
+            );
 
             if ($authority === CredentialAuthorizationAuthority::Unavailable) {
                 return CredentialAuthorizationRefused::temporarilyUnavailable();

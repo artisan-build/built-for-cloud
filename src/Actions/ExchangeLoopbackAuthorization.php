@@ -69,7 +69,12 @@ final readonly class ExchangeLoopbackAuthorization
                 return CredentialAuthorizationRefused::denied();
             }
 
-            $authority = $this->policy->authority($profile, $context, (string) $authorization->initiating_user_id);
+            $authority = $this->policy->authority(
+                $profile,
+                $context,
+                (string) $authorization->initiating_user_id,
+                installationExchange: true,
+            );
 
             if ($authority === CredentialAuthorizationAuthority::Unavailable) {
                 return CredentialAuthorizationRefused::temporarilyUnavailable();
