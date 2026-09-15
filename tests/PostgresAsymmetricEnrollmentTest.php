@@ -196,3 +196,53 @@ it('serializes completion against reissue under token credential UUID and bindin
         }
     }
 });
+
+it('serializes two reissues with one refusal and one live pending successor', function (): void {
+    $source = postgresPendingAsymmetricEnrollment();
+    app(CompleteAsymmetricEnrollment::class)($source['code'], $source['scope'], new Rs256PublicKey(testsRsaKey()['public']));
+    $rotation = app(RotateCredential::class)($source['id'], new RotateOptions(codeTtlSeconds: 3600));
+    $pending = [
+        'scope' => $source['scope'],
+        'code' => (string) $rotation?->mint->secret?->reveal(),
+        'id' => (string) $rotation?->mint->summary->id,
+    ];
+    $main = $this->postgresLaneConnection();
+    $main->beginTransaction();
+    $main->table('onboarding_tokens')->where('durable_credential_id', $pending['id'])->lockForUpdate()->sole();
+    $workers = [];
+
+    try {
+        foreach ([1, 2] as $workerId) {
+            $worker = new Process([PHP_BINARY, __DIR__.'/Fixtures/asymmetric-enrollment-worker.php']);
+            $worker->setInput(json_encode(postgresEnrollmentWorkerInput(
+                $workerId,
+                'reissue',
+                $pending,
+                testsRsaKey()['public'],
+                $source['id'],
+            ), JSON_THROW_ON_ERROR));
+            $worker->start();
+            $workers[] = $worker;
+        }
+
+        waitForEnrollmentWorkersToBlock($workers, $this->postgresLaneProbe());
+        $main->commit();
+        $results = finishEnrollmentWorkers($workers);
+        $outcomes = array_count_values(array_column($results, 'outcome'));
+        ksort($outcomes);
+
+        expect($outcomes)->toBe(['refused' => 1, 'reissued' => 1])
+            ->and(Credential::query()->where('status', CredentialStatus::Pending)->whereNull('revoked_at')->count())->toBe(1)
+            ->and(CredentialAuditEvent::query()->where('credential_id', $pending['id'])->where('reason_code', AuditReason::DeliveryAbandoned)->count())->toBe(1);
+    } finally {
+        foreach ($workers as $worker) {
+            if ($worker->isRunning()) {
+                $worker->stop();
+            }
+        }
+
+        if ($main->transactionLevel() > 0) {
+            $main->rollBack();
+        }
+    }
+});

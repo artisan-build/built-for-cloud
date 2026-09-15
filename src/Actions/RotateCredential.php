@@ -407,7 +407,9 @@ final class RotateCredential
         // replacement is still PENDING: the old key still OWNS signing,
         // and retiring it here would leave the subject with nothing that
         // signs. Activation is the step that owes the retirement.
-        if ($successor->status === CredentialStatus::Pending && $this->isBoundAsymmetricOriginator($successor->id)) {
+        if (! $options->emergency
+            && $successor->status === CredentialStatus::Pending
+            && $this->isBoundAsymmetricOriginator($successor->id)) {
             throw RotationRefused::successorAwaitingEnrollment($source->id, $successor->id);
         }
 

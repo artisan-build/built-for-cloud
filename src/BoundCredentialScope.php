@@ -32,7 +32,7 @@ final readonly class BoundCredentialScope
         if ($value === ''
             || strlen($value) > 255
             || ! mb_check_encoding($value, 'UTF-8')
-            || preg_match('/[\x00-\x1F\x7F]/', $value) === 1) {
+            || preg_match('/\p{Cc}/u', $value) === 1) {
             throw InvalidCredentialInput::invalidBoundScope();
         }
     }

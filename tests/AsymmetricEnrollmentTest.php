@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Actions\CompleteAsymmetricEnrollment;
 use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
+use ArtisanBuild\BuiltForCloud\Actions\OffboardSubject;
+use ArtisanBuild\BuiltForCloud\Actions\RevokeCredential;
 use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\AsymmetricVerificationKey;
 use ArtisanBuild\BuiltForCloud\AsymmetricVerificationKeys;
@@ -22,8 +24,10 @@ use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintOptions;
+use ArtisanBuild\BuiltForCloud\OffboardOptions;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
+use ArtisanBuild\BuiltForCloud\RevokeOutcome;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\Rs256PublicKey;
 use ArtisanBuild\BuiltForCloud\Subject;
@@ -86,6 +90,49 @@ function asymmetricRotationHeaders(): array
     ]);
 
     return ['Authorization' => $credential->bearerHeader()];
+}
+
+/** @return array<string, string> */
+function asymmetricRevokeHeaders(): array
+{
+    $credential = test()->mintCredential([
+        'purpose' => CredentialPurpose::OperatorManagement,
+        'subject_type' => SubjectType::Operator,
+        'subject_ref' => 'asymmetric-revoke-operator',
+        'abilities' => [OperatorAbility::CredentialRevoke->value],
+    ]);
+
+    return ['Authorization' => $credential->bearerHeader()];
+}
+
+/** @return array{scope: BoundCredentialScope, source_id: string, target_id: string, pending_id: string|null} */
+function revocableBoundEnrollment(string $state): array
+{
+    $source = pendingBoundEnrollment();
+    app(CompleteAsymmetricEnrollment::class)(
+        $source['code'],
+        $source['scope'],
+        new Rs256PublicKey(testsRsaKey()['public']),
+    );
+
+    if ($state === 'active') {
+        return [
+            'scope' => $source['scope'],
+            'source_id' => $source['id'],
+            'target_id' => $source['id'],
+            'pending_id' => null,
+        ];
+    }
+
+    $rotation = app(RotateCredential::class)($source['id'], new RotateOptions(codeTtlSeconds: 3600));
+    $pendingId = (string) $rotation?->mint->summary->id;
+
+    return [
+        'scope' => $source['scope'],
+        'source_id' => $source['id'],
+        'target_id' => $state === 'pending successor' ? $pendingId : $source['id'],
+        'pending_id' => $pendingId,
+    ];
 }
 
 it('completes the exact public-only enrollment over HTTP and verifies retained-private-key bytes', function (): void {
@@ -249,16 +296,20 @@ it('refuses every dead or malformed linked state without a partial write', funct
 
 it('rejects malformed and non-closed HTTP objects without resolver or storage work', function (): void {
     $pending = pendingBoundEnrollment();
+    $publicKey = testsRsaKey()['public'];
     $called = false;
-    app()->instance(ResolvesAsymmetricEnrollmentScope::class, new class($called) implements ResolvesAsymmetricEnrollmentScope
+    app()->instance(ResolvesAsymmetricEnrollmentScope::class, new class($called, $pending['scope']) implements ResolvesAsymmetricEnrollmentScope
     {
-        public function __construct(private bool &$called) {}
+        public function __construct(
+            private bool &$called,
+            private readonly BoundCredentialScope $scope,
+        ) {}
 
         public function resolve(Request $request, string $application): ?BoundCredentialScope
         {
             $this->called = true;
 
-            return null;
+            return $this->scope;
         }
     });
 
@@ -268,7 +319,7 @@ it('rejects malformed and non-closed HTTP objects without resolver or storage wo
         ['enrollment_code' => str_repeat('a', 64), 'public_key' => []],
         ['enrollment_code' => [], 'public_key' => 'key'],
         ['enrollment_code' => 'not-a-code', 'public_key' => 'key'],
-        ['enrollment_code' => str_repeat('a', 64), 'public_key' => 'key', 'algorithm' => 'RS256'],
+        ['enrollment_code' => $pending['code'], 'public_key' => $publicKey, 'audience' => 'https://attacker.example'],
     ];
 
     foreach ($cases as $case) {
@@ -280,7 +331,8 @@ it('rejects malformed and non-closed HTTP objects without resolver or storage wo
     ], '{')->assertUnprocessable();
 
     expect($called)->toBeFalse()
-        ->and(Credential::query()->findOrFail($pending['id'])->public_key)->toBeNull();
+        ->and(Credential::query()->findOrFail($pending['id'])->public_key)->toBeNull()
+        ->and(OnboardingToken::query()->where('durable_credential_id', $pending['id'])->sole()->consumed_at)->toBeNull();
 });
 
 it('rolls back key activation code consumption and audit when lifecycle recording fails', function (): void {
@@ -342,6 +394,8 @@ it('accepts only canonicalizable RSA SPKI material within the fixed size range',
         file_get_contents(__DIR__.'/Fixtures/rsa-9216-public.pem'),
         $rsa['public'].$rsa4096['public'],
         $rsa['public'].'payload',
+        "\0".$rsa['public'],
+        $rsa['public']."\0",
         "-----BEGIN PUBLIC KEY-----\nnot-base64!\n-----END PUBLIC KEY-----\n",
         '/tmp/key.pem',
         'file:///tmp/key.pem',
@@ -352,28 +406,45 @@ it('accepts only canonicalizable RSA SPKI material within the fixed size range',
 });
 
 it('rejects oversized HTTP bodies and key values before OpenSSL or resolver work', function (): void {
+    $pending = pendingBoundEnrollment();
+    $publicKey = testsRsaKey()['public'];
     $called = false;
-    app()->instance(ResolvesAsymmetricEnrollmentScope::class, new class($called) implements ResolvesAsymmetricEnrollmentScope
+    app()->instance(ResolvesAsymmetricEnrollmentScope::class, new class($called, $pending['scope']) implements ResolvesAsymmetricEnrollmentScope
     {
-        public function __construct(private bool &$called) {}
+        public function __construct(
+            private bool &$called,
+            private readonly BoundCredentialScope $scope,
+        ) {}
 
         public function resolve(Request $request, string $application): ?BoundCredentialScope
         {
             $this->called = true;
 
-            return null;
+            return $this->scope;
         }
     });
 
-    $this->call('POST', '/bfc/asymmetric-enrollments/app', [], [], [], [
+    $body = json_encode([
+        'enrollment_code' => $pending['code'],
+        'public_key' => $publicKey,
+    ], JSON_THROW_ON_ERROR);
+    $body .= str_repeat(' ', 24577 - strlen($body));
+    $this->call('POST', '/bfc/asymmetric-enrollments/'.$pending['scope']->application, [], [], [], [
         'CONTENT_TYPE' => 'application/json',
-    ], str_repeat('x', 24577))->assertUnprocessable();
-    $this->postJson('/bfc/asymmetric-enrollments/app', [
-        'enrollment_code' => str_repeat('a', 64),
-        'public_key' => str_repeat('x', 16385),
+    ], $body)->assertUnprocessable();
+
+    $oversizedPublicKey = str_replace(
+        "\n-----END PUBLIC KEY-----",
+        str_repeat("\n", 16385)."-----END PUBLIC KEY-----",
+        $publicKey,
+    );
+    $this->postJson('/bfc/asymmetric-enrollments/'.$pending['scope']->application, [
+        'enrollment_code' => $pending['code'],
+        'public_key' => $oversizedPublicKey,
     ])->assertUnprocessable();
 
-    expect($called)->toBeFalse();
+    expect($called)->toBeFalse()
+        ->and(OnboardingToken::query()->where('durable_credential_id', $pending['id'])->sole()->consumed_at)->toBeNull();
 });
 
 it('selects exact canonical keys in frozen order and ignores hash collisions and legacy rows', function (): void {
@@ -501,6 +572,80 @@ it('makes emergency bound rotation an explicit outage until enrollment', functio
     expect(array_column(app(AsymmetricVerificationKeys::class)->for($source['scope']), 'credentialId'))
         ->toBe([$replacementId]);
 });
+
+it('ends a stamped bound predecessor when emergency rotation is re-invoked and enrolls only its existing successor', function (): void {
+    Carbon::setTestNow(Carbon::parse('2026-09-15 12:00:00'));
+    $source = pendingBoundEnrollment();
+    app(CompleteAsymmetricEnrollment::class)($source['code'], $source['scope'], new Rs256PublicKey(testsRsaKey()['public']));
+    $rotation = app(RotateCredential::class)($source['id'], new RotateOptions(codeTtlSeconds: 3600));
+    $replacementId = (string) $rotation?->mint->summary->id;
+    $replacementCode = (string) $rotation?->mint->secret?->reveal();
+
+    $completed = app(RotateCredential::class)($source['id'], new RotateOptions(emergency: true));
+
+    expect($completed?->mint->summary->id)->toBe($replacementId)
+        ->and(Credential::query()->findOrFail($source['id'])->expires_at?->lessThanOrEqualTo(now()))->toBeTrue()
+        ->and(app(AsymmetricVerificationKeys::class)->for($source['scope']))->toBe([]);
+
+    app(CompleteAsymmetricEnrollment::class)(
+        $replacementCode,
+        $source['scope'],
+        new Rs256PublicKey(testsRsaKey()['public']),
+    );
+
+    expect(array_column(app(AsymmetricVerificationKeys::class)->for($source['scope']), 'credentialId'))
+        ->toBe([$replacementId]);
+});
+
+it('revokes bound asymmetric lifecycle rows through every supported verb', function (string $verb, string $state): void {
+    $lifecycle = revocableBoundEnrollment($state);
+
+    match ($verb) {
+        'action' => expect(app(RevokeCredential::class)($lifecycle['target_id']))->toBe(RevokeOutcome::Revoked),
+        'http' => $this->deleteJson(
+            '/bfc/credentials/'.$lifecycle['target_id'],
+            [],
+            asymmetricRevokeHeaders(),
+        )->assertNoContent(),
+        'cli' => expect(Artisan::call('bfc:credential:revoke', [
+            'id' => $lifecycle['target_id'],
+            '--local' => true,
+        ]))->toBe(0),
+        'offboard' => app(OffboardSubject::class)(OffboardOptions::fromInput([
+            'subject_type' => $lifecycle['scope']->subject->type->value,
+            'subject_ref' => $lifecycle['scope']->subject->ref,
+        ])),
+    };
+
+    $lookupIds = array_column(app(AsymmetricVerificationKeys::class)->for($lifecycle['scope']), 'credentialId');
+    $expectedLookupIds = $state === 'pending successor' && $verb !== 'offboard'
+        ? [$lifecycle['source_id']]
+        : [];
+
+    expect(Credential::query()->findOrFail($lifecycle['target_id'])->revoked_at)->not->toBeNull()
+        ->and($lookupIds)->toBe($expectedLookupIds);
+
+    if ($lifecycle['pending_id'] !== null) {
+        $pendingToken = OnboardingToken::query()->where('durable_credential_id', $lifecycle['pending_id'])->sole();
+
+        expect($pendingToken->consumed_at !== null)->toBe(
+            $state === 'pending successor' || $verb === 'offboard',
+        );
+    }
+})->with([
+    'action active' => ['action', 'active'],
+    'action pending successor' => ['action', 'pending successor'],
+    'action stamped predecessor' => ['action', 'stamped predecessor'],
+    'HTTP active' => ['http', 'active'],
+    'HTTP pending successor' => ['http', 'pending successor'],
+    'HTTP stamped predecessor' => ['http', 'stamped predecessor'],
+    'CLI active' => ['cli', 'active'],
+    'CLI pending successor' => ['cli', 'pending successor'],
+    'CLI stamped predecessor' => ['cli', 'stamped predecessor'],
+    'offboard active' => ['offboard', 'active'],
+    'offboard pending successor' => ['offboard', 'pending successor'],
+    'offboard stamped predecessor' => ['offboard', 'stamped predecessor'],
+]);
 
 it('rolls back replacement activation and predecessor cutover together', function (): void {
     Carbon::setTestNow(Carbon::parse('2026-09-15 12:00:00'));

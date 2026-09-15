@@ -168,8 +168,14 @@ final class Credential extends Model implements Authenticatable
                 && $credential->revoked_at !== null
                 && $rawPurpose === null;
 
+            $boundAsymmetricSigning = $credential->boundAsymmetricSigningWrite
+                || ($credential->exists
+                    && $rawPurpose === CredentialPurpose::Signing->value
+                    && ($credential->getAttributes()['kind'] ?? null) === CredentialKind::Asymmetric->value
+                    && CredentialProtocolBinding::query()->whereKey($credential->getKey())->exists());
+
             if (! $historicalTombstone) {
-                $credential->assertValidStoredPurpose($credential->boundAsymmetricSigningWrite);
+                $credential->assertValidStoredPurpose($boundAsymmetricSigning);
             }
 
             OperatorAbility::assertValues($credential->abilities);

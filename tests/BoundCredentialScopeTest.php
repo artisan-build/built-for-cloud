@@ -43,6 +43,8 @@ it('validates every bound string and the shared audience grammar', function (arr
 })->with([
     'empty' => [['installation' => '']],
     'control' => [['application' => "app\n1"]],
+    'C1 control in installation' => [['installation' => "install\u{0080}1"]],
+    'C1 control in application' => [['application' => "app\u{009F}1"]],
     'invalid utf8' => [['subjectRef' => "bad\xFF"]],
     'over 255 bytes' => [['appPurpose' => str_repeat('a', 256)]],
     'audience whitespace' => [['audience' => 'https://reel.example/a b']],

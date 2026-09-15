@@ -23,7 +23,7 @@ final readonly class Rs256PublicKey
             throw InvalidCredentialInput::invalidRs256PublicKey();
         }
 
-        $normalized = str_replace("\r\n", "\n", trim($publicKey, " \t\n\r\0\x0B\f"));
+        $normalized = str_replace("\r\n", "\n", trim($publicKey, " \t\n\r\x0B\f"));
 
         if (str_contains($normalized, "\r")
             || preg_match('/\A-----BEGIN PUBLIC KEY-----\n([A-Za-z0-9+\/=\n]+)\n-----END PUBLIC KEY-----\z/D', $normalized, $matches) !== 1) {
