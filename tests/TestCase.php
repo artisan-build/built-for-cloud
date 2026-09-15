@@ -46,20 +46,6 @@ abstract class TestCase extends Orchestra
         $app['config']->set('session.driver', 'array');
         $app['config']->set('app.debug', false);
 
-        $app['config']->set('database.connections.pgsql_testing', [
-            'driver' => 'pgsql',
-            'host' => $this->environment('PGSQL_TESTING_HOST', '127.0.0.1'),
-            'port' => $this->environment('PGSQL_TESTING_PORT', '5432'),
-            'database' => $this->environment('PGSQL_TESTING_DATABASE', 'bfc_testing'),
-            'username' => $this->environment('PGSQL_TESTING_USERNAME', 'postgres'),
-            'password' => $this->environment('PGSQL_TESTING_PASSWORD', 'postgres'),
-            'charset' => 'utf8',
-            'prefix' => '',
-            'prefix_indexes' => true,
-            'search_path' => 'public',
-            'sslmode' => 'prefer',
-        ]);
-
         // The Console is OFF by default in a consuming app (it gates the
         // delegated guard's injection, and with it the delegated
         // behaviour of the package's session gates). The package's own
@@ -73,12 +59,5 @@ abstract class TestCase extends Orchestra
         // key-version fingerprints stable within a run.
         $app['config']->set('app.key', 'base64:'.base64_encode(str_repeat('bfc-test-key-32b', 2)));
         $app['config']->set('built-for-cloud.hmac.audience', 'https://bfc-test-installation.example');
-    }
-
-    private function environment(string $name, string $default): string
-    {
-        $value = getenv($name);
-
-        return $value === false ? $default : $value;
     }
 }

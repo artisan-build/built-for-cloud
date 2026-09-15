@@ -495,6 +495,26 @@ for minting unified operator and consume-capable credentials when an app wants t
 This package is developed by [Artisan Build](https://artisan.build). Issues and pull requests are
 welcome.
 
+### P6 release gate
+
+The ordinary `composer test` command remains the SQLite suite. The final package candidate is checked
+on one clean committed SHA by running `composer stan`, `composer lint:test`, `composer test`,
+`composer test:pgsql`, and `composer test:p6c-live` in that order with one private
+`BFC_P6_COMMAND_STAMP` path. The PostgreSQL command also requires a separately supplied local test
+administrator through `PGSQL_TESTING_HOST`, `PGSQL_TESTING_PORT`,
+`PGSQL_TESTING_ADMIN_DATABASE`, `PGSQL_TESTING_USERNAME`, optional `PGSQL_TESTING_PASSWORD`, and
+optional `PGSQL_TESTING_SSLMODE`; it accepts no target database name. Set `BFC_P6_PGSQL_STAMP` for
+that command, then pass the same command and PostgreSQL stamp paths plus `BFC_P6_LIVE_STAMP` to the
+live command.
+
+The live command builds a Composer zip from the exact committed candidate, installs that dist archive
+into a disposable fresh Laravel host, and runs the two-node matrix. It refuses path repositories,
+development branches, published tags, incomplete prior command evidence, isolated state drivers, and
+unverified teardown. The PostgreSQL group drops its run-owned matrix database before exiting, so the
+subsequent live command creates a separate run-owned database and stamps both generated names plus that
+relationship rather than attributing the matrix verdicts to the live database. These commands never
+select a Laravel Cloud application or run a remote command.
+
 ### Releasing
 
 Every tag gets a version bump: update `BuiltForCloud::VERSION` to the version you are about to tag

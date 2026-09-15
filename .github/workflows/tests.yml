@@ -66,19 +66,14 @@ jobs:
 
       - name: Run Tests
         run: composer test
-        env:
-          PGSQL_TESTING_DATABASE: bfc_testing
-          PGSQL_TESTING_HOST: 127.0.0.1
-          PGSQL_TESTING_PASSWORD: postgres
-          PGSQL_TESTING_USERNAME: postgres
 
       # Local runs skip the opt-in Postgres group when no server is configured.
       # CI must instead fail if the service or its driver disappears, so skipped
       # tests are an explicit failure rather than a permanently green lane.
       - name: Prove the Postgres tests actually ran
-        run: ./vendor/bin/pest --group=pgsql --fail-on-skipped
+        run: composer test:pgsql
         env:
-          PGSQL_TESTING_DATABASE: bfc_testing
+          PGSQL_TESTING_ADMIN_DATABASE: bfc_testing
           PGSQL_TESTING_HOST: 127.0.0.1
           PGSQL_TESTING_PASSWORD: postgres
           PGSQL_TESTING_USERNAME: postgres

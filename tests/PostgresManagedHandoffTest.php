@@ -56,7 +56,7 @@ it('lets exactly one concurrent callback claim the BfC correlation and reach a r
         expect($authority->waitUntil(
             static fn (string $type, string $output): bool => str_contains($output, 'READY'),
         ))->toBeTrue();
-        DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
+        DB::table('bfc_authority')->updateOrInsert(['key' => InstallationAuthority::KEY], [
             'mode' => 'managed',
             'generation' => 7,
             'issuer' => 'https://live-issuer.example.test',
@@ -64,6 +64,8 @@ it('lets exactly one concurrent callback claim the BfC correlation and reach a r
             'organization_id' => 'live-organization',
             'installation_id' => 'live-installation',
             'authority_base_url' => $baseUrl,
+            'created_at' => now(),
+            'updated_at' => now(),
         ]);
         config([
             'built-for-cloud.managed.client_secret' => $clientSecret,
