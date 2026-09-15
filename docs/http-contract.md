@@ -88,6 +88,23 @@ The rules a consumer may rely on:
 4. On the claim surfaces, **the `error` enum is the contract** — branch on `error`, never on the
    HTTP status (statuses are stated as guidance and stable in practice).
 
+### Opt-in contract-major admission
+
+Consumers may attach the middleware alias `bfc.contract-major` to their own product or provider
+routes whose wire follows this contract. Existing package routes are not subject to this gate. An
+admitted request carries exactly one `BFC-Contract-Version` header whose value is the canonical
+unsigned decimal `2`; the header selects no guard, credential, purpose, audience, installation,
+role, ability, retry policy, or authority. `X-BfC-Client-Id` remains advisory metadata.
+
+Admission refusals are JSON with `Cache-Control: no-store`, no `Retry-After`, no reflected input,
+and the following closed `error` vocabulary. Clients branch on `error`.
+
+| Condition | Status | Exact JSON |
+| --- | ---: | --- |
+| Header absent | 400 | `{"error":"missing_contract_major","supported_contract_major":2}` |
+| Duplicate or non-canonical header | 400 | `{"error":"malformed_contract_major","supported_contract_major":2}` |
+| Canonical integer other than `2` | 426 | `{"error":"unsupported_contract_major","supported_contract_major":2}` |
+
 ### Changelog
 
 **api_version 2** (bfc **0.10.0**, this release). All changes since version 1, in one inventory.

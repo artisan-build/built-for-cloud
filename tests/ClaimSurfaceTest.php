@@ -573,6 +573,8 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     // increasing blocks by eight and absolute/unpaired by two.
     // P5-UI-e added the installation credential browser contract and view,
     // increasing blocks by sixteen and absolute/unpaired by three.
+    // P6a1 added four scaffold/conformance blocks on these measured surfaces
+    // without changing the absolute pairing vocabulary.
     $gateSurfaces = [
         'src/Console', 'src/Audit', 'src/Http/Controllers/ConsoleEnter.php',
         'src/Http/Controllers/ConsoleChromeScript.php', 'resources/views', 'resources/js',
@@ -583,7 +585,7 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1399,
+        'blocks' => 1403,
         'absolute' => 434,
         'paired' => 113,
         'unpaired' => 321,

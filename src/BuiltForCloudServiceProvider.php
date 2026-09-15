@@ -59,6 +59,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\UiLogout;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiPersonalCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureContractMajor;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
@@ -80,6 +81,7 @@ use Illuminate\Auth\Events\Login;
 use Illuminate\Auth\SessionGuard;
 use Illuminate\Bus\Dispatcher as BusDispatcher;
 use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Contracts\Bus\Dispatcher as BusDispatcherContract;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
@@ -259,6 +261,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router = $this->app['router'];
 
             $router->aliasMiddleware('bfc.auth', EnsureUserIsAuthenticated::class);
+            $router->aliasMiddleware('bfc.contract-major', EnsureContractMajor::class);
             $router->aliasMiddleware('bfc.admin', EnsureUserIsAdmin::class);
             $router->aliasMiddleware('bfc.credential.admin', EnsureCredentialAdmin::class);
             $router->aliasMiddleware('bfc.ability', EnsureCredentialAbility::class);
@@ -275,6 +278,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router->aliasMiddleware('bfc.console', EnsureConsoleSession::class);
             $router->aliasMiddleware('bfc.mcp', AuthenticateMcp::class);
             $router->aliasMiddleware('bfc.standalone', EnsureStandaloneAuthority::class);
+            $this->prioritizeContractMajorAdmission($router);
 
             // These convenience aliases remain public. Package operator routes
             // verify their resolved gate on match, and each final operator
@@ -312,6 +316,71 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 __DIR__.'/../resources/views' => $this->app->resourcePath('views/vendor/bfc'),
             ], 'built-for-cloud-views');
         }
+    }
+
+    /** Keep opt-in contract admission ahead of every package authentication gate. */
+    private function prioritizeContractMajorAdmission(Router $router): void
+    {
+        $config = $this->app->make(Repository::class);
+        $authentication = [
+            EnsureManagedAuthority::class,
+            EnsureStandaloneAuthority::class,
+            EnsureConsoleSession::class,
+            AuthenticateMcp::class,
+            VerifyHmacSignature::class,
+            EnsureDashboardCredential::class,
+            EnsureCredentialAdmin::class,
+            EnsureCredentialAbility::class,
+            EnsureUserIsAuthenticated::class,
+            EnsureUserIsAdmin::class,
+        ];
+
+        $router->matched(static function (RouteMatched $event) use ($authentication, $config, $router): void {
+            $resolved = $router->resolveMiddleware(
+                $event->route->gatherMiddleware(),
+                $event->route->excludedMiddleware(),
+            );
+            $admission = array_search(EnsureContractMajor::class, $resolved, true);
+
+            if ($admission === false) {
+                return;
+            }
+
+            $firstAuthentication = null;
+
+            foreach ($resolved as $index => $middleware) {
+                [$name, $parameters] = array_pad(explode(':', $middleware, 2), 2, null);
+                $usesCredentialGuard = false;
+
+                if (is_a($name, AuthenticatesRequests::class, true)) {
+                    $guards = $parameters === null
+                        ? [$config->get('auth.defaults.guard')]
+                        : explode(',', $parameters);
+
+                    foreach ($guards as $guard) {
+                        $guardConfig = is_string($guard) ? $config->get('auth.guards.'.$guard) : null;
+
+                        if (is_array($guardConfig) && ($guardConfig['driver'] ?? null) === 'bfc') {
+                            $usesCredentialGuard = true;
+                            break;
+                        }
+                    }
+                }
+
+                if ($usesCredentialGuard || in_array($name, $authentication, true)) {
+                    $firstAuthentication = $index;
+                    break;
+                }
+            }
+
+            if ($firstAuthentication === null || $admission < $firstAuthentication) {
+                return;
+            }
+
+            array_splice($resolved, $admission, 1);
+            array_splice($resolved, $firstAuthentication, 0, [EnsureContractMajor::class]);
+            $event->route->computedMiddleware = $resolved;
+        });
     }
 
     /**

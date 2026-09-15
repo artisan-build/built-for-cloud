@@ -10,8 +10,8 @@ use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\DefaultCredentialDeclaration;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
+use ArtisanBuild\BuiltForCloud\HttpContract;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -635,7 +635,7 @@ it('refuses with a bounded 401 on an app that never registered the bfc guard', f
 it('renders honestly for a caller stating a previous contract version', function (): void {
     $response = $this->getJson('/bfc/console/vitals', [
         'Authorization' => vitalsReader()->bearerHeader(),
-        ConsoleVitals::CONTRACT_VERSION_HEADER => (string) (BuiltForCloud::API_VERSION - 1),
+        HttpContract::MAJOR_HEADER => (string) (BuiltForCloud::API_VERSION - 1),
     ]);
 
     $response->assertOk();
@@ -651,7 +651,7 @@ it('renders honestly for a caller stating a previous contract version', function
     // the assertion above would pass on a route that always degrades.
     $agreed = $this->getJson('/bfc/console/vitals', [
         'Authorization' => vitalsReader()->bearerHeader(),
-        ConsoleVitals::CONTRACT_VERSION_HEADER => (string) BuiltForCloud::API_VERSION,
+        HttpContract::MAJOR_HEADER => (string) BuiltForCloud::API_VERSION,
     ])->assertOk();
 
     expect($agreed->json('health'))->toBe('ok');

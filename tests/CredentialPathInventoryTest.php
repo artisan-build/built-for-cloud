@@ -128,6 +128,7 @@ it('derives the seven discoverable paths with no transitional rows from all five
             'key-sink:ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession',
+            'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureContractMajor',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential',

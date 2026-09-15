@@ -74,7 +74,7 @@ final class SurfaceSelectionTest extends TestCase
         // still gates its own routes (the MCP per-tool primitive included).
         $aliases = Route::getMiddleware();
 
-        foreach (['bfc.auth', 'bfc.admin', 'bfc.credential.admin', 'bfc.ability', 'bfc.hmac'] as $alias) {
+        foreach (['bfc.auth', 'bfc.admin', 'bfc.credential.admin', 'bfc.ability', 'bfc.hmac', 'bfc.contract-major'] as $alias) {
             $this->assertArrayHasKey($alias, $aliases);
         }
 
