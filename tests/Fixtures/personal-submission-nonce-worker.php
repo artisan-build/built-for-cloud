@@ -56,7 +56,7 @@ $case = new class('testProbe') extends TestCase
             'prefix' => '',
             'prefix_indexes' => true,
             'search_path' => 'public',
-            'sslmode' => 'prefer',
+            'sslmode' => $environment('PGSQL_TESTING_SSLMODE', 'prefer'),
         ]);
         $app['config']->set('database.default', 'pgsql_testing');
         $app['config']->set('session.driver', 'array');
