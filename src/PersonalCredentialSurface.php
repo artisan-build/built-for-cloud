@@ -67,22 +67,12 @@ use Illuminate\Http\Request;
  */
 final readonly class PersonalCredentialSurface
 {
-    /**
-     * The kinds a self-service mint may produce when the app declares no
-     * policy: `bearer` alone. `hmac` and `asymmetric` deliver signing key
-     * material and enrollment codes, and `basic` is an operator-shaped
-     * delivery — none of them is something a logged-in human should be
-     * able to reach by naming it.
-     *
-     * @var list<CredentialKind>
-     */
-    private const array DEFAULT_SELF_SERVICE_KINDS = [CredentialKind::Bearer];
-
     public function __construct(
         private ListCredentials $list,
         private MintCredential $mint,
         private RevokeCredential $revoke,
         private RotateCredential $rotate,
+        private SelfServiceKindPolicyResolver $kindPolicy,
     ) {}
 
     /**
@@ -161,12 +151,8 @@ final readonly class PersonalCredentialSurface
     public function admittedKinds(Request $request): array
     {
         $subject = $this->requireSubject($request);
-        $declaration = $this->declaration();
-        $kinds = $declaration instanceof DeclaresSelfServiceMintPolicy
-            ? $declaration->selfServiceKinds($subject)
-            : self::DEFAULT_SELF_SERVICE_KINDS;
 
-        return array_values(array_unique($kinds, SORT_REGULAR));
+        return $this->kindPolicy->personalKinds($subject);
     }
 
     public function rotateMine(
@@ -348,11 +334,7 @@ final readonly class PersonalCredentialSurface
         $policy = $this->declaration();
         $policy = $policy instanceof DeclaresSelfServiceMintPolicy ? $policy : null;
 
-        $kinds = $policy?->selfServiceKinds($subject) ?? self::DEFAULT_SELF_SERVICE_KINDS;
-
-        if (! in_array($options->kind, $kinds, true)) {
-            throw CredentialVerbRefused::selfServiceKind($options->kind);
-        }
+        $this->kindPolicy->assertPersonalKindAllowed($subject, $options->kind);
 
         $abilities = array_values(array_filter(
             $policy?->selfServiceAbilities($subject) ?? [],

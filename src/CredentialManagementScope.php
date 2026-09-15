@@ -96,6 +96,14 @@ final readonly class CredentialManagementScope
 
     public function assertRotationAllowed(Credential $credential): void
     {
+        $kindPolicy = app(SelfServiceKindPolicyResolver::class);
+
+        if ($this->ownership === CredentialOwnership::Installation) {
+            $kindPolicy->assertInstallationKindAllowed($credential->subject(), $credential->kind);
+        } else {
+            $kindPolicy->assertPersonalKindAllowed($credential->subject(), $credential->kind);
+        }
+
         if (! $this->selfService) {
             return;
         }
@@ -103,15 +111,9 @@ final readonly class CredentialManagementScope
         $declaration = app(CredentialDeclaration::class);
 
         if ($declaration instanceof DeclaresSelfServiceMintPolicy) {
-            $kinds = $declaration->selfServiceKinds($credential->subject());
             $abilities = $declaration->selfServiceAbilities($credential->subject());
         } else {
-            $kinds = [CredentialKind::Bearer];
             $abilities = [];
-        }
-
-        if (! in_array($credential->kind, $kinds, true)) {
-            throw CredentialVerbRefused::selfServiceKind($credential->kind);
         }
 
         $abilities = array_values(array_filter(

@@ -22,6 +22,7 @@ use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\RevokeOutcome;
 use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
+use ArtisanBuild\BuiltForCloud\SelfServiceKindPolicyResolver;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\User;
@@ -50,8 +51,11 @@ final class InstallationCredentials
         ]);
     }
 
-    public function store(Request $request, MintCredential $mint): JsonResponse
-    {
+    public function store(
+        Request $request,
+        MintCredential $mint,
+        SelfServiceKindPolicyResolver $kindPolicy,
+    ): JsonResponse {
         $managementScope = CredentialManagementScope::memberInstallation();
 
         /** @var array{subject_type: string, subject_ref: string} $validated */
@@ -70,8 +74,10 @@ final class InstallationCredentials
                 throw CredentialVerbRefused::abilityWidening($refusedAbility);
             }
 
+            $subject = new Subject(SubjectType::from($validated['subject_type']), $validated['subject_ref']);
+            $kindPolicy->assertInstallationKindAllowed($subject, $options->kind);
             $result = $mint(
-                new Subject(SubjectType::from($validated['subject_type']), $validated['subject_ref']),
+                $subject,
                 new MintOptions(
                     kind: $options->kind,
                     purpose: $options->purpose,

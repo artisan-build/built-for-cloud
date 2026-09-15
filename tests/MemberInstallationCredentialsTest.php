@@ -19,6 +19,7 @@ use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\RotationOverride;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SelfServicePolicyDeclaration;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -171,6 +172,45 @@ it('lets a Member mint each installation app purpose through the JSON API', func
     'mcp bearer' => [CredentialPurpose::Mcp, CredentialKind::Bearer],
     'mcp basic' => [CredentialPurpose::Mcp, CredentialKind::Basic],
 ]);
+
+it('applies the bearer-only host policy to JSON installation issue and rotation', function (): void {
+    config(['built-for-cloud.credentials.declaration' => SelfServicePolicyDeclaration::class]);
+    SelfServicePolicyDeclaration::$kinds = [CredentialKind::Bearer];
+    SelfServicePolicyDeclaration::$abilities = [];
+    $member = installationMember(UserRole::Member);
+    $beforeIssue = [
+        Credential::query()->count(),
+        CredentialAuditEvent::query()->count(),
+    ];
+    $issue = $this->actingAsVersioned($member)->postJson('/bfc/installation/credentials', [
+        'subject_type' => SubjectType::Application->value,
+        'subject_ref' => 'json-forged-basic-issue',
+        'kind' => CredentialKind::Basic->value,
+        'purpose' => CredentialPurpose::SystemDeployment->value,
+    ])->assertForbidden();
+
+    expect($issue->json('delivery'))->toBeNull()
+        ->and([Credential::query()->count(), CredentialAuditEvent::query()->count()])->toBe($beforeIssue);
+
+    $source = Credential::query()->create([
+        'kind' => CredentialKind::Basic,
+        'purpose' => CredentialPurpose::SystemDeployment,
+        'subject_type' => SubjectType::Application,
+        'subject_ref' => 'json-forged-basic-rotation',
+        'status' => CredentialStatus::Active,
+        'secret_hash' => hash('sha256', 'json-forged-basic-rotation-secret'),
+    ]);
+    $beforeRotation = [
+        Credential::query()->count(),
+        CredentialAuditEvent::query()->count(),
+    ];
+    $rotation = $this->postJson('/bfc/installation/credentials/'.$source->id.'/rotate')
+        ->assertForbidden();
+
+    expect($rotation->json('delivery'))->toBeNull()
+        ->and([Credential::query()->count(), CredentialAuditEvent::query()->count()])->toBe($beforeRotation)
+        ->and($source->refresh()->rotated_at)->toBeNull();
+});
 
 it('refuses an installation MCP credential at the consumption gate', function (): void {
     $secret = 'installation-mcp-wrong-consumption-purpose-'.bin2hex(random_bytes(12));

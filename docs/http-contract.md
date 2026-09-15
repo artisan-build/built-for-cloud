@@ -1687,7 +1687,9 @@ This surface calls the same unified-store actions described above. Its ownership
 credentials for `application` and `installation` subjects whose `user_id` is null; personal rows
 are neither listed nor accepted as rotate/revoke targets. Bearer and basic installation subjects
 may carry `system_deployment`, `consumption`, or `mcp`; application subjects remain limited to
-`system_deployment`.
+`system_deployment`. When the host implements `DeclaresSelfServiceMintPolicy`, its admitted kinds
+also constrain the installation HTML and JSON issue and rotation paths. Without that policy, the
+installation surfaces retain their existing kind set.
 
 ### GET /bfc/installation/credentials
 

@@ -24,6 +24,7 @@ use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\RevokeOutcome;
 use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
+use ArtisanBuild\BuiltForCloud\SelfServiceKindPolicyResolver;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\SubmissionNonce;
@@ -43,8 +44,9 @@ final class UiInstallationCredentials
         Request $request,
         ListCredentials $list,
         UiCredentialPurposes $purposes,
+        SelfServiceKindPolicyResolver $kindPolicy,
     ): Response {
-        return $this->pageResponse($request, $list, $purposes, $this->actor($request));
+        return $this->pageResponse($request, $list, $purposes, $kindPolicy, $this->actor($request));
     }
 
     public function store(
@@ -52,6 +54,7 @@ final class UiInstallationCredentials
         MintCredential $mint,
         ListCredentials $list,
         UiCredentialPurposes $purposes,
+        SelfServiceKindPolicyResolver $kindPolicy,
     ): Response {
         try {
             $actor = $this->actor($request);
@@ -73,6 +76,7 @@ final class UiInstallationCredentials
             $submitted = MintOptions::fromInput($request->only([
                 'kind', 'name', 'expires_at', 'code_ttl_seconds',
             ]));
+            $kindPolicy->assertInstallationKindAllowed($subject, $submitted->kind);
             $result = $mint($subject, new MintOptions(
                 kind: $submitted->kind,
                 purpose: $purposes->purposeForSubmission($appPurpose),
@@ -90,7 +94,7 @@ final class UiInstallationCredentials
             return $this->error($refused->getMessage(), 409);
         }
 
-        return $this->pageResponse($request, $list, $purposes, $actor, $this->deliveryPayload($result), 201);
+        return $this->pageResponse($request, $list, $purposes, $kindPolicy, $actor, $this->deliveryPayload($result), 201);
     }
 
     public function rotate(
@@ -98,6 +102,7 @@ final class UiInstallationCredentials
         RotateCredential $rotate,
         ListCredentials $list,
         UiCredentialPurposes $purposes,
+        SelfServiceKindPolicyResolver $kindPolicy,
         string $id,
     ): Response {
         try {
@@ -136,6 +141,7 @@ final class UiInstallationCredentials
             $request,
             $list,
             $purposes,
+            $kindPolicy,
             $actor,
             $this->deliveryPayload($result->mint),
             $result->completedCutover ? 200 : 201,
@@ -172,6 +178,7 @@ final class UiInstallationCredentials
         Request $request,
         ListCredentials $list,
         UiCredentialPurposes $purposes,
+        SelfServiceKindPolicyResolver $kindPolicy,
         AuditActor $actor,
         ?array $delivery = null,
     ): array {
@@ -184,7 +191,12 @@ final class UiInstallationCredentials
             foreach (CredentialKind::cases() as $kind) {
                 $subjectTypes = array_values(array_filter(
                     $scope->subjectTypes(),
-                    static fn (string $subjectType): bool => $purpose->allowedFor($kind, SubjectType::from($subjectType)),
+                    static function (string $subjectType) use ($kind, $kindPolicy, $purpose): bool {
+                        $subject = new Subject(SubjectType::from($subjectType), '');
+
+                        return $purpose->allowedFor($kind, $subject->type)
+                            && in_array($kind, $kindPolicy->installationKinds($subject), true);
+                    },
                 ));
 
                 if ($subjectTypes !== []) {
@@ -231,13 +243,14 @@ final class UiInstallationCredentials
         Request $request,
         ListCredentials $list,
         UiCredentialPurposes $purposes,
+        SelfServiceKindPolicyResolver $kindPolicy,
         AuditActor $actor,
         ?array $delivery = null,
         int $status = 200,
     ): Response {
         return response()->view(
             'bfc::credentials.installation',
-            $this->page($request, $list, $purposes, $actor, $delivery),
+            $this->page($request, $list, $purposes, $kindPolicy, $actor, $delivery),
             $status,
             ['Cache-Control' => 'private, no-store'],
         );
