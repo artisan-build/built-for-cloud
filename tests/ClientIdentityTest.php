@@ -440,8 +440,14 @@ final class ClientIdentityTest extends TestCase
 
         $this->assertNull(ClientIdentity::fromRequest($request));
 
+        $request->headers->set(ClientIdentity::HEADER, 'client one');
+        $this->assertSame('client one', ClientIdentity::fromRequest($request));
+
         $request->headers->set(ClientIdentity::HEADER, '  spaced  ');
-        $this->assertSame('  spaced  ', ClientIdentity::fromRequest($request));
+        $this->assertNull(ClientIdentity::fromRequest($request));
+
+        $request->headers->set(ClientIdentity::HEADER, "client\x7Fone");
+        $this->assertNull(ClientIdentity::fromRequest($request));
 
         $request->headers->set(ClientIdentity::HEADER, ['one', 'two']);
         $this->assertNull(ClientIdentity::fromRequest($request));
@@ -458,7 +464,7 @@ final class ClientIdentityTest extends TestCase
         return [
             'uuid' => ['9f8b1c34-0a2e-4f77-9c1d-6b0f2a5e7d31'],
             'multi-byte' => ['клиент-ідентичність'],
-            'surrounding whitespace' => ['  spaced  '],
+            'internal space' => ['client one'],
             'mixed case' => ['MiXeD-CaSe-Client'],
             'unicode line separator' => ["a\u{2028}b"],
         ];
@@ -477,6 +483,13 @@ final class ClientIdentityTest extends TestCase
             'line feed' => ["a\nb"],
             'empty' => [''],
             'invalid utf-8' => ["\xC3\x28"],
+            'surrounding whitespace' => ['  spaced  '],
+            'leading space' => [' client'],
+            'trailing tab' => ["client\t"],
+            'internal tab' => ["client\tone"],
+            'vertical tab' => ["client\x0Bone"],
+            'delete' => ["client\x7Fone"],
+            'start of heading' => ["client\x01one"],
         ];
     }
 
@@ -509,6 +522,17 @@ final class ClientIdentityTest extends TestCase
             'line feed' => ["a\nb", false],
             'invalid utf-8' => ["\xC3\x28", false],
             'unicode line separator' => ["a\u{2028}b", true],
+            'internal space' => ['client one', true],
+            'multi-byte utf-8' => ['клиент-ідентичність', true],
+            'leading space' => [' client', false],
+            'trailing space' => ['client ', false],
+            'leading tab' => ["\tclient", false],
+            'trailing tab' => ["client\t", false],
+            'internal tab' => ["client\tone", false],
+            'vertical tab' => ["client\x0Bone", false],
+            'delete' => ["client\x7Fone", false],
+            'start of heading' => ["client\x01one", false],
+            'only spaces' => ['   ', false],
         ];
     }
 

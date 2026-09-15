@@ -66,7 +66,7 @@ bearer credential it already authenticates with. This package records that value
 
 | Rule | Behaviour |
 | --- | --- |
-| **Shape** | Valid UTF-8, **1–255 bytes** (bytes, not characters), no CR, LF or NUL, exactly one header value. |
+| **Shape** | Valid UTF-8, **1–255 bytes** (bytes, not characters), no leading or trailing space or tab, no control octet (0x00–0x1F, including tab anywhere, or 0x7F), exactly one header value. Internal spaces and non-ASCII UTF-8 are allowed. This is the domain that survives HTTP transport byte-exactly. |
 | **Opaque** | Compared byte-wise and stored **verbatim** — no trimming, normalising, case-folding or truncation. |
 | **Not a credential** | It grants nothing. A credential without the route ability still gets `403`; a request with no bearer credential still gets `401`. |
 | **Untrusted text** | It is opaque, attacker-controlled text of up to 255 bytes, and it is readable through credential surfaces — anything rendering it into HTML, a terminal or a log must escape it itself. |
@@ -113,7 +113,7 @@ enabling this in production.
 | --- | --- |
 | **What counts** | Only the genuine no-credential paths: no bearer token, or a bearer that resolves to nothing (unknown, expired, revoked). |
 | **What does not** | A `403` — that caller has a working credential and merely lacks the required ability. |
-| **Malformed headers** | A contract-violating value — too long, CR/LF/NUL, invalid UTF-8, empty — is dropped and never observed, and deliberately **not logged** on this path, since it is unauthenticated and unthrottled. |
+| **Malformed headers** | A contract-violating value — too long, leading/trailing space or tab, a control octet, invalid UTF-8, empty — is dropped and never observed, and deliberately **not logged** on this path, since it is unauthenticated and unthrottled. |
 | **Repeat claims** | Increment `observation_count` and bump `last_seen_at`. `first_seen_at` never moves — it is the earliest signal. |
 | **The cap** | `BUILT_FOR_CLOUD_MAX_OBSERVATIONS` (default `100`) caps the number of **distinct** identities stored. It is enforced **per request, not atomically** — concurrent requests can each pass the check and briefly overshoot it. An approximate ceiling, not an exact one. |
 | **At the cap** | A **new** identity is dropped; existing rows still update. **Nothing is evicted** — otherwise anyone spraying unbounded distinct identities could push the genuine client out. |
