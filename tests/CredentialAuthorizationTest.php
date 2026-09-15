@@ -8,39 +8,40 @@ use ArtisanBuild\BuiltForCloud\Actions\ExchangeLoopbackAuthorization;
 use ArtisanBuild\BuiltForCloud\Actions\PollDeviceAuthorization;
 use ArtisanBuild\BuiltForCloud\Actions\StartDeviceAuthorization;
 use ArtisanBuild\BuiltForCloud\Actions\StartLoopbackAuthorization;
-use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
+use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\BoundBearerCredentialAuthenticator;
 use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAlgorithm;
+use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
+use ArtisanBuild\BuiltForCloud\CredentialAuthorizationAuthority;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationOwnership;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationPolicy;
-use ArtisanBuild\BuiltForCloud\CredentialAuthorizationAuthority;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationProfile;
-use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialMaterialRole;
 use ArtisanBuild\BuiltForCloud\CredentialProtocolBinding;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialAuthorizationRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
-use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
+use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\DeviceFlowDeclaration;
 use ArtisanBuild\BuiltForCloud\User;
-use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Database\QueryException;
-use Illuminate\Http\Request;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as ClientRequest;
+use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
+use Ramsey\Uuid\Uuid;
 
 uses(RefreshDatabase::class);
 
@@ -339,7 +340,7 @@ it('rolls back a credential collision and permits one later exchange without red
         'subject_ref' => 'collision-subject',
         'secret_hash' => hash('sha256', 'collision-secret'),
     ]);
-    Str::createUuidsUsing(static fn () => Ramsey\Uuid\Uuid::fromString($collision));
+    Str::createUuidsUsing(static fn () => Uuid::fromString($collision));
 
     try {
         expect(fn () => app(PollDeviceAuthorization::class)($request, $code))->toThrow(QueryException::class);

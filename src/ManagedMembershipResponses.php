@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Actions\ContainCredentialAuthorizations;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedOwnerAcquisitionNotApplicable;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedOwnerContested;
@@ -573,7 +574,7 @@ final class ManagedMembershipResponses
         bool $connectionDenied,
     ): void {
         if ($connectionDenied) {
-            app(\ArtisanBuild\BuiltForCloud\Actions\ContainCredentialAuthorizations::class)->connection();
+            app(ContainCredentialAuthorizations::class)->connection();
             $subjects = User::query()
                 ->where('scalpels_issuer', $connection->issuer)
                 ->where('scalpels_connection_id', $connection->connectionId)

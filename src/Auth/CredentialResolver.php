@@ -4,18 +4,18 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Auth;
 
-use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
 use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
+use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAlgorithm;
+use ArtisanBuild\BuiltForCloud\CredentialAuthorizationOwnership;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialMaterialRole;
-use ArtisanBuild\BuiltForCloud\CredentialAuthorizationOwnership;
 use ArtisanBuild\BuiltForCloud\CredentialProtocolBinding;
-use Carbon\CarbonInterface;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier;
 use ArtisanBuild\BuiltForCloud\ManagedAccountAccess;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
+use Carbon\CarbonInterface;
 
 /**
  * Hash lookup against the unified store. A presented secret resolves only a
@@ -79,8 +79,7 @@ final class CredentialResolver
         array $abilities,
         ?CarbonInterface $expiresAt,
         ?string $secret,
-    ): ?Credential
-    {
+    ): ?Credential {
         if ($secret === null || $secret === '') {
             return null;
         }

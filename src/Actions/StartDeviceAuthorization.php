@@ -8,7 +8,6 @@ use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\BrowserCredentialAuthorizationStore;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationAuthority;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationFlow;
-use ArtisanBuild\BuiltForCloud\CredentialAuthorizationOwnership;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationPolicy;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationStatus;
 use ArtisanBuild\BuiltForCloud\DeviceAuthorizationStart;

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use Illuminate\Support\Facades\DB;
 use LogicException;
 
 final readonly class CredentialAuthorizationTransitions
@@ -16,7 +17,7 @@ final readonly class CredentialAuthorizationTransitions
             return false;
         }
 
-        $changed = \Illuminate\Support\Facades\DB::table('credential_authorizations')
+        $changed = DB::table('credential_authorizations')
             ->where('id', $authorization->id)
             ->whereIn('status', [CredentialAuthorizationStatus::Pending->value, CredentialAuthorizationStatus::Approved->value])
             ->update([
@@ -30,7 +31,7 @@ final readonly class CredentialAuthorizationTransitions
             return false;
         }
 
-        if (\Illuminate\Support\Facades\DB::transactionLevel() === 0) {
+        if (DB::transactionLevel() === 0) {
             throw new LogicException('Authorization denial must share its caller transaction.');
         }
 

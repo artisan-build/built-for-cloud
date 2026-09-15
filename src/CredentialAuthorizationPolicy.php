@@ -117,8 +117,7 @@ final readonly class CredentialAuthorizationPolicy
         Request $request,
         string $initiatingUserId,
         bool $installationExchange = false,
-    ): CredentialAuthorizationAuthority
-    {
+    ): CredentialAuthorizationAuthority {
         if (InstallationAuthority::current()->mode !== AuthorityMode::Managed) {
             return CredentialAuthorizationAuthority::Allowed;
         }
