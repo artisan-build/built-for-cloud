@@ -21,6 +21,7 @@ use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Facades\Schema;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
 uses(RefreshDatabase::class);
@@ -151,6 +152,67 @@ it('refuses an unrecognised integrity violation through the managed callback', f
         ->and(User::query()->whereNotNull('scalpels_id')->exists())->toBeFalse()
         ->and(auth('web')->check())->toBeFalse();
 });
+
+it('does not relabel check not-null or foreign-key integrity failures as a managed refusal', function (string $constraint): void {
+    $exchange = p3bExchange();
+    $originalConnection = DB::getDefaultConnection();
+    $database = null;
+
+    if ($constraint === 'CHECK') {
+        DB::statement("ALTER TABLE users ADD COLUMN check_probe TEXT DEFAULT 'bad' CHECK (check_probe = 'good')");
+    } elseif ($constraint === 'NOT NULL') {
+        Schema::table('users', fn ($table) => $table->string('required_probe')->nullable(false));
+    } else {
+        $database = tempnam(sys_get_temp_dir(), 'bfc-fk-probe-');
+        config()->set('database.connections.fk_probe', [
+            'driver' => 'sqlite',
+            'database' => $database,
+            'prefix' => '',
+            'foreign_key_constraints' => true,
+        ]);
+        DB::setDefaultConnection('fk_probe');
+        Schema::connection('fk_probe')->create('users', function ($table): void {
+            $table->id();
+            foreach ([
+                'name', 'email', 'password', 'role', 'status', 'scalpels_issuer',
+                'scalpels_connection_id', 'scalpels_id', 'original_contact_email',
+                'normalized_email', 'email_conflict_source',
+            ] as $column) {
+                $table->string($column)->nullable();
+            }
+            foreach (['deactivated_at', 'membership_confirmed_at', 'membership_checked_at', 'membership_response_at', 'email_conflict_at'] as $column) {
+                $table->timestamp($column)->nullable();
+            }
+            $table->boolean('email_is_generated')->default(false);
+            $table->foreignId('parent_probe_id')->default(999999)->constrained('users');
+            $table->timestamps();
+        });
+        expect((int) DB::connection('fk_probe')->selectOne('PRAGMA foreign_keys')->foreign_keys)->toBe(1);
+    }
+
+    try {
+        app(ManagedIdentityUpsert::class)->upsert(p3bConnection(), $exchange);
+    } catch (Throwable $exception) {
+        DB::setDefaultConnection($originalConnection);
+        DB::purge('fk_probe');
+
+        if (is_string($database)) {
+            unlink($database);
+        }
+
+        expect($exception)->toBeInstanceOf(QueryException::class)
+            ->and($exception)->not->toBeInstanceOf(ManagedAuthRefused::class);
+
+        return;
+    }
+
+    DB::setDefaultConnection($originalConnection);
+    $this->fail("The {$constraint} integrity control did not fail.");
+})->with([
+    'CHECK',
+    'NOT NULL',
+    'foreign key',
+]);
 
 it('keys strictly on issuer connection and subject while the exact tuple converges', function (): void {
     $upsert = app(ManagedIdentityUpsert::class);

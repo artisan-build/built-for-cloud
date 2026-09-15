@@ -35,6 +35,21 @@ final class McpDelegatedTools
      */
     public static function assertConforms(string $serverClass): void
     {
+        $result = self::discover($serverClass);
+
+        Assert::assertSame(
+            [],
+            $result['violations'],
+            "The MCP server cannot advertise mcp-delegated:\n".implode("\n", $result['violations']),
+        );
+    }
+
+    /**
+     * @param  class-string<Server>  $serverClass
+     * @return array{tools: list<string>, violations: list<string>}
+     */
+    public static function discover(string $serverClass): array
+    {
         $server = app()->make($serverClass, ['transport' => new FakeTransporter]);
 
         Assert::assertInstanceOf(Server::class, $server, $serverClass.' is not a Laravel MCP server.');
@@ -44,16 +59,20 @@ final class McpDelegatedTools
         $server->start();
 
         $offences = [];
+        $tools = [];
 
         foreach ($server->createContext()->tools() as $tool) {
+            $tools[] = $tool::class;
             self::inspect($tool, $offences);
         }
 
-        Assert::assertSame(
-            [],
-            $offences,
-            "The MCP server cannot advertise mcp-delegated:\n".implode("\n", $offences),
-        );
+        sort($tools);
+        sort($offences);
+
+        return [
+            'tools' => array_values(array_unique($tools)),
+            'violations' => array_values(array_unique($offences)),
+        ];
     }
 
     /**

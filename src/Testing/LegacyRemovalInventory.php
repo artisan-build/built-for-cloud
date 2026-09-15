@@ -83,6 +83,21 @@ final class LegacyRemovalInventory
     }
 
     /** @return list<string> */
+    public static function sourceOffences(string $root): array
+    {
+        $offences = [];
+
+        foreach (self::phpFiles($root) as $file) {
+            $path = substr($file->getPathname(), strlen(rtrim($root, DIRECTORY_SEPARATOR)) + 1);
+            array_push($offences, ...self::phpOffences($path, self::contents($file->getPathname())));
+        }
+
+        sort($offences);
+
+        return array_values(array_unique($offences));
+    }
+
+    /** @return list<string> */
     public static function publicDocumentOffences(string $packageRoot): array
     {
         $root = self::packageRoot($packageRoot);

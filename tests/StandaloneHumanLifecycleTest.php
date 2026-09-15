@@ -16,6 +16,7 @@ use ArtisanBuild\BuiltForCloud\Tests\TestCase;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Notifications\AnonymousNotifiable;
 use Illuminate\Support\Facades\Auth;
@@ -127,6 +128,37 @@ it('mounts every named standalone route and renders package structural hooks', f
     $this->get('/bfc/me/sessions')
         ->assertOk()->assertSeeHtml('data-testid="sessions-management"');
 });
+
+it('keeps invitation authority refusal independent from csrf state', function (AuthorityMode $mode, bool $validCsrf, int $status): void {
+    $this->withMiddleware();
+    app()->bind(PreventRequestForgery::class, static fn ($app): PreventRequestForgery => new class($app, $app['encrypter']) extends PreventRequestForgery
+    {
+        protected function runningUnitTests(): bool
+        {
+            return false;
+        }
+    });
+    DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
+        'mode' => $mode->value,
+        'generation' => DB::raw('generation + 1'),
+    ]);
+    $csrf = 'test-created-csrf-token';
+    $request = $this->withSession(['_token' => $csrf]);
+    $response = $request->post(route('bfc.invitations.accept.store', absolute: false), [
+        '_token' => $validCsrf ? $csrf : 'test-created-invalid-csrf-token',
+        'token' => 'test-created-invitation-token',
+        'name' => 'Test Invitee',
+        'password' => 'test-created-password',
+        'password_confirmation' => 'test-created-password',
+    ]);
+
+    $response->assertStatus($status);
+})->with([
+    'managed without csrf' => [AuthorityMode::Managed, false, 404],
+    'managed with csrf' => [AuthorityMode::Managed, true, 404],
+    'standalone without csrf' => [AuthorityMode::Standalone, false, 419],
+    'standalone with csrf' => [AuthorityMode::Standalone, true, 302],
+]);
 
 it('authenticates only eligible canonical users with generic refusals and a local redirect', function (): void {
     $eligible = standaloneUser('eligible@example.test', UserRole::Admin);

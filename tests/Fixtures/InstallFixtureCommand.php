@@ -11,7 +11,7 @@ final class InstallFixtureCommand extends Command
 {
     use WritesInstallEnv;
 
-    protected $signature = 'fixture:install {--env-path=} {--composer-path=} {--some-flag=} {--package=vendor/pkg} {--major=2}';
+    protected $signature = 'fixture:install {--env-path=} {--composer-path=} {--some-flag=} {--package=vendor/pkg} {--major=2} {--force}';
 
     protected $description = 'Exercise the reusable install scaffold in tests';
 
@@ -29,22 +29,31 @@ final class InstallFixtureCommand extends Command
             return self::FAILURE;
         }
 
-        $changed = $this->writeEnvFile($envPath, [
-            'SOME_FLAG' => $someFlag,
-            'INSTALL_PACKAGE' => $package,
-        ]);
+        $result = $this->installServerScaffold(
+            $envPath,
+            $composerPath,
+            [
+                'SOME_FLAG' => $someFlag,
+                'INSTALL_PACKAGE' => $package,
+            ],
+            [$package => '^'.$major],
+        );
 
-        $this->pinComposerConstraint($composerPath, $package, $major);
+        if (! $result->succeeded()) {
+            $this->summarize($result->stages());
+
+            return self::FAILURE;
+        }
 
         // The install-time operator credential (PRD 1.20): minted through
         // the scaffold, idempotently — a re-run skips with a notice.
-        $this->mintInstallOperatorCredential();
+        if ($this->mintInstallOperatorCredential(force: (bool) $this->option('force')) !== self::SUCCESS) {
+            $this->summarize($result->stages());
 
-        $this->summarize([
-            'env changed' => $changed,
-            'package' => $package,
-            'constraint' => '^'.$major,
-        ]);
+            return self::FAILURE;
+        }
+
+        $this->summarize($result->stages());
 
         return self::SUCCESS;
     }

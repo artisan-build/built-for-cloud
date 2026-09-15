@@ -27,12 +27,22 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiInstallationCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiLogout;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiPersonalCredentials;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
 
 final class StandaloneSurfaceInventory
 {
-    private const string PACKAGE_CONTROLLER_NAMESPACE = 'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\';
+    /** @var list<string> */
+    private const array STANDALONE_PATHS = [
+        'bfc/forgot-password',
+        'bfc/invitations',
+        'bfc/login',
+        'bfc/logout',
+        'bfc/me/sessions',
+        'bfc/members',
+        'bfc/reset-password',
+    ];
 
     /** @return array<class-string, bool> */
     public static function expectedControllerFamilies(): array
@@ -75,22 +85,30 @@ final class StandaloneSurfaceInventory
     {
         return self::sortedRoutes(array_values(array_filter(
             $router->getRoutes()->getRoutes(),
-            static fn (Route $route): bool => str_starts_with(
-                self::controller($route),
-                self::PACKAGE_CONTROLLER_NAMESPACE,
-            ),
+            static fn (Route $route): bool => $route->uri() === 'bfc'
+                || str_starts_with($route->uri(), 'bfc/'),
         )));
     }
 
     /** @return list<Route> */
     public static function routes(Router $router): array
     {
-        $required = array_fill_keys(self::requiredControllerFamilies(), true);
-
         return self::sortedRoutes(array_values(array_filter(
             self::packageRoutes($router),
-            static fn (Route $route): bool => isset($required[self::controller($route)]),
+            static fn (Route $route): bool => self::isStandalonePath($route->uri())
+                || in_array(EnsureStandaloneAuthority::class, $router->gatherRouteMiddleware($route), true),
         )));
+    }
+
+    private static function isStandalonePath(string $uri): bool
+    {
+        foreach (self::STANDALONE_PATHS as $path) {
+            if ($uri === $path || str_starts_with($uri, $path.'/')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

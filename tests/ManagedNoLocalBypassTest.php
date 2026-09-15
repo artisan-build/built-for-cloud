@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\FutureLocalAuthenticationController;
 use ArtisanBuild\BuiltForCloud\Tests\Support\StandaloneSurfaceInventory;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
@@ -23,7 +24,7 @@ trait EnablesEveryPackageRoute
 
 uses(EnablesEveryPackageRoute::class);
 
-it('derives the standalone surface structurally and detects an added route without its authority gate', function (): void {
+it('derives the standalone surface structurally and detects closure and foreign-controller routes without their authority gate', function (): void {
     /** @var Router $router */
     $router = app('router');
     $packageRoutes = StandaloneSurfaceInventory::packageRoutes($router);
@@ -43,19 +44,31 @@ it('derives the standalone surface structurally and detects an added route witho
         expect($router->gatherRouteMiddleware($route))->toContain(EnsureStandaloneAuthority::class);
     }
 
-    $controlController = 'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\FutureLocalAuthenticationController';
-    $control = RouteFacade::get('/_bfc-standalone-inventory-control', [$controlController, 'authenticate']);
-    $discoveredControl = array_values(array_filter(
-        StandaloneSurfaceInventory::packageRoutes($router),
-        static fn (Route $route): bool => $route === $control,
+    $closureControl = RouteFacade::get('/bfc/members/closure-control', static fn (): string => 'closure-control');
+    $namespaceControl = RouteFacade::get(
+        '/bfc/me/sessions/namespace-control',
+        [FutureLocalAuthenticationController::class, 'authenticate'],
+    );
+    $controls = [$closureControl, $namespaceControl];
+    $discoveredControls = array_values(array_filter(
+        StandaloneSurfaceInventory::routes($router),
+        static fn (Route $route): bool => in_array($route, $controls, true),
     ));
-    $unexpectedControllers = array_values(array_diff(
-        array_unique(array_map(StandaloneSurfaceInventory::controller(...), StandaloneSurfaceInventory::packageRoutes($router))),
-        $expectedControllers,
+    $violations = array_values(array_map(
+        static fn (Route $route): string => $route->uri(),
+        array_filter(
+            StandaloneSurfaceInventory::routes($router),
+            static fn (Route $route): bool => ! in_array(
+                EnsureStandaloneAuthority::class,
+                $router->gatherRouteMiddleware($route),
+                true,
+            ),
+        ),
     ));
 
-    expect($discoveredControl)->toHaveCount(1)
-        ->and($unexpectedControllers)->toBe([$controlController])
-        ->and($router->gatherRouteMiddleware($discoveredControl[0]))
-        ->not->toContain(EnsureStandaloneAuthority::class);
+    expect($discoveredControls)->toBe([$namespaceControl, $closureControl])
+        ->and($violations)->toBe([
+            'bfc/me/sessions/namespace-control',
+            'bfc/members/closure-control',
+        ]);
 });

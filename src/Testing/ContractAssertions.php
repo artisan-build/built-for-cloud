@@ -9,6 +9,8 @@ use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
@@ -16,6 +18,8 @@ use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Foundation\Testing\TestCase;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Testing\TestResponse;
 use Laravel\Mcp\Server;
@@ -27,6 +31,11 @@ use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
  */
 trait ContractAssertions
 {
+    public function assertBuiltForCloudFleetConformance(ConsumerConformance $spec): ConformanceReport
+    {
+        return (new FleetConformance($this))->assert($spec);
+    }
+
     /**
      * @param  class-string<Server>  $serverClass
      */
@@ -172,12 +181,57 @@ trait ContractAssertions
         Assert::assertTrue(Schema::hasTable('bfc_authority'));
     }
 
+    public function assertBuiltForCloudHumanLifecycleContract(): void
+    {
+        $router = app('router');
+        $login = Route::getRoutes()->getByName('bfc.login.store');
+        $account = Route::getRoutes()->getByName('bfc.sessions.index');
+
+        Assert::assertNotNull($login, 'The package login route is not mounted.');
+        Assert::assertNotNull($account, 'An authenticated package route is not mounted.');
+        Assert::assertContains(EnsureStandaloneAuthority::class, $router->gatherRouteMiddleware($login));
+        Assert::assertContains(EnsureUserIsAuthenticated::class, $router->gatherRouteMiddleware($account));
+        Assert::assertSame(User::class, config('auth.providers.users.model'));
+
+        $email = 'conformance-'.bin2hex(random_bytes(8)).'@example.test';
+        $user = User::query()->create([
+            'name' => 'Conformance Human',
+            'email' => $email,
+            'password' => Hash::make('test-created-password'),
+        ]);
+        $user->forceFill([
+            'role' => 'member',
+            'status' => 'active',
+            'email_verified_at' => now(),
+            'original_contact_email' => $email,
+        ])->save();
+
+        $this->post('/bfc/login', [
+            'email' => $email,
+            'password' => 'test-created-password',
+        ])->assertRedirect(route('bfc.ui.home', absolute: false));
+
+        Assert::assertSame($user->getAuthIdentifier(), auth('web')->id());
+    }
+
     public function assertBuiltForCloudThinHostSources(string $hostRoot): void
     {
         Assert::assertSame(
             [],
             ThinHostConformance::sourceArtifacts($hostRoot),
             'Conventional app-owned human auth artifacts were detected. This path scan is a drift detector, not a completeness proof.',
+        );
+    }
+
+    public function assertBuiltForCloudThinHostConfiguration(): void
+    {
+        $auth = config('auth');
+
+        Assert::assertIsArray($auth, 'The resolved auth configuration is missing.');
+        Assert::assertSame(
+            [],
+            ThinHostConformance::configurationArtifacts($auth),
+            'The resolved auth configuration exposes an app-owned human authority.',
         );
     }
 
