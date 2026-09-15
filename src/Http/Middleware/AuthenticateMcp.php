@@ -97,8 +97,7 @@ final class AuthenticateMcp
         #[SensitiveParameter] Request $request,
         Closure $next,
         ?string $admission = null,
-    ): Response
-    {
+    ): Response {
         $bearer = $request->bearerToken();
 
         $this->forgetCredential($request);
