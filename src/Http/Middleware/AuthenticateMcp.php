@@ -169,8 +169,7 @@ final class AuthenticateMcp
     private function dispatchAsInstallationSystem(
         #[SensitiveParameter] Request $request,
         Closure $next,
-    ): Response
-    {
+    ): Response {
         $context = app(SystemAuthorityContext::class);
         $response = $context->run(static fn (): Response => $next($request));
 
