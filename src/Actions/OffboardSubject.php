@@ -108,7 +108,10 @@ final class OffboardSubject
      */
     public const int PRINCIPAL_TRAVERSAL_CEILING = 100;
 
-    public function __construct(private readonly LifecycleEventRecorder $recorder) {}
+    public function __construct(
+        private readonly LifecycleEventRecorder $recorder,
+        private readonly ContainCredentialAuthorizations $authorizations,
+    ) {}
 
     public function __invoke(OffboardOptions $options, ?AuditActor $actor = null): OffboardResult
     {
@@ -302,6 +305,22 @@ final class OffboardSubject
             ->lockForUpdate()
             ->exists();
 
+        // Authorization rows lock first so a blocked exchange cannot commit
+        // a new credential after this transaction's revocation sweep.
+        $this->authorizations->subject($subject, $actor);
+        $knownBoundUserIds = Credential::query()
+            ->where('subject_type', $subject->type->value)
+            ->where('subject_ref', $subject->ref)
+            ->whereNotNull('user_id')
+            ->pluck('user_id')
+            ->filter(static fn (mixed $userId): bool => is_string($userId))
+            ->values()
+            ->all();
+
+        foreach ($knownBoundUserIds as $boundUserId) {
+            $this->authorizations->user($boundUserId, $actor);
+        }
+
         // 1 — every bound credential, in every lifecycle state.
         /** @var list<Credential> $credentials */
         $credentials = Credential::query()
@@ -340,6 +359,10 @@ final class OffboardSubject
         // account an accepted invitation of this principal CREATED, plus
         // (for a human principal) the account whose email IS the ref.
         [$userIds, $emails, $traversalComplete] = $this->resolvePrincipals($subject, array_values(array_unique($boundUserIds)), $integrationNamespace);
+
+        foreach ($userIds as $userId) {
+            $this->authorizations->user($userId, $actor);
+        }
 
         // A user's credentials can belong to several subjects. Sweep every
         // unified row bound to the resolved users, without processing rows

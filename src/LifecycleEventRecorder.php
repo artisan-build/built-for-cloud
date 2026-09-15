@@ -47,6 +47,7 @@ final class LifecycleEventRecorder
         ?string $supersededByCredentialId = null,
         ?string $dedupKey = null,
         bool $drainAfterCommit = true,
+        ?string $credentialAuthorizationId = null,
     ): CredentialAuditEvent {
         if (DB::transactionLevel() === 0) {
             throw new LogicException(
@@ -59,6 +60,7 @@ final class LifecycleEventRecorder
             'event' => $event,
             'code_id' => $codeId,
             'credential_id' => $credentialId,
+            'credential_authorization_id' => $credentialAuthorizationId,
             'superseded_by_credential_id' => $supersededByCredentialId,
             'provider' => $this->contextValue('built-for-cloud.product'),
             'deployment' => $this->contextValue('built-for-cloud.cloud.application'),

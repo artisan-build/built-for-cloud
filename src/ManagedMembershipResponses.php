@@ -573,6 +573,7 @@ final class ManagedMembershipResponses
         bool $connectionDenied,
     ): void {
         if ($connectionDenied) {
+            app(\ArtisanBuild\BuiltForCloud\Actions\ContainCredentialAuthorizations::class)->connection();
             $subjects = User::query()
                 ->where('scalpels_issuer', $connection->issuer)
                 ->where('scalpels_connection_id', $connection->connectionId)

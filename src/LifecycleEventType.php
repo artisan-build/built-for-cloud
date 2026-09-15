@@ -27,6 +27,9 @@ enum LifecycleEventType: string
     case Activated = 'activated';
     case Rotated = 'rotated';
     case Revoked = 'revoked';
+    case CredentialAuthorizationStarted = 'credential_authorization_started';
+    case CredentialAuthorizationApproved = 'credential_authorization_approved';
+    case CredentialAuthorizationDenied = 'credential_authorization_denied';
 
     /**
      * The one subject-level containment event the offboard verb emits
