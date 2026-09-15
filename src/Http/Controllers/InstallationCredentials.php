@@ -55,8 +55,7 @@ final class InstallationCredentials
         Request $request,
         MintCredential $mint,
         SelfServiceKindPolicyResolver $kindPolicy,
-    ): JsonResponse
-    {
+    ): JsonResponse {
         $managementScope = CredentialManagementScope::memberInstallation();
 
         /** @var array{subject_type: string, subject_ref: string} $validated */
