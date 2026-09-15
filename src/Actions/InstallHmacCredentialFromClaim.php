@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Actions;
 
 use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
+use ArtisanBuild\BuiltForCloud\ClaimedHmacCredential;
 use ArtisanBuild\BuiltForCloud\Contracts\HmacCredentialIssuerClient;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAlgorithm;
@@ -81,7 +82,7 @@ final class InstallHmacCredentialFromClaim
         }
     }
 
-    private function install(BoundCredentialScope $scope, \ArtisanBuild\BuiltForCloud\ClaimedHmacCredential $claimed): InstalledHmacCredential
+    private function install(BoundCredentialScope $scope, ClaimedHmacCredential $claimed): InstalledHmacCredential
     {
         $transfer = $claimed->transfer;
         $ids = array_values(array_filter([$transfer->predecessorCredentialId, $transfer->issuerCredentialId]));

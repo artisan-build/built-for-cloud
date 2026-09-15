@@ -12,7 +12,6 @@ use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Str;
-use SensitiveParameter;
 use Throwable;
 
 /** Origin-pinned HTTP implementation of the trusted HMAC issuer channel. */

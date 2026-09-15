@@ -15,13 +15,13 @@ use ArtisanBuild\BuiltForCloud\Contracts\HmacCredentialIssuerClient;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
-use ArtisanBuild\BuiltForCloud\CredentialMaterialRole;
 use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\CredentialProtocolBinding;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
-use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\Exceptions\CrossStoreCutoverIncomplete;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacCredentialTransferRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\HmacSigningRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacSigner;
@@ -94,7 +94,7 @@ it('keeps receiver old and replacement verification overlapping through the auth
 
     $this->travelTo($deadline->addSecond());
     expect(fn () => app(HmacVerifier::class)->verifyBound($scope, ac3Header($old, $oldKey, $scope, 'late'), 'late'))
-        ->toThrow(ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed::class)
+        ->toThrow(HmacVerificationFailed::class)
         ->and(app(HmacVerifier::class)->verifyBound($scope, ac3Header($new, $newKey, $scope, 'new-late'), 'new-late')->credentialId)->toBe($new->id);
 });
 
@@ -198,7 +198,7 @@ it('refuses imported verification copies as both bound and legacy signers', func
     ac3VerificationCopy($scope, str_repeat('1', 64));
 
     expect(fn () => app(HmacSigner::class)->signBound($scope, 'body', 'event'))
-        ->toThrow(ArtisanBuild\BuiltForCloud\Exceptions\HmacSigningRefused::class)
+        ->toThrow(HmacSigningRefused::class)
         ->and(fn () => app(HmacSigner::class)->sign($scope->subject, 'body', 'event'))
-        ->toThrow(ArtisanBuild\BuiltForCloud\Exceptions\HmacSigningRefused::class);
+        ->toThrow(HmacSigningRefused::class);
 });

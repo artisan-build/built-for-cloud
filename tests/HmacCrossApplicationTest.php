@@ -12,7 +12,6 @@ use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
 use ArtisanBuild\BuiltForCloud\ClaimedHmacCredential;
 use ArtisanBuild\BuiltForCloud\Contracts\HmacCredentialIssuerClient;
 use ArtisanBuild\BuiltForCloud\Credential;
-use ArtisanBuild\BuiltForCloud\CredentialAlgorithm;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialMaterialRole;
@@ -21,9 +20,14 @@ use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacCredentialTransferRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacSigningRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
+use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
+use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacSigner;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
 use ArtisanBuild\BuiltForCloud\HmacCredentialTransfer;
 use ArtisanBuild\BuiltForCloud\HttpHmacCredentialIssuerClient;
 use ArtisanBuild\BuiltForCloud\ImportedHmacSecret;
@@ -41,6 +45,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class);
 
@@ -161,7 +166,7 @@ it('pins the HTTP issuer origin and rejects unknown, oversized, and non-JSON res
     $secret = str_repeat('a', 64);
     $payload = [
         'signing_key' => $secret,
-        'credential_id' => (string) Illuminate\Support\Str::uuid(),
+        'credential_id' => (string) Str::uuid(),
         'app_purpose' => $scope->appPurpose,
         'subject_type' => $scope->subject->type->value,
         'subject_ref' => $scope->subject->ref,
@@ -236,7 +241,7 @@ it('installs across separate SQLite stores encrypted and verifies a source-bound
         expect(fn () => app(HmacSigner::class)->sign($scope->subject, 'body', 'event'))
             ->toThrow(HmacSigningRefused::class)
             ->and(fn () => app(HmacVerifier::class)->verify($scope->subject, $header, 'callback-body', $scope->audience))
-            ->toThrow(ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed::class);
+            ->toThrow(HmacVerificationFailed::class);
 
         DB::setDefaultConnection('hmac_receiver');
         config()->set('app.key', 'base64:'.base64_encode(str_repeat('r', 32)));
@@ -262,7 +267,7 @@ it('honors the declared installation app-purpose allow-list before receiver inst
         $scope,
         issuerReturning(claimedFromPayload($scope, $payload)),
         str_repeat('d', 64),
-    ))->toThrow(ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput::class)
+    ))->toThrow(InvalidCredentialInput::class)
         ->and(Credential::query()->whereKey($payload['credential_id'])->count())->toBe(1);
 });
 
@@ -292,14 +297,14 @@ it('reissues a lost bound HMAC delivery under the writer barrier without same-se
             ->exists())->toBeTrue()
         ->and(OnboardingToken::query()->where('durable_credential_id', $reissued->mint->summary->id)->whereNull('consumed_at')->exists())->toBeTrue();
 
-    $lock = Cache::lock(ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier::LOCK, 10);
+    $lock = Cache::lock(HmacWriterBarrier::LOCK, 10);
     expect($lock->get())->toBeTrue();
 
     try {
         expect(fn () => app(RotateCredential::class)(
             (string) $payload['credential_id'],
             new RotateOptions(codeTtlSeconds: 3600, reissuePendingDelivery: true),
-        ))->toThrow(ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress::class);
+        ))->toThrow(RewrapInProgress::class);
     } finally {
         $lock->release();
     }
@@ -352,7 +357,7 @@ it('refuses a wrong bound verification scope before decrypt replay rate or usage
         'activated_at' => now(),
     ])->save();
     CredentialProtocolBinding::createVerificationCopy($credential, $scope);
-    $header = (new ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope(
+    $header = (new HmacEnvelope(
         $credential->id,
         'event',
         now()->getTimestamp(),
@@ -363,7 +368,7 @@ it('refuses a wrong bound verification scope before decrypt replay rate or usage
     $wrong = new BoundCredentialScope($scope->appPurpose, $scope->subject, 'wrong-install', $scope->application, $scope->audience);
 
     expect(fn () => app(HmacVerifier::class)->verifyBound($wrong, $header, 'body'))
-        ->toThrow(ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed::class)
+        ->toThrow(HmacVerificationFailed::class)
         ->and(Cache::has('bfc:hmac:rate:'.$credential->id))->toBeFalse()
         ->and($credential->refresh()->last_used_at)->toBeNull();
 });

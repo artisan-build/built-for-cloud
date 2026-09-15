@@ -36,6 +36,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\AsymmetricEnrollments;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\BoundHmacCutovers;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleEnter;
@@ -530,13 +531,13 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         );
 
         $this->protectOperatorRoute(
-            $router->post('/bfc/hmac-cutovers/activate', [\ArtisanBuild\BuiltForCloud\Http\Controllers\BoundHmacCutovers::class, 'activate'])
+            $router->post('/bfc/hmac-cutovers/activate', [BoundHmacCutovers::class, 'activate'])
                 ->middleware('throttle:bfc-operator-write'),
             $operatorRoutes,
         );
 
         $this->protectOperatorRoute(
-            $router->post('/bfc/hmac-cutovers/status', [\ArtisanBuild\BuiltForCloud\Http\Controllers\BoundHmacCutovers::class, 'status'])
+            $router->post('/bfc/hmac-cutovers/status', [BoundHmacCutovers::class, 'status'])
                 ->middleware('throttle:bfc-operator-write'),
             $operatorRoutes,
         );

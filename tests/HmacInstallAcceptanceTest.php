@@ -8,12 +8,12 @@ use ArtisanBuild\BuiltForCloud\ClaimedHmacCredential;
 use ArtisanBuild\BuiltForCloud\Contracts\HmacCredentialIssuerClient;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
-use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\CredentialProtocolBinding;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacCredentialTransferRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
 use ArtisanBuild\BuiltForCloud\HmacCredentialTransfer;
@@ -227,7 +227,7 @@ it('commits no receiver state when the HMAC writer barrier cannot be acquired', 
             $scope,
             ac1Issuer(ac1Claimed($scope, str_repeat('a', 64))),
             str_repeat('e', 64),
-        ))->toThrow(ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress::class)
+        ))->toThrow(RewrapInProgress::class)
             ->and(ac1State())->toBe($before);
     } finally {
         $lock->release();

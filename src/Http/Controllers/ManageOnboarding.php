@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\Actions\FileConsoleKey;
 use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
+use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
@@ -676,7 +677,7 @@ final class ManageOnboarding extends OperatorRouteController
 
         if ($bound) {
             $scope = $binding->scopeFor($credential);
-            $purpose = app(\ArtisanBuild\BuiltForCloud\AppPurposeRegistry::class)->purpose($scope->appPurpose);
+            $purpose = app(AppPurposeRegistry::class)->purpose($scope->appPurpose);
 
             if (! $binding->exactlyMatches(
                 $credential,

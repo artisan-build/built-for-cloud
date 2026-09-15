@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
 use ArtisanBuild\BuiltForCloud\Contracts\HmacCredentialIssuerClient;
 use ArtisanBuild\BuiltForCloud\CutOverImportedHmacResult;
 use ArtisanBuild\BuiltForCloud\Exceptions\CrossStoreCutoverIncomplete;
+use ArtisanBuild\BuiltForCloud\IssuerHmacCutoverReceipt;
 use Throwable;
 
 /** Preserves the install-source-receiver ordering without claiming distributed atomicity. */
@@ -40,7 +41,7 @@ final class CoordinateImportedHmacCutover
 
     private function applyOrReportIncomplete(
         BoundCredentialScope $scope,
-        \ArtisanBuild\BuiltForCloud\IssuerHmacCutoverReceipt $receipt,
+        IssuerHmacCutoverReceipt $receipt,
     ): CutOverImportedHmacResult {
         try {
             return ($this->cutOver)($scope, $receipt);
