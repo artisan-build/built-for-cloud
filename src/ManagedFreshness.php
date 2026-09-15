@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud;
 
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
-use ArtisanBuild\BuiltForCloud\Support\CacheInteger;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -66,7 +65,7 @@ final class ManagedFreshness
 
             $attemptKey = 'bfc:managed-refresh-attempt:'.$key;
             $now = CarbonImmutable::now();
-            $nextAttemptAt = CacheInteger::parse(Cache::get($attemptKey));
+            $nextAttemptAt = Support\CacheInteger::parse(Cache::get($attemptKey));
 
             if ($nextAttemptAt !== null && $now->getTimestamp() < $nextAttemptAt) {
                 return $this->storedAllows($subject);
