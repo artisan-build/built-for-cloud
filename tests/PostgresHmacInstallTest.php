@@ -75,7 +75,7 @@ it('serializes concurrent receiver installers into one write and one exact idemp
                   and application_name like 'bfc-hmac-install-worker-%'
                   and state = 'active'
                   and wait_event_type = 'Lock'
-                  and query like '%credentials%'
+                  and (query like '%credentials%' or query like '%bfc_hmac_writer_barriers%')
                 SQL);
 
             if ($blocked === 2) {
