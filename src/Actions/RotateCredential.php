@@ -408,8 +408,11 @@ final class RotateCredential
         // replacement is still PENDING: the old key still OWNS signing,
         // and retiring it here would leave the subject with nothing that
         // signs. Activation is the step that owes the retirement.
-        if ($successor->status === CredentialStatus::Pending
-            && ($successor->kind === CredentialKind::Hmac || $this->isBoundAsymmetricOriginator($successor->id))) {
+        if ($successor->status === CredentialStatus::Pending && $this->isBoundAsymmetricOriginator($successor->id)) {
+            throw RotationRefused::successorAwaitingEnrollment($source->id, $successor->id);
+        }
+
+        if ($successor->status === CredentialStatus::Pending && $successor->kind === CredentialKind::Hmac) {
             throw RotationRefused::successorAwaitingActivation($source->id, $successor->id);
         }
 
@@ -863,9 +866,13 @@ final class RotateCredential
                     $source->expires_at,
                     $bindings[$id],
                 );
+                $newCodeId = OnboardingToken::query()
+                    ->where('durable_credential_id', $result->summary->id)
+                    ->value('id');
                 $this->recorder->record(
                     LifecycleEventType::Issued,
                     $result->summary->id,
+                    is_string($newCodeId) ? $newCodeId : null,
                     actor: $actor,
                     codeTtlSeconds: $options->codeTtlSeconds,
                     credentialExpiresAt: $source->expires_at,

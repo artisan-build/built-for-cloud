@@ -32,7 +32,11 @@ it('reports the rogue omitted-purpose writer positive control', function (): voi
     expect($inventory['writers'])->toContain([
         'member' => 'Fixtures\RogueCredentialWriter::write',
         'has_purpose' => false,
+    ], [
+        'member' => 'Fixtures\RogueCredentialWriter::writeThroughBoundHelper',
+        'has_purpose' => false,
     ])->and($inventory['violations'])->toContain(
         'missing-purpose:Fixtures\RogueCredentialWriter::write',
+        'missing-purpose:Fixtures\RogueCredentialWriter::writeThroughBoundHelper',
     );
 });

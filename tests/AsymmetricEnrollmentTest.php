@@ -28,6 +28,7 @@ use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\Rs256PublicKey;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
+use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -122,6 +123,7 @@ it('fails closed with the default resolver and rejects caller-authored scope or 
 
     bindEnrollmentScope($pending['scope']);
     openssl_pkey_export($key['private'], $privatePem);
+    openssl_pkey_export($key['private'], $encryptedPrivatePem, 'test-only-passphrase');
     $this->postJson('/bfc/asymmetric-enrollments/'.$pending['scope']->application, [
         'enrollment_code' => $pending['code'],
         'public_key' => $privatePem,
@@ -130,6 +132,10 @@ it('fails closed with the default resolver and rejects caller-authored scope or 
     $this->postJson('/bfc/asymmetric-enrollments/'.$pending['scope']->application, [
         'enrollment_code' => $pending['code'],
         'public_key' => $privatePem,
+    ])->assertUnprocessable();
+    $this->postJson('/bfc/asymmetric-enrollments/'.$pending['scope']->application, [
+        'enrollment_code' => $pending['code'],
+        'public_key' => $encryptedPrivatePem,
     ])->assertUnprocessable();
 
     expect(Credential::query()->findOrFail($pending['id'])->public_key)->toBeNull()
@@ -182,6 +188,17 @@ it('refuses every dead or malformed linked state without a partial write', funct
         'already active' => DB::table('credentials')->where('id', $pending['id'])->update(['status' => 'active']),
         'wrong kind' => DB::table('credentials')->where('id', $pending['id'])->update(['kind' => 'bearer']),
         'wrong purpose' => DB::table('credentials')->where('id', $pending['id'])->update(['purpose' => 'enrollment']),
+        'wrong ownership' => (function () use ($pending): void {
+            $user = User::query()->create([
+                'name' => 'Wrong enrollment owner',
+                'email' => 'wrong-enrollment-owner@example.test',
+                'password' => bcrypt('test-created-password'),
+            ]);
+            DB::table('credentials')->where('id', $pending['id'])->update(['user_id' => $user->getKey()]);
+        })(),
+        'malformed binding hash' => DB::table('credential_protocol_bindings')->where('credential_id', $pending['id'])->update(['scope_hash' => str_repeat('0', 64)]),
+        'wrong binding algorithm' => DB::table('credential_protocol_bindings')->where('credential_id', $pending['id'])->update(['algorithm' => 'hmac-sha256']),
+        'wrong binding role' => DB::table('credential_protocol_bindings')->where('credential_id', $pending['id'])->update(['material_role' => 'verification_copy']),
         'unlinked' => DB::table('onboarding_tokens')->where('durable_credential_id', $pending['id'])->update(['durable_credential_id' => null]),
     };
     $before = [
@@ -206,8 +223,48 @@ it('refuses every dead or malformed linked state without a partial write', funct
     'already active',
     'wrong kind',
     'wrong purpose',
+    'wrong ownership',
+    'malformed binding hash',
+    'wrong binding algorithm',
+    'wrong binding role',
     'unlinked',
 ]);
+
+it('rejects malformed and non-closed HTTP objects without resolver or storage work', function (): void {
+    $pending = pendingBoundEnrollment();
+    $called = false;
+    app()->instance(ResolvesAsymmetricEnrollmentScope::class, new class($called) implements ResolvesAsymmetricEnrollmentScope
+    {
+        public function __construct(private bool &$called) {}
+
+        public function resolve(Request $request, string $application): ?BoundCredentialScope
+        {
+            $this->called = true;
+
+            return null;
+        }
+    });
+
+    $cases = [
+        [],
+        ['enrollment_code' => str_repeat('a', 64)],
+        ['enrollment_code' => str_repeat('a', 64), 'public_key' => []],
+        ['enrollment_code' => [], 'public_key' => 'key'],
+        ['enrollment_code' => 'not-a-code', 'public_key' => 'key'],
+        ['enrollment_code' => str_repeat('a', 64), 'public_key' => 'key', 'algorithm' => 'RS256'],
+    ];
+
+    foreach ($cases as $case) {
+        $this->postJson('/bfc/asymmetric-enrollments/app_1', $case)->assertUnprocessable();
+    }
+
+    $this->call('POST', '/bfc/asymmetric-enrollments/app_1', [], [], [], [
+        'CONTENT_TYPE' => 'application/json',
+    ], '{')->assertUnprocessable();
+
+    expect($called)->toBeFalse()
+        ->and(Credential::query()->findOrFail($pending['id'])->public_key)->toBeNull();
+});
 
 it('rolls back key activation code consumption and audit when lifecycle recording fails', function (): void {
     $pending = pendingBoundEnrollment();
@@ -325,6 +382,57 @@ it('selects exact canonical keys in frozen order and ignores hash collisions and
         ->and(Credential::activePublicKeysFor($legacy->subject_type, $legacy->subject_ref))->toBe([$legacy->public_key]);
 });
 
+it('excludes every wrong lookup dimension lifecycle and malformed stored shape', function (): void {
+    $pending = pendingBoundEnrollment();
+    $key = testsRsaKey();
+    app(CompleteAsymmetricEnrollment::class)($pending['code'], $pending['scope'], new Rs256PublicKey($key['public']));
+    $lookup = app(AsymmetricVerificationKeys::class);
+
+    foreach ([
+        new BoundCredentialScope('matte.callback', $pending['scope']->subject, $pending['scope']->installation, $pending['scope']->application, $pending['scope']->audience),
+        new BoundCredentialScope($pending['scope']->appPurpose, new Subject(SubjectType::Installation, 'wrong-subject'), $pending['scope']->installation, $pending['scope']->application, $pending['scope']->audience),
+        new BoundCredentialScope($pending['scope']->appPurpose, $pending['scope']->subject, 'wrong-installation', $pending['scope']->application, $pending['scope']->audience),
+        new BoundCredentialScope($pending['scope']->appPurpose, $pending['scope']->subject, $pending['scope']->installation, 'wrong-application', $pending['scope']->audience),
+        new BoundCredentialScope($pending['scope']->appPurpose, $pending['scope']->subject, $pending['scope']->installation, $pending['scope']->application, 'https://wrong.example'),
+    ] as $wrongScope) {
+        expect($lookup->for($wrongScope))->toBe([]);
+    }
+
+    $credential = DB::table('credentials')->where('id', $pending['id'])->first();
+    $binding = DB::table('credential_protocol_bindings')->where('credential_id', $pending['id'])->first();
+    $wrongOwner = User::query()->create([
+        'name' => 'Wrong lookup owner',
+        'email' => 'wrong-lookup-owner@example.test',
+        'password' => bcrypt('test-created-password'),
+    ]);
+    $mutations = [
+        ['credentials', ['status' => 'pending']],
+        ['credentials', ['revoked_at' => now()]],
+        ['credentials', ['expires_at' => now()->subSecond()]],
+        ['credentials', ['kind' => 'bearer']],
+        ['credentials', ['purpose' => 'enrollment']],
+        ['credentials', ['public_key' => null]],
+        ['credentials', ['public_key' => " \n".$key['public']]],
+        ['credentials', ['subject_ref' => 'wrong-subject']],
+        ['credentials', ['user_id' => $wrongOwner->getKey()]],
+        ['credential_protocol_bindings', ['app_purpose' => 'matte.callback']],
+        ['credential_protocol_bindings', ['installation_ref' => 'wrong-installation']],
+        ['credential_protocol_bindings', ['application_ref' => 'wrong-application']],
+        ['credential_protocol_bindings', ['audience' => 'https://wrong.example']],
+        ['credential_protocol_bindings', ['algorithm' => 'hmac-sha256']],
+        ['credential_protocol_bindings', ['material_role' => 'verification_copy']],
+        ['credential_protocol_bindings', ['scope_hash' => str_repeat('0', 64)]],
+    ];
+
+    foreach ($mutations as [$table, $change]) {
+        $keyColumn = $table === 'credentials' ? 'id' : 'credential_id';
+        DB::table($table)->where($keyColumn, $pending['id'])->update($change);
+        expect($lookup->for($pending['scope']))->toBe([]);
+        $original = $table === 'credentials' ? (array) $credential : (array) $binding;
+        DB::table($table)->where($keyColumn, $pending['id'])->update(array_intersect_key($original, $change));
+    }
+});
+
 it('defers bound grace until enrollment then returns overlap in order and only the replacement after grace', function (): void {
     Carbon::setTestNow(Carbon::parse('2026-09-15 12:00:00'));
     $source = pendingBoundEnrollment();
@@ -335,7 +443,7 @@ it('defers bound grace until enrollment then returns overlap in order and only t
 
     expect(Credential::query()->findOrFail($source['id'])->expires_at)->toBeNull();
     expect(fn () => app(RotateCredential::class)($source['id'], new RotateOptions))
-        ->toThrow(RotationRefused::class, 'PENDING activation');
+        ->toThrow(RotationRefused::class, 'PENDING public-key enrollment');
     expect(Credential::query()->findOrFail($source['id'])->expires_at)->toBeNull();
 
     app(CompleteAsymmetricEnrollment::class)(
@@ -354,6 +462,65 @@ it('defers bound grace until enrollment then returns overlap in order and only t
         ->toBe([$replacementId]);
 });
 
+it('makes emergency bound rotation an explicit outage until enrollment', function (): void {
+    Carbon::setTestNow(Carbon::parse('2026-09-15 12:00:00'));
+    $source = pendingBoundEnrollment();
+    app(CompleteAsymmetricEnrollment::class)($source['code'], $source['scope'], new Rs256PublicKey(testsRsaKey()['public']));
+    $rotation = app(RotateCredential::class)(
+        $source['id'],
+        new RotateOptions(emergency: true, codeTtlSeconds: 3600),
+    );
+    $replacementId = (string) $rotation?->mint->summary->id;
+
+    expect(Credential::query()->findOrFail($source['id'])->expires_at?->lessThanOrEqualTo(now()))->toBeTrue()
+        ->and(app(AsymmetricVerificationKeys::class)->for($source['scope']))->toBe([]);
+
+    app(CompleteAsymmetricEnrollment::class)(
+        (string) $rotation?->mint->secret?->reveal(),
+        $source['scope'],
+        new Rs256PublicKey(testsRsaKey()['public']),
+    );
+
+    expect(array_column(app(AsymmetricVerificationKeys::class)->for($source['scope']), 'credentialId'))
+        ->toBe([$replacementId]);
+});
+
+it('rolls back replacement activation and predecessor cutover together', function (): void {
+    Carbon::setTestNow(Carbon::parse('2026-09-15 12:00:00'));
+    $source = pendingBoundEnrollment();
+    app(CompleteAsymmetricEnrollment::class)($source['code'], $source['scope'], new Rs256PublicKey(testsRsaKey()['public']));
+    $rotation = app(RotateCredential::class)($source['id'], new RotateOptions(codeTtlSeconds: 3600));
+    $replacementId = (string) $rotation?->mint->summary->id;
+    $replacementCode = (string) $rotation?->mint->secret?->reveal();
+    DB::unprepared(<<<'SQL'
+        CREATE TRIGGER fail_asymmetric_cutover_audit
+        BEFORE INSERT ON credential_audit_events
+        WHEN NEW.event = 'rotated' AND NEW.reason_code = 'cutover_completion'
+        BEGIN
+            SELECT RAISE(ABORT, 'forced cutover audit failure');
+        END
+        SQL);
+
+    try {
+        app(CompleteAsymmetricEnrollment::class)(
+            $replacementCode,
+            $source['scope'],
+            new Rs256PublicKey(testsRsaKey()['public']),
+        );
+        test()->fail('The forced cutover audit failure unexpectedly committed.');
+    } catch (Throwable) {
+        // The state assertions below prove the transition rolled back as one unit.
+    } finally {
+        DB::unprepared('DROP TRIGGER fail_asymmetric_cutover_audit');
+    }
+
+    expect(Credential::query()->findOrFail($source['id'])->expires_at)->toBeNull()
+        ->and(Credential::query()->findOrFail($replacementId)->status)->toBe(CredentialStatus::Pending)
+        ->and(Credential::query()->findOrFail($replacementId)->public_key)->toBeNull()
+        ->and(OnboardingToken::query()->where('durable_credential_id', $replacementId)->sole()->consumed_at)->toBeNull()
+        ->and(CredentialAuditEvent::query()->where('credential_id', $replacementId)->where('event', LifecycleEventType::Activated)->exists())->toBeFalse();
+});
+
 it('reissues one lost bound delivery without redelivery or same-second lineage ambiguity', function (): void {
     Carbon::setTestNow(Carbon::parse('2026-09-15 12:00:00'));
     $source = pendingBoundEnrollment();
@@ -370,6 +537,11 @@ it('reissues one lost bound delivery without redelivery or same-second lineage a
         ->and(OnboardingToken::query()->where('durable_credential_id', $firstId)->sole()->consumed_at)->not->toBeNull()
         ->and(CredentialAuditEvent::query()->where('credential_id', $firstId)->where('reason_code', AuditReason::DeliveryAbandoned)->exists())->toBeTrue()
         ->and($reissued?->mint->summary->id)->not->toBe($firstId)
+        ->and(CredentialAuditEvent::query()
+            ->where('credential_id', $reissued?->mint->summary->id)
+            ->where('event', LifecycleEventType::Issued)
+            ->whereNotNull('code_id')
+            ->exists())->toBeTrue()
         ->and(Credential::query()->where('status', CredentialStatus::Pending)->whereNull('revoked_at')->count())->toBe(1);
 
     expect(fn () => app(CompleteAsymmetricEnrollment::class)(

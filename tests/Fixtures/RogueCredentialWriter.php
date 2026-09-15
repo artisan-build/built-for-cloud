@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Fixtures;
 
+use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
 use ArtisanBuild\BuiltForCloud\Credential;
 
 final class RogueCredentialWriter
@@ -15,5 +16,18 @@ final class RogueCredentialWriter
             'subject_type' => 'application',
             'subject_ref' => 'rogue',
         ]);
+    }
+
+    public function writeThroughBoundHelper(BoundCredentialScope $scope): Credential
+    {
+        $credential = new Credential;
+        $credential->forceFill([
+            'kind' => 'asymmetric',
+            'subject_type' => 'installation',
+            'subject_ref' => 'rogue-bound',
+        ]);
+        $credential->saveWithOriginatorBinding($scope);
+
+        return $credential;
     }
 }

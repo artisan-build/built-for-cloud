@@ -14,7 +14,8 @@ use SplFileInfo;
  * Lexically inventories package-owned credential row creation syntax.
  *
  * The scanner derives literal `Credential::query()->create([...])` calls and
- * `new Credential; ... forceFill([...])->save()` pairs. It cannot see dynamic
+ * `new Credential; ... forceFill([...]); ... save()` pairs, including the
+ * bound `saveWithOriginatorBinding()` storage path. It cannot see dynamic
  * class names, aliases assembled at runtime, host-application writes, raw SQL,
  * query-builder writes, generated non-PHP code, or writes hidden behind an
  * unrecognized helper. Those remain review concerns.
@@ -96,7 +97,7 @@ final class CredentialWriterInventory
             PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
         );
         preg_match_all(
-            '/\$([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*new\s+Credential\s*;\s*\$\1->forceFill\(\s*\[(.*?)\]\s*\)->save\(\)/s',
+            '/\$([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*new\s+Credential\s*;\s*\$\1->forceFill\(\s*\[(.*?)\]\s*\);(?:(?!\bfunction\b).)*?\$\1->(?:save|saveWithOriginatorBinding)\s*\(/s',
             $code,
             $forceFills,
             PREG_SET_ORDER | PREG_OFFSET_CAPTURE,

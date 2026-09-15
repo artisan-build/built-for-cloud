@@ -96,21 +96,6 @@ final class CredentialProtocolBinding extends Model
         ]);
     }
 
-    public static function copyTo(self $source, Credential $replacement): self
-    {
-        /** @var self */
-        return self::query()->create([
-            'credential_id' => $replacement->id,
-            'app_purpose' => $source->app_purpose,
-            'installation_ref' => $source->installation_ref,
-            'application_ref' => $source->application_ref,
-            'audience' => $source->audience,
-            'algorithm' => $source->algorithm,
-            'material_role' => $source->material_role,
-            'scope_hash' => $source->scope_hash,
-        ]);
-    }
-
     public function scopeFor(Credential $credential): BoundCredentialScope
     {
         return new BoundCredentialScope(

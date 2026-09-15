@@ -95,6 +95,17 @@ final class RotationRefused extends RuntimeException
         ));
     }
 
+    public static function successorAwaitingEnrollment(string $id, string $successorId): self
+    {
+        return new self(sprintf(
+            'Credential %s was already rotated; its replacement %s is still PENDING public-key enrollment. '
+            .'Complete enrollment before starting the old credential\'s grace window, or use emergency rotation '
+            .'to end the old credential immediately.',
+            $id,
+            $successorId,
+        ));
+    }
+
     public static function sourcePending(string $id): self
     {
         return new self(sprintf(

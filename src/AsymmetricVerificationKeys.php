@@ -40,6 +40,7 @@ final class AsymmetricVerificationKeys
             ->where('credentials.subject_type', $scope->subject->type->value)
             ->where('credentials.subject_ref', $scope->subject->ref)
             ->where('credentials.status', CredentialStatus::Active->value)
+            ->whereNull('credentials.user_id')
             ->whereNull('credentials.revoked_at')
             ->where(function (Builder $query): void {
                 $query->whereNull('credentials.expires_at')->orWhere('credentials.expires_at', '>', now());

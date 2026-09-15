@@ -18,6 +18,7 @@ use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class);
@@ -115,15 +116,35 @@ it('refuses unbound signing asymmetric and every bound authority mismatch withou
         ->and(CredentialProtocolBinding::query()->count())->toBe(0);
 });
 
-it('re-resolves mappings at use regardless of UI flags or a preconstructed scope', function (): void {
+it('re-resolves mappings at use regardless of every UI flag combination or a preconstructed scope', function (): void {
     $scope = testsBoundScope();
 
-    foreach ([false, true] as $visible) {
+    foreach ([[false, false], [false, true], [true, false], [true, true]] as [$personal, $installation]) {
         config([
-            'built-for-cloud.credentials.app_purposes' => ['reel.application.signing' => ['signing']],
-            'built-for-cloud.ui.personal_credentials' => $visible,
-            'built-for-cloud.ui.installation_credentials' => $visible,
+            'built-for-cloud.credentials.app_purposes' => ['reel.application.signing' => 'signing'],
+            'built-for-cloud.ui.personal_credentials' => $personal,
+            'built-for-cloud.ui.installation_credentials' => $installation,
         ]);
+
+        app(MintCredential::class)(
+            $scope->subject,
+            new MintOptions(
+                kind: CredentialKind::Asymmetric,
+                purpose: CredentialPurpose::Signing,
+                codeTtlSeconds: 3600,
+                boundScope: $scope,
+            ),
+        );
+    }
+
+    foreach ([
+        null,
+        [],
+        ['reel.application.signing' => ['signing']],
+        ['reel.application.signing' => 1],
+        ['reel.application.signing' => 'unknown'],
+    ] as $mappings) {
+        config(['built-for-cloud.credentials.app_purposes' => $mappings]);
 
         expect(fn () => app(MintCredential::class)(
             $scope->subject,
@@ -135,6 +156,57 @@ it('re-resolves mappings at use regardless of UI flags or a preconstructed scope
             ),
         ))->toThrow(InvalidCredentialInput::class, 'app purpose mapping is invalid');
     }
+
+    $malformed = new BoundCredentialScope(
+        'not-a-mapping-id',
+        $scope->subject,
+        $scope->installation,
+        $scope->application,
+        $scope->audience,
+    );
+    config(['built-for-cloud.credentials.app_purposes' => ['not-a-mapping-id' => 'signing']]);
+    expect(fn () => app(MintCredential::class)(
+        $malformed->subject,
+        new MintOptions(
+            kind: CredentialKind::Asymmetric,
+            purpose: CredentialPurpose::Signing,
+            codeTtlSeconds: 3600,
+            boundScope: $malformed,
+        ),
+    ))->toThrow(InvalidCredentialInput::class, 'app purpose mapping is invalid');
+
+    expect(Credential::query()->count())->toBe(4);
+});
+
+it('round trips enum bindings and enforces one binding per credential', function (): void {
+    testsConfigureBoundPurposes();
+    $scope = testsBoundScope();
+    $mint = app(MintCredential::class)(
+        $scope->subject,
+        new MintOptions(
+            kind: CredentialKind::Asymmetric,
+            purpose: CredentialPurpose::Signing,
+            codeTtlSeconds: 3600,
+            boundScope: $scope,
+        ),
+    );
+    $binding = CredentialProtocolBinding::query()->findOrFail($mint->summary->id);
+
+    expect($binding->algorithm)->toBe(CredentialAlgorithm::Rs256)
+        ->and($binding->material_role)->toBe(CredentialMaterialRole::Originator);
+
+    expect(fn () => DB::table('credential_protocol_bindings')->insert([
+        'credential_id' => $mint->summary->id,
+        'app_purpose' => $scope->appPurpose,
+        'installation_ref' => $scope->installation,
+        'application_ref' => $scope->application,
+        'audience' => $scope->audience,
+        'algorithm' => CredentialAlgorithm::Rs256->value,
+        'material_role' => CredentialMaterialRole::Originator->value,
+        'scope_hash' => $binding->scope_hash,
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]))->toThrow(QueryException::class);
 });
 
 it('copies an exact binding through rotation and refuses verification-copy rotation', function (): void {

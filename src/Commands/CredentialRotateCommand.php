@@ -8,6 +8,9 @@ use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Commands\Concerns\ParsesCredentialVerbInput;
 use ArtisanBuild\BuiltForCloud\DeliveryShape;
+use ArtisanBuild\BuiltForCloud\CredentialAlgorithm;
+use ArtisanBuild\BuiltForCloud\CredentialMaterialRole;
+use ArtisanBuild\BuiltForCloud\CredentialProtocolBinding;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
@@ -181,8 +184,20 @@ final class CredentialRotateCommand extends SystemAuthorityCommand
             $result->supersededId,
         ));
 
-        $this->line((bool) $this->option('emergency')
-            ? 'Emergency rotation: the old credential is dead now.'
+        if ((bool) $this->option('emergency')) {
+            $this->line('Emergency rotation: the old credential is dead now.');
+
+            return;
+        }
+
+        $deferredAsymmetricCutover = CredentialProtocolBinding::query()
+            ->whereKey($summary->id)
+            ->where('algorithm', CredentialAlgorithm::Rs256->value)
+            ->where('material_role', CredentialMaterialRole::Originator->value)
+            ->exists();
+
+        $this->line($deferredAsymmetricCutover
+            ? 'The old credential stays active until public-key enrollment; enrollment then starts its one-hour grace window.'
             : 'The old credential stays resolvable through its grace window (one hour), then dies by its own expiry.');
     }
 
