@@ -40,6 +40,7 @@
         "test": "@php tests/Support/run-p6-gate-command.php \"composer test\" vendor/bin/pest",
         "test:pgsql": "@php tests/Support/run-p6-gate-command.php \"composer test:pgsql\" vendor/bin/pest --group=pgsql --fail-on-skipped --colors=never",
         "test:p6c-live": "@php tests/Live/run-p6c-live.php",
+        "test:redis": "vendor/bin/pest --group=redis --fail-on-skipped --colors=never",
         "lint": "pint",
         "lint:test": "@php tests/Support/run-p6-gate-command.php \"composer lint:test\" vendor/bin/pint --test",
         "stan": "@php tests/Support/run-p6-gate-command.php \"composer stan\" vendor/bin/phpstan analyse --memory-limit=512M"

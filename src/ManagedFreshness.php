@@ -65,9 +65,9 @@ final class ManagedFreshness
 
             $attemptKey = 'bfc:managed-refresh-attempt:'.$key;
             $now = CarbonImmutable::now();
-            $nextAttemptAt = Cache::get($attemptKey);
+            $nextAttemptAt = Support\CacheInteger::parse(Cache::get($attemptKey));
 
-            if (is_int($nextAttemptAt) && $now->getTimestamp() < $nextAttemptAt) {
+            if ($nextAttemptAt !== null && $now->getTimestamp() < $nextAttemptAt) {
                 return $this->storedAllows($subject);
             }
 

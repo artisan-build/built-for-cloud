@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresHeadlineStat;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\MetadataShape;
+use ArtisanBuild\BuiltForCloud\Support\CacheInteger;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -279,12 +280,11 @@ final class CollectVitals
      * Rebuild a snapshot from whatever the cache handed back, or null
      * when that is not a snapshot this class wrote.
      *
-     * Every member is checked: the four integers must be absent, null or
-     * int, and the degradation flag must be a boolean. Nothing is cast.
-     * A cached `"12"` is not a pending count — it is evidence that
-     * something else owns this key — and a value that fails here is
-     * bypassed rather than repaired, because repairing it would report a
-     * number this deployment never read.
+     * Every member is checked: the four integers must be absent, null or a
+     * canonical non-negative integer representation, and the degradation
+     * flag must be a boolean. A value that fails here is bypassed rather than
+     * repaired, because repairing it would report a number this deployment
+     * never read.
      *
      * @return array{pending: int|null, reserved: int|null, failed: int|null, oldest_at: int|null, degraded: bool}|null
      */
@@ -299,11 +299,19 @@ final class CollectVitals
         foreach (['pending', 'reserved', 'failed', 'oldest_at'] as $member) {
             $value = $cached[$member] ?? null;
 
-            if ($value !== null && ! is_int($value)) {
+            if ($value === null) {
+                $members[$member] = null;
+
+                continue;
+            }
+
+            $integer = CacheInteger::parse($value);
+
+            if ($integer === null) {
                 return null;
             }
 
-            $members[$member] = $value;
+            $members[$member] = $integer;
         }
 
         return [
