@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\ClientIdentity;
 use ArtisanBuild\BuiltForCloud\Tests\Support\ContractMajorLiveAuthenticationProbe;
-use ArtisanBuild\BuiltForCloud\Tests\Support\ContractMajorRouteCacheProbe;
 use ArtisanBuild\BuiltForCloud\Tests\Support\ContractMajorLiveState;
+use ArtisanBuild\BuiltForCloud\Tests\Support\ContractMajorRouteCacheProbe;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Support\Facades\Route;
