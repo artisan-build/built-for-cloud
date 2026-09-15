@@ -89,6 +89,29 @@ final class UiConfigReadScan
     }
 
     /**
+     * @param  list<class-string|string>  $consumers
+     * @param  list<string>  $additionalRoots
+     * @return list<string> `<consumer>|<exact ui key>|<ordinal>` identities
+     */
+    public static function forbiddenConsumerReads(string $sourceRoot, array $consumers, array $additionalRoots = []): array
+    {
+        $reads = self::discover($sourceRoot);
+
+        foreach ($additionalRoots as $root) {
+            array_push($reads, ...self::discover($root));
+        }
+
+        $consumers = array_values(array_unique($consumers));
+        $forbidden = array_values(array_filter(
+            $reads,
+            static fn (string $read): bool => in_array(strstr($read, '|', true), $consumers, true),
+        ));
+        sort($forbidden);
+
+        return $forbidden;
+    }
+
+    /**
      * @param  list<string>  $additionalRoots
      * @return array<string, 'display'|'mapper'|'mount'|'transport-validator'>
      */

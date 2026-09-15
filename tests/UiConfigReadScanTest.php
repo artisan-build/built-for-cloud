@@ -8,6 +8,8 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome;
 use ArtisanBuild\BuiltForCloud\LandingManifest;
 use ArtisanBuild\BuiltForCloud\LandingPageRegistrar;
 use ArtisanBuild\BuiltForCloud\Testing\UiConfigReadScan;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConditionedLifecycleRefusal;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConditionedPurposeGate;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConfigChainEnforcementPath;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConfigEnforcementPath;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConfigFacadeEnforcementPath;
@@ -109,6 +111,8 @@ it('reports an executed enforcement path for every supported ui config read form
     $fixtureReads = UiConfigReadScan::discover(__DIR__.'/Fixtures');
 
     expect($fixtureReads)->toBe([
+        UiConditionedLifecycleRefusal::class.'|built-for-cloud.ui.session_management|1',
+        UiConditionedPurposeGate::class.'|built-for-cloud.ui.personal_credentials|1',
         UiConfigChainEnforcementPath::class.'|built-for-cloud.ui.rogue_chain_gate|1',
         UiConfigEnforcementPath::class.'|built-for-cloud.ui.rogue_gate|1',
         UiConfigFacadeEnforcementPath::class.'|built-for-cloud.ui.rogue_facade_gate|1',

@@ -241,6 +241,46 @@ It also creates one structurally guarded `bfc_authority` row in `standalone` mod
 `InstallationAuthority::change()` is the non-Eloquent write API; it advances that generation with a
 compare-and-set update and returns the exact state it wrote, so stale writers cannot change authority.
 
+### Package web UI adoption
+
+Publish `config/built-for-cloud.php`, then replace the package defaults with the consumer's canonical
+Scalpels catalog values. A complete adoption supplies all five `manifest` fields, fixed app-purpose
+mappings, and the affordances that product supports:
+
+```php
+'manifest' => [
+    'name' => 'Example Product',
+    'slug' => 'example-product',
+    'description' => 'The catalog description.',
+    'icon' => 'https://example.test/icon.svg',
+    'product_url' => 'https://scalpels.app/products/example-product',
+],
+'credentials' => [
+    // Keep the other published credential settings.
+    'app_purposes' => ['example-product.ingest' => 'consumption'],
+],
+'ui' => [
+    'landing_page' => true,
+    'member_management' => true,
+    'personal_credentials' => true,
+    'installation_credentials' => true,
+    'session_management' => true,
+    'managed_transitions' => true,
+    'credential_purposes' => ['example-product.ingest'],
+],
+```
+
+`ui.credential_purposes` is ordered display data; every entry must resolve through the fixed
+`credentials.app_purposes` enforcement map. Boolean UI values control links and rendered controls
+only. They do not unmount `/bfc/ui*`, authorize direct requests, or change credential purpose,
+audience, lifecycle, authority-mode, membership, or route-ownership decisions.
+
+After adopting the package UI, remove the consumer's starter root page so it cannot shadow the
+optional package landing page. In the consumer's conformance test, call
+`$this->assertBuiltForCloudContract()` and
+`$this->assertBuiltForCloudManifestMatches($canonicalCatalogEntry)` with the canonical Scalpels entry;
+keep deliberate `bfc::` view overrides under the consumer's own test coverage.
+
 ### System-authority entries
 
 Built for Cloud commands, queued jobs/listeners, and package-registered schedule callbacks execute in
