@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Mcp;
 
-use ArtisanBuild\BuiltForCloud\RouteMiddleware;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
+use ArtisanBuild\BuiltForCloud\RouteMiddleware;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Router;
 use Throwable;
