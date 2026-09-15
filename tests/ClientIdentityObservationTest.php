@@ -467,7 +467,9 @@ final class ClientIdentityObservationTest extends TestCase
     }
 
     /**
-     * Pairs that a case-insensitive or trailing-space-insensitive collation would treat as equal.
+     * Pairs that a case-insensitive or accent-insensitive collation would treat as equal.
+     *
+     * Trailing-space pairs are no longer representable: outer whitespace is outside the contract.
      *
      * @return array<string, array{string, string}>
      */
@@ -475,7 +477,7 @@ final class ClientIdentityObservationTest extends TestCase
     {
         return [
             'case' => ['client-a', 'CLIENT-A'],
-            'trailing space' => ['spaced', 'spaced '],
+            'accent' => ['client-e', 'client-é'],
         ];
     }
 
@@ -503,6 +505,9 @@ final class ClientIdentityObservationTest extends TestCase
             'null byte' => ["a\0b"],
             'invalid utf-8' => ["\xC3\x28"],
             'empty' => [''],
+            'trailing space' => ['spaced '],
+            'internal tab' => ["a\tb"],
+            'delete' => ["a\x7Fb"],
         ];
     }
 
