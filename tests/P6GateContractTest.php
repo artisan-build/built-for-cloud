@@ -40,6 +40,7 @@ function p6ValidStamp(): array
         'postgres' => [
             'database_name' => $database,
             'matrix_database_name' => 'bfc_p6_'.str_repeat('d', 32),
+            'matrix_candidate_sha' => $sha,
             'relationship' => 'separate-run-owned-databases',
             'run_marker_verified' => true,
             'cases' => array_fill_keys(P6GateContract::POSTGRES_CASES, 'pass'),
@@ -139,6 +140,18 @@ it('rejects path branch tag and published archive evidence', function (string $s
     ['composer-package-dist-archive', 'dev-main'],
 ]);
 
+it('binds every archive identity to the exact stamp candidate', function (string $field): void {
+    $stamp = p6ValidStamp();
+    if ($field === 'archive-candidate') {
+        $stamp['archive']['candidate_sha'] = str_repeat('e', 40);
+    } else {
+        $stamp['archive']['installed_version'] = '0.0.0+p6c.'.str_repeat('e', 40);
+    }
+
+    expect(fn () => P6GateStamp::assertValid($stamp))
+        ->toThrow(InvalidArgumentException::class, 'exact candidate archive');
+})->with(['archive-candidate', 'installed-version']);
+
 it('refuses isolated or divergent shared state between nodes', function (string $case): void {
     $stamp = p6ValidStamp();
 
@@ -169,6 +182,28 @@ it('requires an explicit relationship between separate run-owned matrix and live
     expect(fn () => P6GateStamp::assertValid($stamp))
         ->toThrow(InvalidArgumentException::class, 'relationship');
 })->with(['same-database', 'wrong-relationship']);
+
+it('binds the PostgreSQL matrix evidence to the exact stamp candidate', function (): void {
+    $stamp = p6ValidStamp();
+    $stamp['postgres']['matrix_candidate_sha'] = str_repeat('e', 40);
+
+    expect(fn () => P6GateStamp::assertValid($stamp))
+        ->toThrow(InvalidArgumentException::class, 'different candidate SHA');
+});
+
+it('requires fully distinct listener identities with addresses tied to ports', function (string $case): void {
+    $stamp = p6ValidStamp();
+    if ($case === 'pid') {
+        $stamp['listeners']['node_b']['pid'] = $stamp['listeners']['node_a']['pid'];
+    } elseif ($case === 'port') {
+        $stamp['listeners']['node_b']['port'] = $stamp['listeners']['node_a']['port'];
+        $stamp['listeners']['node_b']['address'] = $stamp['listeners']['node_a']['address'];
+    } else {
+        $stamp['listeners']['node_b']['address'] = '127.0.0.1:41003';
+    }
+
+    expect(fn () => P6GateStamp::assertValid($stamp))->toThrow(InvalidArgumentException::class);
+})->with(['pid', 'port', 'address']);
 
 it('rejects every incomplete or failed teardown observation', function (string $field): void {
     $stamp = p6ValidStamp();

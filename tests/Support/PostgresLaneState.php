@@ -98,13 +98,18 @@ final class PostgresLaneState
         $stampPath = getenv('BFC_P6_PGSQL_STAMP');
 
         if (is_string($stampPath) && $stampPath !== '') {
+            $candidateSha = getenv('BFC_P6_CANDIDATE_SHA');
+            if (! is_string($candidateSha) || preg_match('/^[a-f0-9]{40}$/D', $candidateSha) !== 1) {
+                throw new RuntimeException('The PostgreSQL lane candidate SHA is required for its stamp.');
+            }
             $cases = [];
             foreach (P6GateContract::POSTGRES_CASES as $case) {
                 $cases[$case] = self::$cases[$case] ?? 'not-run';
             }
 
             $stamp = [
-                'schema' => 'bfc.p6.postgres.v1',
+                'schema' => 'bfc.p6.postgres.v2',
+                'candidate_sha' => $candidateSha,
                 'database_name' => $lane->databaseName(),
                 'run_marker_verified' => $teardown->markerVerified,
                 'cases' => $cases,

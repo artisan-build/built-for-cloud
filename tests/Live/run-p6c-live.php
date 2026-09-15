@@ -59,15 +59,9 @@ function p6LiveRun(array $command, string $directory, array $environment, string
 }
 
 /** @param array<string, string> $environment */
-function p6LiveRunSensitive(array $command, string $directory, array $environment, string $input, string $label, array &$arguments): string
+function p6LiveRunSensitive(array $command, string $directory, array $environment, string $input, string $label, array &$arguments, array &$diagnostics): string
 {
-    $arguments[] = $command;
-    $process = new Process($command, $directory, $environment, $input, 60);
-    if ($process->run() !== 0) {
-        p6LiveFail("{$label} exited non-zero.");
-    }
-
-    return $process->getOutput();
+    return P6LiveCommandRunner::runSensitive($command, $directory, $environment, $input, $label, $arguments, $diagnostics);
 }
 
 function p6LiveSigningKey(): AsymmetricSecretKey
@@ -222,31 +216,6 @@ function p6LiveDatabaseSurface(PDO $database): array
     return $surface;
 }
 
-/** @param list<string> $forbidden
- * @return list<string>
- */
-function p6LiveFileLeaks(string $root, array $forbidden): array
-{
-    $leaks = [];
-    $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
-    foreach ($iterator as $entry) {
-        if (! $entry instanceof SplFileInfo || ! $entry->isFile() || str_contains($entry->getPathname(), '/vendor/')) {
-            continue;
-        }
-        $contents = file_get_contents($entry->getPathname());
-        if (! is_string($contents)) {
-            continue;
-        }
-        foreach ($forbidden as $material) {
-            if ($material !== '' && str_contains($contents, $material)) {
-                p6LiveFail('The P6c secret detector found forbidden material in a generated file.');
-            }
-        }
-    }
-
-    return $leaks;
-}
-
 $root = dirname(__DIR__, 2);
 $stampPath = getenv('BFC_P6_LIVE_STAMP');
 $commandStamp = getenv('BFC_P6_COMMAND_STAMP');
@@ -277,6 +246,7 @@ $lane = null;
 $failure = null;
 $arguments = [];
 $outputs = [];
+$sensitiveDiagnostics = [];
 $responses = [];
 $listenerIdentities = [];
 $archivePath = '';
@@ -306,7 +276,7 @@ try {
     }
     $candidateSha = trim(p6LiveRun(['git', 'rev-parse', 'HEAD'], $root, [], 'candidate SHA', $arguments, $outputs));
     $commandResults = P6GateCommandLedger::completedForLiveRunner($commandStamp, $candidateSha);
-    $postgresEvidence = P6PostgresRunStamp::read($postgresStamp);
+    $postgresEvidence = P6PostgresRunStamp::read($postgresStamp, $candidateSha);
     $postgresCases = $postgresEvidence['cases'];
     $matrixDatabaseName = $postgresEvidence['database_name'];
 
@@ -390,7 +360,7 @@ try {
         'p6-canary-'.bin2hex(random_bytes(16)),
     ], static fn (string $material): bool => $material !== ''));
 
-    $cases->observe('fresh_migration_and_install', function () use ($host, $environment, $installedVersion, &$arguments, &$outputs): bool {
+    $cases->observe('fresh_migration_and_install', function () use ($host, $environment, $installedVersion, &$arguments, &$outputs, &$sensitiveDiagnostics): bool {
         p6LiveRun([PHP_BINARY, 'artisan', 'migrate:fresh', '--force', '--no-interaction'], $host, $environment, 'fresh host migration', $arguments, $outputs);
         $result = p6LiveJson(p6LiveRunSensitive(
             [PHP_BINARY, 'p6c-host-cli.php', 'install'],
@@ -399,6 +369,7 @@ try {
             json_encode(['version' => $installedVersion], JSON_THROW_ON_ERROR),
             'fresh host install',
             $arguments,
+            $sensitiveDiagnostics,
         ), 'fresh host install');
         p6LiveSame('replaced', $result['environment'] ?? null, 'first install environment');
         p6LiveSame('unchanged', $result['composer'] ?? null, 'first install composer');
@@ -406,7 +377,7 @@ try {
         return true;
     });
     $lane->assertOwned();
-    $cases->observe('identical_install_rerun', function () use ($host, $environment, $installedVersion, &$arguments): bool {
+    $cases->observe('identical_install_rerun', function () use ($host, $environment, $installedVersion, &$arguments, &$sensitiveDiagnostics): bool {
         $result = p6LiveJson(p6LiveRunSensitive(
             [PHP_BINARY, 'p6c-host-cli.php', 'install'],
             $host,
@@ -414,6 +385,7 @@ try {
             json_encode(['version' => $installedVersion], JSON_THROW_ON_ERROR),
             'fresh host install rerun',
             $arguments,
+            $sensitiveDiagnostics,
         ), 'fresh host install rerun');
         p6LiveSame(['environment' => 'unchanged', 'composer' => 'unchanged'], $result, 'identical install rerun');
 
@@ -429,6 +401,7 @@ try {
         json_encode(['public_key' => $signingKey->getPublicKey()->toHexString(), 'password' => $password], JSON_THROW_ON_ERROR),
         'fresh host fixture seed',
         $arguments,
+        $sensitiveDiagnostics,
     ), 'fresh host fixture seed');
     foreach (['mcp_id', 'mcp_secret', 'wrong_secret', 'operator_secret', 'user_id', 'email'] as $key) {
         if (! is_string($seed[$key] ?? null) || $seed[$key] === '') {
@@ -688,6 +661,7 @@ try {
         '{}',
         'managed fixture setup',
         $arguments,
+        $sensitiveDiagnostics,
     ), 'managed fixture setup');
     $managedUser = $managed['user_id'] ?? null;
     if (! is_string($managedUser)) {
@@ -750,10 +724,11 @@ try {
     $databaseSurface = p6LiveDatabaseSurface($targetPdo);
     $responseBodies = array_column($responses, 'body');
     $responseHeaders = array_column($responses, 'headers');
+    P6LiveCommandRunner::assertFilesAbsent($runDirectory, $forbidden);
     P6SecretLeakDetector::assertAbsent([
         'process_arguments' => $arguments,
-        'files' => p6LiveFileLeaks($runDirectory, $forbidden),
-        'logs' => [$listenerA->output(), $listenerB->output()],
+        'files' => ['complete_disposable_tree_scan' => 'pass'],
+        'logs' => [$listenerA->output(), $listenerB->output(), ...$sensitiveDiagnostics],
         'exception_text' => [],
         'response_bodies' => $responseBodies,
         'response_headers' => $responseHeaders,
@@ -828,6 +803,7 @@ if ($failure === null && $teardown['verdict'] === 'pass') {
             'postgres' => [
                 'database_name' => $databaseName,
                 'matrix_database_name' => $matrixDatabaseName,
+                'matrix_candidate_sha' => $postgresEvidence['candidate_sha'],
                 'relationship' => 'separate-run-owned-databases',
                 'run_marker_verified' => $liveMarkerVerified,
                 'cases' => $postgresCases,

@@ -39,7 +39,7 @@ final class P6GateStamp
 
         self::assertArchive($stamp['archive'], $stamp['candidate_sha']);
         self::assertRuntime($stamp['runtime']);
-        $liveDatabase = self::assertPostgres($stamp['postgres']);
+        $liveDatabase = self::assertPostgres($stamp['postgres'], $stamp['candidate_sha']);
         self::assertSharedRuntime($stamp['shared_runtime'], $liveDatabase);
         self::assertListeners($stamp['listeners']);
         self::assertCommands($stamp['commands']);
@@ -61,8 +61,7 @@ final class P6GateStamp
             || ($archive['candidate_sha'] ?? null) !== $sha
             || ! is_string($archive['sha256'] ?? null)
             || preg_match('/^[a-f0-9]{64}$/D', $archive['sha256']) !== 1
-            || ! is_string($archive['installed_version'] ?? null)
-            || preg_match('/^0\.0\.0\+p6c\.[a-f0-9]{40}$/D', $archive['installed_version']) !== 1) {
+            || ($archive['installed_version'] ?? null) !== '0.0.0+p6c.'.$sha) {
             throw new InvalidArgumentException('The package was not proven from the exact candidate archive.');
         }
     }
@@ -81,7 +80,7 @@ final class P6GateStamp
         }
     }
 
-    private static function assertPostgres(mixed $postgres): string
+    private static function assertPostgres(mixed $postgres, string $sha): string
     {
         if (! is_array($postgres)) {
             throw new InvalidArgumentException('The P6c PostgreSQL evidence is absent.');
@@ -90,6 +89,7 @@ final class P6GateStamp
         self::assertExactKeys($postgres, [
             'database_name',
             'matrix_database_name',
+            'matrix_candidate_sha',
             'relationship',
             'run_marker_verified',
             'cases',
@@ -98,6 +98,10 @@ final class P6GateStamp
         $matrixDatabase = is_string($postgres['matrix_database_name'] ?? null) ? $postgres['matrix_database_name'] : '';
         PostgresRunIdentity::assertDatabaseName($database);
         PostgresRunIdentity::assertDatabaseName($matrixDatabase);
+
+        if (($postgres['matrix_candidate_sha'] ?? null) !== $sha) {
+            throw new InvalidArgumentException('The PostgreSQL matrix stamp belongs to a different candidate SHA.');
+        }
 
         if (($postgres['run_marker_verified'] ?? null) !== true) {
             throw new InvalidArgumentException('The P6c PostgreSQL run marker was not verified.');
@@ -136,6 +140,7 @@ final class P6GateStamp
         }
 
         $ports = [];
+        $pids = [];
         foreach ($listeners as $listener) {
             if (! is_array($listener)) {
                 throw new InvalidArgumentException('A P6c listener identity is absent.');
@@ -153,10 +158,11 @@ final class P6GateStamp
             }
 
             $ports[] = $listener['port'];
+            $pids[] = $listener['pid'];
         }
 
-        if (count(array_unique($ports)) !== 2) {
-            throw new InvalidArgumentException('The P6c listener ports are not distinct.');
+        if (count(array_unique($ports)) !== 2 || count(array_unique($pids)) !== 2) {
+            throw new InvalidArgumentException('The P6c listener identities are not distinct.');
         }
     }
 

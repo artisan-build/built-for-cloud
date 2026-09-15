@@ -92,9 +92,21 @@ it('requires observed successful commands from one exact candidate before live e
     expect(array_keys(P6GateCommandLedger::completedForLiveRunner($path, $sha)))
         ->toBe(array_slice(P6GateContract::COORDINATOR_COMMANDS, 0, -1));
 
-    P6GateCommandLedger::record($path, $sha, 'composer test', 1);
-    expect(fn () => P6GateCommandLedger::completedForLiveRunner($path, $sha))
-        ->toThrow(RuntimeException::class, 'composer test');
+    $retryPath = p6SupportDirectory().'/commands.json';
+    P6GateCommandLedger::record($retryPath, $sha, 'composer stan', 1);
+    expect(fn () => P6GateCommandLedger::record($retryPath, $sha, 'composer lint:test', 0))
+        ->toThrow(RuntimeException::class, 'out of contract order');
+    P6GateCommandLedger::record($retryPath, $sha, 'composer stan', 0);
+    foreach (array_slice(P6GateContract::COORDINATOR_COMMANDS, 1, -1) as $command) {
+        P6GateCommandLedger::record($retryPath, $sha, $command, 0);
+    }
+    expect(array_keys(P6GateCommandLedger::completedForLiveRunner($retryPath, $sha)))
+        ->toBe(array_slice(P6GateContract::COORDINATOR_COMMANDS, 0, -1));
+
+    expect(fn () => P6GateCommandLedger::record($path, $sha, 'composer test:pgsql', 1))
+        ->toThrow(RuntimeException::class, 'retried')
+        ->and(fn () => P6GateCommandLedger::record($path, $sha, 'composer stan', 1))
+        ->toThrow(RuntimeException::class, 'retried');
 });
 
 it('rejects missing commands candidate drift unknown commands and declarations without probes', function (): void {
@@ -104,7 +116,7 @@ it('rejects missing commands candidate drift unknown commands and declarations w
     P6GateCommandLedger::record($path, $sha, 'composer stan', 0);
 
     expect(fn () => P6GateCommandLedger::completedForLiveRunner($path, $sha))
-        ->toThrow(RuntimeException::class, 'composer lint:test')
+        ->toThrow(RuntimeException::class, 'incomplete or out of contract order')
         ->and(fn () => P6GateCommandLedger::completedForLiveRunner($path, str_repeat('c', 40)))
         ->toThrow(RuntimeException::class, 'different candidate');
 
@@ -119,6 +131,28 @@ it('rejects missing commands candidate drift unknown commands and declarations w
         ->and(fn () => $recorder->completed())->toThrow(RuntimeException::class, 'two')
         ->and(fn () => $recorder->observe('one', static fn (): bool => true))
         ->toThrow(InvalidArgumentException::class);
+});
+
+it('rejects out-of-order command history without normalizing it', function (): void {
+    $path = p6SupportDirectory().'/commands.json';
+    $sha = str_repeat('d', 40);
+
+    expect(fn () => P6GateCommandLedger::record($path, $sha, 'composer test', 0))
+        ->toThrow(RuntimeException::class, 'out of contract order');
+
+    file_put_contents($path, json_encode([
+        'schema' => P6GateCommandLedger::SCHEMA,
+        'candidate_sha' => $sha,
+        'commands' => [
+            'composer stan' => ['exit_code' => 0, 'verdict' => 'pass'],
+            'composer test' => ['exit_code' => 0, 'verdict' => 'pass'],
+            'composer lint:test' => ['exit_code' => 0, 'verdict' => 'pass'],
+            'composer test:pgsql' => ['exit_code' => 0, 'verdict' => 'pass'],
+        ],
+    ], JSON_THROW_ON_ERROR));
+
+    expect(fn () => P6GateCommandLedger::completedForLiveRunner($path, $sha))
+        ->toThrow(RuntimeException::class, 'out of contract order');
 });
 
 it('rejects path branch tag source and accepts one exact artifact lock entry', function (string $version, string $type): void {
@@ -156,6 +190,52 @@ it('detects a planted marker in every required secret sink', function (string $s
     expect(fn () => P6SecretLeakDetector::assertAbsent($surfaces, [$marker]))
         ->toThrow(RuntimeException::class, $surface);
 })->with(P6SecretLeakDetector::SURFACES);
+
+it('scans successful sensitive-child stderr through the real collector path', function (): void {
+    $marker = 'p6-sensitive-stderr-'.bin2hex(random_bytes(8));
+    $arguments = [];
+    $diagnostics = [];
+    $output = P6LiveCommandRunner::runSensitive(
+        [PHP_BINARY, '-r', 'fwrite(STDERR, getenv("P6_MARKER")); fwrite(STDOUT, "{}");'],
+        __DIR__,
+        ['P6_MARKER' => $marker],
+        '{}',
+        'sensitive stderr control',
+        $arguments,
+        $diagnostics,
+    );
+    $surfaces = array_fill_keys(P6SecretLeakDetector::SURFACES, ['clean']);
+    $surfaces['logs'] = $diagnostics;
+
+    expect($output)->toBe('{}')
+        ->and(fn () => P6SecretLeakDetector::assertAbsent($surfaces, [$marker]))
+        ->toThrow(RuntimeException::class, 'logs');
+});
+
+it('rejects a secret file under the disposable vendor tree', function (): void {
+    $root = p6SupportDirectory();
+    $vendor = $root.'/host/vendor/package';
+    mkdir($vendor, 0700, true);
+    $marker = 'p6-vendor-secret-'.bin2hex(random_bytes(8));
+    file_put_contents($vendor.'/runtime.txt', $marker);
+
+    expect(fn () => P6LiveCommandRunner::assertFilesAbsent($root, [$marker]))
+        ->toThrow(RuntimeException::class, 'generated file');
+});
+
+it('fails closed when an encountered disposable-host file is unreadable', function (): void {
+    $root = p6SupportDirectory();
+    $path = $root.'/unreadable.txt';
+    file_put_contents($path, 'clean');
+    chmod($path, 0000);
+
+    try {
+        expect(fn () => P6LiveCommandRunner::assertFilesAbsent($root, ['marker']))
+            ->toThrow(RuntimeException::class, 'could not be inspected');
+    } finally {
+        chmod($path, 0600);
+    }
+});
 
 it('encodes actual signing secret bytes for the leak inventory', function (): void {
     $key = AsymmetricSecretKey::generate(new Version4);
@@ -241,7 +321,8 @@ it('returns the canonical string session identity from either live node', functi
 it('accepts only complete observed PostgreSQL lane evidence', function (string $case): void {
     $path = p6SupportDirectory().'/postgres.json';
     $stamp = [
-        'schema' => 'bfc.p6.postgres.v1',
+        'schema' => 'bfc.p6.postgres.v2',
+        'candidate_sha' => str_repeat('f', 40),
         'database_name' => 'bfc_p6_'.str_repeat('a', 32),
         'run_marker_verified' => true,
         'cases' => array_fill_keys(P6GateContract::POSTGRES_CASES, 'pass'),
@@ -265,14 +346,36 @@ it('accepts only complete observed PostgreSQL lane evidence', function (string $
     file_put_contents($path, json_encode($stamp, JSON_THROW_ON_ERROR));
 
     if ($case === 'complete') {
-        expect(P6PostgresRunStamp::read($path)['database_name'])->toBe($stamp['database_name']);
+        expect(P6PostgresRunStamp::read($path, $stamp['candidate_sha'])['database_name'])->toBe($stamp['database_name']);
 
         return;
     }
 
-    expect(fn () => P6PostgresRunStamp::read($path))
+    expect(fn () => P6PostgresRunStamp::read($path, $stamp['candidate_sha']))
         ->toThrow(RuntimeException::class, 'PostgreSQL stamp');
 })->with(['complete', 'missing-case', 'unverified-marker', 'incomplete-teardown']);
+
+it('rejects PostgreSQL evidence from a different syntactically valid candidate', function (): void {
+    $path = p6SupportDirectory().'/postgres.json';
+    $stamp = [
+        'schema' => 'bfc.p6.postgres.v2',
+        'candidate_sha' => str_repeat('a', 40),
+        'database_name' => 'bfc_p6_'.str_repeat('b', 32),
+        'run_marker_verified' => true,
+        'cases' => array_fill_keys(P6GateContract::POSTGRES_CASES, 'pass'),
+        'teardown' => [
+            'database_absent' => true,
+            'manifest_absent' => true,
+            'marker_verified' => true,
+            'already_dropped' => false,
+            'verdict' => 'pass',
+        ],
+    ];
+    file_put_contents($path, json_encode($stamp, JSON_THROW_ON_ERROR));
+
+    expect(fn () => P6PostgresRunStamp::read($path, str_repeat('c', 40)))
+        ->toThrow(RuntimeException::class, 'PostgreSQL stamp');
+});
 
 it('requires exact shared runtime counter deltas', function (): void {
     P6RuntimeCounterProof::assertDeltas(

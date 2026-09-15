@@ -11,7 +11,7 @@ use RuntimeException;
 final class P6PostgresRunStamp
 {
     /** @return array<string, mixed> */
-    public static function read(string $path): array
+    public static function read(string $path, string $candidateSha): array
     {
         $contents = @file_get_contents($path);
 
@@ -22,8 +22,9 @@ final class P6PostgresRunStamp
         }
 
         if (! is_array($stamp)
-            || array_keys($stamp) !== ['schema', 'database_name', 'run_marker_verified', 'cases', 'teardown']
-            || ($stamp['schema'] ?? null) !== 'bfc.p6.postgres.v1'
+            || array_keys($stamp) !== ['schema', 'candidate_sha', 'database_name', 'run_marker_verified', 'cases', 'teardown']
+            || ($stamp['schema'] ?? null) !== 'bfc.p6.postgres.v2'
+            || ($stamp['candidate_sha'] ?? null) !== $candidateSha
             || ! is_string($stamp['database_name'] ?? null)
             || ($stamp['run_marker_verified'] ?? null) !== true
             || ! is_array($stamp['cases'] ?? null)

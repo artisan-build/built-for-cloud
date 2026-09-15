@@ -16,15 +16,19 @@ if ($label === '' || $command === []) {
     exit(2);
 }
 
-$process = new Process($command, $root, null, null, null);
+$shaProcess = new Process(['git', 'rev-parse', 'HEAD'], $root);
+if ($shaProcess->run() !== 0 || preg_match('/^[a-f0-9]{40}$/D', $sha = trim($shaProcess->getOutput())) !== 1) {
+    fwrite(STDERR, "Could not resolve the P6c candidate SHA.\n");
+    exit(1);
+}
+
+$process = new Process($command, $root, ['BFC_P6_CANDIDATE_SHA' => $sha], null, null);
 $exitCode = $process->run(static function (string $type, string $output): void {
     fwrite($type === Process::ERR ? STDERR : STDOUT, $output);
 });
 $ledger = getenv('BFC_P6_COMMAND_STAMP');
 
 if (is_string($ledger) && $ledger !== '') {
-    $sha = trim((string) shell_exec('git -C '.escapeshellarg($root).' rev-parse HEAD'));
-
     try {
         P6GateCommandLedger::record($ledger, $sha, $label, $exitCode);
     } catch (Throwable $exception) {
