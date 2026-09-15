@@ -234,7 +234,10 @@ final class HttpHmacCredentialIssuerClient implements HmacCredentialIssuerClient
         return $this->request()->withHeaders($headers);
     }
 
-    /** @param list<string> $expectedFields @return array<string, mixed> */
+    /**
+     * @param  list<string>  $expectedFields
+     * @return array<string, mixed>
+     */
     private function payload(Response $response, int $status, array $expectedFields): array
     {
         $body = $response->body();

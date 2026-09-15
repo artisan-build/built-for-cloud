@@ -300,6 +300,29 @@ final class HttpContractDocTest extends TestCase
         );
     }
 
+    public function test_the_bound_hmac_wire_and_php_api_are_documented(): void
+    {
+        $doc = $this->contractDoc();
+
+        foreach ([
+            '### POST /bfc/hmac-cutovers/activate',
+            '### POST /bfc/hmac-cutovers/status',
+            '### Bound HMAC PHP APIs',
+            'InstallHmacCredentialFromClaim::__invoke',
+            'HmacSigner::signBound',
+            'HmacVerifier::verifyBound',
+            'CrossStoreCutoverIncomplete',
+            'HmacSecretSurfaceInventoryTest',
+        ] as $required) {
+            $this->assertStringContainsString($required, $doc);
+        }
+
+        $this->assertMatchesRegularExpression(
+            '/^\| `POST \/bfc\/hmac-cutovers\/(?:activate|status)` \| `content` \|/m',
+            $doc,
+        );
+    }
+
     /**
      * **EVERY documented route is classified, and every classification
      * row names a real documented route.**
