@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests\Support;
 
+use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
 use ArtisanBuild\BuiltForCloud\Testing\DisposablePostgresLane;
 use ArtisanBuild\BuiltForCloud\Testing\PostgresAdministrator;
 use Illuminate\Database\Connection;
@@ -95,5 +96,8 @@ trait PostgresLane
         $this->postgresLaneConnection()->statement(
             'TRUNCATE TABLE '.implode(', ', $quoted).' RESTART IDENTITY CASCADE',
         );
+        $this->postgresLaneConnection()->table(HmacWriterBarrier::FENCE_TABLE)->insert([
+            'name' => HmacWriterBarrier::FENCE_NAME,
+        ]);
     }
 }

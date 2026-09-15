@@ -25,11 +25,13 @@ use Illuminate\Support\Facades\Cache;
  * active, pending, in-grace, even revoked and expired — because a row
  * whose ciphertext outlives its ring key is fossilized forever.
  *
- * LOCKED: a cache lock admits one run at a time — a second concurrent
- * invocation refuses. RESTARTABLE: the rows themselves are the cursor
- * (each is either on the write-primary version or not), so a run killed
- * mid-sweep resumes exactly where it died by being run again; nothing
- * is lost and nothing is double-processed. Each row's update is guarded
+ * LOCKED: a cache lock admits one run at a time and a database row lock
+ * fences every ciphertext commit — a second concurrent invocation
+ * refuses or waits behind the commit fence. RESTARTABLE: the rows themselves
+ * are the cursor (each is either on the write-primary version or not), so
+ * a graceful failed run keeps completed rows while a crashed transaction
+ * rolls its current sweep back for the next run; nothing is lost or
+ * double-processed. Each row's update is guarded
  * on the version that was read, so a concurrent re-key (the exchange's
  * re-claim writes under the write-primary already) is never clobbered.
  *
@@ -58,7 +60,7 @@ final class HmacRewrapCommand extends SystemAuthorityCommand
      */
     private const int LOCK_SECONDS = 600;
 
-    public function handle(HmacKeyring $keyring): int
+    public function handle(HmacKeyring $keyring, HmacWriterBarrier $barrier): int
     {
         // The lock is only as exclusive as the cache store is SHARED: an
         // instance-local store (array, file) cannot exclude a concurrent
@@ -75,8 +77,8 @@ final class HmacRewrapCommand extends SystemAuthorityCommand
         }
 
         // THE LOCK DISCIPLINE (see {@see HmacWriterBarrier}): this is the
-        // same lock every ciphertext writer takes around its
-        // check+write+commit. This run holds it from before the first
+        // same cache lock and database fence every ciphertext writer
+        // takes around its check+write+commit. This run holds both from before the first
         // re-encryption THROUGH the final verify-zero-old-version-rows
         // count (released only in the finally below, after rewrap()
         // returns) — so while the completion verification runs, no writer
@@ -91,7 +93,7 @@ final class HmacRewrapCommand extends SystemAuthorityCommand
         }
 
         try {
-            return $this->rewrap($keyring, $lock);
+            return $barrier->withDatabaseFence(fn (): int => $this->rewrap($keyring, $lock));
         } finally {
             $lock->release();
         }

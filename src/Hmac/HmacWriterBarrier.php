@@ -8,13 +8,15 @@ use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
 use Closure;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 
 /**
  * The mutual exclusion between hmac ciphertext WRITERS and the rewrap's
  * completion verification (SEC-V3-08, rework Fix 1).
  *
- * THE LOCK DISCIPLINE, stated once: `bfc:hmac:rewrap` is ONE lock with
- * two kinds of holder. The rewrap command holds it for its ENTIRE run —
+ * THE LOCK DISCIPLINE, stated once: `bfc:hmac:rewrap` is one shared-cache
+ * refusal lock and `bfc_hmac_writer_barriers:rewrap` is the database
+ * commit fence. The rewrap command holds both for its ENTIRE run —
  * acquired before the first re-encryption and released only AFTER the
  * final verify-zero-old-version-rows count — and every ciphertext-
  * producing verb (hmac mint, hmac rotation's replacement mint, the
@@ -23,10 +25,10 @@ use Illuminate\Support\Facades\Cache;
  * cannot close the race: a writer on a lagging old-primary instance
  * could pass `cutoverInProgress()` before the sweep, and commit its
  * old-version row after the zero-count had already authorized dropping
- * the old key. Under the shared lock that interleaving cannot exist:
- * while the rewrap verifies, no writer holds the lock, so no ciphertext
- * write is in flight anywhere between its check and its commit — the
- * zero-count is authoritative.
+ * the old key. The cache lease gives fast retry-later behavior, while the
+ * database row lock is crash-releasing and cannot expire before the outer
+ * transaction commits. The zero-count is therefore authoritative even if
+ * a writer outlives its cache lease.
  *
  * Writers hold the lock only for the duration of one verb (seconds), so
  * they block each other briefly and block the rewrap's start briefly;
@@ -38,6 +40,10 @@ use Illuminate\Support\Facades\Cache;
 final class HmacWriterBarrier
 {
     public const string LOCK = 'bfc:hmac:rewrap';
+
+    public const string FENCE_TABLE = 'bfc_hmac_writer_barriers';
+
+    public const string FENCE_NAME = 'rewrap';
 
     /**
      * A writer's lease: generous for one verb's transaction, short
@@ -103,9 +109,27 @@ final class HmacWriterBarrier
         }
 
         try {
-            return $write();
+            return $this->withDatabaseFence($write);
         } finally {
             $lock->release();
         }
+    }
+
+    /**
+     * @template TReturn
+     *
+     * @param  Closure(): TReturn  $write
+     * @return TReturn
+     */
+    public function withDatabaseFence(Closure $write): mixed
+    {
+        return DB::transaction(function () use ($write): mixed {
+            DB::table(self::FENCE_TABLE)
+                ->where('name', self::FENCE_NAME)
+                ->lockForUpdate()
+                ->sole();
+
+            return $write();
+        });
     }
 }

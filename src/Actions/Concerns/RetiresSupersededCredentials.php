@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Actions\Concerns;
 
 use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\Credential;
+use Carbon\CarbonInterface;
 
 /**
  * The cutover retirement shared by the verbs that end a superseded row's
@@ -22,6 +23,11 @@ trait RetiresSupersededCredentials
     {
         $graceEnd = $emergency ? now() : now()->addSeconds(RotateCredential::GRACE_SECONDS);
 
+        $this->retireAt($id, $graceEnd);
+    }
+
+    private function retireAt(string $id, CarbonInterface $graceEnd): void
+    {
         Credential::query()
             ->whereKey($id)
             ->where(function ($query) use ($graceEnd): void {

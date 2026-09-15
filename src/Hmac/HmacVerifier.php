@@ -4,13 +4,19 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Hmac;
 
+use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
+use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialAlgorithm;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialMaterialRole;
+use ArtisanBuild\BuiltForCloud\CredentialProtocolBinding;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
 use ArtisanBuild\BuiltForCloud\ManagedAccountAccess;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\Subject;
+use ArtisanBuild\BuiltForCloud\VerifiedHmacCredential;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schema;
 
@@ -63,6 +69,7 @@ final class HmacVerifier
     public function __construct(
         private readonly HmacKeyring $keyring,
         private readonly ?ManagedAccountAccess $managedAccess = null,
+        private readonly ?AppPurposeRegistry $appPurposes = null,
     ) {}
 
     /**
@@ -105,6 +112,11 @@ final class HmacVerifier
             ->where('subject_ref', $subject->ref)
             ->whereKey($envelope->keyId)
             ->whereNotNull('secret_ciphertext')
+            ->whereNotExists(function ($query): void {
+                $query->selectRaw('1')
+                    ->from('credential_protocol_bindings')
+                    ->whereColumn('credential_protocol_bindings.credential_id', 'credentials.id');
+            })
             ->active()
             ->first();
 
@@ -176,6 +188,100 @@ final class HmacVerifier
         Credential::query()->whereKey($credential->id)->update(['last_used_at' => now()]);
 
         return $credential;
+    }
+
+    public function verifyBound(BoundCredentialScope $scope, string $header, string $body): VerifiedHmacCredential
+    {
+        [$envelope, $claimedAlgorithm, $signature] = HmacEnvelope::parse($header);
+
+        if ($claimedAlgorithm !== HmacEnvelope::ALGORITHM) {
+            throw HmacVerificationFailed::algorithmRejected($claimedAlgorithm);
+        }
+
+        if (! hash_equals($scope->audience, $envelope->audience)) {
+            throw HmacVerificationFailed::wrongAudience();
+        }
+
+        $tolerance = $this->timestampTolerance();
+
+        if (abs(now()->getTimestamp() - $envelope->timestamp) > $tolerance) {
+            throw HmacVerificationFailed::staleTimestamp($tolerance);
+        }
+
+        $purpose = ($this->appPurposes ?? app(AppPurposeRegistry::class))->purpose($scope->appPurpose);
+
+        if ($purpose !== CredentialPurpose::Signing || ! Schema::hasColumn('credentials', 'purpose')) {
+            throw HmacVerificationFailed::unusableKey();
+        }
+
+        /** @var Credential|null $credential */
+        $credential = Credential::query()
+            ->whereKey($envelope->keyId)
+            ->where('kind', CredentialKind::Hmac->value)
+            ->where('purpose', CredentialPurpose::Signing->value)
+            ->whereNotNull('secret_ciphertext')
+            ->active()
+            ->first();
+        /** @var CredentialProtocolBinding|null $binding */
+        $binding = $credential === null ? null : CredentialProtocolBinding::query()->whereKey($credential->id)->first();
+        $role = $binding?->material_role;
+
+        if ($credential === null
+            || $binding === null
+            || ! in_array($role, [CredentialMaterialRole::Originator, CredentialMaterialRole::VerificationCopy], true)
+            || ! $binding->exactlyMatches(
+                $credential,
+                $scope,
+                $purpose,
+                CredentialAlgorithm::HmacSha256,
+                $role,
+            )
+            || OffboardedSubject::rejects($credential)) {
+            throw HmacVerificationFailed::unusableKey();
+        }
+
+        $expected = hash_hmac(
+            'sha256',
+            $envelope->canonical($body),
+            $this->keyring->decrypt((string) $credential->secret_ciphertext, $credential->secret_key_version),
+        );
+
+        if (! hash_equals($expected, $signature)) {
+            throw HmacVerificationFailed::invalidSignature();
+        }
+
+        if (! $this->managedAccess()->allowsCredential($credential)) {
+            throw HmacVerificationFailed::unusableKey();
+        }
+
+        $this->consumeReplayRateAndUsage($credential, $envelope, $tolerance);
+
+        return new VerifiedHmacCredential($credential->id, $scope);
+    }
+
+    private function consumeReplayRateAndUsage(Credential $credential, HmacEnvelope $envelope, int $tolerance): void
+    {
+        $windowSeconds = $tolerance * 2 + 60;
+        $nonceKey = 'bfc:hmac:nonce:'.hash('sha256', $envelope->keyId.'|'.$envelope->nonce);
+
+        if (Cache::has($nonceKey)) {
+            throw HmacVerificationFailed::replayedNonce();
+        }
+
+        $ceiling = $this->rateCeiling();
+        $rateKey = 'bfc:hmac:rate:'.$envelope->keyId;
+        Cache::add($rateKey, 0, $windowSeconds);
+
+        if ((int) Cache::increment($rateKey) > $ceiling) {
+            throw HmacVerificationFailed::rateLimited($ceiling);
+        }
+
+        if (! Cache::add($nonceKey, 1, $windowSeconds)) {
+            Cache::decrement($rateKey);
+            throw HmacVerificationFailed::replayedNonce();
+        }
+
+        Credential::query()->whereKey($credential->id)->update(['last_used_at' => now()]);
     }
 
     private function rateCeiling(): int

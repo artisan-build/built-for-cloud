@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Http\Controllers\BoundHmacCutovers;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
@@ -69,7 +70,9 @@ final class StandaloneRouteOwnership
             ManageCredentials::class.'@store' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialMint->value,
             ManageCredentials::class.'@destroy' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRevoke->value,
             ManageCredentials::class.'@rotate',
-            ManageCredentials::class.'@activate' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRotate->value,
+            ManageCredentials::class.'@activate',
+            BoundHmacCutovers::class.'@activate',
+            BoundHmacCutovers::class.'@status' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRotate->value,
             ManageConsoleKeys::class.'@reKey',
             ManageConsoleKeys::class.'@retire' => EnsureCredentialAdmin::class.':'.OperatorAbility::ConsoleKeyWrite->value,
             ManageSubjects::class.'@offboard' => EnsureCredentialAdmin::class.':'.OperatorAbility::SubjectOffboard->value,

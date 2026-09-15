@@ -451,6 +451,8 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/claim` | `content` | single reveal of the durable secret (`token`), plus the free-text suggested name |
 | `POST /bfc/onboarding/exchange` | `content` | single reveal of the durable secret, plus the free-text credential name |
 | `POST /bfc/asymmetric-enrollments/{application}` | `metadata` | a bounded credential id and the fixed `RS256` algorithm; no key or code is returned |
+| `POST /bfc/hmac-cutovers/activate` | `content` | exact scope references plus ids, timestamps and emergency flag; no key material |
+| `POST /bfc/hmac-cutovers/status` | `content` | exact scope references plus ids, timestamps and emergency flag; no key material |
 | `POST /bfc/onboarding/verify` | `content` | carries the free-text credential name |
 | `GET /bfc/managed/login` | `content` | redirect carrying an opaque one-time browser state, plus the initiating session cookie |
 | `GET /bfc/managed/callback` | `content` | redirect plus a newly established authenticated session cookie |
@@ -874,6 +876,18 @@ before minting its replacement.
 Bound asymmetric enrollment codes are not generic claim codes. Both this route and
 `POST /bfc/claim` refuse a code linked to a protocol-bound asymmetric credential before burning
 it or changing its pending row. Complete it only through the asymmetric enrollment route below.
+
+A protocol-bound HMAC originator code has only the bound exchange branch; `POST /bfc/claim`
+refuses it before burn. Its first successful exchange always burns the code and returns exactly
+`signing_key`, `credential_id`, `app_purpose`, `subject_type`, `subject_ref`, `installation_ref`,
+`application_ref`, `audience`, `algorithm`, `credential_expires_at`, `delivery_generation`,
+`delivery_fingerprint`, `predecessor_credential_id`, `source_status`, `delivered_at` and
+`transfer_expires_at`. The key is 64 lowercase hexadecimal characters and is the single reveal;
+algorithm is fixed `hmac-sha256`, fingerprint is 16 lowercase hexadecimal characters, source
+status is `pending`, ids are UUIDs, and dates are RFC 3339. Credential expiry and predecessor id
+are nullable. Transfer expiry is no later than 60 seconds after delivery. A lost response is
+recovered only through bound `reissuePendingDelivery`, which abandons the pending successor and
+issues fresh material; it never re-delivers the same key.
 
 ### POST /bfc/asymmetric-enrollments/{application}
 
@@ -1369,6 +1383,47 @@ installation ownership, originator role and RS256, then compares every exact sco
 field; pending, revoked, expired, unbound, malformed or null-key rows are invisible. The monitored
 client keeps the private key and owns signing; the package API supplies verification keys only.
 
+### Bound HMAC PHP APIs
+
+`HmacCredentialIssuerClient` is mandatory and has exactly three operations:
+`claim(BoundCredentialScope, SensitiveString): ClaimedHmacCredential`,
+`activate(BoundCredentialScope, ?string $predecessorId, string $replacementId, string
+$deliveryFingerprint): IssuerHmacCutoverReceipt`, and `cutoverStatus(BoundCredentialScope,
+?string $predecessorId, string $replacementId): IssuerHmacCutoverReceipt`.
+`HttpHmacCredentialIssuerClient` fixes those calls to the exchange route and the two protected
+routes below, requires HTTPS except loopback HTTP in local/testing, disables redirects, pins the
+effective origin, requires exact JSON shapes, and caps responses at 24 KiB. The host supplies TLS
+configuration and fresh protected-route authorization headers.
+
+The receiver calls `InstallHmacCredentialFromClaim::__invoke(BoundCredentialScope,
+HmacCredentialIssuerClient, string): InstalledHmacCredential`. Under `HmacWriterBarrier`, it
+reveals the internal carrier once, fingerprint-checks, encrypts immediately, and atomically writes
+the same issuer id as a `verification_copy`, exact binding/lifecycle facts, audit/outbox and durable
+predecessor lineage. Exact retries are idempotent; changed collisions refuse without overwrite.
+There is no public import route or secret-bearing command option.
+
+Callbacks use `HmacSigner::signBound(BoundCredentialScope, string $body, string $eventType):
+string` and `HmacVerifier::verifyBound(BoundCredentialScope, string $header, string $body):
+VerifiedHmacCredential`. Signing selects originators only; verification accepts the exact named
+originator or verification copy and returns ids, scope and fixed algorithm only, never a model or
+secret. Wrong scope, role or lifecycle is rejected before decrypt, replay/rate state or usage.
+Existing unbound methods remain source-compatible and cannot select bound rows.
+
+`CutOverImportedHmacCredential` accepts only a direct authenticated receipt for exact durable
+lineage, locks both ids lexically, and atomically applies an equal or earlier source deadline with
+lifecycle/outbox. `CoordinateImportedHmacCutover::recover()` uses authenticated status after an
+issuer-success/receiver-failure split; `CrossStoreCutoverIncomplete` contains ids and authoritative
+expiry only. Separate stores are not distributed-atomic and revocation coordination remains the
+adopting application's responsibility.
+
+HMAC plaintext is permitted only in the authenticated issuer response, sealed one-reveal carriers,
+keyring encrypt/decrypt calls and HMAC computation. `HmacSecretSurfaceInventoryTest` derives direct
+recognized production syntax and includes a positive-control fixture that returns, logs,
+JSON-encodes, writes and passes plaintext as a process argument. This is honestly lexical, not
+whole-program analysis: dynamic calls/aliases, reflection/debugger/memory capture, raw model or
+query-builder writes, generated/custom encodings, host code, malicious bindings and consumer code
+after reveal are outside its claim.
+
 ### Reserved installation signing root (no HTTP surface)
 
 The reserved HMAC row is exactly `purpose: "signing_root"`, subject
@@ -1521,6 +1576,62 @@ are excluded rather than ordered by audit timestamp. The CLI spelling is
   the stamped row again** — the 200 completion above — or `DELETE /bfc/credentials/{id}`
   where revoke is authorized. **No secret was delivered** — the sealed carrier is discarded —
   so rotate the standing replacement for a fresh delivery, or revoke it by id if unneeded.
+
+### POST /bfc/hmac-cutovers/activate
+
+Protected issuer operation (`credential:rotate`, operator-write throttle). It activates one exact
+protocol-bound HMAC originator after the separate receiver has installed the delivered replacement.
+The JSON object is closed; unknown fields or wrong types return the same `409` refusal.
+
+```json
+{
+  "app_purpose": "matte.callback",
+  "subject_type": "installation",
+  "subject_ref": "server-derived subject reference",
+  "installation_ref": "installation reference",
+  "application_ref": "application reference",
+  "audience": "https://receiver.example",
+  "predecessor_credential_id": "UUID or null for first generation",
+  "replacement_credential_id": "UUID",
+  "delivery_fingerprint": "16 lowercase hexadecimal characters"
+}
+```
+
+Success is `200` with `Cache-Control: no-store` and the exact receipt shape below. Activation
+requires the exact pending originator, scope, source lineage and current delivery fingerprint. For
+rotation it starts issuer signing with the replacement and bounds the predecessor to the earlier of
+its stored expiry or the ordinary grace deadline. Emergency lineage reports `emergency: true` and
+an immediate predecessor deadline. First-generation activation has null predecessor id and expiry.
+
+```json
+{
+  "predecessor_credential_id": "UUID or null",
+  "replacement_credential_id": "UUID",
+  "app_purpose": "matte.callback",
+  "subject_type": "installation",
+  "subject_ref": "server-derived subject reference",
+  "installation_ref": "installation reference",
+  "application_ref": "application reference",
+  "audience": "https://receiver.example",
+  "activated_at": "2026-09-15T12:00:00+00:00",
+  "predecessor_expires_at": "2026-09-15T13:00:00+00:00 or null",
+  "emergency": false
+}
+```
+
+- **401/403** follow the operator gate. **409** is the uniform
+  `{"message":"The HMAC cutover was refused."}` for malformed, unknown, mismatched or unusable
+  input. No response carries key material.
+
+### POST /bfc/hmac-cutovers/status
+
+Protected issuer recovery operation (`credential:rotate`, operator-write throttle). It is an
+idempotent authenticated read of source cutover state after activation may have committed but the
+receiver update failed. The closed request is identical to the activation request except that
+`delivery_fingerprint` is absent. Success is the exact same `200` receipt and `Cache-Control:
+no-store`; `401`/`403` and the uniform `409` have the same meanings. It cannot activate a pending
+replacement. The returned predecessor expiry is the actual stored deadline, so a receiver retry
+can preserve or shorten authority but never extend it.
 
 ### POST /bfc/credentials/{id}/activate
 

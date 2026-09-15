@@ -1039,7 +1039,11 @@ final class CredentialPathInventory
             $model = ltrim($model, '\\');
             $resolved = self::imports($code)[$model] ?? $model;
 
-            if (! in_array($resolved, ['Credential', 'ArtisanBuild\\BuiltForCloud\\Credential'], true)) {
+            if (! in_array($resolved, [
+                'Credential',
+                'ArtisanBuild\\BuiltForCloud\\Credential',
+                'ArtisanBuild\\BuiltForCloud\\CredentialProtocolBinding',
+            ], true)) {
                 return true;
             }
         }

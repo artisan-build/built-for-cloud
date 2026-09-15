@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\Actions\FileConsoleKey;
 use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
+use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
@@ -18,7 +19,11 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresBurnMode;
 use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialAlgorithm;
+use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialMaterialRole;
+use ArtisanBuild\BuiltForCloud\CredentialProtocolBinding;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
@@ -403,10 +408,35 @@ final class ManageOnboarding extends OperatorRouteController
                 return ClaimError::InvalidCode->respond('This code redeems a signing key, which this claim surface cannot deliver. Exchange it at POST /bfc/onboarding/exchange instead.');
             }
 
+            // The hmac delivery leg (PRD 1.21, SEC-V3-01): a code linked to
+            // a PENDING hmac row delivers THAT key and returns here —
+            // nothing below (the durable mint, the D1d sweep) applies to a
+            // signing-key delivery, and NOTHING about signing state
+            // changes: activation is a separate operator-authorized verb.
+            $hmacDelivery = $this->deliverPendingSigningKey($code);
+
+            if ($hmacDelivery !== null) {
+                /** @var array<string, mixed> $hmacPayload */
+                $hmacPayload = $hmacDelivery->getData(true);
+
+                // The bound branch is exact and cannot acquire the optional
+                // legacy console-key response field.
+                if (($hmacPayload['algorithm'] ?? null) === CredentialAlgorithm::HmacSha256->value) {
+                    return $hmacDelivery;
+                }
+
+                // A REFUSED signing-key delivery files no console key:
+                // the exchange did not succeed, and a key filed against
+                // a failed exchange is custody nobody was told arrived.
+                return $hmacDelivery->isSuccessful()
+                    ? $this->withConsoleKey($hmacDelivery, $delivery, $code)
+                    : $hmacDelivery;
+            }
+
             // Under `at_exchange` (a provider with no observable first use),
-            // redemption IS the burn: a conditional update gated on affected
-            // rows, inside this locked transaction. Zero rows means a
-            // concurrent exchange won.
+            // redemption IS the burn. HMAC delivery performs this check in
+            // its own branch so a bound descriptor is fully validated before
+            // its mandatory one-use burn.
             if ($this->burnMode() === BurnMode::AtExchange) {
                 $consumed = OnboardingToken::query()
                     ->whereKey($code->getKey())
@@ -416,22 +446,6 @@ final class ManageOnboarding extends OperatorRouteController
                 if ($consumed === 0) {
                     return ClaimError::CodeAlreadyClaimed->respond('This code was already used to set up a working connection. Ask the issuer to revoke it and issue a new one.');
                 }
-            }
-
-            // The hmac delivery leg (PRD 1.21, SEC-V3-01): a code linked to
-            // a PENDING hmac row delivers THAT key and returns here —
-            // nothing below (the durable mint, the D1d sweep) applies to a
-            // signing-key delivery, and NOTHING about signing state
-            // changes: activation is a separate operator-authorized verb.
-            $hmacDelivery = $this->deliverPendingSigningKey($code);
-
-            if ($hmacDelivery !== null) {
-                // A REFUSED signing-key delivery files no console key:
-                // the exchange did not succeed, and a key filed against
-                // a failed exchange is custody nobody was told arrived.
-                return $hmacDelivery->isSuccessful()
-                    ? $this->withConsoleKey($hmacDelivery, $delivery, $code)
-                    : $hmacDelivery;
             }
 
             // A re-claim before first use lands here too (make-before-break):
@@ -657,6 +671,48 @@ final class ManageOnboarding extends OperatorRouteController
         }
 
         $keyring = app(HmacKeyring::class);
+        /** @var CredentialProtocolBinding|null $binding */
+        $binding = CredentialProtocolBinding::query()->whereKey($credential->id)->lockForUpdate()->first();
+        $bound = $binding !== null;
+
+        if ($bound) {
+            $scope = $binding->scopeFor($credential);
+            $purpose = app(AppPurposeRegistry::class)->purpose($scope->appPurpose);
+
+            if (! $binding->exactlyMatches(
+                $credential,
+                $scope,
+                $purpose,
+                CredentialAlgorithm::HmacSha256,
+                CredentialMaterialRole::Originator,
+            ) || $purpose !== CredentialPurpose::Signing || $credential->delivered_at !== null) {
+                return ClaimError::InvalidCode->respond('This code no longer redeems a deliverable signing key. Ask the issuer for a new one.');
+            }
+
+            $predecessors = CredentialAuditEvent::query()
+                ->where('event', LifecycleEventType::Rotated->value)
+                ->where('superseded_by_credential_id', $credential->id)
+                ->pluck('credential_id')
+                ->filter(static fn (mixed $id): bool => is_string($id) && $id !== '')
+                ->unique()
+                ->values();
+
+            if ($predecessors->count() > 1) {
+                return ClaimError::InvalidCode->respond('This code no longer redeems a deliverable signing key. Ask the issuer for a new one.');
+            }
+        }
+
+        if (! $bound && $this->burnMode() === BurnMode::AtExchange) {
+            $consumed = OnboardingToken::query()
+                ->whereKey($code->getKey())
+                ->whereNull('consumed_at')
+                ->update(['consumed_at' => now()]);
+
+            if ($consumed === 0) {
+                return ClaimError::CodeAlreadyClaimed->respond('This code was already used to set up a working connection. Ask the issuer to revoke it and issue a new one.');
+            }
+        }
+
         $rekeyed = $credential->delivered_at !== null;
 
         if ($rekeyed) {
@@ -698,6 +754,17 @@ final class ManageOnboarding extends OperatorRouteController
         $generation = $credential->delivered_generation + 1;
         $fingerprint = $keyring->deliveryFingerprint($signingKey, $generation);
 
+        if ($bound) {
+            $consumed = OnboardingToken::query()
+                ->whereKey($code->getKey())
+                ->whereNull('consumed_at')
+                ->update(['consumed_at' => now()]);
+
+            if ($consumed !== 1) {
+                return ClaimError::CodeAlreadyClaimed->respond('This code was already used to set up a working connection. Ask the issuer to revoke it and issue a new one.');
+            }
+        }
+
         Credential::query()->whereKey($credential->id)->update([
             'delivered_at' => now(),
             'delivered_generation' => $generation,
@@ -724,6 +791,34 @@ final class ManageOnboarding extends OperatorRouteController
                 ? 'redelivery: generation '.$generation.' ('.$fingerprint.'); the pending key was re-keyed and every prior delivery of this code is dead'
                 : 'delivery generation '.$generation.' ('.$fingerprint.')',
         );
+
+        if ($bound) {
+            $delivered = $credential->refresh();
+            $transferExpiresAt = $delivered->delivered_at->copy()->addSeconds(60);
+
+            if ($code->expires_at->lessThan($transferExpiresAt)) {
+                $transferExpiresAt = $code->expires_at;
+            }
+
+            return response()->json([
+                'signing_key' => $signingKey,
+                'credential_id' => $delivered->id,
+                'app_purpose' => $scope->appPurpose,
+                'subject_type' => $scope->subject->type->value,
+                'subject_ref' => $scope->subject->ref,
+                'installation_ref' => $scope->installation,
+                'application_ref' => $scope->application,
+                'audience' => $scope->audience,
+                'algorithm' => CredentialAlgorithm::HmacSha256->value,
+                'credential_expires_at' => $delivered->expires_at?->toRfc3339String(),
+                'delivery_generation' => $delivered->delivered_generation,
+                'delivery_fingerprint' => $delivered->delivery_fingerprint,
+                'predecessor_credential_id' => $predecessors->first(),
+                'source_status' => $delivered->status->value,
+                'delivered_at' => $delivered->delivered_at->toRfc3339String(),
+                'transfer_expires_at' => $transferExpiresAt->toRfc3339String(),
+            ], 201)->header('Cache-Control', 'no-store');
+        }
 
         // The single reveal of this delivery. The key is PENDING: the
         // receiver installs it, confirms the DELIVERY FINGERPRINT
