@@ -23,7 +23,10 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\VerifyHmacSignature;
 use ArtisanBuild\BuiltForCloud\HttpContract;
 use ArtisanBuild\BuiltForCloud\SubjectType;
+use Illuminate\Auth\Middleware\Authenticate;
+use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Contracts\Http\Kernel;
+use Illuminate\Foundation\Http\Kernel as HttpKernel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Log\Events\MessageLogged;
@@ -50,6 +53,12 @@ beforeEach(function (): void {
             'client_id' => $request->header(ClientIdentity::HEADER),
         ];
     })->middleware(['bfc.contract-major', 'bfc.mcp']);
+
+    Route::post('/contract-major-guard-order-probe', function (): array {
+        Cache::put('contract-major-guard-domain-ran', true);
+
+        return ['ok' => true];
+    })->middleware(['auth:bfc', 'bfc.contract-major']);
 });
 
 function assertContractMajorRefusal(TestResponse $response, int $status, string $error): void
@@ -236,6 +245,87 @@ it('registers the exact alias and resolves admission before every package authen
     )))->toBe($baseline)
         ->and(array_values(array_intersect($resolved, $authentication)))->toBe($declaredAuthentication);
 });
+
+it('adds only admission to the existing middleware priority list', function (): void {
+    $kernel = app(Kernel::class);
+
+    expect($kernel)->toBeInstanceOf(HttpKernel::class);
+
+    /** @var HttpKernel $kernel */
+    $preP6b = (new ReflectionClass($kernel))->getDefaultProperties()['middlewarePriority'] ?? null;
+
+    expect($preP6b)->toBeArray();
+
+    /** @var list<class-string> $preP6b */
+    $firstAuthentication = count($preP6b);
+
+    foreach ([Authenticate::class, AuthenticatesRequests::class] as $authentication) {
+        $index = array_search($authentication, $preP6b, true);
+
+        if ($index !== false) {
+            $firstAuthentication = min($firstAuthentication, $index);
+        }
+    }
+
+    expect($firstAuthentication)->toBeLessThan(count($preP6b));
+
+    $expected = $preP6b;
+    array_splice($expected, $firstAuthentication, 0, [EnsureContractMajor::class]);
+    $actual = $kernel->getMiddlewarePriority();
+
+    expect($actual)->toBe($expected)
+        ->and(array_values(array_filter(
+            $actual,
+            static fn (string $middleware): bool => $middleware !== EnsureContractMajor::class,
+        )))->toBe($preP6b);
+});
+
+it('refuses before the configured package guard when the guard is declared first', function (array $headers, string $error): void {
+    config(['auth.guards.bfc' => ['driver' => 'bfc', 'provider' => null]]);
+    auth()->forgetGuards();
+
+    $secret = 'contract-major-guard-order-secret';
+    $credential = Credential::factory()->create([
+        'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::Consumption,
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'contract-major-guard-order-consumer',
+        'secret_hash' => hash('sha256', $secret),
+        'status' => CredentialStatus::Active,
+    ]);
+
+    /** @var Router $router */
+    $router = app('router');
+    $route = Route::getRoutes()->match(Request::create('/contract-major-guard-order-probe', 'POST'));
+
+    $resolved = $router->gatherRouteMiddleware($route);
+    $admission = array_search(EnsureContractMajor::class, $resolved, true);
+    $authentication = null;
+
+    foreach ($resolved as $index => $middleware) {
+        [$name, $parameters] = array_pad(explode(':', $middleware, 2), 2, null);
+
+        if ($parameters === 'bfc' && is_a($name, AuthenticatesRequests::class, true)) {
+            $authentication = $index;
+            break;
+        }
+    }
+
+    $response = $this->postJson('/contract-major-guard-order-probe', [], [
+        ...$headers,
+        'Authorization' => 'Bearer '.$secret,
+    ]);
+
+    assertContractMajorRefusal($response, 400, $error);
+    expect($admission)->toBeInt()
+        ->and($authentication)->toBeInt()
+        ->and($admission)->toBeLessThan($authentication)
+        ->and($credential->refresh()->last_used_at)->toBeNull()
+        ->and(Cache::has('contract-major-guard-domain-ran'))->toBeFalse();
+})->with([
+    'missing' => [[], 'missing_contract_major'],
+    'malformed' => [[HttpContract::MAJOR_HEADER => '02'], 'malformed_contract_major'],
+]);
 
 it('keeps all existing package routes outside opt-in admission', function (): void {
     /** @var Router $router */
