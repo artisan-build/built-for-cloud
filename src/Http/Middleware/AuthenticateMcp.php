@@ -73,9 +73,9 @@ use Throwable;
  * with credential admin ability", "takes the bearer out of the
  * server bag as well as the headers", "does not answer or audit a
  * downstream refusal as this door refusing" and "fails closed when an
- * assertion refusal cannot be audited"; `tests/McpProductAdmissionTest.php`
- * pins product roles, installation attribution and the parameterized compound
- * exclusion through the reusable consumer helper.
+ * assertion refusal cannot be audited". The reusable consumer helper pins
+ * product roles, installation attribution and the parameterized compound
+ * exclusion at its own boundary.
  */
 final class AuthenticateMcp
 {
