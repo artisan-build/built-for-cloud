@@ -195,7 +195,7 @@ it('reports a non-secret incomplete cutover and recovers from authenticated stat
     expect($result->predecessorExpiresAt->getTimestamp())->toBe($deadline->getTimestamp());
 });
 
-it('repairs a committed source activation whose first predecessor retirement failed', function (): void {
+it('repairs a committed source activation from a later expiry without extending an earlier deadline', function (): void {
     testsConfigureBoundPurposes();
     $scope = testsBoundScope('matte.callback');
     $receiverConnection = DB::getDefaultConnection();
@@ -232,11 +232,13 @@ it('repairs a committed source activation whose first predecessor retirement fai
             'token' => $rotation?->mint->secret?->reveal(),
         ])->assertCreated()->json();
         $predecessorId = $mint->summary->id;
+        $laterDeadline = CarbonImmutable::now()->startOfSecond()->addHours(2);
+        Credential::query()->whereKey($predecessorId)->update(['expires_at' => $laterDeadline]);
 
         DB::unprepared(<<<SQL
             CREATE TRIGGER fail_hmac_predecessor_retirement
             BEFORE UPDATE OF expires_at ON credentials
-            WHEN OLD.id = '{$predecessorId}' AND OLD.expires_at IS NULL AND NEW.expires_at IS NOT NULL
+            WHEN OLD.id = '{$predecessorId}' AND OLD.expires_at IS NOT NULL AND NEW.expires_at < OLD.expires_at
             BEGIN
                 SELECT RAISE(ABORT, 'forced predecessor retirement failure');
             END
@@ -252,11 +254,11 @@ it('repairs a committed source activation whose first predecessor retirement fai
         $activatedAt = Credential::query()->findOrFail($replacementId)->activated_at?->toImmutable();
         expect($activatedAt)->not->toBeNull()
             ->and(Credential::query()->findOrFail($replacementId)->status->value)->toBe('active')
-            ->and(Credential::query()->findOrFail($predecessorId)->expires_at)->toBeNull();
+            ->and(Credential::query()->findOrFail($predecessorId)->expires_at?->getTimestamp())->toBe($laterDeadline->getTimestamp());
         DB::unprepared('DROP TRIGGER fail_hmac_predecessor_retirement');
 
         DB::setDefaultConnection($receiverConnection);
-        [$receiverPredecessor] = ac3VerificationCopy($scope, str_repeat('2', 64), id: $predecessorId);
+        [$receiverPredecessor] = ac3VerificationCopy($scope, str_repeat('2', 64), $laterDeadline, $predecessorId);
         ac3VerificationCopy($scope, str_repeat('3', 64), id: $replacementId);
         ac3Lineage($receiverPredecessor, Credential::query()->findOrFail($replacementId));
 
@@ -307,6 +309,22 @@ it('repairs a committed source activation whose first predecessor retirement fai
                 (string) $second['delivery_fingerprint'],
             ))->toThrow(HmacCredentialTransferRefused::class)
             ->and(Credential::query()->findOrFail($predecessorId)->expires_at?->getTimestamp())->toBe($expectedDeadline?->getTimestamp());
+
+        $earlierDeadline = $expectedDeadline?->subMinutes(10);
+        Credential::query()->whereKey($predecessorId)->update(['expires_at' => $earlierDeadline]);
+        DB::setDefaultConnection($receiverConnection);
+        Credential::query()->whereKey($predecessorId)->update(['expires_at' => $earlierDeadline]);
+        $earlierResult = app(CoordinateImportedHmacCutover::class)->recover(
+            $scope,
+            $issuer,
+            $predecessorId,
+            $replacementId,
+        );
+
+        expect($earlierResult->predecessorExpiresAt->getTimestamp())->toBe($earlierDeadline?->getTimestamp())
+            ->and($receiverPredecessor->refresh()->expires_at?->getTimestamp())->toBe($earlierDeadline?->getTimestamp());
+        DB::setDefaultConnection($sourceConnection);
+        expect(Credential::query()->findOrFail($predecessorId)->expires_at?->getTimestamp())->toBe($earlierDeadline?->getTimestamp());
     } finally {
         DB::setDefaultConnection($receiverConnection);
         DB::purge($sourceConnection);

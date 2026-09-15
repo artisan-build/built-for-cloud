@@ -22,8 +22,10 @@ use ArtisanBuild\BuiltForCloud\IssuerHmacCutoverReceipt;
 use ArtisanBuild\BuiltForCloud\SensitiveString;
 use ArtisanBuild\BuiltForCloud\Subject;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class);
@@ -225,6 +227,43 @@ it('keeps exact installation idempotence free of decrypt rewrite and duplicate a
         str_repeat('e', 64),
     ))->toThrow(HmacCredentialTransferRefused::class);
     expect(ac1State())->toBe($before);
+});
+
+it('does not resolve a pre-validation serialization failure as idempotent success', function (): void {
+    testsConfigureBoundPurposes();
+    $scope = testsBoundScope('matte.callback');
+    $key = str_repeat('d', 64);
+    $id = (string) Str::uuid();
+    app(InstallHmacCredentialFromClaim::class)(
+        $scope,
+        ac1Issuer(ac1Claimed($scope, $key, ['id' => $id])),
+        str_repeat('e', 64),
+    );
+    $stored = Credential::query()->findOrFail($id);
+    $before = ac1State();
+    $injected = false;
+    DB::connection()->beforeStartingTransaction(function () use (&$injected): void {
+        if ($injected) {
+            return;
+        }
+
+        $injected = true;
+        $cause = new \PDOException('forced serialization failure');
+        $cause->errorInfo = ['40001'];
+
+        throw new QueryException(DB::getDefaultConnection(), 'begin hmac writer fence', [], $cause);
+    });
+
+    expect(fn () => app(InstallHmacCredentialFromClaim::class)(
+        $scope,
+        ac1Issuer(ac1Claimed($scope, str_repeat('g', 64), [
+            'id' => $id,
+            'fingerprint' => $stored->delivery_fingerprint,
+        ])),
+        str_repeat('e', 64),
+    ))->toThrow(QueryException::class)
+        ->and($injected)->toBeTrue()
+        ->and(ac1State())->toBe($before);
 });
 
 it('commits no receiver state when the HMAC writer barrier cannot be acquired', function (): void {

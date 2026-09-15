@@ -66,14 +66,18 @@ final class InstallHmacCredentialFromClaim
             throw new HmacCredentialTransferRefused;
         }
 
+        $deliveryValidated = false;
+
         try {
-            return $this->barrier->exclusive('HMAC credential installation', fn (): InstalledHmacCredential => DB::transaction(
-                fn (): InstalledHmacCredential => $this->install($expectedScope, $claimed),
-            ));
+            return $this->barrier->exclusive('HMAC credential installation', function () use ($expectedScope, $claimed, &$deliveryValidated): InstalledHmacCredential {
+                return DB::transaction(function () use ($expectedScope, $claimed, &$deliveryValidated): InstalledHmacCredential {
+                    return $this->install($expectedScope, $claimed, $deliveryValidated);
+                });
+            });
         } catch (QueryException $failure) {
             $state = (string) ($failure->errorInfo[0] ?? $failure->getCode());
 
-            if (! in_array($state, ['23000', '23505', '40001', '40P01'], true)) {
+            if (! $deliveryValidated || ! in_array($state, ['23000', '23505', '40001', '40P01'], true)) {
                 throw $failure;
             }
 
@@ -82,7 +86,7 @@ final class InstallHmacCredentialFromClaim
         }
     }
 
-    private function install(BoundCredentialScope $scope, ClaimedHmacCredential $claimed): InstalledHmacCredential
+    private function install(BoundCredentialScope $scope, ClaimedHmacCredential $claimed, bool &$deliveryValidated): InstalledHmacCredential
     {
         $transfer = $claimed->transfer;
         $ids = array_values(array_filter([$transfer->predecessorCredentialId, $transfer->issuerCredentialId]));
@@ -102,6 +106,7 @@ final class InstallHmacCredentialFromClaim
             throw new HmacCredentialTransferRefused;
         }
 
+        $deliveryValidated = true;
         $existing = $locked[$transfer->issuerCredentialId] ?? null;
 
         if ($existing !== null) {

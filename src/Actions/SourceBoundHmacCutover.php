@@ -61,18 +61,18 @@ final class SourceBoundHmacCutover
                 throw new HmacCredentialTransferRefused;
             }
 
-            if ($predecessor !== null && $predecessor->expires_at === null) {
+            $graceEnd = $replacement->activated_at->toImmutable()->addSeconds(RotateCredential::GRACE_SECONDS);
+
+            if ($predecessor !== null
+                && ($predecessor->expires_at === null || $predecessor->expires_at->greaterThan($graceEnd))) {
                 if ($predecessor->status !== CredentialStatus::Active || $predecessor->revoked_at !== null) {
                     throw new HmacCredentialTransferRefused;
                 }
 
-                $this->retireAt(
-                    $predecessor->id,
-                    $replacement->activated_at->toImmutable()->addSeconds(RotateCredential::GRACE_SECONDS),
-                );
+                $this->retireAt($predecessor->id, $graceEnd);
                 $predecessor->refresh();
 
-                if ($predecessor->expires_at === null) {
+                if ($predecessor->expires_at === null || $predecessor->expires_at->greaterThan($graceEnd)) {
                     throw new HmacCredentialTransferRefused;
                 }
             }
