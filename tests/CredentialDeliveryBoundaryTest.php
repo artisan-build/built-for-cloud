@@ -155,11 +155,11 @@ it('enumerates every credential kind in the delivery table without inventing a s
  * represents another installation store; this does not claim hostile-host
  * resistance or any caller-selected cross-installation routing path.
  */
-it('resolves a stored secret only in the installation store that contains its hash', function (): void {
-    $secret = 'installation-local-secret';
+it('resolves a stored secret only in the installation store that contains its hash', function (CredentialPurpose $purpose): void {
+    $secret = 'installation-local-'.$purpose->value.'-secret';
     $credential = Credential::factory()->create([
         'kind' => CredentialKind::Bearer,
-        'purpose' => CredentialPurpose::SystemDeployment,
+        'purpose' => $purpose,
         'subject_type' => SubjectType::Installation,
         'subject_ref' => 'installation-a',
         'user_id' => null,
@@ -214,7 +214,7 @@ it('resolves a stored secret only in the installation store that contains its ha
         DB::connection()->table('credentials')->insert([
             'id' => $credential->id,
             'kind' => $credential->kind->value,
-            'purpose' => CredentialPurpose::SystemDeployment->value,
+            'purpose' => $credential->purpose->value,
             'subject_type' => $credential->subject_type->value,
             'subject_ref' => $credential->subject_ref,
             'user_id' => null,
@@ -229,7 +229,11 @@ it('resolves a stored secret only in the installation store that contains its ha
         DB::setDefaultConnection($originalConnection);
         DB::purge('separate_installation');
     }
-});
+})->with([
+    CredentialPurpose::SystemDeployment,
+    CredentialPurpose::Consumption,
+    CredentialPurpose::Mcp,
+]);
 
 /**
  * P5-AC6's exchange-minted bearer rows, driven through both public response

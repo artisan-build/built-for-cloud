@@ -172,6 +172,24 @@ it('lets a Member mint each installation app purpose through the JSON API', func
     'mcp basic' => [CredentialPurpose::Mcp, CredentialKind::Basic],
 ]);
 
+it('refuses an installation MCP credential at the consumption gate', function (): void {
+    $secret = 'installation-mcp-wrong-consumption-purpose-'.bin2hex(random_bytes(12));
+    $credential = Credential::query()->create([
+        'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::Mcp,
+        'subject_type' => SubjectType::Installation,
+        'subject_ref' => 'mcp-not-consumption',
+        'secret_hash' => hash('sha256', $secret),
+        'status' => CredentialStatus::Active,
+    ]);
+
+    $this->getJson('/member-credential-probe', [
+        'Authorization' => 'Bearer '.$secret,
+    ])->assertUnauthorized();
+
+    expect($credential->refresh()->last_used_at)->toBeNull();
+});
+
 it('refuses every operator-vocabulary ability before a Member can mint a credential or receive its secret', function (string $ability): void {
     $member = installationMember(UserRole::Member);
     $before = Credential::query()->count();

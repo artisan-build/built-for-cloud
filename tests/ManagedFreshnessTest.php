@@ -1212,8 +1212,7 @@ it('enforces authoritative denial through the existing MCP store bearer branch',
     $credential = p3cAccountCredential(
         $user,
         $secret,
-        CredentialPurpose::SystemDeployment,
-        subjectType: SubjectType::Application,
+        CredentialPurpose::Mcp,
     );
     Route::middleware('bfc.mcp')->post('/managed-ingress/mcp-store-authoritative', static fn (): string => 'allowed');
 

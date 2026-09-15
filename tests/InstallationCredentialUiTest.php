@@ -104,6 +104,43 @@ final class InstallationCredentialUiTest extends TestCase
         }
     }
 
+    public function test_consumption_and_mcp_choices_offer_only_the_installation_subject(): void
+    {
+        $actor = $this->user(UserRole::Member);
+        $page = $this->actingAsVersioned($actor, 'web')
+            ->get(route('bfc.ui.installation-credentials.index'))
+            ->assertOk();
+        preg_match_all(
+            '/<form data-testid="installation-credentials-issue-option".*?<\/form>/s',
+            (string) $page->getContent(),
+            $matches,
+        );
+        $observed = [];
+
+        foreach ($matches[0] as $form) {
+            if (! str_contains($form, 'value="test.ingest"') && ! str_contains($form, 'value="test.mcp"')) {
+                continue;
+            }
+
+            preg_match('/name="app_purpose" value="([^"]+)"/', $form, $purpose);
+            preg_match('/name="kind" value="([^"]+)"/', $form, $kind);
+            $this->assertArrayHasKey(1, $purpose);
+            $this->assertArrayHasKey(1, $kind);
+            $this->assertStringContainsString('value="installation"', $form);
+            $this->assertStringNotContainsString('value="application"', $form);
+            $observed[] = $purpose[1].' / '.$kind[1];
+        }
+
+        sort($observed);
+
+        $this->assertSame([
+            'test.ingest / basic',
+            'test.ingest / bearer',
+            'test.mcp / basic',
+            'test.mcp / bearer',
+        ], $observed);
+    }
+
     #[DataProvider('rolePurposeKindSubjectProvider')]
     public function test_every_role_and_admitted_shape_issues_lists_cross_issuer_rotates_and_revokes(
         UserRole $role,
