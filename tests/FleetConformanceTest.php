@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Testing\ConformanceFailed;
 use ArtisanBuild\BuiltForCloud\Testing\ConsumerConformance;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
 use ArtisanBuild\BuiltForCloud\Testing\FleetConformance;
+use Illuminate\Foundation\Auth\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Laravel\Mcp\Server;
@@ -501,7 +502,7 @@ it('rejects an app-owned human guard and provider through both aggregate auth fa
         'auth.guards.foreign-human' => ['driver' => 'session', 'provider' => 'foreign-users'],
         'auth.providers.foreign-users' => [
             'driver' => 'eloquent',
-            'model' => Illuminate\Foundation\Auth\User::class,
+            'model' => User::class,
         ],
     ]);
 

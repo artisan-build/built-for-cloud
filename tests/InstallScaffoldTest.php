@@ -102,7 +102,7 @@ it('round trips every supported environment value literally and reruns without w
     file_put_contents($env, "APP_NAME=interpolation-source\nEXISTING=old-sensitive-value\nKEEP=unchanged\n");
     file_put_contents($composer, "{\"name\":\"fixture/app\"}\n");
     $values = [
-        'BACKSLASH' => "path\\segment\\",
+        'BACKSLASH' => 'path\\segment\\',
         'CARRIAGE_RETURN' => "left\rright",
         'COMBINED' => '='.'"'.'${APP_NAME}'."\\\n\r".'$0'.'${1}',
         'DOLLAR_ZERO' => '$0',
