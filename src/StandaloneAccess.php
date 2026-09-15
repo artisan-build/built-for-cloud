@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Actions\ContainCredentialAuthorizations;
 use Illuminate\Contracts\Auth\Guard;
 use Illuminate\Contracts\Auth\StatefulGuard;
 use Illuminate\Database\ConnectionInterface;
@@ -109,6 +110,7 @@ final class StandaloneAccess
 
     public static function invalidateAccountBoundState(User $user): void
     {
+        app(ContainCredentialAuthorizations::class)->user((string) $user->getKey());
         self::invalidateSessions($user);
 
         DB::table('password_reset_tokens')->where('email', $user->email)->delete();

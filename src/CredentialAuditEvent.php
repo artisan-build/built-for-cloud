@@ -36,6 +36,7 @@ use LogicException;
  * @property LifecycleEventType $event
  * @property string|null $code_id
  * @property string|null $credential_id
+ * @property string|null $credential_authorization_id
  * @property string|null $superseded_by_credential_id
  * @property string|null $provider
  * @property string|null $deployment
@@ -68,6 +69,7 @@ final class CredentialAuditEvent extends Model
         'event',
         'code_id',
         'credential_id',
+        'credential_authorization_id',
         'superseded_by_credential_id',
         'provider',
         'deployment',

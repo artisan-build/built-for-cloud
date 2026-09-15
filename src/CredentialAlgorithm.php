@@ -9,12 +9,14 @@ use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
 
 enum CredentialAlgorithm: string
 {
+    case Bearer = 'bearer';
     case Rs256 = 'RS256';
     case HmacSha256 = HmacEnvelope::ALGORITHM;
 
     public static function forKind(CredentialKind $kind): self
     {
         return match ($kind) {
+            CredentialKind::Bearer => self::Bearer,
             CredentialKind::Asymmetric => self::Rs256,
             CredentialKind::Hmac => self::HmacSha256,
             default => throw InvalidCredentialInput::boundKindNotAllowed(),

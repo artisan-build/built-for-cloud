@@ -45,7 +45,7 @@ final class InvalidCredentialInput extends InvalidArgumentException
 
     public static function boundKindNotAllowed(): self
     {
-        return new self('Only asymmetric and hmac credentials support a protocol binding.');
+        return new self('Only bearer, asymmetric and hmac credentials support a protocol binding.');
     }
 
     public static function boundScopeMismatch(): self

@@ -74,6 +74,7 @@ final class MintCredential
         MintOptions $options,
         ?AuditActor $actor = null,
         ?SubmissionNonce $submission = null,
+        ?string $credentialAuthorizationId = null,
     ): MintResult {
         $this->validateProtocolBoundary($subject, $options);
 
@@ -86,9 +87,9 @@ final class MintCredential
 
         return match ($options->kind) {
             CredentialKind::Bearer,
-            CredentialKind::Basic => $this->mintSecretBearing($subject, $options, $actor, $submission),
-            CredentialKind::Asymmetric => $this->mintEnrollment($subject, $options, $actor, $submission),
-            CredentialKind::Hmac => $this->mintSigningKey($subject, $options, $actor, $submission),
+            CredentialKind::Basic => $this->mintSecretBearing($subject, $options, $actor, $submission, $credentialAuthorizationId),
+            CredentialKind::Asymmetric => $this->mintEnrollment($subject, $options, $actor, $submission, $credentialAuthorizationId),
+            CredentialKind::Hmac => $this->mintSigningKey($subject, $options, $actor, $submission, $credentialAuthorizationId),
         };
     }
 
@@ -119,12 +120,12 @@ final class MintCredential
 
         $resolved = $this->appPurposes->purpose($options->boundScope->appPurpose);
 
-        if (! in_array($options->kind, [CredentialKind::Asymmetric, CredentialKind::Hmac], true)) {
+        if (! in_array($options->kind, [CredentialKind::Bearer, CredentialKind::Asymmetric, CredentialKind::Hmac], true)) {
             throw InvalidCredentialInput::boundKindNotAllowed();
         }
 
         if ($resolved !== $options->purpose
-            || $resolved !== CredentialPurpose::Signing
+            || ($options->kind !== CredentialKind::Bearer && $resolved !== CredentialPurpose::Signing)
             || $options->boundScope->subject->type !== $subject->type
             || ! hash_equals($options->boundScope->subject->ref, $subject->ref)) {
             throw InvalidCredentialInput::boundScopeMismatch();
@@ -170,15 +171,17 @@ final class MintCredential
         MintOptions $options,
         ?AuditActor $actor,
         ?SubmissionNonce $submission,
+        ?string $credentialAuthorizationId,
     ): MintResult {
         /** @var MintResult */
-        return DB::transaction(function () use ($subject, $options, $actor, $submission): MintResult {
+        return DB::transaction(function () use ($subject, $options, $actor, $submission, $credentialAuthorizationId): MintResult {
             $submission?->consume();
             $secret = new MintedSecret(
                 (string) config('built-for-cloud.token_prefix').bin2hex(random_bytes(32)),
             );
 
-            $credential = Credential::query()->create([
+            $credential = new Credential;
+            $credential->forceFill([
                 'kind' => $options->kind,
                 'purpose' => $options->purpose,
                 'subject_type' => $subject->type,
@@ -191,11 +194,18 @@ final class MintCredential
                 'status' => CredentialStatus::Active,
             ]);
 
+            if ($options->boundScope === null) {
+                $credential->save();
+            } else {
+                $credential->saveWithOriginatorBinding($options->boundScope);
+            }
+
             $this->recorder->record(
                 event: LifecycleEventType::Issued,
                 credentialId: $credential->id,
                 actor: $actor,
                 credentialExpiresAt: $options->expiresAt,
+                credentialAuthorizationId: $credentialAuthorizationId,
             );
 
             return new MintResult(
@@ -223,6 +233,7 @@ final class MintCredential
         MintOptions $options,
         ?AuditActor $actor,
         ?SubmissionNonce $submission,
+        ?string $credentialAuthorizationId,
     ): MintResult {
         $ttlSeconds = $options->codeTtlSeconds;
 
@@ -234,7 +245,7 @@ final class MintCredential
         }
 
         /** @var MintResult */
-        return DB::transaction(function () use ($subject, $options, $actor, $ttlSeconds, $submission): MintResult {
+        return DB::transaction(function () use ($subject, $options, $actor, $ttlSeconds, $submission, $credentialAuthorizationId): MintResult {
             $submission?->consume();
             $credential = new Credential;
             $credential->forceFill([
@@ -278,6 +289,7 @@ final class MintCredential
                 actor: $actor,
                 codeTtlSeconds: $ttlSeconds,
                 credentialExpiresAt: $options->expiresAt,
+                credentialAuthorizationId: $credentialAuthorizationId,
             );
 
             return new MintResult(
@@ -309,6 +321,7 @@ final class MintCredential
         MintOptions $options,
         ?AuditActor $actor,
         ?SubmissionNonce $submission,
+        ?string $credentialAuthorizationId,
     ): MintResult {
         $ttlSeconds = $options->codeTtlSeconds;
 
@@ -325,7 +338,7 @@ final class MintCredential
         // check ahead of the sweep nor COMMIT an old-version row after
         // the rewrap's verified zero-count.
         /** @var MintResult */
-        return app(HmacWriterBarrier::class)->exclusive('minting', fn (): MintResult => DB::transaction(function () use ($subject, $options, $actor, $ttlSeconds, $keyring, $submission): MintResult {
+        return app(HmacWriterBarrier::class)->exclusive('minting', fn (): MintResult => DB::transaction(function () use ($subject, $options, $actor, $ttlSeconds, $keyring, $submission, $credentialAuthorizationId): MintResult {
             $submission?->consume();
             $signingKey = bin2hex(random_bytes(32));
             $encrypted = $keyring->encrypt($signingKey);
@@ -368,6 +381,7 @@ final class MintCredential
                     credentialId: $credential->id,
                     actor: $actor,
                     credentialExpiresAt: $options->expiresAt,
+                    credentialAuthorizationId: $credentialAuthorizationId,
                 );
 
                 $this->recorder->record(
@@ -405,6 +419,7 @@ final class MintCredential
                 actor: $actor,
                 codeTtlSeconds: $ttlSeconds,
                 credentialExpiresAt: $options->expiresAt,
+                credentialAuthorizationId: $credentialAuthorizationId,
             );
 
             return new MintResult(
