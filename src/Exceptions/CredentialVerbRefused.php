@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Exceptions;
 
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresSelfServiceMintPolicy;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use RuntimeException;
 
@@ -61,6 +62,15 @@ final class CredentialVerbRefused extends RuntimeException
             'The self-service surface does not offer the "%s" credential kind. '
             .'Kinds are opted in by the application declaration, never chosen by the requesting user.',
             $kind->value,
+        ));
+    }
+
+    public static function selfServicePurpose(CredentialPurpose $purpose): self
+    {
+        return new self(sprintf(
+            'The installation credential surface does not offer the "%s" purpose. '
+            .'Purposes are opted in by the application credential-purpose configuration, never chosen independently by the requesting user.',
+            $purpose->value,
         ));
     }
 

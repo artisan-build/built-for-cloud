@@ -142,6 +142,17 @@ final class InstallationCredentialUiTest extends TestCase
         ], $observed);
     }
 
+    public function test_no_declared_purposes_offer_no_issue_choices(): void
+    {
+        config(['built-for-cloud.ui.credential_purposes' => []]);
+        $actor = $this->user(UserRole::Member);
+
+        $this->actingAsVersioned($actor, 'web')
+            ->get(route('bfc.ui.installation-credentials.index'))
+            ->assertOk()
+            ->assertDontSeeHtml('data-testid="installation-credentials-issue-option"');
+    }
+
     public function test_bearer_only_host_policy_filters_choices_and_refuses_forged_issue_and_rotation(): void
     {
         config(['built-for-cloud.credentials.declaration' => SelfServicePolicyDeclaration::class]);
