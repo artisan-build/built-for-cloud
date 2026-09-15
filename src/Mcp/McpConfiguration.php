@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Mcp;
 
+use ArtisanBuild\BuiltForCloud\RouteMiddleware;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Router;
@@ -113,7 +114,10 @@ final class McpConfiguration
             return false;
         }
 
-        return in_array(AuthenticateMcp::class, $router->gatherRouteMiddleware($route), true);
+        return RouteMiddleware::indexOfClass(
+            $router->gatherRouteMiddleware($route),
+            AuthenticateMcp::class,
+        ) !== null;
     }
 
     /**

@@ -13,6 +13,7 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
+use ArtisanBuild\BuiltForCloud\RouteMiddleware;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\User;
@@ -194,8 +195,14 @@ trait ContractAssertions
 
         Assert::assertNotNull($login, 'The package login route is not mounted.');
         Assert::assertNotNull($account, 'An authenticated package route is not mounted.');
-        Assert::assertContains(EnsureStandaloneAuthority::class, $router->gatherRouteMiddleware($login));
-        Assert::assertContains(EnsureUserIsAuthenticated::class, $router->gatherRouteMiddleware($account));
+        Assert::assertNotNull(RouteMiddleware::indexOfClass(
+            $router->gatherRouteMiddleware($login),
+            EnsureStandaloneAuthority::class,
+        ));
+        Assert::assertNotNull(RouteMiddleware::indexOfClass(
+            $router->gatherRouteMiddleware($account),
+            EnsureUserIsAuthenticated::class,
+        ));
         Assert::assertSame(User::class, config('auth.providers.users.model'));
 
         $email = 'conformance-'.bin2hex(random_bytes(8)).'@example.test';

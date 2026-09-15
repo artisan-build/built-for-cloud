@@ -232,11 +232,10 @@ final class StandaloneRouteOwnership
 
             if (count($named) !== 1
                 || ! self::occupiesReservedShape($named[0], $ownedRoute)
-                || (self::requiresStandaloneAuthority($ownedRoute) && ! in_array(
-                    EnsureStandaloneAuthority::class,
+                || (self::requiresStandaloneAuthority($ownedRoute) && RouteMiddleware::indexOfClass(
                     $router->resolveMiddleware($named[0]->middleware(), $named[0]->excludedMiddleware()),
-                    true,
-                ))) {
+                    EnsureStandaloneAuthority::class,
+                ) === null)) {
                 $owner = self::reservedOwner($ownedRoute);
 
                 throw new RuntimeException("The route name [{$name}] is reserved by {$owner}.");
@@ -367,10 +366,10 @@ final class StandaloneRouteOwnership
 
     private static function resolvesGate(Router $router, Route $route, string $gate): bool
     {
-        return in_array(
-            $gate,
-            $router->resolveMiddleware($route->middleware(), $route->excludedMiddleware()),
-            true,
-        );
+        $resolved = $router->resolveMiddleware($route->middleware(), $route->excludedMiddleware());
+
+        return str_contains($gate, ':')
+            ? in_array($gate, $resolved, true)
+            : RouteMiddleware::indexOfClass($resolved, $gate) !== null;
     }
 }
