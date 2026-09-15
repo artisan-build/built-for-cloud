@@ -253,7 +253,7 @@ mappings, and the affordances that product supports:
     'slug' => 'example-product',
     'description' => 'The catalog description.',
     'icon' => 'https://example.test/icon.svg',
-    'product_url' => 'https://example.test',
+    'product_url' => 'https://scalpels.app/products/example-product',
 ],
 'credentials' => [
     // Keep the other published credential settings.
@@ -276,8 +276,9 @@ only. They do not unmount `/bfc/ui*`, authorize direct requests, or change crede
 audience, lifecycle, authority-mode, membership, or route-ownership decisions.
 
 After adopting the package UI, remove the consumer's starter root page so it cannot shadow the
-optional package landing page. Run `ContractAssertions::assertBuiltForCloudContract()` in the
-consumer's conformance test to verify the published manifest/configuration and package foundation;
+optional package landing page. In the consumer's conformance test, call
+`$this->assertBuiltForCloudContract()` and
+`$this->assertBuiltForCloudManifestMatches($canonicalCatalogEntry)` with the canonical Scalpels entry;
 keep deliberate `bfc::` view overrides under the consumer's own test coverage.
 
 ### System-authority entries
