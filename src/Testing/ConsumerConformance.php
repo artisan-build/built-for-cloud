@@ -86,7 +86,7 @@ final readonly class ConsumerConformance
         }
 
         foreach ($purposeMappings as $appPurpose => $purpose) {
-            if ($appPurpose === '' || ! $purpose instanceof CredentialPurpose) {
+            if (! is_string($appPurpose) || $appPurpose === '' || ! $purpose instanceof CredentialPurpose) {
                 throw new InvalidArgumentException('A purpose mapping is invalid.');
             }
         }
@@ -136,6 +136,18 @@ final readonly class ConsumerConformance
             }
         }
 
+        foreach (['source_roots', 'provider_files', 'runtime_assertions', 'capabilities'] as $key) {
+            if (! array_is_list($input[$key])) {
+                throw new InvalidArgumentException('A consumer conformance list field has the wrong shape.');
+            }
+        }
+
+        foreach ($input['expected'] as $members) {
+            if (! is_array($members) || ! array_is_list($members)) {
+                throw new InvalidArgumentException('An expected conformance family has the wrong shape.');
+            }
+        }
+
         if ($input['mcp_server'] !== null && ! is_string($input['mcp_server'])) {
             throw new InvalidArgumentException('A consumer conformance field has the wrong type.');
         }
@@ -149,10 +161,10 @@ final readonly class ConsumerConformance
             $input['consumer'],
             $input['consumer_root'],
             $input['package_root'],
-            array_values($input['source_roots']),
-            array_values($input['provider_files']),
-            array_values($input['runtime_assertions']),
-            array_values($input['capabilities']),
+            $input['source_roots'],
+            $input['provider_files'],
+            $input['runtime_assertions'],
+            $input['capabilities'],
             $purposeMappings,
             $input['mcp_server'],
             $expected,

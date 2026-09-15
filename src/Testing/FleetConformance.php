@@ -135,6 +135,7 @@ final readonly class FleetConformance
         $this->callAssertion('assertBuiltForCloudModelContract');
         $this->callAssertion('assertBuiltForCloudHumanIdentityContract');
         $this->callAssertion('assertBuiltForCloudHumanLifecycleContract');
+        $this->callAssertion('assertBuiltForCloudThinHostConfiguration');
 
         $this->callAssertion('assertBuiltForCloudThinHostSources', [$spec->consumerRoot]);
     }
@@ -198,6 +199,15 @@ final readonly class FleetConformance
         $visited = $this->phpFileCount($spec->consumerRoot);
         foreach (ThinHostConformance::sourceArtifacts($spec->consumerRoot) as $path => $kind) {
             $members[] = 'consumer/'.$path.'|'.$kind;
+        }
+
+        $auth = config('auth');
+        if (! is_array($auth)) {
+            $members[] = 'configuration|missing-auth-config';
+        } else {
+            foreach (ThinHostConformance::configurationArtifacts($auth) as $artifact) {
+                $members[] = 'configuration|'.$artifact;
+            }
         }
 
         return [$members, $members, $visited];

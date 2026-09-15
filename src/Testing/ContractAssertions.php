@@ -223,6 +223,18 @@ trait ContractAssertions
         );
     }
 
+    public function assertBuiltForCloudThinHostConfiguration(): void
+    {
+        $auth = config('auth');
+
+        Assert::assertIsArray($auth, 'The resolved auth configuration is missing.');
+        Assert::assertSame(
+            [],
+            ThinHostConformance::configurationArtifacts($auth),
+            'The resolved auth configuration exposes an app-owned human authority.',
+        );
+    }
+
     /**
      * @param  array<string, mixed>  $canonicalCatalogEntry
      */

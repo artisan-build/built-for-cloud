@@ -101,7 +101,7 @@ final class ServerScaffold
         $pattern = '/^'.preg_quote($key, '/').'=.*$/m';
 
         if (preg_match($pattern, $contents) === 1) {
-            return (string) preg_replace($pattern, $line, $contents);
+            return (string) preg_replace_callback($pattern, static fn (): string => $line, $contents);
         }
 
         $contents = rtrim($contents, "\r\n");
@@ -154,8 +154,8 @@ final class ServerScaffold
 
             try {
                 $parser->parseConstraints($constraint);
-            } catch (Throwable $exception) {
-                throw new InvalidArgumentException('The Composer requirements are invalid.', previous: $exception);
+            } catch (Throwable) {
+                throw new InvalidArgumentException('The Composer requirements are invalid.');
             }
         }
     }
@@ -174,30 +174,34 @@ final class ServerScaffold
     private function composerContents(string $contents, array $requirements): string
     {
         try {
-            $composer = json_decode($contents, true, flags: JSON_THROW_ON_ERROR);
+            $composer = json_decode($contents, flags: JSON_THROW_ON_ERROR);
         } catch (JsonException $exception) {
             throw new RuntimeException('The Composer target is not valid JSON.', previous: $exception);
         }
 
-        if (! is_array($composer) || ($composer !== [] && array_is_list($composer))) {
+        if (! $composer instanceof \stdClass) {
             throw new RuntimeException('The Composer target must contain an object.');
         }
 
-        $require = $composer['require'] ?? [];
+        $require = property_exists($composer, 'require') ? $composer->require : new \stdClass;
 
-        if (! is_array($require) || ($require !== [] && array_is_list($require))) {
+        if (! $require instanceof \stdClass) {
             throw new RuntimeException('The Composer require member must contain an object.');
         }
 
+        $changed = false;
         foreach ($requirements as $package => $constraint) {
-            $require[$package] = $constraint;
+            if (! property_exists($require, $package) || $require->{$package} !== $constraint) {
+                $require->{$package} = $constraint;
+                $changed = true;
+            }
         }
 
-        if (($composer['require'] ?? []) === $require) {
+        if (! $changed) {
             return $contents;
         }
 
-        $composer['require'] = $require;
+        $composer->require = $require;
 
         return json_encode($composer, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR).PHP_EOL;
     }
@@ -274,6 +278,15 @@ final class ServerScaffold
             return $value;
         }
 
-        return '"'.str_replace(['\\', '"', "\n", "\r", '='], ['\\\\', '\\"', '\\n', '', '\\='], $value).'"';
+        return '"'.strtr($value, [
+            '\\' => '\\\\',
+            '"' => '\\"',
+            '$' => '\\$',
+            "\n" => '\\n',
+            "\r" => '\\r',
+            "\t" => '\\t',
+            "\f" => '\\f',
+            "\v" => '\\v',
+        ]).'"';
     }
 }

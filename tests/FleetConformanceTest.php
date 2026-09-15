@@ -290,6 +290,30 @@ it('accepts object members in any order while refusing missing unknown duplicate
     $duplicates = $input;
     $duplicates['source_roots'][] = __DIR__.'/Fixtures/ThinHost';
     expect(fn () => ConsumerConformance::fromArray($duplicates))->toThrow(InvalidArgumentException::class, 'sorted');
+
+    $objectShapedLists = [
+        'source_roots' => ['root' => __DIR__.'/Fixtures/ThinHost'],
+        'provider_files' => ['provider' => dirname(__DIR__).'/src/BuiltForCloudServiceProvider.php'],
+        'runtime_assertions' => ['assertion' => 'meta'],
+        'capabilities' => ['capability' => 'credentials'],
+    ];
+    foreach ($objectShapedLists as $field => $value) {
+        $objectShaped = $input;
+        $objectShaped[$field] = $value;
+        expect(fn () => ConsumerConformance::fromArray($objectShaped))
+            ->toThrow(InvalidArgumentException::class, 'wrong shape');
+    }
+
+    $objectShapedExpected = $input;
+    $objectShapedExpected['expected']['runtime.meta'] = ['member' => 'test-created-member'];
+    expect(fn () => ConsumerConformance::fromArray($objectShapedExpected))
+        ->toThrow(InvalidArgumentException::class, 'wrong shape');
+
+    $numericPurpose = $input;
+    $numericPurpose['runtime_assertions'] = ['meta'];
+    $numericPurpose['purpose_mappings'] = [0 => CredentialPurpose::Consumption];
+    expect(fn () => ConsumerConformance::fromArray($numericPurpose))
+        ->toThrow(InvalidArgumentException::class, 'purpose mapping');
 });
 
 it('does not accept a declared capability without the live meta predicate', function (): void {
@@ -462,6 +486,34 @@ it('drives conventional thin-host checks from the consumer root instead of split
         ->and($report->families['thin_host']->visited)->toBeGreaterThan(0)
         ->and($report->families['thin_host']->discovered)->toBe([$member])
         ->and($report->families['thin_host']->violations)->toContain($member);
+});
+
+it('rejects an app-owned human guard and provider through both aggregate auth families', function (): void {
+    $spec = packageConformanceSpec(runtime: ['auth_schema'], capabilities: []);
+    $clean = (new FleetConformance($this))->inspect($spec);
+
+    expect($clean->passed)->toBeTrue()
+        ->and($clean->families['runtime.auth_schema']->violations)->toBe([])
+        ->and($clean->families['thin_host']->discovered)->toBe([])
+        ->and($clean->families['thin_host']->violations)->toBe([]);
+
+    config([
+        'auth.guards.foreign-human' => ['driver' => 'session', 'provider' => 'foreign-users'],
+        'auth.providers.foreign-users' => [
+            'driver' => 'eloquent',
+            'model' => Illuminate\Foundation\Auth\User::class,
+        ],
+    ]);
+
+    $offender = (new FleetConformance($this))->inspect($spec);
+    $member = 'configuration|custom-guard:foreign-human';
+
+    expect($offender->passed)->toBeFalse()
+        ->and($offender->families['runtime.auth_schema']->violations)->toBe([
+            'assertion-failed:runtime.auth_schema',
+        ])
+        ->and($offender->families['thin_host']->discovered)->toBe([$member])
+        ->and($offender->families['thin_host']->violations)->toContain($member);
 });
 
 it('never leaks absolute paths or test-created secret material in a failing report', function (): void {
