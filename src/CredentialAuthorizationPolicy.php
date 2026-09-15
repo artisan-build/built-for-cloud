@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresCredentialAuthorizationProfiles;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresSelfServiceMintPolicy;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialAuthorizationRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Model;
@@ -69,7 +70,7 @@ final readonly class CredentialAuthorizationPolicy
         try {
             $profile = $this->profile($request, (string) $authorization->app_purpose);
             $purpose = $this->validate($request, $profile, (string) $authorization->initiating_user_id, false);
-        } catch (InvalidCredentialInput|CredentialAuthorizationRefused) {
+        } catch (InvalidCredentialInput|CredentialAuthorizationRefused|CredentialVerbRefused) {
             throw CredentialAuthorizationRefused::denied();
         }
 
@@ -237,6 +238,12 @@ final readonly class CredentialAuthorizationPolicy
 
         if (! array_is_list($profiles)) {
             throw InvalidCredentialInput::invalidAppPurposeMapping();
+        }
+
+        foreach ($profiles as $profile) {
+            if (! $profile instanceof CredentialAuthorizationProfile) {
+                throw InvalidCredentialInput::invalidAppPurposeMapping();
+            }
         }
 
         $matches = array_values(array_filter(

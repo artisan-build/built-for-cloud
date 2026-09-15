@@ -8,7 +8,6 @@ use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresCredentialAuthorizationProfiles;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresSelfServiceMintPolicy;
 use ArtisanBuild\BuiltForCloud\Credential;
-use ArtisanBuild\BuiltForCloud\CredentialAuthorizationOwnership;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationProfile;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\Subject;
@@ -21,18 +20,17 @@ final class DeviceFlowDeclaration implements CredentialDeclaration, DeclaresCred
 
     public static int $authorizeCalls = 0;
 
+    public static ?Subject $resolvedSubject = null;
+
     /** @var list<string> */
     public static array $selfServiceAbilities = [];
 
+    /** @var list<CredentialKind> */
+    public static array $selfServiceKinds = [CredentialKind::Bearer];
+
     public function resolveSubject(Request $request): ?Subject
     {
-        foreach (self::$profiles as $profile) {
-            if ($profile->ownership === CredentialAuthorizationOwnership::Personal) {
-                return $profile->scope->subject;
-            }
-        }
-
-        return null;
+        return self::$resolvedSubject;
     }
 
     public function authorize(Credential $credential, ?string $ability, Request $request): bool
@@ -54,6 +52,6 @@ final class DeviceFlowDeclaration implements CredentialDeclaration, DeclaresCred
 
     public function selfServiceKinds(Subject $subject): array
     {
-        return [CredentialKind::Bearer];
+        return self::$selfServiceKinds;
     }
 }

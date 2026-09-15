@@ -13,10 +13,12 @@ use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\BoundBearerCredentialAuthenticator;
 use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
+use ArtisanBuild\BuiltForCloud\Console\RequestAssertion;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAlgorithm;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationAuthority;
+use ArtisanBuild\BuiltForCloud\CredentialAuthorizationDenialReason;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationOwnership;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationPolicy;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationProfile;
@@ -54,7 +56,9 @@ uses(RefreshDatabase::class);
 beforeEach(function (): void {
     DeviceFlowDeclaration::$profiles = [];
     DeviceFlowDeclaration::$authorizeCalls = 0;
+    DeviceFlowDeclaration::$resolvedSubject = null;
     DeviceFlowDeclaration::$selfServiceAbilities = [];
+    DeviceFlowDeclaration::$selfServiceKinds = [CredentialKind::Bearer];
     config([
         'built-for-cloud.credentials.declaration' => DeviceFlowDeclaration::class,
         'built-for-cloud.credentials.app_purposes' => [
@@ -97,6 +101,17 @@ function deviceProfile(User $user, string $purpose = 'test.device'): CredentialA
 
 function deviceRequest(object $test, User $user): Request
 {
+    if (DeviceFlowDeclaration::$resolvedSubject === null) {
+        foreach (DeviceFlowDeclaration::$profiles as $profile) {
+            if ($profile instanceof CredentialAuthorizationProfile
+                && $profile->ownership === CredentialAuthorizationOwnership::Personal) {
+                DeviceFlowDeclaration::$resolvedSubject = $profile->scope->subject;
+
+                break;
+            }
+        }
+    }
+
     $test->actingAsVersioned($user, 'web');
     $request = request();
     $request->setUserResolver(static fn (): User => $user);
@@ -310,6 +325,7 @@ it('enforces the personal self-service ability grant before writing', function (
         60,
         5,
     )];
+    DeviceFlowDeclaration::$resolvedSubject = $base->scope->subject;
 
     expect(fn () => app(StartDeviceAuthorization::class)($request, 'test.device'))
         ->toThrow(InvalidCredentialInput::class)
@@ -552,6 +568,44 @@ it('contains and revokes installation state through direct subject offboarding',
         ->and(DB::table('credential_authorizations')->where('status', 'consumed')->count())->toBe(1);
 });
 
+it('refuses an unauthenticated start without writing authorization or audit state', function (): void {
+    $user = deviceFlowUser();
+    DeviceFlowDeclaration::$profiles = [deviceProfile($user)];
+    DeviceFlowDeclaration::$resolvedSubject = DeviceFlowDeclaration::$profiles[0]->scope->subject;
+    $request = request();
+    $request->setUserResolver(static fn (): null => null);
+
+    expect(fn () => app(StartDeviceAuthorization::class)($request, 'test.device'))
+        ->toThrow(CredentialAuthorizationRefused::class, 'access_denied')
+        ->and(DB::table('credential_authorizations')->count())->toBe(0)
+        ->and(CredentialAuditEvent::query()->count())->toBe(0);
+});
+
+it('refuses a delegated-principal start without writing authorization or audit state', function (): void {
+    $user = deviceFlowUser();
+    DeviceFlowDeclaration::$profiles = [deviceProfile($user)];
+    DeviceFlowDeclaration::$resolvedSubject = DeviceFlowDeclaration::$profiles[0]->scope->subject;
+    $request = request();
+    RequestAssertion::publish($request, consoleActor(), consoleAssertionFor());
+
+    expect(fn () => app(StartDeviceAuthorization::class)($request, 'test.device'))
+        ->toThrow(CredentialAuthorizationRefused::class, 'access_denied')
+        ->and(DB::table('credential_authorizations')->count())->toBe(0)
+        ->and(CredentialAuditEvent::query()->count())->toBe(0);
+});
+
+it('refuses a personal start whose request subject differs without writing authorization or audit state', function (): void {
+    $user = deviceFlowUser();
+    DeviceFlowDeclaration::$profiles = [deviceProfile($user)];
+    $request = deviceRequest($this, $user);
+    DeviceFlowDeclaration::$resolvedSubject = new Subject(SubjectType::UserPrincipal, 'different-request-subject');
+
+    expect(fn () => app(StartDeviceAuthorization::class)($request, 'test.device'))
+        ->toThrow(InvalidCredentialInput::class)
+        ->and(DB::table('credential_authorizations')->count())->toBe(0)
+        ->and(CredentialAuditEvent::query()->count())->toBe(0);
+});
+
 it('refuses malformed profile authority and exact package-boundary values before writing', function (callable $mutate): void {
     $user = deviceFlowUser();
     $request = deviceRequest($this, $user);
@@ -568,6 +622,7 @@ it('refuses malformed profile authority and exact package-boundary values before
     'malformed mapping' => fn () => config(['built-for-cloud.credentials.app_purposes' => ['test.device' => true, 'test.loopback' => CredentialPurpose::Consumption->value]]),
     'unknown mapping' => fn () => config(['built-for-cloud.credentials.app_purposes' => ['test.device' => 'unknown-purpose', 'test.loopback' => CredentialPurpose::Consumption->value]]),
     'malformed profile list' => fn () => DeviceFlowDeclaration::$profiles = [new stdClass],
+    'mixed malformed profile list' => fn (User $user) => DeviceFlowDeclaration::$profiles = [deviceProfile($user), new stdClass],
     'ttl below minimum' => fn (User $user) => DeviceFlowDeclaration::$profiles = [new CredentialAuthorizationProfile('test.device', deviceProfile($user)->scope, CredentialAuthorizationOwnership::Personal, [], null, 59, 5)],
     'ttl above maximum' => fn (User $user) => DeviceFlowDeclaration::$profiles = [new CredentialAuthorizationProfile('test.device', deviceProfile($user)->scope, CredentialAuthorizationOwnership::Personal, [], null, 901, 5)],
     'cadence below minimum' => fn (User $user) => DeviceFlowDeclaration::$profiles = [new CredentialAuthorizationProfile('test.device', deviceProfile($user)->scope, CredentialAuthorizationOwnership::Personal, [], null, 60, 4)],
@@ -616,6 +671,50 @@ it('rejects every exact-bound drift before declaration or usage effects', functi
         DeviceFlowDeclaration::$profiles = [new CredentialAuthorizationProfile('test.device', deviceProfile($user)->scope, CredentialAuthorizationOwnership::Personal, [], now()->addDays(2), 600, 5)];
     },
 ]);
+
+it('rejects a mismatched current subject before managed authority declaration usage or client identity effects', function (): void {
+    Carbon::setTestNow('2026-09-15 12:00:00');
+    $user = deviceFlowUser();
+    DeviceFlowDeclaration::$profiles = [deviceProfile($user)];
+    $request = deviceRequest($this, $user);
+    $start = app(StartDeviceAuthorization::class)($request, 'test.device');
+    app(DecideDeviceAuthorization::class)($request, $start->userCode->reveal(), $start->browserNonce->reveal(), true);
+    $token = app(PollDeviceAuthorization::class)($request, $start->deviceCode->reveal());
+    $secret = $token->accessToken->reveal();
+    DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
+        'mode' => AuthorityMode::Managed->value,
+        'generation' => 7,
+        'issuer' => 'https://issuer.example.test',
+        'connection_id' => 'connection-fixture',
+        'organization_id' => 'organization-fixture',
+        'installation_id' => 'installation-fixture',
+        'authority_base_url' => 'https://authority.example.test',
+        'managed_connection_status' => 'active',
+    ]);
+    $user->forceFill([
+        'scalpels_issuer' => 'https://issuer.example.test',
+        'scalpels_connection_id' => 'connection-fixture',
+        'scalpels_id' => 'managed-device-user',
+        'membership_confirmed_at' => now()->subHour(),
+        'managed_membership_status' => 'active',
+    ])->save();
+    Cache::flush();
+    Http::fake(static fn () => Http::response(['error' => 'must-not-run'], 500));
+    DeviceFlowDeclaration::$resolvedSubject = new Subject(SubjectType::UserPrincipal, 'different-request-subject');
+    DeviceFlowDeclaration::$authorizeCalls = 0;
+    $use = Request::create('/protected', 'GET', server: [
+        'HTTP_AUTHORIZATION' => 'Bearer '.$secret,
+        'HTTP_USER_AGENT' => 'subject-binding-canary',
+    ]);
+    $refreshKey = hash('sha256', "https://issuer.example.test\0connection-fixture\0managed-device-user");
+
+    expect(app(BoundBearerCredentialAuthenticator::class)->authenticate($use, 'test.device'))->toBeNull()
+        ->and(DeviceFlowDeclaration::$authorizeCalls)->toBe(0)
+        ->and(Credential::query()->findOrFail($token->credentialId)->last_used_at)->toBeNull()
+        ->and(DB::table('bfc_client_identity_observations')->count())->toBe(0)
+        ->and(Cache::get('bfc:managed-refresh-attempt:'.$refreshKey))->toBeNull();
+    Http::assertNothingSent();
+});
 
 it('rejects wrong binding before managed refresh cache declaration usage or client identity effects', function (): void {
     Carbon::setTestNow('2026-09-15 12:00:00');
@@ -916,6 +1015,50 @@ it('returns stored denial and unknown grant before cadence effects', function ()
         ->and(fn () => app(PollDeviceAuthorization::class)($request, str_repeat('z', 43)))
         ->toThrow(CredentialAuthorizationRefused::class, 'invalid_grant')
         ->and((array) DB::table('credential_authorizations')->sole())->toBe($before);
+});
+
+it('turns kind withdrawal at decision into exactly one terminal denial', function (): void {
+    $user = deviceFlowUser();
+    DeviceFlowDeclaration::$profiles = [deviceProfile($user)];
+    $request = deviceRequest($this, $user);
+    $start = app(StartDeviceAuthorization::class)($request, 'test.device');
+    $userCode = $start->userCode->reveal();
+    $browserNonce = $start->browserNonce->reveal();
+    DeviceFlowDeclaration::$selfServiceKinds = [];
+
+    expect(fn () => app(DecideDeviceAuthorization::class)($request, $userCode, $browserNonce, true))
+        ->toThrow(CredentialAuthorizationRefused::class, 'authorization_unavailable');
+
+    DeviceFlowDeclaration::$selfServiceKinds = [CredentialKind::Bearer];
+
+    expect(fn () => app(DecideDeviceAuthorization::class)($request, $userCode, $browserNonce, true))
+        ->toThrow(CredentialAuthorizationRefused::class, 'authorization_unavailable')
+        ->and(DB::table('credential_authorizations')->sole()->status)->toBe('denied')
+        ->and(DB::table('credential_authorizations')->sole()->denial_reason)->toBe(CredentialAuthorizationDenialReason::ProfileWithdrawn->value)
+        ->and(CredentialAuditEvent::query()->where('event', LifecycleEventType::CredentialAuthorizationDenied)->count())->toBe(1)
+        ->and(Credential::query()->count())->toBe(0);
+});
+
+it('turns kind withdrawal at exchange into exactly one terminal denial', function (): void {
+    $user = deviceFlowUser();
+    DeviceFlowDeclaration::$profiles = [deviceProfile($user)];
+    $request = deviceRequest($this, $user);
+    $start = app(StartDeviceAuthorization::class)($request, 'test.device');
+    app(DecideDeviceAuthorization::class)($request, $start->userCode->reveal(), $start->browserNonce->reveal(), true);
+    $deviceCode = $start->deviceCode->reveal();
+    DeviceFlowDeclaration::$selfServiceKinds = [];
+
+    expect(fn () => app(PollDeviceAuthorization::class)($request, $deviceCode))
+        ->toThrow(CredentialAuthorizationRefused::class, 'access_denied');
+
+    DeviceFlowDeclaration::$selfServiceKinds = [CredentialKind::Bearer];
+
+    expect(fn () => app(PollDeviceAuthorization::class)($request, $deviceCode))
+        ->toThrow(CredentialAuthorizationRefused::class, 'access_denied')
+        ->and(DB::table('credential_authorizations')->sole()->status)->toBe('denied')
+        ->and(DB::table('credential_authorizations')->sole()->denial_reason)->toBe(CredentialAuthorizationDenialReason::ProfileWithdrawn->value)
+        ->and(CredentialAuditEvent::query()->where('event', LifecycleEventType::CredentialAuthorizationDenied)->count())->toBe(1)
+        ->and(Credential::query()->count())->toBe(0);
 });
 
 it('turns profile drift into one terminal denial without minting', function (): void {

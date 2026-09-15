@@ -29,6 +29,17 @@ final class BoundBearerCredentialAuthenticator
     public function authenticate(Request $request, string $appPurpose, ?string $ability = null): ?BoundBearerCredential
     {
         [$profile, $purpose] = $this->policy->forUse($request, $appPurpose);
+
+        if ($profile->ownership === CredentialAuthorizationOwnership::Personal) {
+            $subject = $this->declaration->resolveSubject($request);
+
+            if ($subject === null
+                || $subject->type !== $profile->scope->subject->type
+                || ! hash_equals($subject->ref, $profile->scope->subject->ref)) {
+                return null;
+            }
+        }
+
         $key = CredentialProtocolBinding::scopeHash(
             $profile->scope,
             $purpose,
