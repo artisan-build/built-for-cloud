@@ -349,6 +349,10 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $firstAuthentication = null;
 
             foreach ($resolved as $index => $middleware) {
+                if (! is_string($middleware)) {
+                    continue;
+                }
+
                 [$name, $parameters] = array_pad(explode(':', $middleware, 2), 2, null);
                 $usesCredentialGuard = false;
 
