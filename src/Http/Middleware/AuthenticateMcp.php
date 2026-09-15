@@ -13,6 +13,7 @@ use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleEntryRefusalReason;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Console\RequestAssertion;
+use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialUsageRecorder;
@@ -22,7 +23,10 @@ use ArtisanBuild\BuiltForCloud\Exceptions\DelegatedActorDeactivated;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
+use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\SubjectType;
+use ArtisanBuild\BuiltForCloud\SystemAuthorityContext;
+use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use Closure;
 use Illuminate\Http\JsonResponse;
@@ -47,6 +51,10 @@ use Throwable;
  * this request object. Assertion refusals are audited and fail closed if that
  * audit cannot be committed. Store-bearer refusals are intentionally not
  * audited here, matching the package's public bearer gates.
+ * Account-bound store bearers also resolve their package user and pass the
+ * product-role policy before usage. Unbound installation MCP dispatch runs
+ * inside SystemAuthorityContext. The optional `product` parameter closes the
+ * bounded operator compound for consumers that do not expose that branch.
  *
  * THE CREDENTIAL IS TAKEN OUT OF THE REQUEST BEFORE ANYTHING CAN THROW,
  * and the claim is deliberately narrower than "no frame leaks it":
@@ -64,7 +72,9 @@ use Throwable;
  * with credential admin ability", "takes the bearer out of the
  * server bag as well as the headers", "does not answer or audit a
  * downstream refusal as this door refusing" and "fails closed when an
- * assertion refusal cannot be audited".
+ * assertion refusal cannot be audited"; `tests/McpProductAdmissionTest.php`
+ * pins product roles, installation attribution and the parameterized compound
+ * exclusion through the reusable consumer helper.
  */
 final class AuthenticateMcp
 {
@@ -83,7 +93,11 @@ final class AuthenticateMcp
     /**
      * @param  Closure(Request): Response  $next
      */
-    public function handle(#[SensitiveParameter] Request $request, Closure $next): Response
+    public function handle(
+        #[SensitiveParameter] Request $request,
+        Closure $next,
+        ?string $admission = null,
+    ): Response
     {
         $bearer = $request->bearerToken();
 
@@ -103,6 +117,8 @@ final class AuthenticateMcp
             && $credential->hasAbility(OperatorAbility::Admin->value);
 
         if (($credential?->purpose !== CredentialPurpose::Mcp && ! $compoundAdmin)
+            || ($admission === 'product' && $compoundAdmin)
+            || ! $this->accountCanUseProduct($credential)
             || ! $this->usage->recordUsage($credential)) {
             return $this->refuseToken();
         }
@@ -115,7 +131,26 @@ final class AuthenticateMcp
 
         $request->setUserResolver(static fn () => $credential);
 
+        if ($credential->purpose === CredentialPurpose::Mcp
+            && $credential->subject_type === SubjectType::Installation
+            && $credential->user_id === null) {
+            return app(SystemAuthorityContext::class)->run(static fn (): Response => $next($request));
+        }
+
         return $next($request);
+    }
+
+    private function accountCanUseProduct(?Credential $credential): bool
+    {
+        if ($credential === null || $credential->user_id === null) {
+            return true;
+        }
+
+        $user = User::query()->find($credential->user_id);
+
+        return $user instanceof User
+            && hash_equals((string) $user->getAuthIdentifier(), $credential->user_id)
+            && RolePolicy::canUseProduct($user->role);
     }
 
     /**

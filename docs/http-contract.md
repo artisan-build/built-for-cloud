@@ -2366,8 +2366,24 @@ The only carrier is `Authorization: Bearer <credential>`. Dispatch is exclusive 
   purpose `mcp`, except for the bounded operator integration escape
   (`operator_management` + `operator` subject + `credential:admin`). An unknown, expired, revoked,
   or wrong-purpose credential never falls through to assertion verification and reaches no usage,
-  client identity, actor publication, or dispatch. Ordinary `mcp` credentials publish no admin
-  actor; only the bounded escape publishes `bfc.actor_credential_id`.
+  client identity, actor publication, or dispatch. When the resolved credential has a non-null
+  `user_id`, its package user must still resolve and its current role must pass
+  `RolePolicy::canUseProduct()`; an unknown role or an unresolved user receives the same `401`,
+  before usage or dispatch. Resolver freshness and offboarding therefore remain the first account
+  checks. Ordinary `mcp` credentials publish no admin actor; only the bounded escape publishes
+  `bfc.actor_credential_id`.
+
+The optional middleware parameter `bfc.mcp:product` closes that bounded operator escape for a
+consumer product endpoint. It still admits purpose-`mcp` credentials and delegated MCP assertions,
+but refuses the `operator_management` + `operator` + `credential:admin` compound with the same
+reason-free `401`, before usage. Plain `bfc.mcp` deliberately retains the compound for consumers
+that use the package's default operator integration behavior. No second alias is registered.
+
+An unbound installation credential (`subject_type=installation`, `purpose=mcp`, `user_id=null`)
+runs the downstream pipeline inside `SystemAuthorityContext`. That context is request execution
+attribution read by `AuditActor`; it grants no ability or policy permission. It is not active for
+account-bound credentials, delegated assertions, the operator compound, or after downstream
+dispatch returns or throws.
 
 A deployment whose `built-for-cloud.token_prefix` is configured as `v4.public.` creates a carrier
 collision: generated registry tokens would select the assertion path. That is an invalid
@@ -2421,6 +2437,13 @@ upstream proxy or middleware, web-server access logs that record headers, a raw 
 already captured elsewhere, or vendor frames entered before removal. It does not authorize a tool
 either: applications still apply their own policy to the assertion role or token.
 
+Consumers can exercise these branches without importing package `User` or `Credential` models by
+using `ArtisanBuild\BuiltForCloud\Testing\ContractAssertions` in a database-refreshing feature test
+and calling `assertBuiltForCloudMcpProductAdmission()`. The helper mounts random test-only probes
+through the application's real `bfc.mcp` and `bfc.mcp:product` middleware, then checks all recognized
+account roles, unknown and unresolved accounts with no usage, installation system attribution and
+cleanup, and the compound's product/plain split.
+
 A request-scoped delegated actor has no local personal identity. If an application composes
 `bfc.mcp` with `bfc.admin`, `bfc.auth`, or `PersonalCredentialSurface`, those local/session-oriented
 consumers refuse it through `delegatedSessionPresent()` rather than treating it as a local user.
@@ -2436,7 +2459,8 @@ same route sees no credential at all. Scrubbing the credential before anything c
 point; anything that still needs the bearer belongs in front of `bfc.mcp`, or keyed on something
 other than the credential.
 
-*Pinned by* `tests/AuthenticateMcpTest.php`, `tests/ConsoleActingPrincipalTest.php`,
+*Pinned by* `tests/AuthenticateMcpTest.php`, `tests/McpProductAdmissionTest.php`,
+`tests/ConsoleActingPrincipalTest.php`,
 `tests/AuthFoundationTest.php`, `tests/ConsoleChromeTest.php`,
 `tests/ConsoleChromeUnmountedTest.php`, and `tests/PersonalCredentialsTest.php`.
 
