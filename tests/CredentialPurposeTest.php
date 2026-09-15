@@ -36,7 +36,8 @@ function p5PurposeAllowed(CredentialKind $kind, SubjectType $subjectType, Creden
         CredentialKind::Asymmetric => $purpose === CredentialPurpose::Enrollment,
         CredentialKind::Bearer, CredentialKind::Basic => match ($subjectType) {
             SubjectType::Operator => in_array($purpose, [CredentialPurpose::OperatorManagement, CredentialPurpose::DashboardMetadata], true),
-            SubjectType::Application, SubjectType::Installation => $purpose === CredentialPurpose::SystemDeployment,
+            SubjectType::Application => $purpose === CredentialPurpose::SystemDeployment,
+            SubjectType::Installation => in_array($purpose, [CredentialPurpose::SystemDeployment, CredentialPurpose::Consumption, CredentialPurpose::Mcp], true),
             SubjectType::ExternalConsumer, SubjectType::UserPrincipal => in_array($purpose, [CredentialPurpose::Consumption, CredentialPurpose::Mcp], true),
         },
     };

@@ -59,12 +59,14 @@ final class InstallationCredentialUiTest extends TestCase
             'built-for-cloud.credentials.declaration' => UiInstallationCredentialDeclaration::class,
             'built-for-cloud.credentials.app_purposes' => [
                 'test.deploy' => CredentialPurpose::SystemDeployment->value,
+                'test.ingest' => CredentialPurpose::Consumption->value,
+                'test.mcp' => CredentialPurpose::Mcp->value,
                 'test.sign' => CredentialPurpose::Signing->value,
                 'test.enroll' => CredentialPurpose::Enrollment->value,
                 'test.hidden' => CredentialPurpose::SystemDeployment->value,
             ],
             'built-for-cloud.ui.credential_purposes' => [
-                'test.deploy', 'test.sign', 'test.enroll',
+                'test.deploy', 'test.ingest', 'test.mcp', 'test.sign', 'test.enroll',
             ],
             'built-for-cloud.ui.installation_credentials' => true,
             'built-for-cloud.manifest' => [
@@ -81,15 +83,19 @@ final class InstallationCredentialUiTest extends TestCase
     public static function rolePurposeKindSubjectProvider(): iterable
     {
         $pairs = [
-            ['test.deploy', CredentialPurpose::SystemDeployment, CredentialKind::Bearer],
-            ['test.deploy', CredentialPurpose::SystemDeployment, CredentialKind::Basic],
-            ['test.sign', CredentialPurpose::Signing, CredentialKind::Hmac],
-            ['test.enroll', CredentialPurpose::Enrollment, CredentialKind::Asymmetric],
+            ['test.deploy', CredentialPurpose::SystemDeployment, CredentialKind::Bearer, [SubjectType::Application, SubjectType::Installation]],
+            ['test.deploy', CredentialPurpose::SystemDeployment, CredentialKind::Basic, [SubjectType::Application, SubjectType::Installation]],
+            ['test.ingest', CredentialPurpose::Consumption, CredentialKind::Bearer, [SubjectType::Installation]],
+            ['test.ingest', CredentialPurpose::Consumption, CredentialKind::Basic, [SubjectType::Installation]],
+            ['test.mcp', CredentialPurpose::Mcp, CredentialKind::Bearer, [SubjectType::Installation]],
+            ['test.mcp', CredentialPurpose::Mcp, CredentialKind::Basic, [SubjectType::Installation]],
+            ['test.sign', CredentialPurpose::Signing, CredentialKind::Hmac, [SubjectType::Application, SubjectType::Installation]],
+            ['test.enroll', CredentialPurpose::Enrollment, CredentialKind::Asymmetric, [SubjectType::Application, SubjectType::Installation]],
         ];
 
         foreach (UserRole::cases() as $role) {
-            foreach ($pairs as [$appPurpose, $purpose, $kind]) {
-                foreach ([SubjectType::Application, SubjectType::Installation] as $subjectType) {
+            foreach ($pairs as [$appPurpose, $purpose, $kind, $subjectTypes]) {
+                foreach ($subjectTypes as $subjectType) {
                     yield implode('-', [$role->value, $appPurpose, $kind->value, $subjectType->value]) => [
                         $role, $appPurpose, $purpose, $kind, $subjectType,
                     ];

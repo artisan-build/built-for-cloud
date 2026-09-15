@@ -302,7 +302,11 @@ it('authenticates a unified bearer, records its use and does not leak the prior 
     mcpRequest(['sub' => 'first-request'])->assertOk();
 
     $plaintext = 'credential-'.bin2hex(random_bytes(16));
-    $credential = mcpStoreCredential($plaintext, abilities: [OperatorAbility::McpRead->value]);
+    $credential = mcpStoreCredential(
+        $plaintext,
+        SubjectType::Installation,
+        [OperatorAbility::McpRead->value],
+    );
 
     expect($credential->last_used_at)->toBeNull();
 
@@ -347,14 +351,18 @@ it('refuses wrong-purpose unknown and revoked store bearers before usage identit
     $wrong = Credential::query()->create([
         'kind' => CredentialKind::Bearer,
         'purpose' => CredentialPurpose::SystemDeployment,
-        'subject_type' => SubjectType::Application,
+        'subject_type' => SubjectType::Installation,
         'subject_ref' => 'wrong-protocol',
         'name' => 'wrong protocol',
         'abilities' => [OperatorAbility::McpRead->value, OperatorAbility::Admin->value],
         'secret_hash' => hash('sha256', $wrongSecret),
     ]);
     $revokedSecret = 'revoked-mcp-'.bin2hex(random_bytes(16));
-    $revoked = mcpStoreCredential($revokedSecret, abilities: [OperatorAbility::McpRead->value]);
+    $revoked = mcpStoreCredential(
+        $revokedSecret,
+        SubjectType::Installation,
+        [OperatorAbility::McpRead->value],
+    );
     $revoked->forceFill(['revoked_at' => now()])->save();
 
     $dispatched = 0;

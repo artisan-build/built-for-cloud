@@ -1224,7 +1224,8 @@ missing, or matrix-invalid purposes are rejected. The generic mint matrix is exa
 | kind | subject type | admitted purpose |
 |---|---|---|
 | `bearer` / `basic` | `operator` | `operator_management`, `dashboard_metadata` |
-| `bearer` / `basic` | `application`, `installation` | `system_deployment` |
+| `bearer` / `basic` | `application` | `system_deployment` |
+| `bearer` / `basic` | `installation` | `system_deployment`, `consumption`, `mcp` |
 | `bearer` / `basic` | `external_consumer`, `user_principal` | `consumption`, `mcp` |
 | `hmac` | any ordinary subject admitted by the declaration | `signing` |
 | `asymmetric` | any subject admitted by the declaration | `enrollment` |
@@ -1684,7 +1685,9 @@ stored role fails closed with **403**.
 
 This surface calls the same unified-store actions described above. Its ownership scope includes
 credentials for `application` and `installation` subjects whose `user_id` is null; personal rows
-are neither listed nor accepted as rotate/revoke targets.
+are neither listed nor accepted as rotate/revoke targets. Bearer and basic installation subjects
+may carry `system_deployment`, `consumption`, or `mcp`; application subjects remain limited to
+`system_deployment`.
 
 ### GET /bfc/installation/credentials
 
@@ -2348,7 +2351,7 @@ mutating request).
 
 ## MCP authentication
 
-`AuthenticateMcp` is the plain Laravel middleware alias `bfc.mcp` for an application-owned,
+`AuthenticateMcp` is the plain Laravel middleware alias `bfc.mcp` for an installation-local,
 stateless MCP endpoint. The package does not mount that endpoint. A deployment declares the path
 it actually mounted with `built-for-cloud.mcp.path` and declares delegated support with
 `built-for-cloud.mcp.delegated`; the `mcp-delegated` capability rides that declaration AND the
