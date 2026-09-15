@@ -149,7 +149,13 @@ final class RotateCredential
         }
 
         if ($options->reissuePendingDelivery) {
-            return $this->reissuePendingDelivery($id, $options, $actor, $managementScope, $submission);
+            $reissue = fn (): RotationResult => $this->reissuePendingDelivery($id, $options, $actor, $managementScope, $submission);
+
+            // A bound HMAC reissue writes a fresh ciphertext. Its check,
+            // write, and transaction commit share the rewrap barrier.
+            return $targeted->kind === CredentialKind::Hmac
+                ? app(HmacWriterBarrier::class)->exclusive('HMAC delivery reissue', $reissue)
+                : $reissue();
         }
 
         $phaseOne = fn (): ?RotationResult => DB::transaction(
@@ -776,7 +782,7 @@ final class RotateCredential
                     ->lockForUpdate()
                     ->first();
 
-                if ($token === null || $token->consumed_at !== null || ! $token->expires_at->isAfter(now())) {
+                if ($token === null) {
                     throw RotationRefused::pendingDeliveryUnavailable();
                 }
 
@@ -831,18 +837,26 @@ final class RotateCredential
                 $this->assertRotatableBinding($source, $bindings[$id]);
                 $this->assertRotatableBinding($successor, $bindings[$successorId]);
 
-                if ($source->kind !== CredentialKind::Asymmetric
+                $asymmetric = $source->kind === CredentialKind::Asymmetric
+                    && $successor->kind === CredentialKind::Asymmetric
+                    && $successor->public_key === null
+                    && $token->consumed_at === null
+                    && $token->expires_at->isAfter(now());
+                $hmac = $source->kind === CredentialKind::Hmac
+                    && $successor->kind === CredentialKind::Hmac
+                    && $successor->delivered_at !== null
+                    && $successor->secret_ciphertext !== null;
+
+                if ((! $asymmetric && ! $hmac)
                     || $source->status !== CredentialStatus::Active
                     || $source->rotated_at === null
                     || $source->revoked_at !== null
                     || ($source->expires_at !== null && ! $source->expires_at->isAfter(now()))
-                    || $successor->kind !== CredentialKind::Asymmetric
                     || $successor->status !== CredentialStatus::Pending
-                    || $successor->public_key !== null
                     || $successor->revoked_at !== null
                     || ($successor->expires_at !== null && ! $successor->expires_at->isAfter(now()))
                     || $this->successorOf($id) !== $successorId
-                    || $alreadyReissued
+                    || ($alreadyReissued && ! $hmac)
                     || $options->emergency
                     || $options->override
                     || $options->requestsChange()) {
@@ -860,13 +874,21 @@ final class RotateCredential
                     reason: AuditReason::DeliveryAbandoned,
                 );
 
-                $result = $this->replaceWithEnrollment(
-                    $source,
-                    $options,
-                    $source->abilities,
-                    $source->expires_at,
-                    $bindings[$id],
-                );
+                $result = $hmac
+                    ? $this->replaceWithPendingSigningKey(
+                        $source,
+                        $options,
+                        $source->abilities,
+                        $source->expires_at,
+                        $bindings[$id],
+                    )
+                    : $this->replaceWithEnrollment(
+                        $source,
+                        $options,
+                        $source->abilities,
+                        $source->expires_at,
+                        $bindings[$id],
+                    );
                 $newCodeId = OnboardingToken::query()
                     ->where('durable_credential_id', $result->summary->id)
                     ->value('id');

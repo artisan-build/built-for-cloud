@@ -66,6 +66,10 @@ function testsConfigureBoundPurposes(): void
             'reel.application.signing' => CredentialPurpose::Signing->value,
             'matte.callback' => CredentialPurpose::Signing->value,
         ],
+        'built-for-cloud.ui.credential_purposes' => [
+            'reel.application.signing',
+            'matte.callback',
+        ],
     ]);
 }
 

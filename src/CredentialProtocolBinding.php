@@ -80,6 +80,20 @@ final class CredentialProtocolBinding extends Model
 
     public static function createOriginator(Credential $credential, BoundCredentialScope $scope): self
     {
+        return self::createForRole($credential, $scope, CredentialMaterialRole::Originator);
+    }
+
+    /** @internal Receiver installs use this while holding their writer barrier and transaction. */
+    public static function createVerificationCopy(Credential $credential, BoundCredentialScope $scope): self
+    {
+        return self::createForRole($credential, $scope, CredentialMaterialRole::VerificationCopy);
+    }
+
+    private static function createForRole(
+        Credential $credential,
+        BoundCredentialScope $scope,
+        CredentialMaterialRole $role,
+    ): self {
         $purpose = app(AppPurposeRegistry::class)->purpose($scope->appPurpose);
         $algorithm = CredentialAlgorithm::forKind($credential->kind);
 
@@ -91,8 +105,8 @@ final class CredentialProtocolBinding extends Model
             'application_ref' => $scope->application,
             'audience' => $scope->audience,
             'algorithm' => $algorithm,
-            'material_role' => CredentialMaterialRole::Originator,
-            'scope_hash' => self::scopeHash($scope, $purpose, $algorithm, CredentialMaterialRole::Originator),
+            'material_role' => $role,
+            'scope_hash' => self::scopeHash($scope, $purpose, $algorithm, $role),
         ]);
     }
 

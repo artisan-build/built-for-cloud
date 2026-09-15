@@ -4,8 +4,13 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Hmac;
 
+use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
+use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialAlgorithm;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialMaterialRole;
+use ArtisanBuild\BuiltForCloud\CredentialProtocolBinding;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacSigningRefused;
 use ArtisanBuild\BuiltForCloud\Subject;
@@ -31,7 +36,10 @@ use Illuminate\Support\Facades\Schema;
  */
 final class HmacSigner
 {
-    public function __construct(private readonly HmacKeyring $keyring) {}
+    public function __construct(
+        private readonly HmacKeyring $keyring,
+        private readonly ?AppPurposeRegistry $appPurposes = null,
+    ) {}
 
     /**
      * Sign a message body for the subject; returns the full
@@ -62,6 +70,25 @@ final class HmacSigner
         return $envelope->headerValue($signature);
     }
 
+    public function signBound(BoundCredentialScope $scope, string $body, string $eventType): string
+    {
+        $credential = $this->activeBoundSigningKey($scope);
+        $envelope = new HmacEnvelope(
+            keyId: $credential->id,
+            eventType: $eventType,
+            timestamp: now()->getTimestamp(),
+            nonce: bin2hex(random_bytes(16)),
+            audience: $scope->audience,
+        );
+        $signature = hash_hmac(
+            'sha256',
+            $envelope->canonical($body),
+            $this->keyring->decrypt((string) $credential->secret_ciphertext, $credential->secret_key_version),
+        );
+
+        return $envelope->headerValue($signature);
+    }
+
     private function activeSigningKey(Subject $subject): Credential
     {
         // Rollback leaves retired rows in place but removes their purpose.
@@ -76,6 +103,11 @@ final class HmacSigner
             ->where('subject_type', $subject->type->value)
             ->where('subject_ref', $subject->ref)
             ->whereNotNull('secret_ciphertext')
+            ->whereNotExists(function ($query): void {
+                $query->selectRaw('1')
+                    ->from('credential_protocol_bindings')
+                    ->whereColumn('credential_protocol_bindings.credential_id', 'credentials.id');
+            })
             ->active()
             ->get();
 
@@ -101,6 +133,56 @@ final class HmacSigner
                 ->count();
 
             throw HmacSigningRefused::noActiveKey($subject, $pendingKeys);
+        }
+
+        return $signer;
+    }
+
+    private function activeBoundSigningKey(BoundCredentialScope $scope): Credential
+    {
+        $purpose = ($this->appPurposes ?? app(AppPurposeRegistry::class))->purpose($scope->appPurpose);
+
+        if ($purpose !== CredentialPurpose::Signing || ! Schema::hasColumn('credentials', 'purpose')) {
+            throw HmacSigningRefused::noActiveKey($scope->subject, 0);
+        }
+
+        $candidateIds = CredentialProtocolBinding::query()
+            ->where('scope_hash', CredentialProtocolBinding::scopeHash(
+                $scope,
+                $purpose,
+                CredentialAlgorithm::HmacSha256,
+                CredentialMaterialRole::Originator,
+            ))
+            ->where('material_role', CredentialMaterialRole::Originator->value)
+            ->pluck('credential_id');
+        $candidates = Credential::query()
+            ->whereIn('id', $candidateIds)
+            ->where('kind', CredentialKind::Hmac->value)
+            ->where('purpose', CredentialPurpose::Signing->value)
+            ->whereNotNull('secret_ciphertext')
+            ->active()
+            ->get()
+            ->filter(function (Credential $credential) use ($scope, $purpose): bool {
+                /** @var CredentialProtocolBinding|null $binding */
+                $binding = CredentialProtocolBinding::query()->whereKey($credential->id)->first();
+
+                return $binding !== null && $binding->exactlyMatches(
+                    $credential,
+                    $scope,
+                    $purpose,
+                    CredentialAlgorithm::HmacSha256,
+                    CredentialMaterialRole::Originator,
+                );
+            });
+        $preferred = $candidates->whereNull('rotated_at');
+        $pool = $preferred->isNotEmpty() ? $preferred : $candidates;
+        /** @var Credential|null $signer */
+        $signer = $pool
+            ->sortByDesc(fn (Credential $row): string => ($row->activated_at?->toIso8601String() ?? '').'|'.($row->created_at?->toIso8601String() ?? '').'|'.$row->id)
+            ->first();
+
+        if ($signer === null) {
+            throw HmacSigningRefused::noActiveKey($scope->subject, 0);
         }
 
         return $signer;

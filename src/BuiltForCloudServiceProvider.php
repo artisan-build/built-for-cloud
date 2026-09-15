@@ -529,6 +529,18 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $operatorRoutes,
         );
 
+        $this->protectOperatorRoute(
+            $router->post('/bfc/hmac-cutovers/activate', [\ArtisanBuild\BuiltForCloud\Http\Controllers\BoundHmacCutovers::class, 'activate'])
+                ->middleware('throttle:bfc-operator-write'),
+            $operatorRoutes,
+        );
+
+        $this->protectOperatorRoute(
+            $router->post('/bfc/hmac-cutovers/status', [\ArtisanBuild\BuiltForCloud\Http\Controllers\BoundHmacCutovers::class, 'status'])
+                ->middleware('throttle:bfc-operator-write'),
+            $operatorRoutes,
+        );
+
         // The personal-credentials surface (PRD 1.17): the SAME verbs
         // above, session-authenticated and scoped to the caller's OWN
         // credentials. Its gate is the session, not an operator ability
