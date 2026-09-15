@@ -78,20 +78,16 @@ use ArtisanBuild\BuiltForCloud\Listeners\SystemAuthorityQueueScope;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Auth\Events\Authenticated;
 use Illuminate\Auth\Events\Login;
-use Illuminate\Auth\Middleware\Authenticate;
 use Illuminate\Auth\SessionGuard;
 use Illuminate\Bus\Dispatcher as BusDispatcher;
 use Illuminate\Cache\RateLimiting\Limit;
-use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Contracts\Bus\Dispatcher as BusDispatcherContract;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
-use Illuminate\Contracts\Http\Kernel as HttpKernelContract;
 use Illuminate\Contracts\Session\Session;
 use Illuminate\Contracts\View\View as ViewContract;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
-use Illuminate\Foundation\Http\Kernel as HttpKernel;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Http\Request;
 use Illuminate\Queue\Events\JobAttempted;
@@ -321,18 +317,9 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         }
     }
 
-    /** Keep opt-in contract admission ahead of Laravel and package authentication gates. */
+    /** Keep opt-in contract admission ahead of every package authentication gate. */
     private function prioritizeContractMajorAdmission(Router $router): void
     {
-        $kernel = $this->app->make(HttpKernelContract::class);
-
-        if ($kernel instanceof HttpKernel) {
-            $kernel->addToMiddlewarePriorityBefore(
-                [Authenticate::class, AuthenticatesRequests::class],
-                EnsureContractMajor::class,
-            );
-        }
-
         $authentication = [
             EnsureManagedAuthority::class,
             EnsureStandaloneAuthority::class,
