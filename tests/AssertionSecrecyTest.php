@@ -47,6 +47,7 @@ it('marks every frame in this package that holds console assertion bytes', funct
         'AssertionVerifier::verify($token)',
         'AuthenticateMcp::authenticateAssertion($assertionToken)',
         'AuthenticateMcp::authenticateAssertion($request)',
+        'AuthenticateMcp::dispatchAsInstallationSystem($request)',
         'AuthenticateMcp::forgetCredential($request)',
         'AuthenticateMcp::handle($request)',
         // The three the name rule could never have seen. `__invoke` is
