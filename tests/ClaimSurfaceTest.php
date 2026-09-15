@@ -571,6 +571,8 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     // increasing blocks by three and absolute/unpaired by one.
     // P5-UI-d added the personal credential browser contract and view,
     // increasing blocks by eight and absolute/unpaired by two.
+    // P5-UI-e added the installation credential browser contract and view,
+    // increasing blocks by sixteen and absolute/unpaired by three.
     $gateSurfaces = [
         'src/Console', 'src/Audit', 'src/Http/Controllers/ConsoleEnter.php',
         'src/Http/Controllers/ConsoleChromeScript.php', 'resources/views', 'resources/js',
@@ -581,10 +583,10 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1383,
-        'absolute' => 431,
+        'blocks' => 1399,
+        'absolute' => 434,
         'paired' => 113,
-        'unpaired' => 318,
+        'unpaired' => 321,
     ]);
 
     // The surfaces the restatement map runs over are wider than the
