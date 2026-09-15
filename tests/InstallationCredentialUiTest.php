@@ -32,6 +32,7 @@ use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\SubmissionNonce;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiInstallationCredentialDeclaration;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SelfServicePolicyDeclaration;
 use ArtisanBuild\BuiltForCloud\UiCredentialPurposes;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
@@ -139,6 +140,87 @@ final class InstallationCredentialUiTest extends TestCase
             'test.mcp / basic',
             'test.mcp / bearer',
         ], $observed);
+    }
+
+    public function test_bearer_only_host_policy_filters_choices_and_refuses_forged_issue_and_rotation(): void
+    {
+        config(['built-for-cloud.credentials.declaration' => SelfServicePolicyDeclaration::class]);
+        SelfServicePolicyDeclaration::$kinds = [CredentialKind::Bearer];
+        SelfServicePolicyDeclaration::$abilities = [];
+        $actor = $this->user(UserRole::Member);
+        $page = $this->actingAsVersioned($actor, 'web')
+            ->get(route('bfc.ui.installation-credentials.index'))
+            ->assertOk();
+        preg_match_all(
+            '/<form data-testid="installation-credentials-issue-option".*?<\/form>/s',
+            (string) $page->getContent(),
+            $matches,
+        );
+        $deployForms = array_values(array_filter(
+            $matches[0],
+            static fn (string $form): bool => str_contains($form, 'name="app_purpose" value="test.deploy"'),
+        ));
+
+        $this->assertCount(1, $deployForms);
+        $this->assertStringContainsString('name="kind" value="bearer"', $deployForms[0]);
+        $this->assertStringContainsString('test.deploy / bearer', $deployForms[0]);
+        $this->assertStringNotContainsString('name="kind" value="basic"', implode('', $matches[0]));
+
+        $issueNonce = $this->nonceFor(route('bfc.ui.installation-credentials.store'));
+        $beforeIssue = $this->effects();
+        $this->post(route('bfc.ui.installation-credentials.store'), [
+            'app_purpose' => 'test.deploy',
+            'kind' => CredentialKind::Basic->value,
+            'subject_type' => SubjectType::Application->value,
+            'subject_ref' => 'forged-basic-issue',
+            SubmissionNonce::FIELD => $issueNonce,
+        ])->assertForbidden()->assertDontSeeHtml('data-testid="installation-credentials-delivery"');
+        $this->assertSame($beforeIssue, $this->effects());
+
+        $source = Credential::query()->create([
+            'kind' => CredentialKind::Basic,
+            'purpose' => CredentialPurpose::SystemDeployment,
+            'subject_type' => SubjectType::Application,
+            'subject_ref' => 'forged-basic-rotation',
+            'name' => 'test-created-basic-rotation',
+            'status' => CredentialStatus::Active,
+            'secret_hash' => hash('sha256', 'test-created-basic-rotation-secret'),
+        ]);
+        $rotationNonce = $this->nonceFor(route('bfc.ui.installation-credentials.rotate', $source->id));
+        $beforeRotation = $this->effects();
+        $this->post(route('bfc.ui.installation-credentials.rotate', $source->id), [
+            SubmissionNonce::FIELD => $rotationNonce,
+        ])->assertForbidden()->assertDontSeeHtml('data-testid="installation-credentials-delivery"');
+        $this->assertSame($beforeRotation, $this->effects());
+        $this->assertNull($source->refresh()->rotated_at);
+    }
+
+    public function test_no_policy_host_still_offers_bearer_and_basic_installation_choices(): void
+    {
+        $actor = $this->user(UserRole::Member);
+        $page = $this->actingAsVersioned($actor, 'web')
+            ->get(route('bfc.ui.installation-credentials.index'))
+            ->assertOk();
+        preg_match_all(
+            '/<form data-testid="installation-credentials-issue-option".*?<\/form>/s',
+            (string) $page->getContent(),
+            $matches,
+        );
+        $kinds = [];
+
+        foreach ($matches[0] as $form) {
+            if (! str_contains($form, 'name="app_purpose" value="test.deploy"')) {
+                continue;
+            }
+
+            preg_match('/name="kind" value="([^"]+)"/', $form, $kind);
+            $this->assertArrayHasKey(1, $kind);
+            $this->assertStringContainsString('test.deploy / '.$kind[1], $form);
+            $kinds[] = $kind[1];
+        }
+
+        sort($kinds);
+        $this->assertSame([CredentialKind::Basic->value, CredentialKind::Bearer->value], $kinds);
     }
 
     #[DataProvider('rolePurposeKindSubjectProvider')]
