@@ -758,10 +758,10 @@ final class RotateCredential
         ?AuditActor $actor,
         ?CredentialManagementScope $managementScope,
         ?SubmissionNonce $submission,
-    ): ?RotationResult {
+    ): RotationResult {
         try {
-            /** @var RotationResult|null */
-            return DB::transaction(function () use ($id, $options, $actor, $managementScope, $submission): ?RotationResult {
+            /** @var RotationResult */
+            return DB::transaction(function () use ($id, $options, $actor, $managementScope, $submission): RotationResult {
                 $successorId = $this->successorOf($id);
 
                 if ($successorId === null) {

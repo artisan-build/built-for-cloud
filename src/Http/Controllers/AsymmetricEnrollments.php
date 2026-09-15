@@ -34,11 +34,10 @@ final class AsymmetricEnrollments
             return $this->invalid();
         }
 
-        $keys = is_array($input) ? array_keys($input) : [];
+        $keys = array_keys($input);
         sort($keys);
 
-        if (! is_array($input)
-            || $keys !== ['enrollment_code', 'public_key']
+        if ($keys !== ['enrollment_code', 'public_key']
             || ! is_string($input['enrollment_code'] ?? null)
             || preg_match('/\A[0-9a-f]{64}\z/D', $input['enrollment_code']) !== 1
             || ! is_string($input['public_key'] ?? null)
