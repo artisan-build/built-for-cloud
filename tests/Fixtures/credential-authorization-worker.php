@@ -93,6 +93,7 @@ $case = new class('testProbe') extends TestCase
             600,
             5,
         )];
+        DeviceFlowDeclaration::$resolvedSubject = $subject;
 
         try {
             if ($input['operation'] === 'offboard') {

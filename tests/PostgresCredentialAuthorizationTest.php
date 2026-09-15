@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationOwnership;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationProfile;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
@@ -63,6 +64,7 @@ function pgAuthorizationRequest(object $test, User $user, array $profile): Reque
         600,
         5,
     )];
+    DeviceFlowDeclaration::$resolvedSubject = DeviceFlowDeclaration::$profiles[0]->scope->subject;
     $test->actingAsVersioned($user, 'web');
     $request = request();
     $request->setUserResolver(static fn (): User => $user);
@@ -153,6 +155,10 @@ function pgFinishAuthorizationWorkers(array $workers): array
 
 beforeEach(function (): void {
     DeviceFlowDeclaration::$profiles = [];
+    DeviceFlowDeclaration::$authorizeCalls = 0;
+    DeviceFlowDeclaration::$resolvedSubject = null;
+    DeviceFlowDeclaration::$selfServiceAbilities = [];
+    DeviceFlowDeclaration::$selfServiceKinds = [CredentialKind::Bearer];
     config([
         'built-for-cloud.credentials.declaration' => DeviceFlowDeclaration::class,
         'built-for-cloud.credentials.app_purposes' => ['test.device' => CredentialPurpose::Consumption->value, 'test.loopback' => CredentialPurpose::Consumption->value],
