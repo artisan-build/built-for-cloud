@@ -830,6 +830,12 @@ it('keeps approved production-action state unchanged when authority fails after 
 it('writes nothing when current connection authority denies start', function (): void {
     DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
         'mode' => AuthorityMode::Managed->value,
+        'generation' => 7,
+        'issuer' => 'https://issuer.example.test',
+        'connection_id' => 'connection-fixture',
+        'organization_id' => 'organization-fixture',
+        'installation_id' => 'installation-fixture',
+        'authority_base_url' => 'https://authority.example.test',
         'managed_connection_status' => 'inactive',
     ]);
     $user = deviceFlowUser();
