@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
+use App\Providers\P6LiveServiceProvider;
 use App\Support\P6LiveManagedUser;
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
-use ArtisanBuild\BuiltForCloud\ManagedFreshness;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ManagedAuthorityFixture;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 
 require_once __DIR__.'/Live/P6LiveManagedUser.php';
+require_once __DIR__.'/Live/P6LiveServiceProvider.php';
 
 uses(RefreshDatabase::class);
 
@@ -35,6 +36,7 @@ it('persists a bound stale managed user that enters the authority refresh path',
         'managed_connection_generation' => 7,
     ]);
     config(['built-for-cloud.managed.client_secret' => 'p6-fixture-client-secret']);
+    P6LiveServiceProvider::registerManagedRefreshRoute();
     $authority = new ManagedAuthorityFixture(
         'https://p6-authority.test',
         'p6-fixture-client-secret',
@@ -48,6 +50,7 @@ it('persists a bound stale managed user that enters the authority refresh path',
 
     $user = P6LiveManagedUser::create()->fresh();
     $staleAt = CarbonImmutable::parse('2026-09-15T11:50:00+00:00');
+    $response = $this->postJson('/_bfc-p6c/managed-refresh/'.(string) $user->getKey());
 
     expect($user->scalpels_issuer)->toBe('https://p6-authority.test')
         ->and($user->scalpels_connection_id)->toBe('p6-connection')
@@ -61,6 +64,8 @@ it('persists a bound stale managed user that enters the authority refresh path',
         ->and($user->managed_membership_roster_version)->toBe(1)
         ->and($user->managed_membership_response_sequence)->toBe(1)
         ->and(CarbonImmutable::now()->diffInSeconds($user->membership_confirmed_at, true))->toBe(600.0)
-        ->and(app(ManagedFreshness::class)->allows($user))->toBeTrue()
-        ->and(array_column($authority->calls, 'path'))->toBe(['/managed-auth/v1/memberships/confirm']);
+        ->and($response->status())->toBe(200)
+        ->and($response->json())->toBe(['allowed' => true])
+        ->and(array_column($authority->calls, 'path'))->toBe(['/managed-auth/v1/memberships/confirm'])
+        ->and($authority->calls[0]['body']['scalpels_id'] ?? null)->toBe('p6-managed-subject');
 });

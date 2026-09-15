@@ -30,6 +30,15 @@ final class P6LiveServiceProvider extends ServiceProvider
         return ['user_id' => (string) $request->user()?->getAuthIdentifier(), 'node' => $node];
     }
 
+    public static function registerManagedRefreshRoute(): void
+    {
+        Route::post('/_bfc-p6c/managed-refresh/{user}', static function (string $user): array {
+            $subject = User::query()->findOrFail($user);
+
+            return ['allowed' => app(ManagedFreshness::class)->allows($subject)];
+        });
+    }
+
     public function register(): void
     {
         $this->app['config']->set('auth.defaults.guard', 'web');
@@ -131,9 +140,7 @@ final class P6LiveServiceProvider extends ServiceProvider
             Route::post('/_bfc-p6c/mcp', static function (Request $request): array {
                 return ['node' => (string) env('BFC_P6_NODE'), 'principal' => $request->user()?->getAuthIdentifier()];
             })->middleware(['bfc.contract-major', 'bfc.mcp']);
-            Route::post('/_bfc-p6c/managed-refresh/{user}', static function (User $user): array {
-                return ['allowed' => app(ManagedFreshness::class)->allows($user)];
-            });
+            P6LiveServiceProvider::registerManagedRefreshRoute();
             Route::get('/_bfc-p6c/session', static function (Request $request): array {
                 return P6LiveServiceProvider::sessionResponse($request, (string) env('BFC_P6_NODE'));
             })->middleware(['web', 'bfc.auth']);
