@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\ClientIdentity;
 use ArtisanBuild\BuiltForCloud\Tests\Support\ContractMajorLiveAuthenticationProbe;
+use ArtisanBuild\BuiltForCloud\Tests\Support\ContractMajorRouteCacheProbe;
 use ArtisanBuild\BuiltForCloud\Tests\Support\ContractMajorLiveState;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
@@ -48,4 +49,16 @@ if (getenv('BFC_CONTRACT_MAJOR_STATE') !== false) {
         ContractMajorLiveAuthenticationProbe::class,
         'bfc.mcp',
     ])->withoutMiddleware(PreventRequestForgery::class);
+}
+
+if (getenv('BFC_CONTRACT_MAJOR_ROUTE_CACHE') !== false) {
+    Route::post('/_bfc-harness/contract-major-cache/explicit', ContractMajorRouteCacheProbe::class)
+        ->middleware(['auth:bfc', 'bfc.contract-major'])
+        ->name('bfc-harness.contract-major-cache.explicit');
+    Route::post('/_bfc-harness/contract-major-cache/renamed', ContractMajorRouteCacheProbe::class)
+        ->middleware(['auth:contract-api', 'bfc.contract-major'])
+        ->name('bfc-harness.contract-major-cache.renamed');
+    Route::post('/_bfc-harness/contract-major-cache/default', ContractMajorRouteCacheProbe::class)
+        ->middleware(['auth', 'bfc.contract-major'])
+        ->name('bfc-harness.contract-major-cache.default');
 }

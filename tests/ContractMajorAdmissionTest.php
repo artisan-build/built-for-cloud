@@ -23,7 +23,9 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\VerifyHmacSignature;
 use ArtisanBuild\BuiltForCloud\HttpContract;
 use ArtisanBuild\BuiltForCloud\SubjectType;
+use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Contracts\Http\Kernel;
+use Illuminate\Foundation\Http\Kernel as HttpKernel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Log\Events\MessageLogged;
@@ -37,6 +39,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Testing\TestResponse;
+use Symfony\Component\Process\Process;
 
 uses(RefreshDatabase::class);
 
@@ -235,6 +238,162 @@ it('registers the exact alias and resolves admission before every package authen
         static fn (string $middleware): bool => $middleware !== EnsureContractMajor::class,
     )))->toBe($baseline)
         ->and(array_values(array_intersect($resolved, $authentication)))->toBe($declaredAuthentication);
+});
+
+it('leaves the global middleware priority byte-identical to the framework baseline', function (): void {
+    $kernel = app(Kernel::class);
+
+    expect($kernel)->toBeInstanceOf(HttpKernel::class);
+
+    /** @var list<class-string> $baseline */
+    $baseline = (new ReflectionClass($kernel))->getDefaultProperties()['middlewarePriority'];
+
+    /** @var HttpKernel $kernel */
+    expect($kernel->getMiddlewarePriority())->toBe($baseline)
+        ->and($kernel->getMiddlewarePriority())->not->toContain(EnsureContractMajor::class);
+});
+
+it('refuses before every configured bfc guard spelling when authentication is declared first', function (
+    string $suffix,
+    string $authentication,
+    array $configuration,
+    array $headers,
+    string $error,
+): void {
+    config($configuration);
+    auth()->forgetGuards();
+
+    $secret = 'contract-major-guard-order-'.$suffix.'-secret';
+    $credential = Credential::factory()->create([
+        'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::Consumption,
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'contract-major-guard-order-'.$suffix,
+        'secret_hash' => hash('sha256', $secret),
+        'status' => CredentialStatus::Active,
+    ]);
+    $uri = '/contract-major-guard-order-'.$suffix;
+    Route::post($uri, function (): array {
+        Cache::put('contract-major-guard-domain-ran', true);
+
+        return ['ok' => true];
+    })->middleware([$authentication, 'bfc.contract-major']);
+
+    $response = $this->postJson($uri, [], [
+        ...$headers,
+        'Authorization' => 'Bearer '.$secret,
+    ]);
+
+    assertContractMajorRefusal($response, 400, $error);
+
+    /** @var Router $router */
+    $router = app('router');
+    $route = Route::getRoutes()->match(Request::create($uri, 'POST'));
+    $resolved = $router->gatherRouteMiddleware($route);
+    $admission = array_search(EnsureContractMajor::class, $resolved, true);
+    $authenticationIndex = null;
+
+    foreach ($resolved as $index => $middleware) {
+        [$name] = explode(':', $middleware, 2);
+
+        if (is_a($name, AuthenticatesRequests::class, true)) {
+            $authenticationIndex = $index;
+            break;
+        }
+    }
+
+    expect($admission)->toBeInt()
+        ->and($authenticationIndex)->toBeInt()
+        ->and($admission)->toBeLessThan($authenticationIndex)
+        ->and($credential->refresh()->last_used_at)->toBeNull()
+        ->and(Cache::has('contract-major-guard-domain-ran'))->toBeFalse();
+})->with([
+    'auth:bfc missing' => [
+        'explicit-missing',
+        'auth:bfc',
+        ['auth.guards.bfc' => ['driver' => 'bfc', 'provider' => null]],
+        [],
+        'missing_contract_major',
+    ],
+    'auth:bfc malformed' => [
+        'explicit-malformed',
+        'auth:bfc',
+        ['auth.guards.bfc' => ['driver' => 'bfc', 'provider' => null]],
+        [HttpContract::MAJOR_HEADER => '02'],
+        'malformed_contract_major',
+    ],
+    'renamed guard missing' => [
+        'renamed-missing',
+        'auth:contract-api',
+        ['auth.guards.contract-api' => ['driver' => 'bfc', 'provider' => null]],
+        [],
+        'missing_contract_major',
+    ],
+    'renamed guard malformed' => [
+        'renamed-malformed',
+        'auth:contract-api',
+        ['auth.guards.contract-api' => ['driver' => 'bfc', 'provider' => null]],
+        [HttpContract::MAJOR_HEADER => '02'],
+        'malformed_contract_major',
+    ],
+    'default guard missing' => [
+        'default-missing',
+        'auth',
+        [
+            'auth.defaults.guard' => 'contract-default',
+            'auth.guards.contract-default' => ['driver' => 'bfc', 'provider' => null],
+        ],
+        [],
+        'missing_contract_major',
+    ],
+    'default guard malformed' => [
+        'default-malformed',
+        'auth',
+        [
+            'auth.defaults.guard' => 'contract-default',
+            'auth.guards.contract-default' => ['driver' => 'bfc', 'provider' => null],
+        ],
+        [HttpContract::MAJOR_HEADER => '02'],
+        'malformed_contract_major',
+    ],
+]);
+
+it('does not reorder unrelated Laravel authentication guards', function (): void {
+    config([
+        'auth.defaults.guard' => 'web',
+        'auth.guards.web' => ['driver' => 'session', 'provider' => null],
+    ]);
+
+    /** @var Router $router */
+    $router = app('router');
+    $route = Route::get('/contract-major-foreign-guard-order', fn (): array => ['ok' => true])
+        ->middleware(['auth:web', 'bfc.contract-major']);
+    $baseline = $router->resolveMiddleware($route->gatherMiddleware(), $route->excludedMiddleware());
+
+    Event::dispatch(new RouteMatched($route, Request::create('/contract-major-foreign-guard-order')));
+
+    expect($router->gatherRouteMiddleware($route))->toBe($baseline);
+});
+
+it('reorders configured bfc guards from a real compiled route collection', function (): void {
+    $payload = sys_get_temp_dir().'/bfc-contract-major-route-cache-'.bin2hex(random_bytes(8)).'.php';
+
+    try {
+        $generate = new Process([PHP_BINARY, __DIR__.'/Fixtures/contract-major-route-cache.php', 'generate', $payload]);
+        $generate->setTimeout(60);
+        $generate->mustRun();
+
+        expect($generate->getOutput())->toContain('"contains":true');
+
+        $load = new Process([PHP_BINARY, __DIR__.'/Fixtures/contract-major-route-cache.php', 'load', $payload]);
+        $load->setTimeout(60);
+        $load->run();
+
+        expect($load->getExitCode())->toBe(0, $load->getOutput().$load->getErrorOutput())
+            ->and($load->getOutput())->toContain('contract-major-route-cache-ok');
+    } finally {
+        @unlink($payload);
+    }
 });
 
 it('keeps all existing package routes outside opt-in admission', function (): void {

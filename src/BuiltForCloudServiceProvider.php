@@ -81,6 +81,7 @@ use Illuminate\Auth\Events\Login;
 use Illuminate\Auth\SessionGuard;
 use Illuminate\Bus\Dispatcher as BusDispatcher;
 use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Contracts\Bus\Dispatcher as BusDispatcherContract;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
@@ -320,6 +321,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     /** Keep opt-in contract admission ahead of every package authentication gate. */
     private function prioritizeContractMajorAdmission(Router $router): void
     {
+        $config = $this->app->make(Repository::class);
         $authentication = [
             EnsureManagedAuthority::class,
             EnsureStandaloneAuthority::class,
@@ -333,7 +335,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             EnsureUserIsAdmin::class,
         ];
 
-        $router->matched(static function (RouteMatched $event) use ($authentication, $router): void {
+        $router->matched(static function (RouteMatched $event) use ($authentication, $config, $router): void {
             $resolved = $router->resolveMiddleware(
                 $event->route->gatherMiddleware(),
                 $event->route->excludedMiddleware(),
@@ -347,9 +349,25 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $firstAuthentication = null;
 
             foreach ($resolved as $index => $middleware) {
-                $name = strstr($middleware, ':', true) ?: $middleware;
+                [$name, $parameters] = array_pad(explode(':', $middleware, 2), 2, null);
+                $usesCredentialGuard = false;
 
-                if (in_array($name, $authentication, true)) {
+                if (is_a($name, AuthenticatesRequests::class, true)) {
+                    $guards = $parameters === null
+                        ? [$config->get('auth.defaults.guard')]
+                        : explode(',', $parameters);
+
+                    foreach ($guards as $guard) {
+                        $guardConfig = is_string($guard) ? $config->get('auth.guards.'.$guard) : null;
+
+                        if (is_array($guardConfig) && ($guardConfig['driver'] ?? null) === 'bfc') {
+                            $usesCredentialGuard = true;
+                            break;
+                        }
+                    }
+                }
+
+                if ($usesCredentialGuard || in_array($name, $authentication, true)) {
                     $firstAuthentication = $index;
                     break;
                 }
