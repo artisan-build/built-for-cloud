@@ -30,7 +30,8 @@ enum CredentialPurpose: string
             CredentialKind::Asymmetric => $this === self::Enrollment,
             CredentialKind::Bearer, CredentialKind::Basic => match ($subjectType) {
                 SubjectType::Operator => in_array($this, [self::OperatorManagement, self::DashboardMetadata], true),
-                SubjectType::Application, SubjectType::Installation => $this === self::SystemDeployment,
+                SubjectType::Application => $this === self::SystemDeployment,
+                SubjectType::Installation => in_array($this, [self::SystemDeployment, self::Consumption, self::Mcp], true),
                 SubjectType::ExternalConsumer, SubjectType::UserPrincipal => in_array($this, [self::Consumption, self::Mcp], true),
             },
         };

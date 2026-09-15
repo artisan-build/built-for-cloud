@@ -31,6 +31,7 @@ uses(RefreshDatabase::class);
 beforeEach(function (): void {
     config(['auth.guards.bfc' => ['driver' => 'bfc', 'provider' => 'users']]);
     Route::middleware('auth:bfc')->get('/member-credential-probe', static fn (): array => ['authenticated' => true]);
+    Route::middleware('bfc.mcp')->post('/member-mcp-probe', static fn (): array => ['authenticated' => true]);
     Route::middleware('bfc.ability:custom:deploy')->get('/member-custom-ability-probe', static fn (): array => ['authorized' => true]);
 });
 
@@ -144,6 +145,49 @@ it('lets every recognized role perform each installation credential verb with a 
     }
 
     return $cases;
+});
+
+it('lets a Member mint each installation app purpose through the JSON API', function (
+    CredentialPurpose $purpose,
+    CredentialKind $kind,
+): void {
+    $member = installationMember(UserRole::Member);
+    $response = $this->actingAsVersioned($member)->postJson('/bfc/installation/credentials', [
+        'subject_type' => SubjectType::Installation->value,
+        'subject_ref' => 'member-'.$purpose->value.'-'.$kind->value,
+        'kind' => $kind->value,
+        'purpose' => $purpose->value,
+        'name' => 'member-'.$purpose->value.'-'.$kind->value,
+    ])->assertCreated();
+    $credential = Credential::query()->findOrFail($response->json('credential.id'));
+
+    expect($credential->purpose)->toBe($purpose)
+        ->and($credential->kind)->toBe($kind)
+        ->and($credential->subject_type)->toBe(SubjectType::Installation)
+        ->and($credential->user_id)->toBeNull();
+})->with([
+    'consumption bearer' => [CredentialPurpose::Consumption, CredentialKind::Bearer],
+    'consumption basic' => [CredentialPurpose::Consumption, CredentialKind::Basic],
+    'mcp bearer' => [CredentialPurpose::Mcp, CredentialKind::Bearer],
+    'mcp basic' => [CredentialPurpose::Mcp, CredentialKind::Basic],
+]);
+
+it('refuses an installation MCP credential at the consumption gate', function (): void {
+    $secret = 'installation-mcp-wrong-consumption-purpose-'.bin2hex(random_bytes(12));
+    $credential = Credential::query()->create([
+        'kind' => CredentialKind::Bearer,
+        'purpose' => CredentialPurpose::Mcp,
+        'subject_type' => SubjectType::Installation,
+        'subject_ref' => 'mcp-not-consumption',
+        'secret_hash' => hash('sha256', $secret),
+        'status' => CredentialStatus::Active,
+    ]);
+
+    $this->getJson('/member-credential-probe', [
+        'Authorization' => 'Bearer '.$secret,
+    ])->assertUnauthorized();
+
+    expect($credential->refresh()->last_used_at)->toBeNull();
 });
 
 it('refuses every operator-vocabulary ability before a Member can mint a credential or receive its secret', function (string $ability): void {
@@ -432,21 +476,28 @@ it('denies an unknown stored role fail closed for every verb without changing ro
     assertInstallationAuthentication($seeded['secret']);
 })->with(['list', 'issue', 'rotate', 'revoke']);
 
-it('keeps a Member-issued installation credential alive after creator removal and full account offboarding', function (): void {
+it('keeps a Member-issued installation app credential alive after creator removal and full account offboarding', function (
+    CredentialPurpose $purpose,
+): void {
     $creator = installationMember(UserRole::Member);
     $response = $this->actingAsVersioned($creator)->postJson('/bfc/installation/credentials', [
         'subject_type' => SubjectType::Installation->value,
         'subject_ref' => 'creator-removal',
-        'purpose' => CredentialPurpose::SystemDeployment->value,
+        'purpose' => $purpose->value,
         'name' => 'survivor',
     ])->assertCreated();
     $survivor = Credential::query()->findOrFail($response->json('credential.id'));
     $secret = (string) $response->json('delivery.secret');
-    assertInstallationAuthentication($secret);
+    $authenticate = function () use ($purpose, $secret): void {
+        $purpose === CredentialPurpose::Mcp
+            ? $this->postJson('/member-mcp-probe', [], ['Authorization' => 'Bearer '.$secret])->assertOk()
+            : assertInstallationAuthentication($secret);
+    };
+    $authenticate();
 
     $creator->forceFill(['status' => 'inactive'])->save();
     expect($survivor->refresh()->revoked_at)->toBeNull();
-    assertInstallationAuthentication($secret);
+    $authenticate();
 
     $creator->forceFill(['status' => 'active'])->save();
     $bound = Credential::query()->create([
@@ -467,5 +518,8 @@ it('keeps a Member-issued installation credential alive after creator removal an
         ->and(OffboardedSubject::userIsOffboarded((string) $creator->getKey()))->toBeTrue()
         ->and($survivor->refresh()->revoked_at)->toBeNull()
         ->and(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $secret)?->id)->toBe($survivor->id);
-    assertInstallationAuthentication($secret);
-});
+    $authenticate();
+})->with([
+    'consumption' => CredentialPurpose::Consumption,
+    'mcp' => CredentialPurpose::Mcp,
+]);
