@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\UiInstallationCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiLogout;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiPersonalCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUiAuthority;
@@ -96,6 +97,10 @@ final class MemberSessionUiTest extends TestCase
             ['bfc.ui.personal-credentials.store', 'POST', 'bfc/ui/credentials/personal', UiPersonalCredentials::class.'@store'],
             ['bfc.ui.personal-credentials.rotate', 'POST', 'bfc/ui/credentials/personal/{id}/rotate', UiPersonalCredentials::class.'@rotate'],
             ['bfc.ui.personal-credentials.destroy', 'DELETE', 'bfc/ui/credentials/personal/{id}', UiPersonalCredentials::class.'@destroy'],
+            ['bfc.ui.installation-credentials.index', 'GET', 'bfc/ui/credentials/installation', UiInstallationCredentials::class.'@index'],
+            ['bfc.ui.installation-credentials.store', 'POST', 'bfc/ui/credentials/installation', UiInstallationCredentials::class.'@store'],
+            ['bfc.ui.installation-credentials.rotate', 'POST', 'bfc/ui/credentials/installation/{id}/rotate', UiInstallationCredentials::class.'@rotate'],
+            ['bfc.ui.installation-credentials.destroy', 'DELETE', 'bfc/ui/credentials/installation/{id}', UiInstallationCredentials::class.'@destroy'],
         ], $routes->map(static fn (RoutingRoute $route): array => [
             $route->getName(),
             $route->methods()[0],
@@ -116,7 +121,7 @@ final class MemberSessionUiTest extends TestCase
             $this->assertContains(EnsureUiAuthority::class, $middleware);
             $this->assertContains(EnsureUserIsAuthenticated::class, $middleware);
 
-            if (str_starts_with((string) $route->getName(), 'bfc.ui.personal-credentials.')) {
+            if (str_contains((string) $route->getName(), '-credentials.')) {
                 $this->assertContains('throttle:bfc-personal', $route->middleware());
             }
         }

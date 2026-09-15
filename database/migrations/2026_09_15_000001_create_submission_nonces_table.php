@@ -10,7 +10,7 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create('bfc_personal_submission_nonces', function (Blueprint $table): void {
+        Schema::create('bfc_submission_nonces', function (Blueprint $table): void {
             $table->char('nonce_hash', 64)->primary();
             $table->char('session_hash', 64)->index();
             $table->string('user_id')->index();
@@ -23,6 +23,6 @@ return new class extends Migration
 
     public function down(): void
     {
-        Schema::dropIfExists('bfc_personal_submission_nonces');
+        Schema::dropIfExists('bfc_submission_nonces');
     }
 };

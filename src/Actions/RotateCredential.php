@@ -32,11 +32,11 @@ use ArtisanBuild\BuiltForCloud\MintedSecret;
 use ArtisanBuild\BuiltForCloud\MintResult;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
-use ArtisanBuild\BuiltForCloud\PersonalSubmissionNonce;
 use ArtisanBuild\BuiltForCloud\ReportedStatus;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\RotationResult;
 use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\SubmissionNonce;
 use Carbon\CarbonInterface;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -116,7 +116,7 @@ final class RotateCredential
         RotateOptions $options,
         ?AuditActor $actor = null,
         ?CredentialManagementScope $managementScope = null,
-        ?PersonalSubmissionNonce $submission = null,
+        ?SubmissionNonce $submission = null,
     ): ?RotationResult {
         OperatorAbility::assertValues($options->abilities);
 
@@ -232,7 +232,7 @@ final class RotateCredential
         RotateOptions $options,
         ?AuditActor $actor,
         ?CredentialManagementScope $managementScope,
-        ?PersonalSubmissionNonce $submission,
+        ?SubmissionNonce $submission,
     ): ?RotationResult {
         $query = Credential::query()->whereKey($id);
         $managementScope?->apply($query);

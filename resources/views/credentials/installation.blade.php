@@ -1,19 +1,19 @@
 @extends('bfc::layout')
 
-@section('title', 'Personal credentials')
+@section('title', 'Installation credentials')
 
 @section('content')
-<section data-testid="personal-credentials">
-    <h1>Personal credentials</h1>
+<section data-testid="installation-credentials">
+    <h1>Installation credentials</h1>
 
     @isset($error)
-        <section data-testid="personal-credentials-error">
+        <section data-testid="installation-credentials-error">
             <p>{{ $error }}</p>
         </section>
     @endisset
 
     @if ($delivery !== null)
-        <section data-testid="personal-credentials-delivery">
+        <section data-testid="installation-credentials-delivery">
             <h2>Save this credential now</h2>
             <p>This delivery is shown only in this response and cannot be recovered later.</p>
             @foreach ($delivery as $label => $value)
@@ -25,15 +25,23 @@
         </section>
     @endif
 
-    <section data-testid="personal-credentials-issue">
+    <section data-testid="installation-credentials-issue">
         <h2>Issue a credential</h2>
         @foreach ($choices as $choice)
-            <form data-testid="personal-credentials-issue-option" method="POST" action="{{ route('bfc.ui.personal-credentials.store') }}">
+            <form data-testid="installation-credentials-issue-option" method="POST" action="{{ route('bfc.ui.installation-credentials.store') }}">
                 @csrf
                 <input type="hidden" name="{{ \ArtisanBuild\BuiltForCloud\SubmissionNonce::FIELD }}" value="{{ $choice['submissionNonce'] }}">
                 <input type="hidden" name="app_purpose" value="{{ $choice['appPurpose'] }}">
                 <input type="hidden" name="kind" value="{{ $choice['kind']->value }}">
                 <p>{{ $choice['appPurpose'] }} / {{ $choice['kind']->value }}</p>
+                <label>Subject type
+                    <select name="subject_type">
+                        @foreach ($choice['subjectTypes'] as $subjectType)
+                            <option value="{{ $subjectType }}">{{ $subjectType }}</option>
+                        @endforeach
+                    </select>
+                </label>
+                <label>Subject reference <input name="subject_ref" required></label>
                 <label>Name <input name="name"></label>
                 @if ($choice['kind'] === \ArtisanBuild\BuiltForCloud\CredentialKind::Asymmetric)
                     <label>Enrollment code lifetime in seconds <input name="code_ttl_seconds" inputmode="numeric" required></label>
@@ -43,16 +51,17 @@
         @endforeach
     </section>
 
-    <section data-testid="personal-credentials-list">
-        <h2>Your credentials</h2>
+    <section data-testid="installation-credentials-list">
+        <h2>Installation credentials</h2>
         <ul>
             @foreach ($credentials as $credential)
-                <li data-testid="personal-credentials-item">
+                <li data-testid="installation-credentials-item">
                     <strong>{{ $credential->name ?? $credential->id }}</strong>
                     <span>{{ $credential->kind->value }}</span>
                     <span>{{ $credential->purpose?->value }}</span>
+                    <span>{{ $credential->subjectType->value }}:{{ $credential->subjectRef }}</span>
                     <span>{{ $credential->status }}</span>
-                    <form method="POST" action="{{ route('bfc.ui.personal-credentials.rotate', $credential->id) }}">
+                    <form method="POST" action="{{ route('bfc.ui.installation-credentials.rotate', $credential->id) }}">
                         @csrf
                         <input type="hidden" name="{{ \ArtisanBuild\BuiltForCloud\SubmissionNonce::FIELD }}" value="{{ $rotationNonces[$credential->id] }}">
                         @if ($credential->kind === \ArtisanBuild\BuiltForCloud\CredentialKind::Asymmetric)
@@ -60,7 +69,7 @@
                         @endif
                         <button type="submit">Rotate</button>
                     </form>
-                    <form method="POST" action="{{ route('bfc.ui.personal-credentials.destroy', $credential->id) }}">
+                    <form method="POST" action="{{ route('bfc.ui.installation-credentials.destroy', $credential->id) }}">
                         @csrf
                         @method('DELETE')
                         <button type="submit">Revoke</button>

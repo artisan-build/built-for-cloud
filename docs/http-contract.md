@@ -470,6 +470,10 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/installation/credentials` | `content` | the `delivery` single reveal, plus free-text name/subject fields |
 | `POST /bfc/installation/credentials/{id}/rotate` | `content` | the `delivery` single reveal, plus a summary row carrying free-text names and subject refs |
 | `DELETE /bfc/installation/credentials/{id}` | `metadata` | empty `204` body |
+| `GET /bfc/ui/credentials/installation` | `content` | package-owned HTML containing installation-owned credential summaries and declared fields |
+| `POST /bfc/ui/credentials/installation` | `content` | package-owned HTML containing the `delivery` single reveal and free-text credential fields |
+| `POST /bfc/ui/credentials/installation/{id}/rotate` | `content` | package-owned HTML containing the `delivery` single reveal and credential summaries |
+| `DELETE /bfc/ui/credentials/installation/{id}` | `content` | redirect after installation-owned credential revocation |
 | `POST /bfc/console/re-key` | `metadata` | key ids from a bounded charset, a fixed status enum and a timestamp — no free text, and never any key material |
 | `POST /bfc/console/keys/{key_id}/retire` | `metadata` | a key id from a bounded charset, a fixed status enum, a boolean and a timestamp — no free text, and never any key material |
 | `POST /bfc/console/enter` | `content` | its success is a `303`, not a body: the `Set-Cookie` it establishes IS a single reveal of a live delegated session credential, and the `Location` echoes the return path the issuer signed |
@@ -1699,6 +1703,31 @@ Revoke an installation-owned row by id.
 - **204** — revoked, or already dead.
 - **404** — no installation-owned row with that id; personal-row existence is not disclosed.
 - **403** — the role or declaration denies the operation. **419** — no valid CSRF token.
+
+The installation credential HTML surface uses the same scope and authority policy. Issue and
+rotation render the page directly with the single reveal in the immediate POST response. They never
+redirect delivery or write secret material to session or flash storage. Every rendered issue and
+rotation form carries the shared hash-only, session/user/verb/target-bound, expiring, single-use
+submission nonce, consumed in the credential mutation transaction. A missing, expired, consumed,
+foreign-session, wrong-user, wrong-verb or wrong-target nonce is **409**, with no credential, audit,
+outbox, app-action or onboarding effect and no delivery. Responses are `private, no-store`; GET
+responses never reveal secret material.
+
+### GET /bfc/ui/credentials/installation
+
+Render the installation credential summaries and mutation forms with **200**.
+
+### POST /bfc/ui/credentials/installation
+
+Mint and render the single reveal in the immediate response with **201**.
+
+### POST /bfc/ui/credentials/installation/{id}/rotate
+
+Rotate and render the single reveal with **201**, or complete cutover with **200** and no reveal.
+
+### DELETE /bfc/ui/credentials/installation/{id}
+
+Revoke an installation credential, then redirect to the installation page with **303**.
 
 ## Subjects — the offboard verb
 

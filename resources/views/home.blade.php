@@ -29,7 +29,7 @@
             <a data-testid="ui-nav-personal-credentials" href="{{ route('bfc.ui.personal-credentials.index') }}">Personal credentials</a>
         @endif
         @if ($installationCredentials)
-            <a data-testid="ui-nav-installation-credentials" href="{{ url('/bfc/ui/credentials/installation') }}">Installation credentials</a>
+            <a data-testid="ui-nav-installation-credentials" href="{{ route('bfc.ui.installation-credentials.index') }}">Installation credentials</a>
         @endif
         <form data-testid="ui-logout-form" method="POST" action="{{ route('bfc.ui.logout') }}">
             @csrf

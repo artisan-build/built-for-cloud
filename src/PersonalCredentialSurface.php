@@ -145,7 +145,7 @@ final readonly class PersonalCredentialSurface
         Request $request,
         CredentialPurpose $purpose,
         MintOptions $options,
-        ?PersonalSubmissionNonce $submission = null,
+        ?SubmissionNonce $submission = null,
     ): MintResult {
         $subject = $this->requireSubject($request);
 
@@ -173,7 +173,7 @@ final readonly class PersonalCredentialSurface
         Request $request,
         string $id,
         RotateOptions $options,
-        ?PersonalSubmissionNonce $submission = null,
+        ?SubmissionNonce $submission = null,
     ): ?RotationResult {
         $subject = $this->requireSubject($request);
 
@@ -210,7 +210,7 @@ final readonly class PersonalCredentialSurface
     {
         $this->requireSubject($request);
 
-        return PersonalSubmissionNonce::issue(
+        return SubmissionNonce::issue(
             $request->session()->token(),
             $this->requireSessionUserId(),
             $verb,
@@ -223,10 +223,10 @@ final readonly class PersonalCredentialSurface
         mixed $nonce,
         CredentialVerb $verb,
         string $target,
-    ): PersonalSubmissionNonce {
+    ): SubmissionNonce {
         $this->requireSubject($request);
 
-        return PersonalSubmissionNonce::presented(
+        return SubmissionNonce::presented(
             $nonce,
             $request->session()->token(),
             $this->requireSessionUserId(),
