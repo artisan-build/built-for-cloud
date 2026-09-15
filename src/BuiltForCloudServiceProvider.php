@@ -580,7 +580,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             ->middleware([...$personal, EnsureUserIsAuthenticated::class, 'throttle:bfc-authorization-decision'])
             ->name('bfc.device.decide');
         $authorizationRoutes[] = $router->post('/bfc/device/token', [DeviceAuthorizations::class, 'token'])
-            ->middleware('throttle:bfc-device-token')
+            ->middleware('throttle:bfc-authorization-token')
             ->name('bfc.device.token');
         $authorizationRoutes[] = $router->get('/bfc/loopback/authorize', [LoopbackAuthorizations::class, 'show'])
             ->middleware([...$personal, EnsureUserIsAuthenticated::class, 'throttle:bfc-authorization-start'])
@@ -589,7 +589,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             ->middleware([...$personal, EnsureUserIsAuthenticated::class, 'throttle:bfc-authorization-decision'])
             ->name('bfc.loopback.decide');
         $authorizationRoutes[] = $router->post('/bfc/loopback/token', [LoopbackAuthorizations::class, 'token'])
-            ->middleware('throttle:bfc-loopback-token')
+            ->middleware('throttle:bfc-authorization-token')
             ->name('bfc.loopback.token');
 
         $uiRoutes = [];
@@ -1131,13 +1131,10 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             ->by('bfc-authorization-decision|'.($this->limiterPrincipal($request) ?? 'anonymous').'|'.$this->limiterSourceIp($request))
             ->response($slowDown));
 
-        RateLimiter::for('bfc-device-token', fn (Request $request): array => [
-            Limit::perMinute(120)->by('bfc-device-token|'.$this->limiterSourceIp($request))->response($slowDown),
-            Limit::perMinute(6000)->by('bfc-authorization-token-global')->response($slowDown),
-        ]);
-
-        RateLimiter::for('bfc-loopback-token', fn (Request $request): array => [
-            Limit::perMinute(120)->by('bfc-loopback-token|'.$this->limiterSourceIp($request))->response($slowDown),
+        RateLimiter::for('bfc-authorization-token', fn (Request $request): array => [
+            Limit::perMinute(120)->by(
+                ($request->is('bfc/device/token') ? 'bfc-device-token|' : 'bfc-loopback-token|').$this->limiterSourceIp($request),
+            )->response($slowDown),
             Limit::perMinute(6000)->by('bfc-authorization-token-global')->response($slowDown),
         ]);
 

@@ -68,7 +68,7 @@ final class LoopbackAuthorizations
                     $tuple['state'],
                     $tuple['label'],
                 );
-                $browser->putLoopback($request, $intent->authorizationId, $intent->browserNonce->reveal(), $tuple);
+                $browser->putLoopback($request, $intent->authorizationId, $intent->browserNonce->reveal(), $tuple['state']);
                 $entry = $browser->selectedLoopbackBinding($request);
             }
 
@@ -89,6 +89,8 @@ final class LoopbackAuthorizations
         DecideLoopbackAuthorization $decide,
         BrowserCredentialAuthorizationStore $browser,
     ): Response|RedirectResponse {
+        $authorizationId = null;
+
         try {
             $input = ClosedRequestInput::form($request, ['action', SubmissionNonce::FIELD]);
             $action = $input['action'];
@@ -124,6 +126,10 @@ final class LoopbackAuthorizations
         } catch (SubmissionNonceRefused|CredentialAuthorizationRefused $refused) {
             if ($refused instanceof CredentialAuthorizationRefused && $refused->error === 'temporarily_unavailable') {
                 return $this->view(['authorization' => null, 'outcome' => 'retry'], 503, 5);
+            }
+
+            if ($refused instanceof CredentialAuthorizationRefused && $authorizationId !== null) {
+                $browser->forget($request, $authorizationId);
             }
 
             return $this->unavailable();

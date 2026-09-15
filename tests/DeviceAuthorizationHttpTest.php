@@ -17,6 +17,8 @@ use Illuminate\Http\Request;
 use Illuminate\Session\ArraySessionHandler;
 use Illuminate\Session\Store;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\Route;
 
 uses(RefreshDatabase::class);
 
@@ -153,7 +155,8 @@ it('refuses malformed and foreign device HTTP attempts before completing the exa
         ->assertSee('data-testid="device-authorization-result"', false)
         ->assertSee('approved');
     expect(DB::table('credential_authorizations')->value('status'))->toBe('approved')
-        ->and(DB::table('credentials')->count())->toBe(0);
+        ->and(DB::table('credentials')->count())->toBe(0)
+        ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request()))->toBe([]);
 
     $this->postJson('/bfc/device/token', ['device_code' => $deviceCode])
         ->assertStatus(400)
@@ -204,6 +207,10 @@ it('refuses malformed callback and PKCE attempts before one loopback exchange', 
         ->assertSee('data-testid="device-authorization-loopback"', false)
         ->assertSee('127.0.0.1:49152')
         ->assertSee('HTTP loopback client');
+    $ciphertexts = app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request());
+    $sealed = json_decode(app('encrypter')->decrypt($ciphertexts[0], false), true, flags: JSON_THROW_ON_ERROR);
+    expect(array_keys($sealed))->toBe(['flow', 'authorization_id', 'browser_nonce', 'state'])
+        ->and($sealed)->not->toHaveKeys(['app_purpose', 'redirect_uri', 'code_challenge', 'label']);
     $approve = authorizationHiddenInputs($page->getContent(), 'approve');
     expect($approve)->toHaveKeys(['action', 'submission_nonce']);
     $sessionCookie = $page->getCookie((string) config('session.cookie'));
@@ -215,7 +222,8 @@ it('refuses malformed callback and PKCE attempts before one loopback exchange', 
     parse_str((string) parse_url($location, PHP_URL_QUERY), $callback);
     expect($callback['state'] ?? null)->toBe($state)
         ->and($callback['code'] ?? null)->toMatch('/^[A-Za-z0-9_-]{43}$/')
-        ->and(DB::table('credentials')->count())->toBe(0);
+        ->and(DB::table('credentials')->count())->toBe(0)
+        ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request()))->toBe([]);
 
     $this->postJson('/bfc/loopback/token', [
         'code' => $callback['code'],
@@ -261,4 +269,75 @@ it('refuses a ninth live browser binding without evicting the existing grants', 
     expect(DB::table('credential_authorizations')->count())->toBe(BrowserCredentialAuthorizationStore::MAX_LIVE_BINDINGS)
         ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request()))
         ->toHaveCount(BrowserCredentialAuthorizationStore::MAX_LIVE_BINDINGS);
+});
+
+it('removes a terminal profile-withdrawn binding without consuming its submission nonce', function (): void {
+    $user = httpAuthorizationUser('http-withdrawn@example.test');
+    httpAuthorizationProfile($user, 'http.device');
+    $this->actingAsVersioned($user, 'web');
+
+    $start = $this->postJson('/bfc/device-authorizations', ['app_purpose' => 'http.device'])->assertCreated();
+    $page = $this->get('/bfc/device')->assertOk();
+    $approve = authorizationHiddenInputs($page->getContent(), 'approve');
+    $nonceHash = hash('sha256', $approve['submission_nonce']);
+    DeviceFlowDeclaration::$profiles = [];
+
+    $this->post('/bfc/device', $approve)->assertNotFound();
+
+    expect(DB::table('credential_authorizations')->value('status'))->toBe('denied')
+        ->and(DB::table('credential_authorizations')->value('denial_reason'))->toBe('profile_withdrawn')
+        ->and(DB::table('bfc_submission_nonces')->where('nonce_hash', $nonceHash)->exists())->toBeTrue()
+        ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request()))->toBe([])
+        ->and(DB::table('credentials')->count())->toBe(0)
+        ->and($start->json('device_code'))->toBeString();
+});
+
+it('rejects transport-limited polls before cadence or authorization effects', function (): void {
+    $user = httpAuthorizationUser('http-limited@example.test');
+    httpAuthorizationProfile($user, 'http.device');
+    $this->actingAsVersioned($user, 'web');
+    $start = $this->postJson('/bfc/device-authorizations', ['app_purpose' => 'http.device'])->assertCreated();
+    $before = (array) DB::table('credential_authorizations')->sole();
+    $authorizeCalls = DeviceFlowDeclaration::$authorizeCalls;
+
+    for ($attempt = 0; $attempt < 120; $attempt++) {
+        $this->postJson('/bfc/device/token', ['unexpected' => $attempt])
+            ->assertStatus(400)
+            ->assertExactJson(['error' => 'invalid_request']);
+    }
+
+    $response = $this->postJson('/bfc/device/token', ['device_code' => $start->json('device_code')])
+        ->assertStatus(429)
+        ->assertJsonPath('error', 'slow_down');
+    $after = (array) DB::table('credential_authorizations')->sole();
+
+    expect((int) $response->headers->get('Retry-After'))->toBeBetween(1, 30)
+        ->and($after['last_polled_at'])->toBe($before['last_polled_at'])
+        ->and($after['effective_interval'])->toBe($before['effective_interval'])
+        ->and($after['status'])->toBe($before['status'])
+        ->and(DeviceFlowDeclaration::$authorizeCalls)->toBe($authorizeCalls)
+        ->and(DB::table('credential_audit_events')->where('credential_authorization_id', $after['id'])->count())->toBe(1);
+});
+
+it('shares one package-global token bucket while separating device and loopback source buckets', function (): void {
+    $deviceRoute = Route::getRoutes()->getByName('bfc.device.token');
+    $loopbackRoute = Route::getRoutes()->getByName('bfc.loopback.token');
+    $limiter = RateLimiter::limiter('bfc-authorization-token');
+    expect($deviceRoute)->not->toBeNull()
+        ->and($loopbackRoute)->not->toBeNull()
+        ->and($deviceRoute->gatherMiddleware())->toContain('throttle:bfc-authorization-token')
+        ->and($loopbackRoute->gatherMiddleware())->toContain('throttle:bfc-authorization-token')
+        ->and($limiter)->toBeCallable();
+
+    $device = Request::create('/bfc/device/token', 'POST', server: ['REMOTE_ADDR' => '2001:db8:1:2::1']);
+    $loopback = Request::create('/bfc/loopback/token', 'POST', server: ['REMOTE_ADDR' => '2001:db8:1:2::abcd']);
+    $deviceLimits = $limiter($device);
+    $loopbackLimits = $limiter($loopback);
+
+    expect($deviceLimits[0]->key)->toBe('bfc-device-token|2001:db8:1:2::/64')
+        ->and($loopbackLimits[0]->key)->toBe('bfc-loopback-token|2001:db8:1:2::/64')
+        ->and($deviceLimits[1]->key)->toBe('bfc-authorization-token-global')
+        ->and($loopbackLimits[1]->key)->toBe($deviceLimits[1]->key)
+        ->and($deviceLimits[1]->maxAttempts)->toBe(6000)
+        ->and($loopbackLimits[1]->maxAttempts)->toBe(6000);
 });

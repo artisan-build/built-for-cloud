@@ -1,0 +1,61 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://artisan.build/private-schemas/bfc-device-authorization-live-v1.json",
+    "title": "Built for Cloud device authorization live stamp",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "schema",
+        "candidate_sha",
+        "runtime",
+        "transport",
+        "clients",
+        "cases",
+        "secret_canaries",
+        "teardown",
+        "overall_verdict",
+        "exit_code"
+    ],
+    "properties": {
+        "schema": { "const": "bfc.device-authorization.live.v1" },
+        "candidate_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "runtime": { "type": "object" },
+        "transport": {
+            "type": "object",
+            "required": ["kind", "browser_contexts", "isolated_cookie_jars", "csrf_forms", "bounded_readiness", "bounded_teardown"]
+        },
+        "clients": {
+            "type": "object",
+            "required": ["device", "loopback"]
+        },
+        "cases": {
+            "type": "object",
+            "required": [
+                "same_user_clean_context_refusal",
+                "cross_user_refusal",
+                "device_approve_exchange_and_bound_use",
+                "device_pending_slow_down_and_deny",
+                "device_expiry",
+                "transport_limiter_refusal_before_effect",
+                "loopback_callback_pkce_and_bound_use",
+                "loopback_cross_browser_refusal",
+                "loopback_deny",
+                "final_state"
+            ]
+        },
+        "secret_canaries": {
+            "type": "object",
+            "required": ["server_log_clean", "argv_clean", "stamp_contains_secrets"]
+        },
+        "teardown": {
+            "type": "object",
+            "required": ["server_stopped", "run_directory_removed"]
+        },
+        "overall_verdict": { "enum": ["pass", "fail"] },
+        "exit_code": { "type": "integer", "enum": [0, 1] },
+        "failure": {
+            "type": "object",
+            "required": ["class", "message"]
+        }
+    }
+}

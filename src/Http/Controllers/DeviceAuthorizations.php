@@ -100,6 +100,8 @@ final class DeviceAuthorizations
         DecideDeviceAuthorization $decide,
         BrowserCredentialAuthorizationStore $browser,
     ): Response {
+        $authorizationId = null;
+
         try {
             $input = ClosedRequestInput::form($request, ['user_code', 'action', SubmissionNonce::FIELD]);
             $userCode = is_string($input['user_code'])
@@ -139,6 +141,10 @@ final class DeviceAuthorizations
                     'authorizations' => [],
                     'outcome' => 'retry',
                 ], 503, 5);
+            }
+
+            if ($refused instanceof CredentialAuthorizationRefused && $authorizationId !== null) {
+                $browser->forget($request, $authorizationId);
             }
 
             return $this->unavailable();

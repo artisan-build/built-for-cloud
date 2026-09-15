@@ -65,13 +65,21 @@ final readonly class DecideLoopbackAuthorization
                 throw CredentialAuthorizationRefused::temporarilyUnavailable();
             }
 
+            if ($authority === CredentialAuthorizationAuthority::Denied) {
+                $this->transitions->deny($authorization, CredentialAuthorizationDenialReason::AuthorityDenied, AuditActor::boundUser((string) $authorization->initiating_user_id));
+
+                return new CredentialAuthorizationDecision(
+                    $authorizationId,
+                    CredentialAuthorizationStatus::Denied,
+                    redirectUri: (string) $authorization->redirect_uri,
+                    state: $state,
+                );
+            }
+
             $submission?->consume();
 
-            if ($authority === CredentialAuthorizationAuthority::Denied || ! $approve) {
-                $reason = $authority === CredentialAuthorizationAuthority::Denied
-                    ? CredentialAuthorizationDenialReason::AuthorityDenied
-                    : CredentialAuthorizationDenialReason::UserDenied;
-                $this->transitions->deny($authorization, $reason, AuditActor::boundUser((string) $authorization->initiating_user_id));
+            if (! $approve) {
+                $this->transitions->deny($authorization, CredentialAuthorizationDenialReason::UserDenied, AuditActor::boundUser((string) $authorization->initiating_user_id));
 
                 return new CredentialAuthorizationDecision(
                     $authorizationId,

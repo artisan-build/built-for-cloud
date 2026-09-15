@@ -7,9 +7,12 @@ namespace ArtisanBuild\BuiltForCloud\Tests\Support;
 use ArtisanBuild\BuiltForCloud\Actions\InstallHmacCredentialFromClaim;
 use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
 use ArtisanBuild\BuiltForCloud\Actions\SourceBoundHmacCutover;
+use ArtisanBuild\BuiltForCloud\BoundBearerCredentialAuthenticator;
 use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
 use ArtisanBuild\BuiltForCloud\Contracts\ResolvesAsymmetricEnrollmentScope;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialAuthorizationOwnership;
+use ArtisanBuild\BuiltForCloud\CredentialAuthorizationProfile;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
@@ -22,6 +25,7 @@ use ArtisanBuild\BuiltForCloud\Notifications\StandalonePasswordResetNotification
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SelfServicePolicyDeclaration;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\DeviceFlowDeclaration;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Request;
 use Illuminate\Notifications\AnonymousNotifiable;
@@ -63,10 +67,63 @@ final class StandaloneHarnessServiceProvider extends ServiceProvider
             $this->app['config']->set('cache.default', 'file');
             $this->app['config']->set('cache.stores.file.path', (string) getenv('BFC_HARNESS_CACHE_PATH'));
         }
+
+        if (getenv('BFC_HARNESS_DEVICE_AUTHORIZATION') !== false) {
+            $profiles = [];
+
+            foreach (['live.device', 'live.loopback'] as $purpose) {
+                $profiles[] = new CredentialAuthorizationProfile(
+                    $purpose,
+                    new BoundCredentialScope(
+                        $purpose,
+                        new Subject(SubjectType::Installation, 'device-live-installation'),
+                        'install_device_live',
+                        'app_device_live',
+                        'https://device-live.example',
+                    ),
+                    CredentialAuthorizationOwnership::Installation,
+                    ['harness:use'],
+                    null,
+                    60,
+                    5,
+                );
+            }
+
+            DeviceFlowDeclaration::$profiles = $profiles;
+            DeviceFlowDeclaration::$resolvedSubject = null;
+            DeviceFlowDeclaration::$authorizeCalls = 0;
+            $this->app['config']->set('built-for-cloud.credentials.declaration', DeviceFlowDeclaration::class);
+            $this->app['config']->set('built-for-cloud.credentials.app_purposes', [
+                'live.device' => CredentialPurpose::Consumption->value,
+                'live.loopback' => CredentialPurpose::Consumption->value,
+            ]);
+            $this->app['config']->set('cache.default', 'file');
+            $this->app['config']->set('cache.stores.file.path', (string) getenv('BFC_HARNESS_CACHE_PATH'));
+        }
     }
 
     public function boot(): void
     {
+        if (getenv('BFC_HARNESS_DEVICE_AUTHORIZATION') !== false) {
+            Route::post('/_bfc-harness/device/use/{profile}', static function (Request $request, string $profile) {
+                $purpose = match ($profile) {
+                    'device' => 'live.device',
+                    'loopback' => 'live.loopback',
+                    default => null,
+                };
+
+                if ($purpose === null) {
+                    abort(404);
+                }
+
+                $credential = app(BoundBearerCredentialAuthenticator::class)->authenticate($request, $purpose, 'harness:use');
+
+                return $credential === null
+                    ? response()->json(['authenticated' => false], 401)
+                    : response()->json(['authenticated' => true, 'credential_id' => $credential->id]);
+            });
+        }
+
         if (getenv('BFC_HARNESS_ASYMMETRIC') === 'bound') {
             $scope = new BoundCredentialScope(
                 'reel.application.signing',

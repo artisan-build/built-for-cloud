@@ -40,18 +40,17 @@ final readonly class BrowserCredentialAuthorizationStore
         ]);
     }
 
-    /** @param array{app_purpose: string, redirect_uri: string, code_challenge: string, state: string, label: ?string} $tuple */
     public function putLoopback(
         Request $request,
         string $authorizationId,
         string $browserNonce,
-        array $tuple,
+        string $state,
     ): void {
         $ciphertext = $this->put($request, [
             'flow' => CredentialAuthorizationFlow::Loopback->value,
             'authorization_id' => $authorizationId,
             'browser_nonce' => $browserNonce,
-            ...$tuple,
+            'state' => $state,
         ]);
         $request->session()->put(self::SELECTED_LOOPBACK_KEY, $ciphertext);
     }
@@ -95,7 +94,7 @@ final readonly class BrowserCredentialAuthorizationStore
             $matches = true;
 
             foreach ($tuple as $key => $value) {
-                $stored = $payload[$key] ?? null;
+                $stored = $key === 'state' ? ($payload[$key] ?? null) : ($entry['authorization']->{$key} ?? null);
                 $matches = $value === null ? $stored === null : is_string($stored) && hash_equals($stored, $value);
 
                 if (! $matches) {
