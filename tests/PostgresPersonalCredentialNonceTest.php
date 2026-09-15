@@ -4,17 +4,20 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Audit\AppActionEvent;
 use ArtisanBuild\BuiltForCloud\Audit\AppActionOutboxEntry;
+use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialOutboxEntry;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
+use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiPersonalCredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Support\PostgresLane;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
+use Illuminate\Support\Facades\DB;
 use Symfony\Component\Process\Process;
 
 uses(PostgresLane::class)->group('pgsql');
@@ -34,6 +37,15 @@ it('lets exactly one concurrent personal issue POST consume a submission nonce',
         'built-for-cloud.ui.credential_purposes' => ['test.consume'],
         'built-for-cloud.ui.personal_credentials' => true,
     ]);
+    DB::table('bfc_authority')->updateOrInsert(
+        ['key' => InstallationAuthority::KEY],
+        [
+            'mode' => AuthorityMode::Standalone->value,
+            'generation' => 1,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ],
+    );
 
     $user = User::query()->create([
         'name' => 'Concurrent personal credential user',

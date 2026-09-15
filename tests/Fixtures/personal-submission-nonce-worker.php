@@ -40,9 +40,24 @@ $case = new class('testProbe') extends TestCase
     {
         parent::getEnvironmentSetUp($app);
 
+        $environment = static fn (string $name, string $default): string => (($value = getenv($name)) === false ? $default : $value);
+
         $app['config']->set('auth.defaults.guard', 'web');
         $app['config']->set('auth.guards.web', ['driver' => 'session', 'provider' => 'users']);
         $app['config']->set('auth.providers.users', ['driver' => 'eloquent', 'model' => User::class]);
+        $app['config']->set('database.connections.pgsql_testing', [
+            'driver' => 'pgsql',
+            'host' => $environment('PGSQL_TESTING_HOST', '127.0.0.1'),
+            'port' => $environment('PGSQL_TESTING_PORT', '5432'),
+            'database' => $environment('PGSQL_TESTING_DATABASE', ''),
+            'username' => $environment('PGSQL_TESTING_USERNAME', 'postgres'),
+            'password' => $environment('PGSQL_TESTING_PASSWORD', 'postgres'),
+            'charset' => 'utf8',
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'search_path' => 'public',
+            'sslmode' => 'prefer',
+        ]);
         $app['config']->set('database.default', 'pgsql_testing');
         $app['config']->set('session.driver', 'array');
         $app['config']->set('queue.default', 'sync');
