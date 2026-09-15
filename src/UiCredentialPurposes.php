@@ -4,11 +4,12 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 
 /**
- * Resolves display choices through the protocol mapper without becoming a
- * second source of purpose authority.
+ * Resolves the host's displayed app-purpose allow-list through the protocol
+ * mapper. Protocol actions remain authoritative for kind/subject pairing.
  */
 final readonly class UiCredentialPurposes
 {
@@ -61,5 +62,16 @@ final readonly class UiCredentialPurposes
         }
 
         return $this->registry->purpose($appPurpose);
+    }
+
+    public function assertPurposeDisplayed(CredentialPurpose $purpose): void
+    {
+        foreach ($this->displayed() as $appPurpose) {
+            if ($this->registry->purpose($appPurpose) === $purpose) {
+                return;
+            }
+        }
+
+        throw CredentialVerbRefused::selfServicePurpose($purpose);
     }
 }

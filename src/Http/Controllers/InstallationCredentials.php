@@ -25,6 +25,7 @@ use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\SelfServiceKindPolicyResolver;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
+use ArtisanBuild\BuiltForCloud\UiCredentialPurposes;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -55,6 +56,7 @@ final class InstallationCredentials
         Request $request,
         MintCredential $mint,
         SelfServiceKindPolicyResolver $kindPolicy,
+        UiCredentialPurposes $purposes,
     ): JsonResponse {
         $managementScope = CredentialManagementScope::memberInstallation();
 
@@ -76,6 +78,11 @@ final class InstallationCredentials
 
             $subject = new Subject(SubjectType::from($validated['subject_type']), $validated['subject_ref']);
             $kindPolicy->assertInstallationKindAllowed($subject, $options->kind);
+
+            if ($options->purpose !== null) {
+                $purposes->assertPurposeDisplayed($options->purpose);
+            }
+
             $result = $mint(
                 $subject,
                 new MintOptions(

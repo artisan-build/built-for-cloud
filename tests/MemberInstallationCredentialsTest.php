@@ -20,6 +20,7 @@ use ArtisanBuild\BuiltForCloud\RotationOverride;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SelfServicePolicyDeclaration;
+use ArtisanBuild\BuiltForCloud\UiCredentialPurposes;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -30,7 +31,15 @@ use Illuminate\Support\Str;
 uses(RefreshDatabase::class);
 
 beforeEach(function (): void {
-    config(['auth.guards.bfc' => ['driver' => 'bfc', 'provider' => 'users']]);
+    config([
+        'auth.guards.bfc' => ['driver' => 'bfc', 'provider' => 'users'],
+        'built-for-cloud.credentials.app_purposes' => [
+            'test.deploy' => CredentialPurpose::SystemDeployment->value,
+            'test.consume' => CredentialPurpose::Consumption->value,
+            'test.mcp' => CredentialPurpose::Mcp->value,
+        ],
+        'built-for-cloud.ui.credential_purposes' => ['test.deploy', 'test.consume', 'test.mcp'],
+    ]);
     Route::middleware('auth:bfc')->get('/member-credential-probe', static fn (): array => ['authenticated' => true]);
     Route::middleware('bfc.mcp')->post('/member-mcp-probe', static fn (): array => ['authenticated' => true]);
     Route::middleware('bfc.ability:custom:deploy')->get('/member-custom-ability-probe', static fn (): array => ['authorized' => true]);
@@ -172,6 +181,56 @@ it('lets a Member mint each installation app purpose through the JSON API', func
     'mcp bearer' => [CredentialPurpose::Mcp, CredentialKind::Bearer],
     'mcp basic' => [CredentialPurpose::Mcp, CredentialKind::Basic],
 ]);
+
+it('restricts JSON installation issuance to purposes reachable from displayed app purposes', function (): void {
+    config(['built-for-cloud.ui.credential_purposes' => ['test.consume']]);
+    $member = installationMember(UserRole::Member);
+
+    foreach ([CredentialPurpose::Mcp, CredentialPurpose::SystemDeployment] as $purpose) {
+        $before = [Credential::query()->count(), CredentialAuditEvent::query()->count()];
+        $response = $this->actingAsVersioned($member)->postJson('/bfc/installation/credentials', [
+            'subject_type' => SubjectType::Installation->value,
+            'subject_ref' => 'refused-'.$purpose->value,
+            'purpose' => $purpose->value,
+        ])->assertForbidden();
+
+        expect($response->json('delivery'))->toBeNull()
+            ->and([Credential::query()->count(), CredentialAuditEvent::query()->count()])->toBe($before);
+    }
+
+    $response = $this->postJson('/bfc/installation/credentials', [
+        'subject_type' => SubjectType::Installation->value,
+        'subject_ref' => 'allowed-consumption',
+        'purpose' => CredentialPurpose::Consumption->value,
+    ])->assertCreated();
+
+    expect($response->json('delivery.secret'))->toBeString()
+        ->and(Credential::query()->findOrFail($response->json('credential.id'))->purpose)
+        ->toBe(CredentialPurpose::Consumption);
+});
+
+it('matches the empty HTML purpose list without defaulting an omitted JSON purpose', function (): void {
+    config(['built-for-cloud.ui.credential_purposes' => []]);
+    $member = installationMember(UserRole::Member);
+    $before = [Credential::query()->count(), CredentialAuditEvent::query()->count()];
+
+    expect(app(UiCredentialPurposes::class)->displayed())->toBe([]);
+
+    $supplied = $this->actingAsVersioned($member)->postJson('/bfc/installation/credentials', [
+        'subject_type' => SubjectType::Installation->value,
+        'subject_ref' => 'no-declaration-supplied',
+        'purpose' => CredentialPurpose::Consumption->value,
+    ])->assertForbidden();
+    $omitted = $this->postJson('/bfc/installation/credentials', [
+        'subject_type' => SubjectType::Installation->value,
+        'subject_ref' => 'no-declaration-omitted',
+    ])->assertUnprocessable();
+
+    expect($supplied->json('delivery'))->toBeNull()
+        ->and($omitted->json('message'))->toContain('purpose is required')
+        ->and($omitted->json('delivery'))->toBeNull()
+        ->and([Credential::query()->count(), CredentialAuditEvent::query()->count()])->toBe($before);
+});
 
 it('applies the bearer-only host policy to JSON installation issue and rotation', function (): void {
     config(['built-for-cloud.credentials.declaration' => SelfServicePolicyDeclaration::class]);
