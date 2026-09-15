@@ -26,7 +26,6 @@ use ArtisanBuild\BuiltForCloud\Rs256PublicKey;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use SensitiveParameter;
-use Throwable;
 use ValueError;
 
 final class CompleteAsymmetricEnrollment

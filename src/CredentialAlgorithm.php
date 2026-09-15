@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
-use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
 
 enum CredentialAlgorithm: string
 {

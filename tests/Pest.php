@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
 use ArtisanBuild\BuiltForCloud\Console\Assertion;
 use ArtisanBuild\BuiltForCloud\Console\AssertionPurpose;
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
@@ -15,7 +16,6 @@ use ArtisanBuild\BuiltForCloud\Console\ConsoleSession;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedClaims;
 use ArtisanBuild\BuiltForCloud\Credential;
-use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
@@ -34,14 +34,14 @@ use ParagonIE\Paseto\Purpose;
 
 uses(TestCase::class)->in(__DIR__);
 
-/** @return array{private: \OpenSSLAsymmetricKey, public: string} */
+/** @return array{private: OpenSSLAsymmetricKey, public: string} */
 function testsRsaKey(int $bits = 2048): array
 {
     $private = openssl_pkey_new([
         'private_key_type' => OPENSSL_KEYTYPE_RSA,
         'private_key_bits' => $bits,
     ]);
-    expect($private)->toBeInstanceOf(\OpenSSLAsymmetricKey::class);
+    expect($private)->toBeInstanceOf(OpenSSLAsymmetricKey::class);
     $details = openssl_pkey_get_details($private);
     expect($details)->toBeArray();
 

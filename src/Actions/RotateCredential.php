@@ -11,13 +11,12 @@ use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesRotationOverrides;
 use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialAlgorithm;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
-use ArtisanBuild\BuiltForCloud\CredentialAlgorithm;
-use ArtisanBuild\BuiltForCloud\CredentialMaterialRole;
 use ArtisanBuild\BuiltForCloud\CredentialManagementScope;
+use ArtisanBuild\BuiltForCloud\CredentialMaterialRole;
 use ArtisanBuild\BuiltForCloud\CredentialProtocolBinding;
-use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
@@ -43,9 +42,9 @@ use ArtisanBuild\BuiltForCloud\RotationResult;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\SubmissionNonce;
 use Carbon\CarbonInterface;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
-use Illuminate\Database\QueryException;
 use Throwable;
 
 /**

@@ -19,7 +19,6 @@ use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\Rs256PublicKey;
 use ArtisanBuild\BuiltForCloud\Tests\Support\PostgresLane;
-use Illuminate\Support\Facades\DB;
 use Symfony\Component\Process\Process;
 
 uses(PostgresLane::class)->group('pgsql');
