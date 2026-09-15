@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
-/** Tracks execution inside the package's requestless system-authority entries. */
+/** Tracks execution inside the package's system-authority entries and attributed MCP requests. */
 final class SystemAuthorityContext
 {
     private int $nextToken = 0;

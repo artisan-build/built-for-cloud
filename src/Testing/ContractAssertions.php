@@ -44,6 +44,11 @@ trait ContractAssertions
         McpDelegatedTools::assertConforms($serverClass);
     }
 
+    public function assertBuiltForCloudMcpProductAdmission(): void
+    {
+        McpProductAdmission::assert();
+    }
+
     public function assertBuiltForCloudContract(): void
     {
         $this->assertBuiltForCloudMetaContract();
