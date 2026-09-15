@@ -13,6 +13,7 @@ use ArtisanBuild\BuiltForCloud\Testing\P6RuntimeCounterProof;
 use ArtisanBuild\BuiltForCloud\Testing\P6SecretLeakDetector;
 use ArtisanBuild\BuiltForCloud\Tests\Support\P6HttpClient;
 use ArtisanBuild\BuiltForCloud\Tests\Support\P6LiveCommandRunner;
+use ArtisanBuild\BuiltForCloud\Tests\Support\P6LiveOneTimeDelivery;
 use ArtisanBuild\BuiltForCloud\Tests\Support\P6LiveSecretMaterial;
 use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Http\Request;
@@ -165,6 +166,64 @@ it('encodes actual signing secret bytes for the leak inventory', function (): vo
     expect($material)->toBe(bin2hex($key->raw()))
         ->and(fn () => P6SecretLeakDetector::assertAbsent($surfaces, [$material]))
         ->toThrow(RuntimeException::class, 'cache_state');
+});
+
+it('permits only the verified one-time rotation delivery field before scanning responses', function (): void {
+    $secret = 'bfc_'.bin2hex(random_bytes(32));
+    $body = json_encode([
+        'credential' => ['id' => 'replacement-id', 'name' => 'live credential'],
+        'delivery' => ['shape' => 'bearer', 'secret' => $secret],
+    ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+    $surfaces = array_fill_keys(P6SecretLeakDetector::SURFACES, ['clean']);
+    $surfaces['response_bodies'] = [$body];
+
+    expect(fn () => P6SecretLeakDetector::assertAbsent($surfaces, [$secret]))
+        ->toThrow(RuntimeException::class, 'response_bodies');
+
+    $sanitized = P6LiveOneTimeDelivery::sanitizeRotationBody($body, $secret);
+    $surfaces['response_bodies'] = [$sanitized];
+    P6SecretLeakDetector::assertAbsent($surfaces, [$secret]);
+
+    expect(p6LiveRunnerSupportJson($sanitized))->toBe([
+        'credential' => ['id' => 'replacement-id', 'name' => 'live credential'],
+        'delivery' => ['shape' => 'bearer', 'secret' => '[verified-one-time-delivery]'],
+    ]);
+});
+
+it('rejects replacement material elsewhere or more than once in its rotation response', function (): void {
+    $secret = 'bfc_'.bin2hex(random_bytes(32));
+    $elsewhere = json_encode([
+        'credential' => ['id' => 'replacement-id', 'note' => $secret],
+        'delivery' => ['secret' => $secret],
+    ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+    $duplicated = json_encode([
+        'delivery' => ['secret' => $secret],
+        'audit' => $secret.$secret,
+    ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+
+    expect(fn () => P6LiveOneTimeDelivery::sanitizeRotationBody($elsewhere, $secret))
+        ->toThrow(RuntimeException::class, 'exactly once')
+        ->and(fn () => P6LiveOneTimeDelivery::sanitizeRotationBody($duplicated, $secret))
+        ->toThrow(RuntimeException::class, 'exactly once');
+});
+
+it('keeps other rotation fields and later responses inside the forbidden-material scan', function (): void {
+    $secret = 'bfc_'.bin2hex(random_bytes(32));
+    $otherSecret = 'p6-other-'.bin2hex(random_bytes(16));
+    $body = json_encode([
+        'credential' => ['id' => 'replacement-id', 'note' => $otherSecret],
+        'delivery' => ['secret' => $secret],
+    ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+    $sanitized = P6LiveOneTimeDelivery::sanitizeRotationBody($body, $secret);
+    $surfaces = array_fill_keys(P6SecretLeakDetector::SURFACES, ['clean']);
+    $surfaces['response_bodies'] = [$sanitized];
+
+    expect(fn () => P6SecretLeakDetector::assertAbsent($surfaces, [$secret, $otherSecret]))
+        ->toThrow(RuntimeException::class, 'response_bodies');
+
+    $surfaces['response_bodies'] = [$sanitized, json_encode(['later' => $secret], JSON_THROW_ON_ERROR)];
+    expect(fn () => P6SecretLeakDetector::assertAbsent($surfaces, [$secret]))
+        ->toThrow(RuntimeException::class, 'response_bodies');
 });
 
 it('returns the canonical string session identity from either live node', function (string $node): void {

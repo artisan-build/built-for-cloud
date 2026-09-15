@@ -19,6 +19,7 @@ use ArtisanBuild\BuiltForCloud\Testing\PostgresAdministrator;
 use ArtisanBuild\BuiltForCloud\Testing\SharedRuntimeIdentity;
 use ArtisanBuild\BuiltForCloud\Tests\Support\P6HttpClient;
 use ArtisanBuild\BuiltForCloud\Tests\Support\P6LiveCommandRunner;
+use ArtisanBuild\BuiltForCloud\Tests\Support\P6LiveOneTimeDelivery;
 use ArtisanBuild\BuiltForCloud\Tests\Support\P6LiveSecretMaterial;
 use ParagonIE\Paseto\Builder;
 use ParagonIE\Paseto\Keys\Version4\AsymmetricSecretKey;
@@ -581,7 +582,6 @@ try {
         ['Authorization', 'Bearer '.$seed['operator_secret']],
         ['Content-Type', 'application/json'],
     ], '{"emergency":true}');
-    $responses[] = $rotation;
     p6LiveStatus($rotation, 201, 'credential rotation');
     $rotationBody = p6LiveJson($rotation['body'], 'credential rotation');
     $replacementId = $rotationBody['credential']['id'] ?? null;
@@ -589,6 +589,8 @@ try {
     if (! is_string($replacementId) || ! is_string($replacementSecret) || $replacementSecret === '') {
         p6LiveFail('Credential rotation did not return a replacement through the package transport.');
     }
+    $rotation['body'] = P6LiveOneTimeDelivery::sanitizeRotationBody($rotation['body'], $replacementSecret);
+    $responses[] = $rotation;
     $forbidden[] = $replacementSecret;
     $cases->observe('cross_node_rotation_visible', function () use ($client, $listenerB, $seed, $replacementSecret, $mcpHeaders, $rotationCountersBefore, &$responses): bool {
         $replacement = $client->request($listenerB->port, 'POST', '/_bfc-p6c/mcp', $mcpHeaders($replacementSecret));
