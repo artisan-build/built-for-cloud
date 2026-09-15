@@ -697,6 +697,7 @@ it('audits every vitals read with the actor typed, and accounts for every column
 
     // Empty, and exactly these.
     expect($row->code_id)->toBeNull()
+        ->and($row->credential_authorization_id)->toBeNull()
         ->and($row->superseded_by_credential_id)->toBeNull()
         ->and($row->recipient)->toBeNull()
         ->and($row->code_ttl_seconds)->toBeNull()
@@ -715,7 +716,7 @@ it('audits every vitals read with the actor typed, and accounts for every column
         'actor_type', 'actor_ref', 'credential_id', 'provider', 'deployment',
         'environment', 'note', 'occurred_at',
         // Empty above.
-        'code_id', 'superseded_by_credential_id', 'recipient', 'code_ttl_seconds',
+        'code_id', 'credential_authorization_id', 'superseded_by_credential_id', 'recipient', 'code_ttl_seconds',
         'credential_expires_at', 'reason_code',
         // Structural, and asserted by the query and the count above
         // rather than by a value: the row's identity, the event name the

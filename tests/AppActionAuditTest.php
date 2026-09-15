@@ -49,11 +49,9 @@ uses(RefreshDatabase::class);
  */
 
 /**
- * The exact columns the CREDENTIAL audit stream had before this PR, in
- * the order its migration declares them. Spelled out rather than
- * compared to a snapshot, because the property being pinned is that this
- * PR added nothing to it and the enumeration is the only shape that can
- * say so.
+ * The exact shipped columns in the CREDENTIAL audit stream, in the order
+ * its migrations declare them. Spelled out rather than compared to a
+ * snapshot so intentional cross-release additions remain explicit here.
  *
  * @return list<string>
  */
@@ -63,7 +61,7 @@ function shippedCredentialAuditColumns(): array
         'id', 'event', 'code_id', 'credential_id', 'superseded_by_credential_id',
         'provider', 'deployment', 'environment', 'actor_type', 'actor_ref',
         'recipient', 'code_ttl_seconds', 'credential_expires_at', 'reason_code',
-        'note', 'occurred_at', 'created_at',
+        'note', 'occurred_at', 'created_at', 'credential_authorization_id',
     ];
 }
 
@@ -125,10 +123,9 @@ function wellFormedAppActionRow(array $overrides = []): array
 
 // ─── AC1: a NEW stream, not an extension ────────────────────────────────────
 
-it('leaves the credential stream\'s shape untouched', function (): void {
-    // The credential stream is credential-work only and D17 does not
-    // extend it. An added column here would be this PR quietly widening
-    // a shipped record instead of opening its own.
+it('keeps the credential stream at its explicitly shipped shape', function (): void {
+    // The credential stream remains credential-work only. Additive
+    // credential lifecycle correlation must be acknowledged explicitly.
     expect(Schema::getColumnListing('credential_audit_events'))->toBe(shippedCredentialAuditColumns());
 
     // And the new stream is genuinely a different table.
