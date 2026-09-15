@@ -63,6 +63,7 @@ final class CredentialPathInventory
             'ArtisanBuild\\BuiltForCloud\\Auth\\BasicAuthenticator::credential' => 1,
             'ArtisanBuild\\BuiltForCloud\\Auth\\BearerAuthenticator::credential' => 1,
             'ArtisanBuild\\BuiltForCloud\\Auth\\CredentialGuard::validate' => 2,
+            'ArtisanBuild\\BuiltForCloud\\BoundBearerCredentialAuthenticator::authenticate' => 1,
             'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::verifyUnifiedDurable' => 1,
             'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\AuthenticateMcp::handle' => 1,
             'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCredentialAdmin::handle' => 1,
@@ -78,7 +79,7 @@ final class CredentialPathInventory
         foreach ($classes as $class => $record) {
             if (str_contains($record['code'], 'CredentialResolver')) {
                 preg_match_all(
-                    '/->resolve\s*\(\s*CredentialKind::(?:Bearer|Basic)\b/',
+                    '/->(?:resolve\s*\(\s*CredentialKind::(?:Bearer|Basic)\b|resolveBoundBearer\s*\()/',
                     $record['code'],
                     $expressions,
                     PREG_OFFSET_CAPTURE,
@@ -421,6 +422,11 @@ final class CredentialPathInventory
                 'source' => 'ArtisanBuild\\BuiltForCloud\\Auth\\CredentialGuard::validate',
                 'tokens' => ['CredentialPurpose::Consumption', 'CredentialPurpose::SystemDeployment', 'in_array'],
                 'rule' => '{consumption,system_deployment}',
+            ],
+            'ArtisanBuild\\BuiltForCloud\\BoundBearerCredentialAuthenticator::authenticate' => [
+                'source' => 'ArtisanBuild\\BuiltForCloud\\BoundBearerCredentialAuthenticator::authenticate',
+                'tokens' => ['forUse', 'resolveBoundBearer', '$purpose'],
+                'rule' => 'app-purpose-registry+exact-bound-bearer',
             ],
             'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::verifyUnifiedDurable' => [
                 'source' => 'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::verifyUnifiedDurable',

@@ -112,6 +112,34 @@ function pgWaitForAuthorizationLocks(array $workers): void
     throw new RuntimeException('Authorization workers did not reach the row-lock barrier.');
 }
 
+function pgWaitForAuthorizationWorkerLock(Process $worker, int $id, string $queryFragment): void
+{
+    $deadline = microtime(true) + 30;
+
+    while (microtime(true) < $deadline) {
+        if (! $worker->isRunning()) {
+            throw new RuntimeException('Authorization worker exited before its staged lock: '.$worker->getOutput().$worker->getErrorOutput());
+        }
+
+        $blocked = (int) DB::connection('pgsql_testing_probe')->scalar(<<<'SQL'
+            select count(*) from pg_stat_activity
+            where datname = current_database()
+              and application_name = ?
+              and state = 'active'
+              and wait_event_type = 'Lock'
+              and query like ?
+            SQL, ['bfc-credential-authorization-worker-'.$id, '%'.$queryFragment.'%']);
+
+        if ($blocked === 1) {
+            return;
+        }
+
+        usleep(2000);
+    }
+
+    throw new RuntimeException('Authorization worker did not reach its staged lock.');
+}
+
 /** @param list<Process> $workers @return list<array<string, mixed>> */
 function pgFinishAuthorizationWorkers(array $workers): array
 {
@@ -143,11 +171,11 @@ it('serializes device and loopback exchange to one credential and one event set'
     if ($flow === 'device') {
         $start = app(StartDeviceAuthorization::class)($request, $purpose);
         $code = $start->deviceCode->reveal();
-        app(DecideDeviceAuthorization::class)($request, $start->userCode->reveal(), true);
+        app(DecideDeviceAuthorization::class)($request, $start->userCode->reveal(), $start->browserNonce->reveal(), true);
     } else {
         $challenge = rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=');
         $intent = app(StartLoopbackAuthorization::class)($request, $purpose, $redirect, $challenge, 'S256', str_repeat('s', 32));
-        $code = (string) app(DecideLoopbackAuthorization::class)($request, $intent->authorizationId, true)->authorizationCode?->reveal();
+        $code = (string) app(DecideLoopbackAuthorization::class)($request, $intent->authorizationId, $intent->browserNonce->reveal(), $intent->state, true)->authorizationCode?->reveal();
     }
 
     $authorization = DB::table('credential_authorizations')->sole();
@@ -184,9 +212,9 @@ it('enforces production shape constraints and records every authorization event 
     $profile = pgAuthorizationProfile($user, 'test.device');
     $request = pgAuthorizationRequest($this, $user, $profile);
     $approved = app(StartDeviceAuthorization::class)($request, 'test.device');
-    app(DecideDeviceAuthorization::class)($request, $approved->userCode->reveal(), true);
+    app(DecideDeviceAuthorization::class)($request, $approved->userCode->reveal(), $approved->browserNonce->reveal(), true);
     $denied = app(StartDeviceAuthorization::class)($request, 'test.device');
-    app(DecideDeviceAuthorization::class)($request, $denied->userCode->reveal(), false);
+    app(DecideDeviceAuthorization::class)($request, $denied->userCode->reveal(), $denied->browserNonce->reveal(), false);
 
     expect(CredentialAuditEvent::query()->whereIn('event', [
         LifecycleEventType::CredentialAuthorizationStarted->value,
@@ -233,7 +261,7 @@ it('contains exchange races through direct offboarding and real managed denial',
     $profile = pgAuthorizationProfile($user, 'test.device');
     $request = pgAuthorizationRequest($this, $user, $profile);
     $start = app(StartDeviceAuthorization::class)($request, 'test.device');
-    app(DecideDeviceAuthorization::class)($request, $start->userCode->reveal(), true);
+    app(DecideDeviceAuthorization::class)($request, $start->userCode->reveal(), $start->browserNonce->reveal(), true);
     $authorization = DB::table('credential_authorizations')->sole();
 
     if ($containment === 'managed') {
@@ -268,17 +296,20 @@ it('contains exchange races through direct offboarding and real managed denial',
 
     $main = $this->postgresLaneConnection();
     $main->beginTransaction();
-    $main->table('credential_authorizations')->where('id', $authorization->id)->lockForUpdate()->sole();
+    $main->statement('LOCK TABLE credentials IN ACCESS EXCLUSIVE MODE');
     $exchange = pgAuthorizationWorker(5, [...$profile, 'operation' => 'exchange', 'flow' => 'device', 'user_id' => (string) $user->getKey(), 'code' => $start->deviceCode->reveal(), 'redirect_uri' => '', 'verifier' => '']);
+    pgWaitForAuthorizationWorkerLock($exchange, 5, 'credentials');
     $contain = pgAuthorizationWorker(6, [...$profile, 'operation' => $containment === 'managed' ? 'managed_denial' : 'offboard', 'user_id' => (string) $user->getKey(), 'now' => now()->toAtomString()]);
     $workers = [$exchange, $contain];
 
     try {
-        pgWaitForAuthorizationLocks($workers);
+        pgWaitForAuthorizationWorkerLock($contain, 6, 'credential_authorizations');
         $main->commit();
-        pgFinishAuthorizationWorkers($workers);
+        $outcomes = pgFinishAuthorizationWorkers($workers);
+        expect($outcomes[0]['outcome'])->toBe('success')
+            ->and($outcomes[1]['outcome'])->toBeIn(['offboarded', 'denied']);
         expect(Credential::query()->whereNull('revoked_at')->count())->toBe(0)
-            ->and(DB::table('credential_authorizations')->sole()->status)->toBeIn(['denied', 'consumed']);
+            ->and(DB::table('credential_authorizations')->sole()->status)->toBe('consumed');
     } finally {
         foreach ($workers as $worker) {
             if ($worker->isRunning()) {

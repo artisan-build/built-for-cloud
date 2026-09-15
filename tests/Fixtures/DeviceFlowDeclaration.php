@@ -21,6 +21,9 @@ final class DeviceFlowDeclaration implements CredentialDeclaration, DeclaresCred
 
     public static int $authorizeCalls = 0;
 
+    /** @var list<string> */
+    public static array $selfServiceAbilities = [];
+
     public function resolveSubject(Request $request): ?Subject
     {
         foreach (self::$profiles as $profile) {
@@ -46,7 +49,7 @@ final class DeviceFlowDeclaration implements CredentialDeclaration, DeclaresCred
 
     public function selfServiceAbilities(Subject $subject): array
     {
-        return [];
+        return self::$selfServiceAbilities;
     }
 
     public function selfServiceKinds(Subject $subject): array

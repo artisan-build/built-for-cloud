@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Actions;
 
 use ArtisanBuild\BuiltForCloud\AuditActor;
-use ArtisanBuild\BuiltForCloud\BrowserCredentialAuthorizationStore;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationAuthority;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationDecision;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationDenialReason;
@@ -25,20 +24,19 @@ final readonly class DecideLoopbackAuthorization
 {
     public function __construct(
         private CredentialAuthorizationPolicy $policy,
-        private BrowserCredentialAuthorizationStore $browser,
         private CredentialAuthorizationTransitions $transitions,
         private LifecycleEventRecorder $recorder,
     ) {}
 
-    public function __invoke(Request $request, string $authorizationId, bool $approve): CredentialAuthorizationDecision
+    public function __invoke(
+        Request $request,
+        string $authorizationId,
+        string $browserNonce,
+        string $state,
+        bool $approve,
+    ): CredentialAuthorizationDecision
     {
-        $payload = $this->browser->get($request, $authorizationId);
-
-        if ($payload === null || ($payload['flow'] ?? null) !== CredentialAuthorizationFlow::Loopback->value) {
-            throw CredentialAuthorizationRefused::unavailable();
-        }
-
-        $result = DB::transaction(function () use ($request, $authorizationId, $approve, $payload): CredentialAuthorizationDecision|CredentialAuthorizationRefused {
+        $result = DB::transaction(function () use ($request, $authorizationId, $browserNonce, $state, $approve): CredentialAuthorizationDecision|CredentialAuthorizationRefused {
             $authorization = DB::table('credential_authorizations')->where('id', $authorizationId)->lockForUpdate()->first();
             $user = $request->user();
 
@@ -47,8 +45,7 @@ final readonly class DecideLoopbackAuthorization
                 || $authorization->status !== CredentialAuthorizationStatus::Pending->value
                 || ! $user instanceof Authenticatable
                 || (string) $user->getAuthIdentifier() !== $authorization->initiating_user_id
-                || ! isset($payload['nonce'], $payload['state'])
-                || ! hash_equals((string) $authorization->browser_session_nonce_hash, hash('sha256', $payload['nonce']))
+                || ! hash_equals((string) $authorization->browser_session_nonce_hash, hash('sha256', $browserNonce))
                 || now()->greaterThanOrEqualTo($authorization->expires_at)) {
                 return CredentialAuthorizationRefused::unavailable();
             }
@@ -57,7 +54,6 @@ final readonly class DecideLoopbackAuthorization
                 [$profile] = $this->policy->revalidate($request, $authorization);
             } catch (CredentialAuthorizationRefused) {
                 $this->transitions->deny($authorization, CredentialAuthorizationDenialReason::ProfileWithdrawn, AuditActor::boundUser((string) $authorization->initiating_user_id));
-                $this->browser->forget($request, $authorizationId);
 
                 return CredentialAuthorizationRefused::unavailable();
             }
@@ -73,13 +69,12 @@ final readonly class DecideLoopbackAuthorization
                     ? CredentialAuthorizationDenialReason::AuthorityDenied
                     : CredentialAuthorizationDenialReason::UserDenied;
                 $this->transitions->deny($authorization, $reason, AuditActor::boundUser((string) $authorization->initiating_user_id));
-                $this->browser->forget($request, $authorizationId);
 
                 return new CredentialAuthorizationDecision(
                     $authorizationId,
                     CredentialAuthorizationStatus::Denied,
                     redirectUri: (string) $authorization->redirect_uri,
-                    state: $payload['state'],
+                    state: $state,
                 );
             }
 
@@ -95,14 +90,12 @@ final readonly class DecideLoopbackAuthorization
                 actor: AuditActor::boundUser((string) $authorization->initiating_user_id),
                 credentialAuthorizationId: $authorizationId,
             );
-            $this->browser->forget($request, $authorizationId);
-
             return new CredentialAuthorizationDecision(
                 $authorizationId,
                 CredentialAuthorizationStatus::Approved,
                 $code,
                 (string) $authorization->redirect_uri,
-                $payload['state'],
+                $state,
             );
         });
 

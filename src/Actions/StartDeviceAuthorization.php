@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Actions;
 
 use ArtisanBuild\BuiltForCloud\AuditActor;
-use ArtisanBuild\BuiltForCloud\BrowserCredentialAuthorizationStore;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationAuthority;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationFlow;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationPolicy;
@@ -25,7 +24,6 @@ final readonly class StartDeviceAuthorization
 
     public function __construct(
         private CredentialAuthorizationPolicy $policy,
-        private BrowserCredentialAuthorizationStore $browser,
         private LifecycleEventRecorder $recorder,
     ) {}
 
@@ -45,18 +43,16 @@ final readonly class StartDeviceAuthorization
         $label = $this->policy->label($label);
         $deviceCode = new MintedSecret(self::opaqueCode());
         $userCode = new MintedSecret(self::userCode());
-        $browserNonce = self::opaqueCode();
+        $browserNonce = new MintedSecret(self::opaqueCode());
         $authorizationId = (string) Str::uuid();
         $expiresAt = now()->addSeconds($profile->codeTtlSeconds);
-        $displayedUserCode = $userCode->reveal();
-        $replacementUserCode = new MintedSecret($displayedUserCode);
 
-        DB::transaction(function () use ($authenticatedRequest, $profile, $purpose, $userId, $label, $deviceCode, $displayedUserCode, $browserNonce, $authorizationId, $expiresAt): void {
+        DB::transaction(function () use ($profile, $purpose, $userId, $label, $deviceCode, $userCode, $browserNonce, $authorizationId, $expiresAt): void {
             DB::table('credential_authorizations')->insert([
                 'id' => $authorizationId,
                 'flow' => CredentialAuthorizationFlow::Device->value,
                 'device_code_hash' => $deviceCode->hash(),
-                'user_code_hash' => hash('sha256', $displayedUserCode),
+                'user_code_hash' => $userCode->hash(),
                 'status' => CredentialAuthorizationStatus::Pending->value,
                 ...$this->snapshot($profile, $purpose->value, $userId, $label, $browserNonce),
                 'base_interval' => $profile->initialPollInterval,
@@ -64,11 +60,6 @@ final readonly class StartDeviceAuthorization
                 'expires_at' => $expiresAt,
                 'created_at' => now(),
                 'updated_at' => now(),
-            ]);
-            $this->browser->put($authenticatedRequest, $authorizationId, [
-                'flow' => CredentialAuthorizationFlow::Device->value,
-                'nonce' => $browserNonce,
-                'user_code' => $displayedUserCode,
             ]);
             $this->recorder->record(
                 LifecycleEventType::CredentialAuthorizationStarted,
@@ -78,8 +69,10 @@ final readonly class StartDeviceAuthorization
         });
 
         return new DeviceAuthorizationStart(
+            $authorizationId,
             $deviceCode,
-            $replacementUserCode,
+            $userCode,
+            $browserNonce,
             url('/bfc/device'),
             $profile->codeTtlSeconds,
             $profile->initialPollInterval,
@@ -103,7 +96,7 @@ final readonly class StartDeviceAuthorization
     }
 
     /** @return array<string, mixed> */
-    private function snapshot(object $profile, string $purpose, string $userId, ?string $label, string $browserNonce): array
+    private function snapshot(object $profile, string $purpose, string $userId, ?string $label, MintedSecret $browserNonce): array
     {
         return [
             'app_purpose' => $profile->appPurpose,
@@ -118,7 +111,9 @@ final readonly class StartDeviceAuthorization
             'label' => $label,
             'credential_expires_at' => $profile->expiresAt,
             'initiating_user_id' => $userId,
-            'browser_session_nonce_hash' => hash('sha256', $browserNonce),
+            'browser_session_nonce_hash' => $browserNonce->hash(),
+            'profile_code_ttl_seconds' => $profile->codeTtlSeconds,
+            'profile_initial_poll_interval' => $profile->initialPollInterval,
         ];
     }
 }

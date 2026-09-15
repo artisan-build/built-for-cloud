@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Actions;
 
 use ArtisanBuild\BuiltForCloud\AuditActor;
-use ArtisanBuild\BuiltForCloud\BrowserCredentialAuthorizationStore;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationAuthority;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationDecision;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationDenialReason;
@@ -24,43 +23,37 @@ final readonly class DecideDeviceAuthorization
 {
     public function __construct(
         private CredentialAuthorizationPolicy $policy,
-        private BrowserCredentialAuthorizationStore $browser,
         private CredentialAuthorizationTransitions $transitions,
         private LifecycleEventRecorder $recorder,
     ) {}
 
-    public function __invoke(Request $request, string $userCode, bool $approve): CredentialAuthorizationDecision
+    public function __invoke(Request $request, string $userCode, string $browserNonce, bool $approve): CredentialAuthorizationDecision
     {
         $userCode = self::normalizeUserCode($userCode);
-        $binding = $this->browser->findDevice($request, $userCode);
 
-        if ($binding === null) {
-            throw CredentialAuthorizationRefused::unavailable();
-        }
-
-        [$authorizationId, $payload] = $binding;
-
-        $result = DB::transaction(function () use ($request, $userCode, $approve, $authorizationId, $payload): CredentialAuthorizationDecision|CredentialAuthorizationRefused {
-            $authorization = DB::table('credential_authorizations')->where('id', $authorizationId)->lockForUpdate()->first();
+        $result = DB::transaction(function () use ($request, $userCode, $browserNonce, $approve): CredentialAuthorizationDecision|CredentialAuthorizationRefused {
+            $authorization = DB::table('credential_authorizations')
+                ->where('flow', CredentialAuthorizationFlow::Device->value)
+                ->where('user_code_hash', hash('sha256', $userCode))
+                ->lockForUpdate()
+                ->first();
             $user = $request->user();
 
             if (! is_object($authorization)
-                || $authorization->flow !== CredentialAuthorizationFlow::Device->value
                 || $authorization->status !== CredentialAuthorizationStatus::Pending->value
                 || ! $user instanceof Authenticatable
                 || (string) $user->getAuthIdentifier() !== $authorization->initiating_user_id
-                || ! isset($payload['nonce'])
-                || ! hash_equals((string) $authorization->browser_session_nonce_hash, hash('sha256', $payload['nonce']))
-                || ! hash_equals((string) $authorization->user_code_hash, hash('sha256', $userCode))
+                || ! hash_equals((string) $authorization->browser_session_nonce_hash, hash('sha256', $browserNonce))
                 || now()->greaterThanOrEqualTo($authorization->expires_at)) {
                 return CredentialAuthorizationRefused::unavailable();
             }
+
+            $authorizationId = (string) $authorization->id;
 
             try {
                 [$profile] = $this->policy->revalidate($request, $authorization);
             } catch (CredentialAuthorizationRefused) {
                 $this->transitions->deny($authorization, CredentialAuthorizationDenialReason::ProfileWithdrawn, AuditActor::boundUser((string) $authorization->initiating_user_id));
-                $this->browser->forget($request, $authorizationId);
 
                 return CredentialAuthorizationRefused::unavailable();
             }
@@ -73,14 +66,12 @@ final readonly class DecideDeviceAuthorization
 
             if ($authority === CredentialAuthorizationAuthority::Denied) {
                 $this->transitions->deny($authorization, CredentialAuthorizationDenialReason::AuthorityDenied, AuditActor::boundUser((string) $authorization->initiating_user_id));
-                $this->browser->forget($request, $authorizationId);
 
                 return CredentialAuthorizationRefused::unavailable();
             }
 
             if (! $approve) {
                 $this->transitions->deny($authorization, CredentialAuthorizationDenialReason::UserDenied, AuditActor::boundUser((string) $authorization->initiating_user_id));
-                $this->browser->forget($request, $authorizationId);
 
                 return new CredentialAuthorizationDecision($authorizationId, CredentialAuthorizationStatus::Denied);
             }
@@ -95,8 +86,6 @@ final readonly class DecideDeviceAuthorization
                 actor: AuditActor::boundUser((string) $authorization->initiating_user_id),
                 credentialAuthorizationId: $authorizationId,
             );
-            $this->browser->forget($request, $authorizationId);
-
             return new CredentialAuthorizationDecision($authorizationId, CredentialAuthorizationStatus::Approved);
         });
 

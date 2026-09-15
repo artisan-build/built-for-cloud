@@ -96,6 +96,7 @@ function frozenPurposeDispositions(): array
         'resolver-caller:ArtisanBuild\\BuiltForCloud\\Auth\\BasicAuthenticator::credential|purpose=guard:{consumption,system_deployment}',
         'resolver-caller:ArtisanBuild\\BuiltForCloud\\Auth\\BearerAuthenticator::credential|purpose=guard:{consumption,system_deployment}',
         'resolver-caller:ArtisanBuild\\BuiltForCloud\\Auth\\CredentialGuard::validate|purpose={consumption,system_deployment}',
+        'resolver-caller:ArtisanBuild\\BuiltForCloud\\BoundBearerCredentialAuthenticator::authenticate|purpose=app-purpose-registry+exact-bound-bearer',
         'resolver-caller:ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::verifyUnifiedDurable|purpose={consumption,operator_management,enrollment}->scope',
         'resolver-caller:ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\AuthenticateMcp::handle|purpose=mcp|{operator_management+operator+credential:admin}',
         'resolver-caller:ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCredentialAdmin::handle|purpose=operator_management',
@@ -241,11 +242,12 @@ it('compares the exact AC2 resolver and ordinary HMAC purpose dispositions', fun
             'ArtisanBuild\\BuiltForCloud\\Auth\\BasicAuthenticator::credential|expressions=1',
             'ArtisanBuild\\BuiltForCloud\\Auth\\BearerAuthenticator::credential|expressions=1',
             'ArtisanBuild\\BuiltForCloud\\Auth\\CredentialGuard::validate|expressions=2',
+            'ArtisanBuild\\BuiltForCloud\\BoundBearerCredentialAuthenticator::authenticate|expressions=1',
             'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::verifyUnifiedDurable|expressions=1',
             'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\AuthenticateMcp::handle|expressions=1',
             'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCredentialAdmin::handle|expressions=1',
         ])
-        ->and($inventory['resolver_expression_count'])->toBe(7)
+        ->and($inventory['resolver_expression_count'])->toBe(8)
         ->and($inventory['hmac_selectors'])->toBe([
             'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacSigner',
             'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacVerifier',

@@ -5,6 +5,7 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\Actions\DecideDeviceAuthorization;
 use ArtisanBuild\BuiltForCloud\Actions\DecideLoopbackAuthorization;
 use ArtisanBuild\BuiltForCloud\Actions\ExchangeLoopbackAuthorization;
+use ArtisanBuild\BuiltForCloud\Actions\OffboardSubject;
 use ArtisanBuild\BuiltForCloud\Actions\PollDeviceAuthorization;
 use ArtisanBuild\BuiltForCloud\Actions\StartDeviceAuthorization;
 use ArtisanBuild\BuiltForCloud\Actions\StartLoopbackAuthorization;
@@ -20,6 +21,7 @@ use ArtisanBuild\BuiltForCloud\CredentialAuthorizationOwnership;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationPolicy;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationProfile;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialManagementScope;
 use ArtisanBuild\BuiltForCloud\CredentialMaterialRole;
 use ArtisanBuild\BuiltForCloud\CredentialProtocolBinding;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
@@ -27,6 +29,10 @@ use ArtisanBuild\BuiltForCloud\Exceptions\CredentialAuthorizationRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
+use ArtisanBuild\BuiltForCloud\ManagedAuthConfirmation;
+use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;
+use ArtisanBuild\BuiltForCloud\ManagedMembershipResponses;
+use ArtisanBuild\BuiltForCloud\OffboardOptions;
 use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -48,6 +54,7 @@ uses(RefreshDatabase::class);
 beforeEach(function (): void {
     DeviceFlowDeclaration::$profiles = [];
     DeviceFlowDeclaration::$authorizeCalls = 0;
+    DeviceFlowDeclaration::$selfServiceAbilities = [];
     config([
         'built-for-cloud.credentials.declaration' => DeviceFlowDeclaration::class,
         'built-for-cloud.credentials.app_purposes' => [
@@ -117,7 +124,7 @@ it('runs one hash-only device lifecycle and authenticates only the exact bound b
 
     expect(fn () => app(PollDeviceAuthorization::class)($request, $deviceCode))
         ->toThrow(CredentialAuthorizationRefused::class, 'authorization_pending');
-    app(DecideDeviceAuthorization::class)($request, strtolower(str_replace('-', '', $userCode)), true);
+    app(DecideDeviceAuthorization::class)($request, strtolower(str_replace('-', '', $userCode)), $start->browserNonce->reveal(), true);
     $this->travel(5)->seconds();
     $token = app(PollDeviceAuthorization::class)($request, $deviceCode);
     $plaintext = $token->accessToken->reveal();
@@ -135,12 +142,26 @@ it('runs one hash-only device lifecycle and authenticates only the exact bound b
             CredentialAlgorithm::Bearer,
             CredentialMaterialRole::Originator,
         ))->toBeTrue()
-        ->and(CredentialAuditEvent::query()->pluck('event')->sort()->values()->all())->toBe(collect([
-            LifecycleEventType::CredentialAuthorizationStarted,
-            LifecycleEventType::CredentialAuthorizationApproved,
-            LifecycleEventType::Issued,
-            LifecycleEventType::Exchanged,
-        ])->sort()->values()->all());
+        ->and(DB::table('credential_audit_events')->orderByRaw('rowid')->pluck('event')->all())->toBe([
+            LifecycleEventType::CredentialAuthorizationStarted->value,
+            LifecycleEventType::CredentialAuthorizationApproved->value,
+            LifecycleEventType::Issued->value,
+            LifecycleEventType::Exchanged->value,
+        ]);
+
+    $events = DB::table('credential_audit_events')->orderByRaw('rowid')->get();
+    expect($events[0]->credential_authorization_id)->toBe($row->id)
+        ->and($events[0]->credential_id)->toBeNull()
+        ->and($events[0]->code_id)->toBeNull()
+        ->and($events[1]->credential_authorization_id)->toBe($row->id)
+        ->and($events[1]->credential_id)->toBeNull()
+        ->and($events[1]->code_id)->toBeNull()
+        ->and($events[2]->credential_authorization_id)->toBe($row->id)
+        ->and($events[2]->credential_id)->toBe($credential->id)
+        ->and($events[2]->code_id)->toBeNull()
+        ->and($events[3]->credential_authorization_id)->toBe($row->id)
+        ->and($events[3]->credential_id)->toBe($credential->id)
+        ->and($events[3]->code_id)->toBeNull();
 
     $use = Request::create('/protected', 'GET', server: ['HTTP_AUTHORIZATION' => 'Bearer '.$plaintext]);
     $bound = app(BoundBearerCredentialAuthenticator::class)->authenticate($use, 'test.device');
@@ -178,7 +199,7 @@ it('uses the same mint and exact binding for loopback with PKCE and byte-exact r
         str_repeat('s', 32),
         'Loopback test',
     );
-    $decision = app(DecideLoopbackAuthorization::class)($request, $intent->authorizationId, true);
+    $decision = app(DecideLoopbackAuthorization::class)($request, $intent->authorizationId, $intent->browserNonce->reveal(), $intent->state, true);
     $code = $decision->authorizationCode?->reveal();
     $token = app(ExchangeLoopbackAuthorization::class)($request, (string) $code, $redirect, $verifier);
 
@@ -191,6 +212,65 @@ it('uses the same mint and exact binding for loopback with PKCE and byte-exact r
         ->toThrow(CredentialAuthorizationRefused::class, 'invalid_grant');
     expect(fn () => app(ExchangeLoopbackAuthorization::class)($request, str_repeat('a', 43), $redirect.'x', $verifier))
         ->toThrow(CredentialAuthorizationRefused::class);
+});
+
+it('checks valid loopback proofs under the lock and preserves approved grants on mismatch', function (string $dimension): void {
+    $user = deviceFlowUser();
+    DeviceFlowDeclaration::$profiles = [deviceProfile($user, 'test.loopback')];
+    $request = deviceRequest($this, $user);
+    $verifier = str_repeat('v', 43);
+    $challenge = rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=');
+    $redirect = 'http://127.0.0.1:49152/callback?test=created';
+    $intent = app(StartLoopbackAuthorization::class)($request, 'test.loopback', $redirect, $challenge, 'S256', str_repeat('s', 32));
+    $decision = app(DecideLoopbackAuthorization::class)($request, $intent->authorizationId, $intent->browserNonce->reveal(), $intent->state, true);
+    $code = (string) $decision->authorizationCode?->reveal();
+    [$attemptedRedirect, $attemptedVerifier] = match ($dimension) {
+        'verifier' => [$redirect, str_repeat('w', 43)],
+        'path' => ['http://127.0.0.1:49152/other?test=created', $verifier],
+        'port' => ['http://127.0.0.1:49153/callback?test=created', $verifier],
+    };
+
+    expect(fn () => app(ExchangeLoopbackAuthorization::class)($request, $code, $attemptedRedirect, $attemptedVerifier))
+        ->toThrow(CredentialAuthorizationRefused::class, 'invalid_grant')
+        ->and(DB::table('credential_authorizations')->where('id', $intent->authorizationId)->value('status'))->toBe('approved')
+        ->and(Credential::query()->count())->toBe(0);
+})->with(['verifier', 'path', 'port']);
+
+it('returns exact loopback terminal classes without mutating approved proof failures', function (): void {
+    Carbon::setTestNow('2026-09-15 12:00:00');
+    $user = deviceFlowUser();
+    DeviceFlowDeclaration::$profiles = [deviceProfile($user, 'test.loopback')];
+    $request = deviceRequest($this, $user);
+    $verifier = str_repeat('v', 43);
+    $challenge = rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=');
+    $redirect = 'http://127.0.0.1:49152/callback';
+    $approve = static function () use ($request, $verifier, $challenge, $redirect): array {
+        $intent = app(StartLoopbackAuthorization::class)($request, 'test.loopback', $redirect, $challenge, 'S256', str_repeat('s', 32));
+        $decision = app(DecideLoopbackAuthorization::class)($request, $intent->authorizationId, $intent->browserNonce->reveal(), $intent->state, true);
+
+        return [$intent, (string) $decision->authorizationCode?->reveal()];
+    };
+
+    [$expired, $expiredCode] = $approve();
+    DB::table('credential_authorizations')->where('id', $expired->authorizationId)->update(['expires_at' => now()]);
+    expect(fn () => app(ExchangeLoopbackAuthorization::class)($request, $expiredCode, $redirect, $verifier))
+        ->toThrow(CredentialAuthorizationRefused::class, 'expired_token');
+
+    [$denied, $deniedCode] = $approve();
+    DB::table('credential_authorizations')->where('id', $denied->authorizationId)->update([
+        'status' => 'denied',
+        'denial_reason' => 'authority_denied',
+    ]);
+    expect(fn () => app(ExchangeLoopbackAuthorization::class)($request, $deniedCode, $redirect, $verifier))
+        ->toThrow(CredentialAuthorizationRefused::class, 'access_denied');
+
+    [$approved, $approvedCode] = $approve();
+    $before = (array) DB::table('credential_authorizations')->where('id', $approved->authorizationId)->sole();
+    expect(fn () => app(ExchangeLoopbackAuthorization::class)($request, '', $redirect, $verifier))
+        ->toThrow(CredentialAuthorizationRefused::class, 'invalid_request')
+        ->and(fn () => app(ExchangeLoopbackAuthorization::class)($request, $approvedCode, 'http://127.0.0.1', $verifier))
+        ->toThrow(CredentialAuthorizationRefused::class, 'invalid_request')
+        ->and((array) DB::table('credential_authorizations')->where('id', $approved->authorizationId)->sole())->toBe($before);
 });
 
 it('refuses missing duplicate and installation operator profiles before writing', function (): void {
@@ -215,6 +295,87 @@ it('refuses missing duplicate and installation operator profiles before writing'
         ->toThrow(InvalidCredentialInput::class)
         ->and(DB::table('credential_authorizations')->count())->toBe(0)
         ->and(CredentialAuditEvent::query()->count())->toBe(0);
+});
+
+it('enforces the personal self-service ability grant before writing', function (): void {
+    $user = deviceFlowUser();
+    $request = deviceRequest($this, $user);
+    $base = deviceProfile($user);
+    DeviceFlowDeclaration::$profiles = [new CredentialAuthorizationProfile(
+        'test.device',
+        $base->scope,
+        CredentialAuthorizationOwnership::Personal,
+        ['mcp:read'],
+        null,
+        60,
+        5,
+    )];
+
+    expect(fn () => app(StartDeviceAuthorization::class)($request, 'test.device'))
+        ->toThrow(InvalidCredentialInput::class)
+        ->and(DB::table('credential_authorizations')->count())->toBe(0)
+        ->and(CredentialAuditEvent::query()->count())->toBe(0);
+
+    DeviceFlowDeclaration::$selfServiceAbilities = ['mcp:read'];
+    $start = app(StartDeviceAuthorization::class)($request, 'test.device');
+    expect(DB::table('credential_authorizations')->sole()->abilities)->toBe(json_encode(['mcp:read']))
+        ->and($start->deviceCode->revealed())->toBeFalse();
+});
+
+it('ignores every UI visibility flag at start exchange and bound use for both transports', function (string $flow, bool $visible): void {
+    config([
+        'built-for-cloud.ui.credential_purposes' => $visible ? ['test.device', 'test.loopback'] : [],
+        'built-for-cloud.ui.personal_credentials' => $visible,
+        'built-for-cloud.ui.installation_credentials' => $visible,
+    ]);
+    $user = deviceFlowUser();
+    $purpose = $flow === 'device' ? 'test.device' : 'test.loopback';
+    DeviceFlowDeclaration::$profiles = [deviceProfile($user, $purpose)];
+    $request = deviceRequest($this, $user);
+
+    if ($flow === 'device') {
+        $start = app(StartDeviceAuthorization::class)($request, $purpose);
+        app(DecideDeviceAuthorization::class)($request, $start->userCode->reveal(), $start->browserNonce->reveal(), true);
+        $token = app(PollDeviceAuthorization::class)($request, $start->deviceCode->reveal());
+    } else {
+        $verifier = str_repeat('v', 43);
+        $challenge = rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=');
+        $intent = app(StartLoopbackAuthorization::class)($request, $purpose, 'http://127.0.0.1:49152/callback', $challenge, 'S256', str_repeat('s', 32));
+        $decision = app(DecideLoopbackAuthorization::class)($request, $intent->authorizationId, $intent->browserNonce->reveal(), $intent->state, true);
+        $token = app(ExchangeLoopbackAuthorization::class)($request, (string) $decision->authorizationCode?->reveal(), $intent->redirectUri, $verifier);
+    }
+
+    $secret = $token->accessToken->reveal();
+    $use = Request::create('/protected', 'GET', server: ['HTTP_AUTHORIZATION' => 'Bearer '.$secret]);
+    expect(app(BoundBearerCredentialAuthenticator::class)->authenticate($use, $purpose)?->id)->toBe($token->credentialId);
+})->with([
+    'device hidden' => ['device', false],
+    'device shown' => ['device', true],
+    'loopback hidden' => ['loopback', false],
+    'loopback shown' => ['loopback', true],
+]);
+
+it('keeps start plaintext out of rows audit outbox and package session serialization', function (): void {
+    $user = deviceFlowUser();
+    DeviceFlowDeclaration::$profiles = [deviceProfile($user)];
+    $request = deviceRequest($this, $user);
+    $sessionBefore = serialize($request->session()->all());
+    $start = app(StartDeviceAuthorization::class)($request, 'test.device');
+    $deviceCode = $start->deviceCode->reveal();
+    $userCode = $start->userCode->reveal();
+    $nonce = $start->browserNonce->reveal();
+    $row = DB::table('credential_authorizations')->sole();
+    $persisted = json_encode([
+        (array) $row,
+        CredentialAuditEvent::query()->get()->toArray(),
+        DB::table('credential_outbox')->get()->map(static fn (object $entry): array => (array) $entry)->all(),
+    ], JSON_THROW_ON_ERROR);
+
+    expect($row->device_code_hash)->toBe(hash('sha256', $deviceCode))
+        ->and($row->user_code_hash)->toBe(hash('sha256', $userCode))
+        ->and($row->browser_session_nonce_hash)->toBe(hash('sha256', $nonce))
+        ->and($persisted)->not->toContain($deviceCode, $userCode, $nonce)
+        ->and(serialize($request->session()->all()))->toBe($sessionBefore);
 });
 
 it('serializes cadence and contains personal grants before revocation without following installation creators', function (): void {
@@ -246,9 +407,11 @@ it('serializes cadence and contains personal grants before revocation without fo
     $installationStart = app(StartDeviceAuthorization::class)($request, 'test.device');
     $installationCode = $installationStart->deviceCode->reveal();
     $installationUserCode = $installationStart->userCode->reveal();
-    app(DecideDeviceAuthorization::class)($request, $installationUserCode, true);
+    app(DecideDeviceAuthorization::class)($request, $installationUserCode, $installationStart->browserNonce->reveal(), true);
     $installationToken = app(PollDeviceAuthorization::class)($request, $installationCode);
     $installationCredential = Credential::query()->findOrFail($installationToken->credentialId);
+
+    expect(CredentialManagementScope::memberInstallation()->apply(Credential::query())->whereKey($installationCredential->id)->exists())->toBeTrue();
 
     DB::transaction(static fn () => StandaloneAccess::invalidateAccountBoundState($user));
 
@@ -256,6 +419,137 @@ it('serializes cadence and contains personal grants before revocation without fo
         ->toBe('denied')
         ->and($installationCredential->refresh()->revoked_at)->toBeNull()
         ->and($installationCredential->user_id)->toBeNull();
+});
+
+it('lets an approved installation grant survive real creator denial and exchange', function (): void {
+    Carbon::setTestNow('2026-09-15 12:00:00');
+    $user = deviceFlowUser();
+    $user->forceFill(['role' => 'member'])->save();
+    DeviceFlowDeclaration::$profiles = [new CredentialAuthorizationProfile(
+        'test.device',
+        new BoundCredentialScope('test.device', new Subject(SubjectType::Installation, 'installation-fixture'), 'installation-fixture', 'application-fixture', 'audience.example.test'),
+        CredentialAuthorizationOwnership::Installation,
+        [],
+        null,
+        600,
+        5,
+    )];
+    $request = deviceRequest($this, $user);
+    $start = app(StartDeviceAuthorization::class)($request, 'test.device');
+    $deviceCode = $start->deviceCode->reveal();
+    app(DecideDeviceAuthorization::class)($request, $start->userCode->reveal(), $start->browserNonce->reveal(), true);
+
+    DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
+        'mode' => AuthorityMode::Managed->value,
+        'generation' => 7,
+        'issuer' => 'https://issuer.example.test',
+        'connection_id' => 'connection-fixture',
+        'organization_id' => 'organization-fixture',
+        'installation_id' => 'installation-fixture',
+        'authority_base_url' => 'https://authority.example.test',
+        'managed_connection_status' => 'active',
+    ]);
+    config(['built-for-cloud.managed.client_secret' => 'fixture-client-secret']);
+    $user->forceFill([
+        'status' => 'active',
+        'scalpels_issuer' => 'https://issuer.example.test',
+        'scalpels_connection_id' => 'connection-fixture',
+        'scalpels_id' => 'managed-device-user',
+        'membership_confirmed_at' => now(),
+        'membership_response_at' => now(),
+        'managed_membership_status' => 'active',
+        'managed_membership_generation' => 7,
+        'managed_membership_roster_version' => 1,
+        'managed_membership_response_sequence' => 1,
+    ])->save();
+    $connection = ManagedAuthConnection::current();
+    app(ManagedMembershipResponses::class)->applyConfirmation(
+        $connection,
+        $user,
+        new ManagedAuthConfirmation('managed-device-user', 'removed', 'active', 'member', 2, 2, new DateTimeImmutable('2026-09-15T12:00:00+00:00')),
+    );
+    Http::fake(static fn () => Http::response(['error' => 'test-created-outage'], 503));
+
+    expect(DB::table('credential_authorizations')->sole()->status)->toBe('approved');
+    $token = app(PollDeviceAuthorization::class)($request, $deviceCode);
+    expect(Credential::query()->findOrFail($token->credentialId)->user_id)->toBeNull()
+        ->and(DB::table('credential_authorizations')->sole()->status)->toBe('consumed');
+});
+
+it('contains installation grants through the real connection-denial chain', function (): void {
+    Carbon::setTestNow('2026-09-15 12:00:00');
+    $user = deviceFlowUser();
+    $user->forceFill([
+        'role' => 'member',
+        'status' => 'active',
+        'scalpels_issuer' => 'https://issuer.example.test',
+        'scalpels_connection_id' => 'connection-fixture',
+        'scalpels_id' => 'managed-device-user',
+        'membership_confirmed_at' => now(),
+        'membership_response_at' => now(),
+        'managed_membership_status' => 'active',
+        'managed_membership_generation' => 7,
+        'managed_membership_roster_version' => 1,
+        'managed_membership_response_sequence' => 1,
+    ])->save();
+    DeviceFlowDeclaration::$profiles = [new CredentialAuthorizationProfile(
+        'test.device',
+        new BoundCredentialScope('test.device', new Subject(SubjectType::Installation, 'installation-fixture'), 'installation-fixture', 'application-fixture', 'audience.example.test'),
+        CredentialAuthorizationOwnership::Installation,
+        [],
+        null,
+        600,
+        5,
+    )];
+    $request = deviceRequest($this, $user);
+    app(StartDeviceAuthorization::class)($request, 'test.device');
+    DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
+        'mode' => AuthorityMode::Managed->value,
+        'generation' => 7,
+        'issuer' => 'https://issuer.example.test',
+        'connection_id' => 'connection-fixture',
+        'organization_id' => 'organization-fixture',
+        'installation_id' => 'installation-fixture',
+        'authority_base_url' => 'https://authority.example.test',
+        'managed_connection_status' => 'active',
+    ]);
+    config(['built-for-cloud.managed.client_secret' => 'fixture-client-secret']);
+    $connection = ManagedAuthConnection::current();
+
+    app(ManagedMembershipResponses::class)->applyConfirmation(
+        $connection,
+        $user,
+        new ManagedAuthConfirmation('managed-device-user', 'active', 'inactive', 'member', 2, 2, new DateTimeImmutable('2026-09-15T12:00:00+00:00')),
+    );
+
+    expect(DB::table('credential_authorizations')->sole()->status)->toBe('denied')
+        ->and(DB::table('credential_authorizations')->sole()->denial_reason)->toBe('connection_inactive');
+});
+
+it('contains and revokes installation state through direct subject offboarding', function (): void {
+    $user = deviceFlowUser();
+    $user->forceFill(['role' => 'member'])->save();
+    $subject = new Subject(SubjectType::Installation, 'installation-fixture');
+    DeviceFlowDeclaration::$profiles = [new CredentialAuthorizationProfile(
+        'test.device',
+        new BoundCredentialScope('test.device', $subject, 'installation-fixture', 'application-fixture', 'audience.example.test'),
+        CredentialAuthorizationOwnership::Installation,
+        [],
+        null,
+        600,
+        5,
+    )];
+    $request = deviceRequest($this, $user);
+    $issued = app(StartDeviceAuthorization::class)($request, 'test.device');
+    app(DecideDeviceAuthorization::class)($request, $issued->userCode->reveal(), $issued->browserNonce->reveal(), true);
+    $credentialId = app(PollDeviceAuthorization::class)($request, $issued->deviceCode->reveal())->credentialId;
+    app(StartDeviceAuthorization::class)($request, 'test.device');
+
+    app(OffboardSubject::class)(new OffboardOptions($subject->type, $subject->ref));
+
+    expect(Credential::query()->findOrFail($credentialId)->revoked_at)->not->toBeNull()
+        ->and(DB::table('credential_authorizations')->where('status', 'denied')->count())->toBe(1)
+        ->and(DB::table('credential_authorizations')->where('status', 'consumed')->count())->toBe(1);
 });
 
 it('refuses malformed profile authority and exact package-boundary values before writing', function (callable $mutate): void {
@@ -271,8 +565,8 @@ it('refuses malformed profile authority and exact package-boundary values before
 })->with([
     'missing mapping' => fn () => config(['built-for-cloud.credentials.app_purposes' => []]),
     'list-valued mapping' => fn () => config(['built-for-cloud.credentials.app_purposes' => ['test.device' => [CredentialPurpose::Consumption->value], 'test.loopback' => CredentialPurpose::Consumption->value]]),
+    'malformed mapping' => fn () => config(['built-for-cloud.credentials.app_purposes' => ['test.device' => true, 'test.loopback' => CredentialPurpose::Consumption->value]]),
     'unknown mapping' => fn () => config(['built-for-cloud.credentials.app_purposes' => ['test.device' => 'unknown-purpose', 'test.loopback' => CredentialPurpose::Consumption->value]]),
-    'duplicate UI authority' => fn () => config(['built-for-cloud.ui.credential_purposes' => ['test.device', 'test.device']]),
     'malformed profile list' => fn () => DeviceFlowDeclaration::$profiles = [new stdClass],
     'ttl below minimum' => fn (User $user) => DeviceFlowDeclaration::$profiles = [new CredentialAuthorizationProfile('test.device', deviceProfile($user)->scope, CredentialAuthorizationOwnership::Personal, [], null, 59, 5)],
     'ttl above maximum' => fn (User $user) => DeviceFlowDeclaration::$profiles = [new CredentialAuthorizationProfile('test.device', deviceProfile($user)->scope, CredentialAuthorizationOwnership::Personal, [], null, 901, 5)],
@@ -286,7 +580,7 @@ it('rejects every exact-bound drift before declaration or usage effects', functi
     DeviceFlowDeclaration::$profiles = [deviceProfile($user)];
     $request = deviceRequest($this, $user);
     $start = app(StartDeviceAuthorization::class)($request, 'test.device');
-    app(DecideDeviceAuthorization::class)($request, $start->userCode->reveal(), true);
+    app(DecideDeviceAuthorization::class)($request, $start->userCode->reveal(), $start->browserNonce->reveal(), true);
     $token = app(PollDeviceAuthorization::class)($request, $start->deviceCode->reveal());
     $secret = $token->accessToken->reveal();
     $credential = Credential::query()->findOrFail($token->credentialId);
@@ -323,6 +617,50 @@ it('rejects every exact-bound drift before declaration or usage effects', functi
     },
 ]);
 
+it('rejects wrong binding before managed refresh cache declaration usage or client identity effects', function (): void {
+    Carbon::setTestNow('2026-09-15 12:00:00');
+    $user = deviceFlowUser();
+    DeviceFlowDeclaration::$profiles = [deviceProfile($user)];
+    $request = deviceRequest($this, $user);
+    $start = app(StartDeviceAuthorization::class)($request, 'test.device');
+    app(DecideDeviceAuthorization::class)($request, $start->userCode->reveal(), $start->browserNonce->reveal(), true);
+    $token = app(PollDeviceAuthorization::class)($request, $start->deviceCode->reveal());
+    $secret = $token->accessToken->reveal();
+    DB::table('credential_protocol_bindings')->where('credential_id', $token->credentialId)->update(['audience' => 'wrong-audience']);
+    DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
+        'mode' => AuthorityMode::Managed->value,
+        'generation' => 7,
+        'issuer' => 'https://issuer.example.test',
+        'connection_id' => 'connection-fixture',
+        'organization_id' => 'organization-fixture',
+        'installation_id' => 'installation-fixture',
+        'authority_base_url' => 'https://authority.example.test',
+        'managed_connection_status' => 'active',
+    ]);
+    $user->forceFill([
+        'scalpels_issuer' => 'https://issuer.example.test',
+        'scalpels_connection_id' => 'connection-fixture',
+        'scalpels_id' => 'managed-device-user',
+        'membership_confirmed_at' => now()->subHour(),
+        'managed_membership_status' => 'active',
+    ])->save();
+    Cache::flush();
+    Http::fake(static fn () => Http::response(['error' => 'must-not-run'], 500));
+    DeviceFlowDeclaration::$authorizeCalls = 0;
+    $use = Request::create('/protected', 'GET', server: [
+        'HTTP_AUTHORIZATION' => 'Bearer '.$secret,
+        'HTTP_USER_AGENT' => 'binding-canary',
+    ]);
+    $refreshKey = hash('sha256', "https://issuer.example.test\0connection-fixture\0managed-device-user");
+
+    expect(app(BoundBearerCredentialAuthenticator::class)->authenticate($use, 'test.device'))->toBeNull()
+        ->and(DeviceFlowDeclaration::$authorizeCalls)->toBe(0)
+        ->and(Credential::query()->findOrFail($token->credentialId)->last_used_at)->toBeNull()
+        ->and(DB::table('bfc_client_identity_observations')->count())->toBe(0)
+        ->and(Cache::get('bfc:managed-refresh-attempt:'.$refreshKey))->toBeNull();
+    Http::assertNothingSent();
+});
+
 it('rolls back a credential collision and permits one later exchange without redelivery', function (): void {
     Carbon::setTestNow('2026-09-15 12:00:00');
     $user = deviceFlowUser();
@@ -330,7 +668,7 @@ it('rolls back a credential collision and permits one later exchange without red
     $request = deviceRequest($this, $user);
     $start = app(StartDeviceAuthorization::class)($request, 'test.device');
     $code = $start->deviceCode->reveal();
-    app(DecideDeviceAuthorization::class)($request, $start->userCode->reveal(), true);
+    app(DecideDeviceAuthorization::class)($request, $start->userCode->reveal(), $start->browserNonce->reveal(), true);
     $collision = (string) Str::uuid();
     Credential::query()->create([
         'id' => $collision,
@@ -416,6 +754,94 @@ it('uses five-minute freshness and thirty-minute grace without turning faults in
         ->and(CredentialAuditEvent::query()->count())->toBe(0);
 });
 
+it('keeps approved production-action state unchanged when authority fails after grace', function (string $flow): void {
+    Carbon::setTestNow('2026-09-15 12:00:00');
+    DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
+        'mode' => AuthorityMode::Managed->value,
+        'generation' => 7,
+        'issuer' => 'https://issuer.example.test',
+        'connection_id' => 'connection-fixture',
+        'organization_id' => 'organization-fixture',
+        'installation_id' => 'installation-fixture',
+        'authority_base_url' => 'https://authority.example.test',
+        'managed_connection_status' => 'active',
+    ]);
+    config(['built-for-cloud.managed.client_secret' => 'fixture-client-secret']);
+    Http::fake(static fn () => Http::response(['error' => 'test-created-outage'], 503));
+    $user = deviceFlowUser();
+    $user->forceFill([
+        'role' => 'member',
+        'status' => 'active',
+        'scalpels_issuer' => 'https://issuer.example.test',
+        'scalpels_connection_id' => 'connection-fixture',
+        'scalpels_id' => 'managed-device-user',
+        'membership_confirmed_at' => now()->subMinutes(29),
+        'membership_checked_at' => now()->subMinutes(29),
+        'membership_response_at' => now()->subMinutes(29),
+        'managed_membership_status' => 'active',
+        'managed_membership_role' => 'member',
+        'managed_membership_generation' => 7,
+        'managed_membership_roster_version' => 1,
+        'managed_membership_response_sequence' => 1,
+        'managed_membership_responded_at' => now()->subMinutes(29),
+    ])->save();
+    $purpose = $flow === 'device' ? 'test.device' : 'test.loopback';
+    DeviceFlowDeclaration::$profiles = [new CredentialAuthorizationProfile(
+        $purpose,
+        new BoundCredentialScope($purpose, new Subject(SubjectType::Installation, 'installation-fixture'), 'installation-fixture', 'application-fixture', 'audience.example.test'),
+        CredentialAuthorizationOwnership::Installation,
+        [],
+        null,
+        600,
+        5,
+    )];
+    $request = deviceRequest($this, $user);
+    $verifier = str_repeat('v', 43);
+
+    if ($flow === 'device') {
+        $start = app(StartDeviceAuthorization::class)($request, $purpose);
+        $proof = $start->deviceCode->reveal();
+        app(DecideDeviceAuthorization::class)($request, $start->userCode->reveal(), $start->browserNonce->reveal(), true);
+    } else {
+        $challenge = rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=');
+        $intent = app(StartLoopbackAuthorization::class)($request, $purpose, 'http://127.0.0.1:49152/callback', $challenge, 'S256', str_repeat('s', 32));
+        $proof = (string) app(DecideLoopbackAuthorization::class)($request, $intent->authorizationId, $intent->browserNonce->reveal(), $intent->state, true)->authorizationCode?->reveal();
+    }
+
+    $this->travel(60)->seconds();
+    Cache::flush();
+    $authorizationBefore = (array) DB::table('credential_authorizations')->sole();
+    $auditBefore = CredentialAuditEvent::query()->count();
+    $attempt = fn () => $flow === 'device'
+        ? app(PollDeviceAuthorization::class)($request, $proof)
+        : app(ExchangeLoopbackAuthorization::class)($request, $proof, 'http://127.0.0.1:49152/callback', $verifier);
+
+    expect($attempt)->toThrow(CredentialAuthorizationRefused::class, 'temporarily_unavailable')
+        ->and((array) DB::table('credential_authorizations')->sole())->toBe($authorizationBefore)
+        ->and(CredentialAuditEvent::query()->count())->toBe($auditBefore)
+        ->and(Credential::query()->count())->toBe(0);
+
+    $rowsBefore = DB::table('credential_authorizations')->count();
+    expect(fn () => app(StartDeviceAuthorization::class)($request, $purpose))
+        ->toThrow(CredentialAuthorizationRefused::class, 'temporarily_unavailable')
+        ->and(DB::table('credential_authorizations')->count())->toBe($rowsBefore);
+})->with(['device', 'loopback']);
+
+it('writes nothing when current connection authority denies start', function (): void {
+    DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
+        'mode' => AuthorityMode::Managed->value,
+        'managed_connection_status' => 'inactive',
+    ]);
+    $user = deviceFlowUser();
+    DeviceFlowDeclaration::$profiles = [deviceProfile($user)];
+    $request = deviceRequest($this, $user);
+
+    expect(fn () => app(StartDeviceAuthorization::class)($request, 'test.device'))
+        ->toThrow(CredentialAuthorizationRefused::class, 'access_denied')
+        ->and(DB::table('credential_authorizations')->count())->toBe(0)
+        ->and(CredentialAuditEvent::query()->count())->toBe(0);
+});
+
 it('honours inclusive lifetime and cadence bounds and gives expiry priority over cadence', function (int $ttl, int $interval): void {
     Carbon::setTestNow('2026-09-15 12:00:00');
     $user = deviceFlowUser();
@@ -437,6 +863,9 @@ it('honours inclusive lifetime and cadence bounds and gives expiry priority over
         ->and($start->interval)->toBe($interval)
         ->and(fn () => app(PollDeviceAuthorization::class)($request, $code))
         ->toThrow(CredentialAuthorizationRefused::class, 'authorization_pending');
+    Carbon::setTestNow(Carbon::parse('2026-09-15 12:00:00')->addSeconds($ttl - 1));
+    expect(fn () => app(PollDeviceAuthorization::class)($request, $code))
+        ->toThrow(CredentialAuthorizationRefused::class, 'authorization_pending');
     Carbon::setTestNow(Carbon::parse('2026-09-15 12:00:00')->addSeconds($ttl));
     expect(fn () => app(PollDeviceAuthorization::class)($request, $code))
         ->toThrow(CredentialAuthorizationRefused::class, 'expired_token')
@@ -446,13 +875,50 @@ it('honours inclusive lifetime and cadence bounds and gives expiry priority over
     'maximums' => [900, 30],
 ]);
 
+it('increases early-poll cadence by five to thirty and admits each returned interval', function (): void {
+    Carbon::setTestNow('2026-09-15 12:00:00');
+    $user = deviceFlowUser();
+    DeviceFlowDeclaration::$profiles = [deviceProfile($user)];
+    $request = deviceRequest($this, $user);
+    $code = app(StartDeviceAuthorization::class)($request, 'test.device')->deviceCode->reveal();
+
+    expect(fn () => app(PollDeviceAuthorization::class)($request, $code))
+        ->toThrow(CredentialAuthorizationRefused::class, 'authorization_pending');
+
+    foreach ([10, 15, 20, 25, 30, 30] as $interval) {
+        expect(fn () => app(PollDeviceAuthorization::class)($request, $code))
+            ->toThrow(CredentialAuthorizationRefused::class, 'slow_down');
+        expect((int) DB::table('credential_authorizations')->sole()->effective_interval)->toBe($interval);
+        $this->travel($interval)->seconds();
+        expect(fn () => app(PollDeviceAuthorization::class)($request, $code))
+            ->toThrow(CredentialAuthorizationRefused::class, 'authorization_pending');
+    }
+});
+
+it('returns stored denial and unknown grant before cadence effects', function (): void {
+    Carbon::setTestNow('2026-09-15 12:00:00');
+    $user = deviceFlowUser();
+    DeviceFlowDeclaration::$profiles = [deviceProfile($user)];
+    $request = deviceRequest($this, $user);
+    $start = app(StartDeviceAuthorization::class)($request, 'test.device');
+    $deviceCode = $start->deviceCode->reveal();
+    app(DecideDeviceAuthorization::class)($request, $start->userCode->reveal(), $start->browserNonce->reveal(), false);
+    $before = (array) DB::table('credential_authorizations')->sole();
+
+    expect(fn () => app(PollDeviceAuthorization::class)($request, $deviceCode))
+        ->toThrow(CredentialAuthorizationRefused::class, 'access_denied')
+        ->and(fn () => app(PollDeviceAuthorization::class)($request, str_repeat('z', 43)))
+        ->toThrow(CredentialAuthorizationRefused::class, 'invalid_grant')
+        ->and((array) DB::table('credential_authorizations')->sole())->toBe($before);
+});
+
 it('turns profile drift into one terminal denial without minting', function (): void {
     Carbon::setTestNow('2026-09-15 12:00:00');
     $user = deviceFlowUser();
     DeviceFlowDeclaration::$profiles = [deviceProfile($user)];
     $request = deviceRequest($this, $user);
     $start = app(StartDeviceAuthorization::class)($request, 'test.device');
-    app(DecideDeviceAuthorization::class)($request, $start->userCode->reveal(), true);
+    app(DecideDeviceAuthorization::class)($request, $start->userCode->reveal(), $start->browserNonce->reveal(), true);
     DeviceFlowDeclaration::$profiles = [new CredentialAuthorizationProfile(
         'test.device',
         new BoundCredentialScope('test.device', deviceProfile($user)->scope->subject, 'installation-test-1', 'application-test-1', 'drifted-audience.example.test'),
@@ -469,6 +935,30 @@ it('turns profile drift into one terminal denial without minting', function (): 
         ->and(Credential::query()->count())->toBe(0)
         ->and(CredentialAuditEvent::query()->where('event', LifecycleEventType::CredentialAuthorizationDenied)->count())->toBe(1);
 });
+
+it('turns stored lifetime and cadence drift into the same terminal denial', function (string $dimension): void {
+    Carbon::setTestNow('2026-09-15 12:00:00');
+    $user = deviceFlowUser();
+    DeviceFlowDeclaration::$profiles = [deviceProfile($user)];
+    $request = deviceRequest($this, $user);
+    $start = app(StartDeviceAuthorization::class)($request, 'test.device');
+    app(DecideDeviceAuthorization::class)($request, $start->userCode->reveal(), $start->browserNonce->reveal(), true);
+    $profile = deviceProfile($user);
+    DeviceFlowDeclaration::$profiles = [new CredentialAuthorizationProfile(
+        'test.device',
+        $profile->scope,
+        CredentialAuthorizationOwnership::Personal,
+        [],
+        $profile->expiresAt,
+        $dimension === 'lifetime' ? 60 : 600,
+        $dimension === 'cadence' ? 10 : 5,
+    )];
+
+    expect(fn () => app(PollDeviceAuthorization::class)($request, $start->deviceCode->reveal()))
+        ->toThrow(CredentialAuthorizationRefused::class, 'access_denied')
+        ->and(DB::table('credential_authorizations')->sole()->status)->toBe('denied')
+        ->and(Credential::query()->count())->toBe(0);
+})->with(['lifetime', 'cadence']);
 
 it('rejects malformed opaque proofs before touching grant cadence or audit', function (string $code): void {
     $user = deviceFlowUser();

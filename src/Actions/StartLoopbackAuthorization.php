@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Actions;
 
 use ArtisanBuild\BuiltForCloud\AuditActor;
-use ArtisanBuild\BuiltForCloud\BrowserCredentialAuthorizationStore;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationAuthority;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationFlow;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationPolicy;
@@ -15,6 +14,7 @@ use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\LoopbackAuthorizationIntent;
 use ArtisanBuild\BuiltForCloud\LoopbackRedirectUri;
+use ArtisanBuild\BuiltForCloud\MintedSecret;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -23,7 +23,6 @@ final readonly class StartLoopbackAuthorization
 {
     public function __construct(
         private CredentialAuthorizationPolicy $policy,
-        private BrowserCredentialAuthorizationStore $browser,
         private LifecycleEventRecorder $recorder,
     ) {}
 
@@ -55,10 +54,10 @@ final readonly class StartLoopbackAuthorization
         }
 
         $label = $this->policy->label($label);
-        $browserNonce = self::opaqueCode();
+        $browserNonce = new MintedSecret(self::opaqueCode());
         $authorizationId = (string) Str::uuid();
 
-        DB::transaction(function () use ($authenticatedRequest, $profile, $purpose, $userId, $label, $redirect, $codeChallenge, $state, $browserNonce, $authorizationId): void {
+        DB::transaction(function () use ($profile, $purpose, $userId, $label, $redirect, $codeChallenge, $browserNonce, $authorizationId): void {
             DB::table('credential_authorizations')->insert([
                 'id' => $authorizationId,
                 'flow' => CredentialAuthorizationFlow::Loopback->value,
@@ -77,15 +76,12 @@ final readonly class StartLoopbackAuthorization
                 'label' => $label,
                 'credential_expires_at' => $profile->expiresAt,
                 'initiating_user_id' => $userId,
-                'browser_session_nonce_hash' => hash('sha256', $browserNonce),
+                'browser_session_nonce_hash' => $browserNonce->hash(),
+                'profile_code_ttl_seconds' => $profile->codeTtlSeconds,
+                'profile_initial_poll_interval' => $profile->initialPollInterval,
                 'expires_at' => now()->addSeconds($profile->codeTtlSeconds),
                 'created_at' => now(),
                 'updated_at' => now(),
-            ]);
-            $this->browser->put($authenticatedRequest, $authorizationId, [
-                'flow' => CredentialAuthorizationFlow::Loopback->value,
-                'nonce' => $browserNonce,
-                'state' => $state,
             ]);
             $this->recorder->record(
                 LifecycleEventType::CredentialAuthorizationStarted,
@@ -94,7 +90,7 @@ final readonly class StartLoopbackAuthorization
             );
         });
 
-        return new LoopbackAuthorizationIntent($authorizationId, $appPurpose, $redirect->value, $state);
+        return new LoopbackAuthorizationIntent($authorizationId, $appPurpose, $redirect->value, $state, $browserNonce);
     }
 
     private static function opaqueCode(): string

@@ -34,6 +34,8 @@ return new class extends Migration
             $table->timestamp('credential_expires_at')->nullable();
             $table->string('initiating_user_id', 64)->index();
             $table->char('browser_session_nonce_hash', 64);
+            $table->unsignedSmallInteger('profile_code_ttl_seconds');
+            $table->unsignedSmallInteger('profile_initial_poll_interval');
             $table->unsignedSmallInteger('base_interval')->nullable();
             $table->unsignedSmallInteger('effective_interval')->nullable();
             $table->timestamp('last_polled_at')->nullable();
@@ -117,6 +119,8 @@ return new class extends Migration
                     OR (status IN ('approved', 'consumed') AND authorization_code_hash IS NOT NULL)
                     OR status = 'denied')))
             AND status IN ('pending', 'approved', 'denied', 'consumed')
+            AND profile_code_ttl_seconds BETWEEN 60 AND 900
+            AND profile_initial_poll_interval BETWEEN 5 AND 30
             AND ((status = 'denied' AND denial_reason IS NOT NULL) OR (status <> 'denied' AND denial_reason IS NULL))
             AND ((status = 'consumed' AND consumed_at IS NOT NULL AND issued_credential_id IS NOT NULL)
                 OR (status <> 'consumed' AND consumed_at IS NULL AND issued_credential_id IS NULL))
@@ -134,6 +138,7 @@ return new class extends Migration
             $columns = [
                 'flow', 'device_code_hash', 'user_code_hash', 'redirect_uri', 'pkce_challenge',
                 'authorization_code_hash', 'base_interval', 'effective_interval', 'last_polled_at',
+                'profile_code_ttl_seconds', 'profile_initial_poll_interval',
                 'status', 'denial_reason', 'consumed_at', 'issued_credential_id',
             ];
             $sqliteShape = preg_replace(

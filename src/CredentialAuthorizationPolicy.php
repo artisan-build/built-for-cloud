@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DeclaresCredentialAuthorizationProfiles;
+use ArtisanBuild\BuiltForCloud\Contracts\DeclaresSelfServiceMintPolicy;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialAuthorizationRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use Illuminate\Contracts\Auth\Authenticatable;
@@ -19,7 +20,6 @@ final readonly class CredentialAuthorizationPolicy
     public function __construct(
         private CredentialDeclaration $declaration,
         private AppPurposeRegistry $appPurposes,
-        private UiCredentialPurposes $uiPurposes,
         private SelfServiceKindPolicyResolver $kindPolicy,
         private ManagedAccountAccess $managedAccess,
         private ActingPrincipalResolver $principals,
@@ -45,10 +45,9 @@ final readonly class CredentialAuthorizationPolicy
     public function forUse(Request $request, string $appPurpose): array
     {
         $profile = $this->profile($request, $appPurpose);
-        $purpose = $this->uiPurposes->purposeForSubmission($profile->appPurpose);
+        $purpose = $this->appPurposes->purpose($profile->appPurpose);
 
         if (! hash_equals($profile->appPurpose, $profile->scope->appPurpose)
-            || $purpose !== $this->appPurposes->purpose($profile->appPurpose)
             || ! $purpose->allowedFor(CredentialKind::Bearer, $profile->scope->subject->type)) {
             throw InvalidCredentialInput::boundScopeMismatch();
         }
@@ -86,7 +85,9 @@ final readonly class CredentialAuthorizationPolicy
             || ! $this->same($profile->scope->application, $authorization->application_ref)
             || ! $this->same($profile->scope->audience, $authorization->audience)
             || $abilities !== $storedAbilities
-            || $this->timestamp($profile->expiresAt) !== $this->timestamp($authorization->credential_expires_at)) {
+            || $this->timestamp($profile->expiresAt) !== $this->timestamp($authorization->credential_expires_at)
+            || $profile->codeTtlSeconds !== $authorization->profile_code_ttl_seconds
+            || $profile->initialPollInterval !== $authorization->profile_initial_poll_interval) {
             throw CredentialAuthorizationRefused::denied();
         }
 
@@ -262,10 +263,9 @@ final readonly class CredentialAuthorizationPolicy
             throw InvalidCredentialInput::invalidBoundScope();
         }
 
-        $purpose = $this->uiPurposes->purposeForSubmission($profile->appPurpose);
+        $purpose = $this->appPurposes->purpose($profile->appPurpose);
 
-        if ($purpose !== $this->appPurposes->purpose($profile->appPurpose)
-            || ! $purpose->allowedFor(CredentialKind::Bearer, $profile->scope->subject->type)) {
+        if (! $purpose->allowedFor(CredentialKind::Bearer, $profile->scope->subject->type)) {
             throw InvalidCredentialInput::purposeNotAllowed();
         }
 
@@ -281,6 +281,14 @@ final readonly class CredentialAuthorizationPolicy
             }
 
             $this->kindPolicy->assertPersonalKindAllowed($profile->scope->subject, CredentialKind::Bearer);
+
+            $declaredAbilities = $this->declaration instanceof DeclaresSelfServiceMintPolicy
+                ? $this->canonicalAbilities($this->declaration->selfServiceAbilities($profile->scope->subject))
+                : [];
+
+            if ($abilities !== $declaredAbilities) {
+                throw InvalidCredentialInput::boundScopeMismatch();
+            }
         } else {
             if (! in_array($profile->scope->subject->type, [SubjectType::Application, SubjectType::Installation], true)
                 || array_intersect($abilities, OperatorAbility::vocabulary()) !== []) {

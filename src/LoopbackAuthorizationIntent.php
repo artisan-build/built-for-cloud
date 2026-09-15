@@ -11,5 +11,6 @@ final readonly class LoopbackAuthorizationIntent
         public string $appPurpose,
         public string $redirectUri,
         public string $state,
+        public MintedSecret $browserNonce,
     ) {}
 }

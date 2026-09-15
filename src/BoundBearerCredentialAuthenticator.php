@@ -28,10 +28,10 @@ final class BoundBearerCredentialAuthenticator
 
     public function authenticate(Request $request, string $appPurpose, ?string $ability = null): ?BoundBearerCredential
     {
-        [$profile] = $this->policy->forUse($request, $appPurpose);
+        [$profile, $purpose] = $this->policy->forUse($request, $appPurpose);
         $key = CredentialProtocolBinding::scopeHash(
             $profile->scope,
-            app(AppPurposeRegistry::class)->purpose($appPurpose),
+            $purpose,
             CredentialAlgorithm::Bearer,
             CredentialMaterialRole::Originator,
         )."\0".hash('sha256', (string) $request->bearerToken())."\0".(string) $ability;
