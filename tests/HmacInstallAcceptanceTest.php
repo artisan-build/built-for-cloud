@@ -248,7 +248,7 @@ it('does not resolve a pre-validation serialization failure as idempotent succes
         }
 
         $injected = true;
-        $cause = new \PDOException('forced serialization failure');
+        $cause = new PDOException('forced serialization failure');
         $cause->errorInfo = ['40001'];
 
         throw new QueryException(DB::getDefaultConnection(), 'begin hmac writer fence', [], $cause);
