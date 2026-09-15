@@ -7,6 +7,7 @@ use ArtisanBuild\BuiltForCloud\Auth\BasicAuthenticator;
 use ArtisanBuild\BuiltForCloud\Auth\BearerAuthenticator;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
+use ArtisanBuild\BuiltForCloud\BoundBearerCredentialAuthenticator;
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
@@ -31,10 +32,11 @@ it('copies and compares every inherited AC8 protocol disposition', function (): 
         BasicAuthenticator::class.'::credential|expressions=1',
         BearerAuthenticator::class.'::credential|expressions=1',
         CredentialGuard::class.'::validate|expressions=2',
+        BoundBearerCredentialAuthenticator::class.'::authenticate|expressions=1',
         ManageOnboarding::class.'::verifyUnifiedDurable|expressions=1',
         AuthenticateMcp::class.'::handle|expressions=1',
         EnsureCredentialAdmin::class.'::handle|expressions=1',
-    ])->and($inventory['resolver_expression_count'])->toBe(7)
+    ])->and($inventory['resolver_expression_count'])->toBe(8)
         ->and($inventory['ordinary_hmac_selectors'])->toBe([
             HmacSigner::class.'::sign',
             HmacVerifier::class.'::verify',
@@ -48,7 +50,7 @@ it('copies and compares every inherited AC8 protocol disposition', function (): 
             ManagedAccountAccess::class.'::allowsCredential',
             HmacVerifier::class.'::verify',
             AssertionVerifier::class.'::verify',
-        ])->and($inventory['forbidden_members'])->toHaveCount(14)
+        ])->and($inventory['forbidden_members'])->toHaveCount(15)
         ->and($inventory['ui_reads'])->toBe([])
         ->and($inventory['violations'])->toBe([]);
 });
