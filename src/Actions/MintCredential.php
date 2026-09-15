@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Actions;
 
 use ArtisanBuild\BuiltForCloud\Actions\Concerns\ConsultsDeclaration;
+use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
 use ArtisanBuild\BuiltForCloud\Credential;
@@ -63,7 +64,10 @@ final class MintCredential
 
     public const int CODE_TTL_MAX_SECONDS = 604800;
 
-    public function __construct(private readonly LifecycleEventRecorder $recorder) {}
+    public function __construct(
+        private readonly LifecycleEventRecorder $recorder,
+        private readonly AppPurposeRegistry $appPurposes,
+    ) {}
 
     public function __invoke(
         Subject $subject,
@@ -101,8 +105,33 @@ final class MintCredential
             throw CredentialVerbRefused::signingRootLifecycleOnly();
         }
 
-        if (! $options->purpose->allowedFor($options->kind, $subject->type)) {
+        $boundAsymmetricSigning = $options->kind === CredentialKind::Asymmetric
+            && $options->purpose === CredentialPurpose::Signing
+            && $options->boundScope !== null;
+
+        if (! $options->purpose->allowedFor($options->kind, $subject->type) && ! $boundAsymmetricSigning) {
             throw InvalidCredentialInput::purposeNotAllowed();
+        }
+
+        if ($options->boundScope === null) {
+            return;
+        }
+
+        $resolved = $this->appPurposes->purpose($options->boundScope->appPurpose);
+
+        if (! in_array($options->kind, [CredentialKind::Asymmetric, CredentialKind::Hmac], true)) {
+            throw InvalidCredentialInput::boundKindNotAllowed();
+        }
+
+        if ($resolved !== $options->purpose
+            || $resolved !== CredentialPurpose::Signing
+            || $options->boundScope->subject->type !== $subject->type
+            || ! hash_equals($options->boundScope->subject->ref, $subject->ref)) {
+            throw InvalidCredentialInput::boundScopeMismatch();
+        }
+
+        if ($options->kind === CredentialKind::Asymmetric && $options->userId !== null) {
+            throw InvalidCredentialInput::boundScopeMismatch();
         }
     }
 
@@ -207,7 +236,8 @@ final class MintCredential
         /** @var MintResult */
         return DB::transaction(function () use ($subject, $options, $actor, $ttlSeconds, $submission): MintResult {
             $submission?->consume();
-            $credential = Credential::query()->create([
+            $credential = new Credential;
+            $credential->forceFill([
                 'kind' => CredentialKind::Asymmetric,
                 'purpose' => $options->purpose,
                 'subject_type' => $subject->type,
@@ -218,6 +248,12 @@ final class MintCredential
                 'expires_at' => $options->expiresAt,
                 'status' => CredentialStatus::Pending,
             ]);
+
+            if ($options->boundScope === null) {
+                $credential->save();
+            } else {
+                $credential->saveWithOriginatorBinding($options->boundScope);
+            }
 
             do {
                 $code = new MintedSecret(bin2hex(random_bytes(32)));
@@ -307,7 +343,13 @@ final class MintCredential
                 'status' => CredentialStatus::Pending,
                 'secret_ciphertext' => $encrypted->ciphertext,
                 'secret_key_version' => $encrypted->keyVersion,
-            ])->save();
+            ]);
+
+            if ($options->boundScope === null) {
+                $credential->save();
+            } else {
+                $credential->saveWithOriginatorBinding($options->boundScope);
+            }
 
             if ($ttlSeconds === null) {
                 // This result IS the delivery (reveal-once, D7): stamp

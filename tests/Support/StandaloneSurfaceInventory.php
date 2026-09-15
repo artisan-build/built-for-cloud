@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Tests\Support;
 
+use ArtisanBuild\BuiltForCloud\Http\Controllers\AsymmetricEnrollments;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleEnter;
@@ -48,6 +49,7 @@ final class StandaloneSurfaceInventory
     public static function expectedControllerFamilies(): array
     {
         return [
+            AsymmetricEnrollments::class => false,
             ClientObservations::class => false,
             ConsoleChromeScript::class => false,
             ConsoleEnter::class => false,

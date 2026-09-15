@@ -385,6 +385,10 @@ final class ManageOnboarding extends OperatorRouteController
             // code refuses HERE — authoritatively, inside the locked
             // transaction, and BEFORE any burn: a refused code must stay
             // presentable on the surface that can serve it.
+            if ($this->linksBoundAsymmetric($code)) {
+                return ClaimError::InvalidCode->respond('This code is reserved for asymmetric public-key enrollment.');
+            }
+
             $linkedHmac = $this->linkedHmac($code);
 
             if ($linkedHmac !== null && SigningRootMac::isReserved($linkedHmac)) {
@@ -570,6 +574,29 @@ final class ManageOnboarding extends OperatorRouteController
             ->whereKey($code->durable_credential_id)
             ->where('kind', CredentialKind::Hmac->value)
             ->first();
+    }
+
+    /** Refuse bound asymmetric codes under the common token->credential->binding lock order. */
+    private function linksBoundAsymmetric(OnboardingToken $code): bool
+    {
+        if ($code->durable_credential_id === null) {
+            return false;
+        }
+
+        /** @var Credential|null $credential */
+        $credential = Credential::query()
+            ->whereKey($code->durable_credential_id)
+            ->lockForUpdate()
+            ->first();
+
+        if ($credential === null || $credential->kind !== CredentialKind::Asymmetric) {
+            return false;
+        }
+
+        return DB::table('credential_protocol_bindings')
+            ->where('credential_id', $credential->id)
+            ->lockForUpdate()
+            ->exists();
     }
 
     /**

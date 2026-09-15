@@ -280,6 +280,11 @@ final class CredentialPathInventory
             $resolutionChokePoints[] = 'choke-point:'.$hmacVerifier.'::verify';
         }
 
+        $asymmetricKeys = 'ArtisanBuild\\BuiltForCloud\\AsymmetricVerificationKeys';
+        if (in_array('key-selection:'.$asymmetricKeys, $keySelection, true)) {
+            $resolutionChokePoints[] = 'choke-point:'.$asymmetricKeys.'::for';
+        }
+
         $paths = self::paths(
             $classes,
             $authenticators,
@@ -298,6 +303,7 @@ final class CredentialPathInventory
         );
 
         $expectedEnrollmentRoutes = [
+            'route:POST /bfc/asymmetric-enrollments/{application}=>ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\AsymmetricEnrollments::__invoke',
             'route:POST /bfc/claim=>ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::claim',
             'route:POST /bfc/onboarding/exchange=>ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::exchange',
             'route:POST /bfc/onboarding/issue=>ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::issue',
@@ -351,6 +357,7 @@ final class CredentialPathInventory
         $items = [];
         $actions = [
             'ActivateCredential',
+            'CompleteAsymmetricEnrollment',
             'ListCredentials',
             'MintCredential',
             'OffboardSubject',
@@ -501,6 +508,21 @@ final class CredentialPathInventory
                     $items[] = 'route:'.strtoupper($route[1]).' '.$route[2].'=>'.$controller.'::'.$route[4];
                 }
             }
+
+            preg_match_all(
+                '/\$router->(get|post|put|patch|delete)\(\s*[\'"]([^\'"]+)[\'"]\s*,\s*([A-Z][A-Za-z0-9_]*)::class\s*\)/i',
+                $code,
+                $invokableRoutes,
+                PREG_SET_ORDER,
+            );
+
+            foreach ($invokableRoutes as $route) {
+                $controller = $providerImports[$route[3]] ?? $route[3];
+
+                if ($controller === 'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\AsymmetricEnrollments') {
+                    $items[] = 'route:'.strtoupper($route[1]).' '.$route[2].'=>'.$controller.'::__invoke';
+                }
+            }
         }
 
         $model = 'ArtisanBuild\\BuiltForCloud\\OnboardingToken';
@@ -617,6 +639,15 @@ final class CredentialPathInventory
             }
         }
 
+        $asymmetric = 'ArtisanBuild\\BuiltForCloud\\AsymmetricVerificationKeys';
+        $code = $classes[$asymmetric]['code'] ?? '';
+
+        if (str_contains($code, 'credential_protocol_bindings')
+            && str_contains($code, 'CredentialKind::Asymmetric')
+            && str_contains($code, 'public function for(')) {
+            $items[] = 'key-selection:'.$asymmetric;
+        }
+
         return $items;
     }
 
@@ -662,21 +693,26 @@ final class CredentialPathInventory
             $paths[] = 'path:MCP|Http\\Middleware\\AuthenticateMcp:store-bearer+v4.public';
         }
 
-        if ($keySelection === [
+        if (array_diff([
             'key-selection:ArtisanBuild\\BuiltForCloud\\Hmac\\HmacSigner',
             'key-selection:ArtisanBuild\\BuiltForCloud\\Hmac\\HmacVerifier',
-        ]) {
+        ], $keySelection) === []) {
             $paths[] = 'path:HMAC|Http\\Middleware\\VerifyHmacSignature+Hmac\\HmacVerifier';
         }
 
         $mint = $classes['ArtisanBuild\\BuiltForCloud\\Actions\\MintCredential']['code'] ?? '';
+        $complete = $classes['ArtisanBuild\\BuiltForCloud\\Actions\\CompleteAsymmetricEnrollment']['code'] ?? '';
+        $asymmetricKeys = $classes['ArtisanBuild\\BuiltForCloud\\AsymmetricVerificationKeys']['code'] ?? '';
         if (str_contains($mint, 'CredentialKind::Asymmetric => $this->mintEnrollment(')
             && ! str_contains($mint, "'public_key'")
-            && str_contains($mint, 'status\' => CredentialStatus::Pending')) {
-            $paths[] = 'path:asymmetric|Actions\\MintCredential::mintEnrollment';
+            && str_contains($mint, 'status\' => CredentialStatus::Pending')
+            && str_contains($complete, 'public function __invoke(')
+            && str_contains($asymmetricKeys, 'public function for(')) {
+            $paths[] = 'path:asymmetric|Actions\\MintCredential::mintEnrollment+CompleteAsymmetricEnrollment+AsymmetricVerificationKeys';
         }
 
         $expectedEnrollmentRoutes = [
+            'route:POST /bfc/asymmetric-enrollments/{application}=>ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\AsymmetricEnrollments::__invoke',
             'route:POST /bfc/claim=>ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::claim',
             'route:POST /bfc/onboarding/exchange=>ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::exchange',
             'route:POST /bfc/onboarding/issue=>ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::issue',

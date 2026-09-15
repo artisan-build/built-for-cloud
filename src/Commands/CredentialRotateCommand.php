@@ -7,6 +7,9 @@ namespace ArtisanBuild\BuiltForCloud\Commands;
 use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Commands\Concerns\ParsesCredentialVerbInput;
+use ArtisanBuild\BuiltForCloud\CredentialAlgorithm;
+use ArtisanBuild\BuiltForCloud\CredentialMaterialRole;
+use ArtisanBuild\BuiltForCloud\CredentialProtocolBinding;
 use ArtisanBuild\BuiltForCloud\DeliveryShape;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
@@ -41,6 +44,7 @@ final class CredentialRotateCommand extends SystemAuthorityCommand
         {--expires= : Override the replacement\'s expiry (ISO-8601; requires --override)}
         {--clear-expiry : Override the replacement to NO expiry (requires --override)}
         {--code-ttl= : Claim-code ttl in seconds (60–604800): required for asymmetric; for hmac it selects claim-code delivery over the reveal-once default}
+        {--reissue-pending-delivery : Abandon a bound pending successor whose one-time delivery was lost and issue one replacement}
         {--local : Run against the local database, zero Cloud dependency}';
 
     protected $description = 'Rotate a unified-store credential: mint the replacement first, retire the old row at grace end';
@@ -115,6 +119,7 @@ final class CredentialRotateCommand extends SystemAuthorityCommand
             'emergency' => (bool) $this->option('emergency'),
             'override' => (bool) $this->option('override'),
             'code_ttl_seconds' => $this->stringOption('code-ttl'),
+            'reissue_pending_delivery' => (bool) $this->option('reissue-pending-delivery'),
         ];
 
         $abilitiesProvided = $this->optionProvided('abilities');
@@ -179,8 +184,20 @@ final class CredentialRotateCommand extends SystemAuthorityCommand
             $result->supersededId,
         ));
 
-        $this->line((bool) $this->option('emergency')
-            ? 'Emergency rotation: the old credential is dead now.'
+        if ((bool) $this->option('emergency')) {
+            $this->line('Emergency rotation: the old credential is dead now.');
+
+            return;
+        }
+
+        $deferredAsymmetricCutover = CredentialProtocolBinding::query()
+            ->whereKey($summary->id)
+            ->where('algorithm', CredentialAlgorithm::Rs256->value)
+            ->where('material_role', CredentialMaterialRole::Originator->value)
+            ->exists();
+
+        $this->line($deferredAsymmetricCutover
+            ? 'The old credential stays active until public-key enrollment; enrollment then starts its one-hour grace window.'
             : 'The old credential stays resolvable through its grace window (one hour), then dies by its own expiry.');
     }
 

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
 use ArtisanBuild\BuiltForCloud\Console\Assertion;
 use ArtisanBuild\BuiltForCloud\Console\AssertionPurpose;
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
@@ -21,6 +22,7 @@ use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\Exceptions\AssertionRefused;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
+use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\TestCase;
 use Carbon\CarbonImmutable;
@@ -31,6 +33,74 @@ use ParagonIE\Paseto\Protocol\Version4;
 use ParagonIE\Paseto\Purpose;
 
 uses(TestCase::class)->in(__DIR__);
+
+/** @return array{private: OpenSSLAsymmetricKey, public: string} */
+function testsRsaKey(int $bits = 2048): array
+{
+    $private = openssl_pkey_new([
+        'private_key_type' => OPENSSL_KEYTYPE_RSA,
+        'private_key_bits' => $bits,
+    ]);
+    expect($private)->toBeInstanceOf(OpenSSLAsymmetricKey::class);
+    $details = openssl_pkey_get_details($private);
+    expect($details)->toBeArray();
+
+    return ['private' => $private, 'public' => $details['key']];
+}
+
+function testsBoundScope(string $appPurpose = 'reel.application.signing'): BoundCredentialScope
+{
+    return new BoundCredentialScope(
+        $appPurpose,
+        new Subject(SubjectType::Installation, 'reel-installation-1'),
+        'install_1',
+        'app_1',
+        'https://reel.example',
+    );
+}
+
+function testsConfigureBoundPurposes(): void
+{
+    config([
+        'built-for-cloud.credentials.app_purposes' => [
+            'reel.application.signing' => CredentialPurpose::Signing->value,
+            'matte.callback' => CredentialPurpose::Signing->value,
+        ],
+    ]);
+}
+
+function testsDerLength(int $length): string
+{
+    if ($length < 128) {
+        return chr($length);
+    }
+
+    $encoded = ltrim(pack('N', $length), "\0");
+
+    return chr(0x80 | strlen($encoded)).$encoded;
+}
+
+function testsDerInteger(string $bytes): string
+{
+    $bytes = ltrim($bytes, "\0");
+    $bytes = $bytes === '' ? "\0" : $bytes;
+
+    if ((ord($bytes[0]) & 0x80) !== 0) {
+        $bytes = "\0".$bytes;
+    }
+
+    return "\x02".testsDerLength(strlen($bytes)).$bytes;
+}
+
+function testsPkcs1PublicKey(string $modulus, string $exponent): string
+{
+    $body = testsDerInteger($modulus).testsDerInteger($exponent);
+    $der = "\x30".testsDerLength(strlen($body)).$body;
+
+    return "-----BEGIN RSA PUBLIC KEY-----\n"
+        .chunk_split(base64_encode($der), 64, "\n")
+        ."-----END RSA PUBLIC KEY-----\n";
+}
 
 /**
  * Shared helpers for the audit-stream tests (loaded here so any single

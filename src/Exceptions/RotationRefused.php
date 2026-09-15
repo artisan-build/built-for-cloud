@@ -95,11 +95,32 @@ final class RotationRefused extends RuntimeException
         ));
     }
 
+    public static function successorAwaitingEnrollment(string $id, string $successorId): self
+    {
+        return new self(sprintf(
+            'Credential %s was already rotated; its replacement %s is still PENDING public-key enrollment. '
+            .'Complete enrollment before starting the old credential\'s grace window, or use emergency rotation '
+            .'to end the old credential immediately.',
+            $id,
+            $successorId,
+        ));
+    }
+
     public static function sourcePending(string $id): self
     {
         return new self(sprintf(
             'Credential %s is a pending enrollment; it has no secret to rotate. Revoke it and mint a new enrollment instead.',
             $id,
         ));
+    }
+
+    public static function pendingDeliveryUnavailable(): self
+    {
+        return new self('The pending credential delivery is unavailable.');
+    }
+
+    public static function verificationCopy(): self
+    {
+        return new self('A verification copy cannot enter the generic rotation path.');
     }
 }

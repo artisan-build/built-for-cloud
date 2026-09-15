@@ -148,6 +148,13 @@ final class MetadataEndpointShapes
                 'type' => 'object',
                 'fields' => ['ok' => ['type' => 'enum', 'values' => [true]]],
             ],
+            'POST /bfc/asymmetric-enrollments/{application}' => [
+                'type' => 'object',
+                'fields' => [
+                    'credential_id' => ['type' => 'token'],
+                    'algorithm' => ['type' => 'enum', 'values' => ['RS256']],
+                ],
+            ],
             // BOTH offboard shapes. The direct path answers
             // `offboarded`, the integration path the uniform `accepted`,
             // and each alternative is an exact shape of its own.

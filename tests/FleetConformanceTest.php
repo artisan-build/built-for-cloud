@@ -58,7 +58,7 @@ function packageConformanceExpected(): array
             'path:Bearer|ArtisanBuild\BuiltForCloud\Auth\BearerAuthenticator',
             'path:HMAC|Http\Middleware\VerifyHmacSignature+Hmac\HmacVerifier',
             'path:MCP|Http\Middleware\AuthenticateMcp:store-bearer+v4.public',
-            'path:asymmetric|Actions\MintCredential::mintEnrollment',
+            'path:asymmetric|Actions\MintCredential::mintEnrollment+CompleteAsymmetricEnrollment+AsymmetricVerificationKeys',
             'path:enrollment|OnboardingToken+POST:/bfc/claim,/bfc/onboarding/issue,/exchange,/verify',
             'path:system|SubjectType::Operator/Application/Installation+AuditActorType::CliOperator',
         ]),

@@ -135,7 +135,7 @@ final class ManageCredentials extends OperatorRouteController
             $result = $rotateCredential(
                 $id,
                 RotateOptions::fromInput($request->only([
-                    'emergency', 'override', 'abilities', 'expires_at', 'code_ttl_seconds',
+                    'emergency', 'override', 'abilities', 'expires_at', 'code_ttl_seconds', 'reissue_pending_delivery',
                 ])),
                 $this->actor($request),
             );

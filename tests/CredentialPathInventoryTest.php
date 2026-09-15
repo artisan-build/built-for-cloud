@@ -25,7 +25,7 @@ function frozenCredentialPathRows(): array
         'path:Bearer|ArtisanBuild\BuiltForCloud\Auth\BearerAuthenticator',
         'path:MCP|Http\Middleware\AuthenticateMcp:store-bearer+v4.public',
         'path:HMAC|Http\Middleware\VerifyHmacSignature+Hmac\HmacVerifier',
-        'path:asymmetric|Actions\MintCredential::mintEnrollment',
+        'path:asymmetric|Actions\MintCredential::mintEnrollment+CompleteAsymmetricEnrollment+AsymmetricVerificationKeys',
         'path:enrollment|OnboardingToken+POST:/bfc/claim,/bfc/onboarding/issue,/exchange,/verify',
         'path:system|SubjectType::Operator/Application/Installation+AuditActorType::CliOperator',
     ]);
@@ -126,6 +126,7 @@ it('derives the seven discoverable paths with no transitional rows from all five
             'guard:ArtisanBuild\BuiltForCloud\Console\ConsoleGuard',
             'key-sink:ArtisanBuild\BuiltForCloud\Hmac\HmacSigner',
             'key-sink:ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier',
+            'key-sink:ArtisanBuild\BuiltForCloud\AsymmetricVerificationKeys',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureContractMajor',
@@ -147,6 +148,7 @@ it('derives the seven discoverable paths with no transitional rows from all five
         ]))
         ->and($inventory['lifecycle'])->toBe(sortedCredentialInventory([
             'action:ArtisanBuild\BuiltForCloud\Actions\ActivateCredential::__invoke',
+            'action:ArtisanBuild\BuiltForCloud\Actions\CompleteAsymmetricEnrollment::__invoke',
             'action:ArtisanBuild\BuiltForCloud\Actions\ListCredentials::__invoke',
             'action:ArtisanBuild\BuiltForCloud\Actions\MintCredential::__invoke',
             'action:ArtisanBuild\BuiltForCloud\Actions\MintCredential::mintEnrollment',
@@ -158,6 +160,7 @@ it('derives the seven discoverable paths with no transitional rows from all five
         ]))
         ->and($inventory['enrollment'])->toBe(sortedCredentialInventory([
             'model:ArtisanBuild\BuiltForCloud\OnboardingToken',
+            'route:POST /bfc/asymmetric-enrollments/{application}=>ArtisanBuild\BuiltForCloud\Http\Controllers\AsymmetricEnrollments::__invoke',
             'route:POST /bfc/claim=>ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding::claim',
             'route:POST /bfc/onboarding/exchange=>ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding::exchange',
             'route:POST /bfc/onboarding/issue=>ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding::issue',
@@ -171,10 +174,12 @@ it('derives the seven discoverable paths with no transitional rows from all five
         ])
         ->and($inventory['classification'])->toBe(frozenCredentialClassification())
         ->and($inventory['key_selection'])->toBe([
+            'key-selection:ArtisanBuild\BuiltForCloud\AsymmetricVerificationKeys',
             'key-selection:ArtisanBuild\BuiltForCloud\Hmac\HmacSigner',
             'key-selection:ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier',
         ])
         ->and($inventory['resolution_choke_points'])->toBe([
+            'choke-point:ArtisanBuild\BuiltForCloud\AsymmetricVerificationKeys::for',
             'choke-point:ArtisanBuild\BuiltForCloud\Auth\CredentialResolver::resolve',
             'choke-point:ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier::verify',
         ])
