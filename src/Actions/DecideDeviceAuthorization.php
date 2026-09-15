@@ -86,6 +86,7 @@ final readonly class DecideDeviceAuthorization
                 actor: AuditActor::boundUser((string) $authorization->initiating_user_id),
                 credentialAuthorizationId: $authorizationId,
             );
+
             return new CredentialAuthorizationDecision($authorizationId, CredentialAuthorizationStatus::Approved);
         });
 

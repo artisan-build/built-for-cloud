@@ -244,7 +244,7 @@ it('returns exact loopback terminal classes without mutating approved proof fail
     $verifier = str_repeat('v', 43);
     $challenge = rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=');
     $redirect = 'http://127.0.0.1:49152/callback';
-    $approve = static function () use ($request, $verifier, $challenge, $redirect): array {
+    $approve = static function () use ($request, $challenge, $redirect): array {
         $intent = app(StartLoopbackAuthorization::class)($request, 'test.loopback', $redirect, $challenge, 'S256', str_repeat('s', 32));
         $decision = app(DecideLoopbackAuthorization::class)($request, $intent->authorizationId, $intent->browserNonce->reveal(), $intent->state, true);
 

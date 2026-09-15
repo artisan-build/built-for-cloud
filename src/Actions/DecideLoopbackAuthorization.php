@@ -34,8 +34,7 @@ final readonly class DecideLoopbackAuthorization
         string $browserNonce,
         string $state,
         bool $approve,
-    ): CredentialAuthorizationDecision
-    {
+    ): CredentialAuthorizationDecision {
         $result = DB::transaction(function () use ($request, $authorizationId, $browserNonce, $state, $approve): CredentialAuthorizationDecision|CredentialAuthorizationRefused {
             $authorization = DB::table('credential_authorizations')->where('id', $authorizationId)->lockForUpdate()->first();
             $user = $request->user();
@@ -90,6 +89,7 @@ final readonly class DecideLoopbackAuthorization
                 actor: AuditActor::boundUser((string) $authorization->initiating_user_id),
                 credentialAuthorizationId: $authorizationId,
             );
+
             return new CredentialAuthorizationDecision(
                 $authorizationId,
                 CredentialAuthorizationStatus::Approved,
