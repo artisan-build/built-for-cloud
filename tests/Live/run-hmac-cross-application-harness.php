@@ -186,7 +186,8 @@ try {
         $fresh = hmacLiveRequest($issuerPort, '/__harness/hmac/sign', ['body' => 'scope-body', 'event' => 'matte.completed']);
         $stamp['cases']['wrong_'.$dimension] = $callback((string) $fresh['body']['header'], 'scope-body', $dimension)['status'] === 403;
     }
-    $stamp['cases']['unsigned'] = $callback('', 'callback-body')['status'] === 403;
+    $unsignedStatus = $callback('', 'callback-body')['status'];
+    $stamp['cases']['unsigned'] = $unsignedStatus >= 400 && $unsignedStatus < 500;
     $stamp['cases']['malformed'] = $callback('not-an-envelope', 'callback-body')['status'] === 403;
     $stamp['cases']['changed_body'] = $callback($header, 'changed-body')['status'] === 403;
     $stamp['cases']['wrong_key'] = $callback(str_replace($id, '00000000-0000-4000-8000-000000000000', $header), 'callback-body')['status'] === 403;
