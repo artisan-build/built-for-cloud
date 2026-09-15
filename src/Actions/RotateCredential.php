@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Actions;
 
 use ArtisanBuild\BuiltForCloud\Actions\Concerns\ConsultsDeclaration;
+use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesRotationOverrides;
@@ -12,7 +13,11 @@ use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialAlgorithm;
+use ArtisanBuild\BuiltForCloud\CredentialMaterialRole;
 use ArtisanBuild\BuiltForCloud\CredentialManagementScope;
+use ArtisanBuild\BuiltForCloud\CredentialProtocolBinding;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
@@ -40,6 +45,7 @@ use ArtisanBuild\BuiltForCloud\SubmissionNonce;
 use Carbon\CarbonInterface;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Database\QueryException;
 use Throwable;
 
 /**
@@ -105,6 +111,7 @@ final class RotateCredential
     public function __construct(
         private readonly LifecycleEventRecorder $recorder,
         private readonly HmacKeyring $keyring,
+        private readonly AppPurposeRegistry $appPurposes,
     ) {}
 
     /**
@@ -140,6 +147,10 @@ final class RotateCredential
             }
 
             return app(SigningRootLifecycle::class)->rotate($id, $options->emergency, $actor);
+        }
+
+        if ($options->reissuePendingDelivery) {
+            return $this->reissuePendingDelivery($id, $options, $actor, $managementScope, $submission);
         }
 
         $phaseOne = fn (): ?RotationResult => DB::transaction(
@@ -183,7 +194,8 @@ final class RotateCredential
         // what emergency has always meant. The completion path is exempt:
         // it exists to retire, whatever the kind.
         if (! $result->completedCutover
-            && $result->mint->summary->kind === CredentialKind::Hmac
+            && ($result->mint->summary->kind === CredentialKind::Hmac
+                || $this->isBoundAsymmetricOriginator($result->mint->summary->id))
             && ! $options->emergency) {
             return $result;
         }
@@ -244,7 +256,10 @@ final class RotateCredential
             return null;
         }
 
-        $source->assertValidStoredPurpose();
+        /** @var CredentialProtocolBinding|null $binding */
+        $binding = CredentialProtocolBinding::query()->whereKey($source->id)->lockForUpdate()->first();
+        $this->assertRotatableBinding($source, $binding);
+        $source->assertValidStoredPurpose($binding !== null);
         $managementScope?->assertRotationAllowed($source);
 
         // The matrix consults the subject the ROW declares — never
@@ -325,8 +340,8 @@ final class RotateCredential
         $note = $override ? $this->overrideNote($source, $options, $abilities, $expiresAt) : null;
 
         $result = match ($source->kind) {
-            CredentialKind::Asymmetric => $this->replaceWithEnrollment($source, $options, $abilities, $expiresAt),
-            CredentialKind::Hmac => $this->replaceWithPendingSigningKey($source, $options, $abilities, $expiresAt),
+            CredentialKind::Asymmetric => $this->replaceWithEnrollment($source, $options, $abilities, $expiresAt, $binding),
+            CredentialKind::Hmac => $this->replaceWithPendingSigningKey($source, $options, $abilities, $expiresAt, $binding),
             default => $this->replaceWithSecret($source, $abilities, $expiresAt),
         };
 
@@ -393,7 +408,8 @@ final class RotateCredential
         // replacement is still PENDING: the old key still OWNS signing,
         // and retiring it here would leave the subject with nothing that
         // signs. Activation is the step that owes the retirement.
-        if ($successor->kind === CredentialKind::Hmac && $successor->status === CredentialStatus::Pending) {
+        if ($successor->status === CredentialStatus::Pending
+            && ($successor->kind === CredentialKind::Hmac || $this->isBoundAsymmetricOriginator($successor->id))) {
             throw RotationRefused::successorAwaitingActivation($source->id, $successor->id);
         }
 
@@ -436,6 +452,7 @@ final class RotateCredential
         RotateOptions $options,
         ?array $abilities,
         ?CarbonInterface $expiresAt,
+        ?CredentialProtocolBinding $binding = null,
     ): MintResult {
         $ttlSeconds = $options->codeTtlSeconds;
 
@@ -460,7 +477,13 @@ final class RotateCredential
             'status' => CredentialStatus::Pending,
             'secret_ciphertext' => $encrypted->ciphertext,
             'secret_key_version' => $encrypted->keyVersion,
-        ])->save();
+        ]);
+
+        if ($binding === null) {
+            $replacement->save();
+        } else {
+            $replacement->saveWithOriginatorBinding($binding->scopeFor($source));
+        }
 
         if ($ttlSeconds === null) {
             // Reveal-once: this result is delivery generation 1, and its
@@ -579,6 +602,7 @@ final class RotateCredential
         RotateOptions $options,
         ?array $abilities,
         ?CarbonInterface $expiresAt,
+        ?CredentialProtocolBinding $binding = null,
     ): MintResult {
         $ttlSeconds = $options->codeTtlSeconds;
 
@@ -588,7 +612,8 @@ final class RotateCredential
             throw InvalidCredentialInput::codeTtlOutOfBounds();
         }
 
-        $replacement = Credential::query()->create([
+        $replacement = new Credential;
+        $replacement->forceFill([
             'kind' => CredentialKind::Asymmetric,
             'purpose' => $source->purpose,
             'subject_type' => $source->subject_type,
@@ -599,6 +624,12 @@ final class RotateCredential
             'expires_at' => $expiresAt,
             'status' => CredentialStatus::Pending,
         ]);
+
+        if ($binding === null) {
+            $replacement->save();
+        } else {
+            $replacement->saveWithOriginatorBinding($binding->scopeFor($source));
+        }
 
         do {
             $code = new MintedSecret(bin2hex(random_bytes(32)));
@@ -659,13 +690,206 @@ final class RotateCredential
      */
     private function successorOf(string $id): ?string
     {
-        $successor = CredentialAuditEvent::query()
+        $candidates = CredentialAuditEvent::query()
             ->where('credential_id', $id)
             ->where('event', LifecycleEventType::Rotated->value)
-            ->orderByDesc('occurred_at')
-            ->value('superseded_by_credential_id');
+            ->pluck('superseded_by_credential_id')
+            ->filter(static fn (mixed $candidate): bool => is_string($candidate) && $candidate !== '')
+            ->unique()
+            ->values();
+        $abandoned = CredentialAuditEvent::query()
+            ->whereIn('credential_id', $candidates->all())
+            ->where('event', LifecycleEventType::Revoked->value)
+            ->where('reason_code', AuditReason::DeliveryAbandoned->value)
+            ->pluck('credential_id')
+            ->all();
+        $successors = $candidates
+            ->reject(static fn (string $candidate): bool => in_array($candidate, $abandoned, true))
+            ->values();
+
+        if ($successors->count() !== 1) {
+            return null;
+        }
+
+        $successor = $successors->first();
 
         return is_string($successor) && $successor !== '' ? $successor : null;
+    }
+
+    private function assertRotatableBinding(Credential $credential, ?CredentialProtocolBinding $binding): void
+    {
+        if ($binding === null) {
+            return;
+        }
+
+        if ($binding->material_role !== CredentialMaterialRole::Originator) {
+            throw RotationRefused::verificationCopy();
+        }
+
+        $scope = $binding->scopeFor($credential);
+        $purpose = $this->appPurposes->purpose($scope->appPurpose);
+        $algorithm = CredentialAlgorithm::forKind($credential->kind);
+
+        if (! $binding->exactlyMatches(
+            $credential,
+            $scope,
+            $purpose,
+            $algorithm,
+            CredentialMaterialRole::Originator,
+        )) {
+            throw RotationRefused::pendingDeliveryUnavailable();
+        }
+    }
+
+    private function isBoundAsymmetricOriginator(string $credentialId): bool
+    {
+        return CredentialProtocolBinding::query()
+            ->whereKey($credentialId)
+            ->where('algorithm', CredentialAlgorithm::Rs256->value)
+            ->where('material_role', CredentialMaterialRole::Originator->value)
+            ->exists();
+    }
+
+    private function reissuePendingDelivery(
+        string $id,
+        RotateOptions $options,
+        ?AuditActor $actor,
+        ?CredentialManagementScope $managementScope,
+        ?SubmissionNonce $submission,
+    ): ?RotationResult {
+        try {
+            /** @var RotationResult|null */
+            return DB::transaction(function () use ($id, $options, $actor, $managementScope, $submission): ?RotationResult {
+                $successorId = $this->successorOf($id);
+
+                if ($successorId === null) {
+                    throw RotationRefused::pendingDeliveryUnavailable();
+                }
+
+                /** @var OnboardingToken|null $token */
+                $token = OnboardingToken::query()
+                    ->where('durable_credential_id', $successorId)
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($token === null || $token->consumed_at !== null || ! $token->expires_at->isAfter(now())) {
+                    throw RotationRefused::pendingDeliveryUnavailable();
+                }
+
+                $ids = [$id, $successorId];
+                sort($ids, SORT_STRING);
+                $credentials = [];
+
+                foreach ($ids as $credentialId) {
+                    $query = Credential::query()->whereKey($credentialId);
+                    $managementScope?->apply($query);
+                    /** @var Credential|null $credential */
+                    $credential = $query->lockForUpdate()->first();
+
+                    if ($credential === null) {
+                        throw RotationRefused::pendingDeliveryUnavailable();
+                    }
+
+                    $credentials[$credentialId] = $credential;
+                }
+
+                $bindings = [];
+
+                foreach ($ids as $credentialId) {
+                    /** @var CredentialProtocolBinding|null $binding */
+                    $binding = CredentialProtocolBinding::query()->whereKey($credentialId)->lockForUpdate()->first();
+
+                    if ($binding === null) {
+                        throw RotationRefused::pendingDeliveryUnavailable();
+                    }
+
+                    $bindings[$credentialId] = $binding;
+                }
+
+                $source = $credentials[$id];
+                $successor = $credentials[$successorId];
+                $managementScope?->assertRotationAllowed($source);
+
+                $alreadyReissued = CredentialAuditEvent::query()
+                    ->where('event', LifecycleEventType::Revoked->value)
+                    ->where('reason_code', AuditReason::DeliveryAbandoned->value)
+                    ->whereIn('credential_id', CredentialAuditEvent::query()
+                        ->where('credential_id', $id)
+                        ->where('event', LifecycleEventType::Rotated->value)
+                        ->pluck('superseded_by_credential_id')
+                        ->all())
+                    ->exists();
+
+                if (! $this->verbAllowed(CredentialVerb::Rotate, $source->subject())) {
+                    throw CredentialVerbRefused::byMatrix(CredentialVerb::Rotate);
+                }
+
+                $this->assertRotatableBinding($source, $bindings[$id]);
+                $this->assertRotatableBinding($successor, $bindings[$successorId]);
+
+                if ($source->kind !== CredentialKind::Asymmetric
+                    || $source->status !== CredentialStatus::Active
+                    || $source->rotated_at === null
+                    || $source->revoked_at !== null
+                    || ($source->expires_at !== null && ! $source->expires_at->isAfter(now()))
+                    || $successor->kind !== CredentialKind::Asymmetric
+                    || $successor->status !== CredentialStatus::Pending
+                    || $successor->public_key !== null
+                    || $successor->revoked_at !== null
+                    || ($successor->expires_at !== null && ! $successor->expires_at->isAfter(now()))
+                    || $this->successorOf($id) !== $successorId
+                    || $alreadyReissued
+                    || $options->emergency
+                    || $options->override
+                    || $options->requestsChange()) {
+                    throw RotationRefused::pendingDeliveryUnavailable();
+                }
+
+                $submission?->consume();
+                OnboardingToken::query()->whereKey($token->id)->update(['consumed_at' => now()]);
+                Credential::query()->whereKey($successorId)->update(['revoked_at' => now()]);
+                $this->recorder->record(
+                    LifecycleEventType::Revoked,
+                    $successorId,
+                    $token->id,
+                    $actor,
+                    reason: AuditReason::DeliveryAbandoned,
+                );
+
+                $result = $this->replaceWithEnrollment(
+                    $source,
+                    $options,
+                    $source->abilities,
+                    $source->expires_at,
+                    $bindings[$id],
+                );
+                $this->recorder->record(
+                    LifecycleEventType::Issued,
+                    $result->summary->id,
+                    actor: $actor,
+                    codeTtlSeconds: $options->codeTtlSeconds,
+                    credentialExpiresAt: $source->expires_at,
+                    reason: AuditReason::Rotation,
+                );
+                $this->recorder->record(
+                    LifecycleEventType::Rotated,
+                    $source->id,
+                    actor: $actor,
+                    reason: AuditReason::Rotation,
+                    supersededByCredentialId: $result->summary->id,
+                );
+
+                return new RotationResult($result, $source->id);
+            });
+        } catch (QueryException $exception) {
+            $state = $exception->errorInfo[0] ?? $exception->getCode();
+
+            if (in_array((string) $state, ['40001', '40P01'], true)) {
+                throw RotationRefused::pendingDeliveryUnavailable();
+            }
+
+            throw $exception;
+        }
     }
 
     private function summarize(Credential $credential): CredentialSummary

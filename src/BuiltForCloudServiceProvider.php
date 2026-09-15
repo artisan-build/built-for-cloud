@@ -31,9 +31,11 @@ use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActorProvider;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
+use ArtisanBuild\BuiltForCloud\Contracts\ResolvesAsymmetricEnrollmentScope;
 use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\AsymmetricEnrollments;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleEnter;
@@ -124,6 +126,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
 
         // P5b's forward-only carry: exchange has one durable destination.
         $this->app->bind(DurableCredentialMinter::class, UnifiedStoreCredentialMinter::class);
+        $this->app->bind(ResolvesAsymmetricEnrollmentScope::class, NullAsymmetricEnrollmentScopeResolver::class);
 
         // D14's single resolved value (Console PRD): one instance per
         // application, memoizing per REQUEST inside itself, so the
@@ -465,6 +468,9 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         );
 
         $router->post('/bfc/onboarding/exchange', [ManageOnboarding::class, 'exchange'])
+            ->middleware('throttle:bfc-claim');
+
+        $router->post('/bfc/asymmetric-enrollments/{application}', AsymmetricEnrollments::class)
             ->middleware('throttle:bfc-claim');
 
         $router->post('/bfc/onboarding/verify', [ManageOnboarding::class, 'verify'])

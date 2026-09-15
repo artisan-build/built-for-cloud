@@ -38,6 +38,26 @@ final class InvalidCredentialInput extends InvalidArgumentException
         return new self('The app purpose mapping is invalid.');
     }
 
+    public static function invalidBoundScope(): self
+    {
+        return new self('The bound credential scope is invalid.');
+    }
+
+    public static function boundKindNotAllowed(): self
+    {
+        return new self('Only asymmetric and hmac credentials support a protocol binding.');
+    }
+
+    public static function boundScopeMismatch(): self
+    {
+        return new self('The bound credential scope does not match the credential purpose or subject.');
+    }
+
+    public static function invalidRs256PublicKey(): self
+    {
+        return new self('The public key must be one canonicalizable RSA SubjectPublicKeyInfo key between 2048 and 8192 bits.');
+    }
+
     public static function purposeNotAllowed(): self
     {
         return new self('The credential purpose is not allowed for this kind and subject.');

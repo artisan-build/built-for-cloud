@@ -41,6 +41,7 @@ final class CredentialRotateCommand extends SystemAuthorityCommand
         {--expires= : Override the replacement\'s expiry (ISO-8601; requires --override)}
         {--clear-expiry : Override the replacement to NO expiry (requires --override)}
         {--code-ttl= : Claim-code ttl in seconds (60–604800): required for asymmetric; for hmac it selects claim-code delivery over the reveal-once default}
+        {--reissue-pending-delivery : Abandon a bound pending successor whose one-time delivery was lost and issue one replacement}
         {--local : Run against the local database, zero Cloud dependency}';
 
     protected $description = 'Rotate a unified-store credential: mint the replacement first, retire the old row at grace end';
@@ -115,6 +116,7 @@ final class CredentialRotateCommand extends SystemAuthorityCommand
             'emergency' => (bool) $this->option('emergency'),
             'override' => (bool) $this->option('override'),
             'code_ttl_seconds' => $this->stringOption('code-ttl'),
+            'reissue_pending_delivery' => (bool) $this->option('reissue-pending-delivery'),
         ];
 
         $abilitiesProvided = $this->optionProvided('abilities');

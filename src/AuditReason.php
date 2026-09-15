@@ -35,5 +35,6 @@ enum AuditReason: string
     case CutoverCompletion = 'cutover_completion';
     case Superseded = 'superseded';
     case Emergency = 'emergency';
+    case DeliveryAbandoned = 'delivery_abandoned';
     case Expired = 'expired';
 }

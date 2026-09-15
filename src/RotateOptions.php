@@ -49,6 +49,7 @@ final readonly class RotateOptions
         public bool $expiryProvided = false,
         public ?CarbonInterface $expiresAt = null,
         public ?int $codeTtlSeconds = null,
+        public bool $reissuePendingDelivery = false,
     ) {}
 
     /**
@@ -70,6 +71,7 @@ final readonly class RotateOptions
             expiryProvided: array_key_exists('expires_at', $input),
             expiresAt: $normalized->expiresAt,
             codeTtlSeconds: $normalized->codeTtlSeconds,
+            reissuePendingDelivery: self::boolFrom($input['reissue_pending_delivery'] ?? null, 'reissue_pending_delivery'),
         );
     }
 

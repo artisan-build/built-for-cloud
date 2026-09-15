@@ -5,13 +5,16 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud;
 
 use ArtisanBuild\BuiltForCloud\Database\Factories\CredentialFactory;
+use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use Carbon\CarbonInterface;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
+use LogicException;
 
 /**
  * A row in the unified credential store.
@@ -68,6 +71,8 @@ use InvalidArgumentException;
  */
 final class Credential extends Model implements Authenticatable
 {
+    private bool $boundAsymmetricSigningWrite = false;
+
     /** @use HasFactory<CredentialFactory> */
     use HasFactory;
 
@@ -164,7 +169,7 @@ final class Credential extends Model implements Authenticatable
                 && $rawPurpose === null;
 
             if (! $historicalTombstone) {
-                $credential->assertValidStoredPurpose();
+                $credential->assertValidStoredPurpose($credential->boundAsymmetricSigningWrite);
             }
 
             OperatorAbility::assertValues($credential->abilities);
@@ -243,7 +248,7 @@ final class Credential extends Model implements Authenticatable
         });
     }
 
-    public function assertValidStoredPurpose(): void
+    public function assertValidStoredPurpose(bool $boundAsymmetricSigning = false): void
     {
         $rawPurpose = $this->getAttributes()['purpose'] ?? null;
         $purpose = is_string($rawPurpose) ? CredentialPurpose::tryFrom($rawPurpose) : null;
@@ -264,9 +269,38 @@ final class Credential extends Model implements Authenticatable
             return;
         }
 
-        if (! $purpose->validForStorage($kind, $subjectType, $subjectRef)) {
+        if (! $purpose->validForStorage($kind, $subjectType, $subjectRef)
+            && ! ($boundAsymmetricSigning
+                && $kind === CredentialKind::Asymmetric
+                && $purpose === CredentialPurpose::Signing)) {
             throw new InvalidArgumentException('A live credential requires a purpose valid for its kind and subject.');
         }
+    }
+
+    public function saveWithOriginatorBinding(BoundCredentialScope $scope): CredentialProtocolBinding
+    {
+        if (DB::transactionLevel() === 0) {
+            throw new LogicException('A credential and its protocol binding must be stored in one transaction.');
+        }
+
+        $purpose = app(AppPurposeRegistry::class)->purpose($scope->appPurpose);
+
+        if ($purpose !== $this->purpose
+            || $scope->subject->type !== $this->subject_type
+            || ! hash_equals($scope->subject->ref, $this->subject_ref)) {
+            throw InvalidCredentialInput::boundScopeMismatch();
+        }
+
+        CredentialAlgorithm::forKind($this->kind);
+        $this->boundAsymmetricSigningWrite = true;
+
+        try {
+            $this->save();
+        } finally {
+            $this->boundAsymmetricSigningWrite = false;
+        }
+
+        return CredentialProtocolBinding::createOriginator($this, $scope);
     }
 
     /**
@@ -327,6 +361,11 @@ final class Credential extends Model implements Authenticatable
             ->where('subject_ref', $ref)
             ->active()
             ->whereNotNull('public_key')
+            ->whereNotExists(function ($query): void {
+                $query->selectRaw('1')
+                    ->from('credential_protocol_bindings')
+                    ->whereColumn('credential_protocol_bindings.credential_id', 'credentials.id');
+            })
             ->orderBy('created_at')
             ->orderBy('id')
             ->pluck('public_key')

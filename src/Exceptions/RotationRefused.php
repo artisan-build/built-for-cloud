@@ -102,4 +102,14 @@ final class RotationRefused extends RuntimeException
             $id,
         ));
     }
+
+    public static function pendingDeliveryUnavailable(): self
+    {
+        return new self('The pending credential delivery is unavailable.');
+    }
+
+    public static function verificationCopy(): self
+    {
+        return new self('A verification copy cannot enter the generic rotation path.');
+    }
 }

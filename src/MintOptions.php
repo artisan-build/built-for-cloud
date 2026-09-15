@@ -51,6 +51,7 @@ final readonly class MintOptions
         public ?CarbonInterface $expiresAt = null,
         public ?string $userId = null,
         public ?int $codeTtlSeconds = null,
+        public ?BoundCredentialScope $boundScope = null,
     ) {}
 
     /**
