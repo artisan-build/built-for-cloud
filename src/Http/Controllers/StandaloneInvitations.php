@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\Actions\AcceptHumanInvitation;
+use ArtisanBuild\BuiltForCloud\BrowserCredentialAuthorizationStore;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleReturnTo;
 use ArtisanBuild\BuiltForCloud\Invitation;
 use ArtisanBuild\BuiltForCloud\StandaloneAccess;
@@ -65,6 +66,7 @@ final class StandaloneInvitations
         Request $request,
         AcceptHumanInvitation $accept,
         StandaloneHandoff $handoff,
+        BrowserCredentialAuthorizationStore $authorizations,
     ): RedirectResponse {
         $payload = $handoff->read($request, StandaloneHandoff::INVITATION);
         $submittedToken = $request->input('token');
@@ -102,7 +104,7 @@ final class StandaloneInvitations
         }
 
         Auth::guard('web')->login($user, false);
-        $request->session()->regenerate();
+        $authorizations->regenerate($request);
         $request->session()->put(StandaloneAccess::SESSION_VERSION_KEY, $user->auth_session_version);
         $user->forceFill(['last_authenticated_at' => now()])->save();
         $handoff->expire(StandaloneHandoff::INVITATION);

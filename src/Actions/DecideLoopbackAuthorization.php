@@ -16,6 +16,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\CredentialAuthorizationRefused;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintedSecret;
+use ArtisanBuild\BuiltForCloud\SubmissionNonce;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -34,8 +35,9 @@ final readonly class DecideLoopbackAuthorization
         string $browserNonce,
         string $state,
         bool $approve,
+        ?SubmissionNonce $submission = null,
     ): CredentialAuthorizationDecision {
-        $result = DB::transaction(function () use ($request, $authorizationId, $browserNonce, $state, $approve): CredentialAuthorizationDecision|CredentialAuthorizationRefused {
+        $result = DB::transaction(function () use ($request, $authorizationId, $browserNonce, $state, $approve, $submission): CredentialAuthorizationDecision|CredentialAuthorizationRefused {
             $authorization = DB::table('credential_authorizations')->where('id', $authorizationId)->lockForUpdate()->first();
             $user = $request->user();
 
@@ -62,6 +64,8 @@ final readonly class DecideLoopbackAuthorization
             if ($authority === CredentialAuthorizationAuthority::Unavailable) {
                 throw CredentialAuthorizationRefused::temporarilyUnavailable();
             }
+
+            $submission?->consume();
 
             if ($authority === CredentialAuthorizationAuthority::Denied || ! $approve) {
                 $reason = $authority === CredentialAuthorizationAuthority::Denied

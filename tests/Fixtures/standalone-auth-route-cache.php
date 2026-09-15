@@ -101,7 +101,7 @@ $case = new class('testProbe') extends TestCase
             }
         }
 
-        if (count($routes) !== 25) {
+        if (count($routes) !== 30) {
             fwrite(STDERR, 'compiled-auth-route-count-'.count($routes).PHP_EOL);
 
             return false;
@@ -185,11 +185,11 @@ $case = new class('testProbe') extends TestCase
         }
 
         $allRefused = $vector === 'fqcn-alias'
-            ? $statuses === array_fill(0, 25, 500)
-            : count(array_filter($statuses, static fn (int $status): bool => $status < 200 || $status >= 300)) === 25;
+            ? $statuses === array_fill(0, 30, 500)
+            : count(array_filter($statuses, static fn (int $status): bool => $status < 200 || $status >= 300)) === 30;
 
         return $allRefused
-            && ($vector === 'fqcn-alias' || ($poisonedStacks === 25 && ! in_array(false, $recomputed, true)))
+            && ($vector === 'fqcn-alias' || ($poisonedStacks === 30 && ! in_array(false, $recomputed, true)))
             && BfcStandaloneAuthCacheState::$paths === []
             && Invitation::query()->count() === 0
             && Credential::query()->count() === $credentialCount
@@ -213,7 +213,7 @@ if (! $valid) {
 }
 
 if ($vector === 'fqcn-alias') {
-    fwrite(STDOUT, "standalone-auth-route-cache-refused-25\n");
+    fwrite(STDOUT, "standalone-auth-route-cache-refused-30\n");
 } else {
-    fwrite(STDOUT, "standalone-auth-route-cache-{$vector}-refused-25\n");
+    fwrite(STDOUT, "standalone-auth-route-cache-{$vector}-refused-30\n");
 }

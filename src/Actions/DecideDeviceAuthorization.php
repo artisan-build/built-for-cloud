@@ -15,6 +15,7 @@ use ArtisanBuild\BuiltForCloud\CredentialAuthorizationTransitions;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialAuthorizationRefused;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
+use ArtisanBuild\BuiltForCloud\SubmissionNonce;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -27,11 +28,11 @@ final readonly class DecideDeviceAuthorization
         private LifecycleEventRecorder $recorder,
     ) {}
 
-    public function __invoke(Request $request, string $userCode, string $browserNonce, bool $approve): CredentialAuthorizationDecision
+    public function __invoke(Request $request, string $userCode, string $browserNonce, bool $approve, ?SubmissionNonce $submission = null): CredentialAuthorizationDecision
     {
         $userCode = self::normalizeUserCode($userCode);
 
-        $result = DB::transaction(function () use ($request, $userCode, $browserNonce, $approve): CredentialAuthorizationDecision|CredentialAuthorizationRefused {
+        $result = DB::transaction(function () use ($request, $userCode, $browserNonce, $approve, $submission): CredentialAuthorizationDecision|CredentialAuthorizationRefused {
             $authorization = DB::table('credential_authorizations')
                 ->where('flow', CredentialAuthorizationFlow::Device->value)
                 ->where('user_code_hash', hash('sha256', $userCode))
@@ -69,6 +70,8 @@ final readonly class DecideDeviceAuthorization
 
                 return CredentialAuthorizationRefused::unavailable();
             }
+
+            $submission?->consume();
 
             if (! $approve) {
                 $this->transitions->deny($authorization, CredentialAuthorizationDenialReason::UserDenied, AuditActor::boundUser((string) $authorization->initiating_user_id));

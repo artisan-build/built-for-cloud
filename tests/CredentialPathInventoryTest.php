@@ -6,6 +6,8 @@ use ArtisanBuild\BuiltForCloud\Testing\CredentialPathInventory;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ClassBoundCredentialGate;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\DecoyResolverCredentialGate;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\DirectHeaderCredentialGate;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueDeviceCredentialExchange;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueLoopbackCredentialSelector;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SecondStoreResolver;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnguardedCredentialAuthenticator;
 
@@ -27,6 +29,8 @@ function frozenCredentialPathRows(): array
         'path:HMAC|Http\Middleware\VerifyHmacSignature+Hmac\HmacVerifier',
         'path:asymmetric|Actions\MintCredential::mintEnrollment+CompleteAsymmetricEnrollment+AsymmetricVerificationKeys',
         'path:enrollment|OnboardingToken+POST:/bfc/claim,/bfc/onboarding/issue,/exchange,/verify',
+        'path:device|Http\Controllers\DeviceAuthorizations+Actions\StartDeviceAuthorization/DecideDeviceAuthorization/PollDeviceAuthorization+BoundBearerCredentialAuthenticator+ContainCredentialAuthorizations',
+        'path:loopback|Http\Controllers\LoopbackAuthorizations+Actions\StartLoopbackAuthorization/DecideLoopbackAuthorization/ExchangeLoopbackAuthorization+BoundBearerCredentialAuthenticator+ContainCredentialAuthorizations',
         'path:system|SubjectType::Operator/Application/Installation+AuditActorType::CliOperator',
     ]);
 }
@@ -83,6 +87,7 @@ function frozenCredentialClassification(): array
         'command:ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand=bfc:outbox:drain',
         'command:ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand=bfc:ownership:mint-claim',
         'command:ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand=bfc:ownership:remint-owner-token',
+        'command:ArtisanBuild\BuiltForCloud\Commands\PruneCredentialAuthorizationsCommand=bfc:credential-authorizations:prune',
         'command:ArtisanBuild\BuiltForCloud\Commands\SigningRootProvisionCommand=bfc:signing-root:provision',
         'command:ArtisanBuild\BuiltForCloud\Commands\SubjectOffboardCommand=bfc:subject:offboard',
         'command:ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand=bfc:credentials:warn-expiring',
@@ -104,21 +109,21 @@ function frozenPurposeDispositions(): array
 }
 
 /**
- * P5-AC12's oracle is Part 1.1's seven discoverable path identities with
+ * P5-AC12's oracle is Part 1.1's nine discoverable path identities with
  * every Part 1.2b row undiscovered, while the independently
  * asserted root inventories keep row classification from hiding a newly
  * discovered mechanism. CredentialPathInventory documents the static-only
  * limits and the unenforced, non-discovered device binding that bound this
  * proof.
  */
-it('derives the seven discoverable paths with no transitional rows from all five roots', function (): void {
+it('derives the nine discoverable paths with no transitional rows from all five roots', function (): void {
     $inventory = CredentialPathInventory::discover(dirname(__DIR__).'/src');
     $expectedRows = frozenCredentialPathRows();
     $derivedRows = sortedCredentialInventory([...$inventory['paths'], ...$inventory['transitional']]);
 
     expect($inventory['violations'])->toBe([])
         ->and($derivedRows)->toBe($expectedRows)
-        ->and($inventory['paths'])->toHaveCount(7)
+        ->and($inventory['paths'])->toHaveCount(9)
         ->and($inventory['transitional'])->toBe([])
         ->and($inventory['mechanisms'])->toBe(sortedCredentialInventory([
             'authenticator:ArtisanBuild\BuiltForCloud\Auth\BasicAuthenticator',
@@ -207,11 +212,6 @@ it('reports every deliberate control through its assigned derivation root', func
         array_values(array_filter($inventory['mechanisms'], static fn (string $item): bool => str_starts_with($item, 'middleware:'))),
         array_values(array_filter($production['mechanisms'], static fn (string $item): bool => str_starts_with($item, 'middleware:'))),
     ));
-    $devicePaths = array_values(array_filter(
-        $inventory['paths'],
-        static fn (string $item): bool => str_starts_with($item, 'path:device|'),
-    ));
-
     expect($inventory['violations'])->toContain(
         'unchoked-authenticator:'.UnguardedCredentialAuthenticator::class,
         'unchoked-operator-ingress:'.UnguardedCredentialAuthenticator::class,
@@ -219,6 +219,8 @@ it('reports every deliberate control through its assigned derivation root', func
         'unchoked-operator-ingress:'.DecoyResolverCredentialGate::class,
         'second-store-resolver:'.UnguardedCredentialAuthenticator::class.'=>'.SecondStoreResolver::class,
         'unlisted-enrollment-route:route:POST /bfc/unlisted-enrollment=>ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding::exchange',
+        'rogue-device-exchange:'.RogueDeviceCredentialExchange::class,
+        'rogue-loopback-selector:'.RogueLoopbackCredentialSelector::class,
     )
         ->and($inventory['enrollment'])->toContain(
             'route:POST /bfc/unlisted-enrollment=>ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding::exchange',
@@ -230,8 +232,7 @@ it('reports every deliberate control through its assigned derivation root', func
         ])
         ->and($inventory['operator_ingresses'])->not->toContain(
             'operator-ingress:'.DecoyResolverCredentialGate::class.'=>ArtisanBuild\BuiltForCloud\Auth\CredentialResolver::resolve',
-        )
-        ->and($devicePaths)->toBe([]);
+        );
 });
 
 it('compares the exact AC2 resolver and ordinary HMAC purpose dispositions', function (): void {
