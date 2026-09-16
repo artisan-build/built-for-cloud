@@ -8,9 +8,10 @@ it('ships a syntax-valid disposable device authorization harness and private sta
     $root = dirname(__DIR__);
     $harness = $root.'/tests/Live/run-device-authorization-harness.php';
     $state = $root.'/tests/Live/device-authorization-state.php';
+    $server = $root.'/tests/Live/asymmetric-enrollment-server.php';
     $schemaPath = $root.'/tests/Live/device-authorization-stamp.schema.json';
 
-    foreach ([$harness, $state] as $phpFile) {
+    foreach ([$harness, $state, $server] as $phpFile) {
         $process = new Process([PHP_BINARY, '-l', $phpFile]);
         expect($process->run())->toBe(0, $process->getErrorOutput());
     }
@@ -28,6 +29,8 @@ it('ships a syntax-valid disposable device authorization harness and private sta
             'device_terminal_binding_cleanup',
             'device_managed_authority_transition',
             'device_approve_exchange_and_bound_use',
+            'device_single_token_exchange',
+            'device_concurrent_token_exchange',
             'device_pending_slow_down_and_deny',
             'device_expiry',
             'transport_limiter_refusal_before_effect',
@@ -35,6 +38,7 @@ it('ships a syntax-valid disposable device authorization harness and private sta
             'loopback_cross_browser_refusal',
             'loopback_deny',
             'exact_bound_refusal_matrix',
+            'app_purpose_mapping_drift',
             'final_state',
         )
         ->and($source)->toContain(
@@ -50,6 +54,8 @@ it('ships a syntax-valid disposable device authorization harness and private sta
             "if (\$follow) {\n        \$config[] = 'location';",
             "\$config[] = 'data-binary = \"@'.deviceHarnessConfigValue(\$requestBody).'\"';",
             "'operation' => 'reset-effects'",
+            "'operation' => 'device-exchange'",
+            "'operation' => 'clear-decision-limiters'",
             "['operation' => 'managed-authority', 'state' => 'positive']",
             "['operation' => 'managed-authority', 'state' => 'inactive']",
             "['operation' => 'managed-authority', 'state' => 'local']",
@@ -62,6 +68,15 @@ it('ships a syntax-valid disposable device authorization harness and private sta
             "\$effectCanaries = ['authorize_calls', 'limiter_attempts', 'usage_calls', 'last_used_at', 'client_identity', 'domain_handler_calls'];",
             'The exact-bound positive control did not change',
             '$wrongPurposeAfter === $wrongPurposeBefore',
+            '$mappingDriftAfter === $mappingDriftBefore',
+            "'drift_status' => \$mappingDriftStatus",
+            "'restored_status' => \$mappingRestoredStatus",
+            'deviceHarnessConcurrentTokenExchange($runDirectory, $concurrentBaseUrl, $concurrentExchange[\'device_code\'], $inspectedArgv)',
+            "\$refusals[0]['body'] === ['error' => 'invalid_grant']",
+            "'barrier_arrivals' => 2",
+            "'bearer_successes' => 1",
+            "'invalid_grant_refusals' => 1",
+            "'credential_rows' => 1",
             '$afterEffects === $beforeEffects',
             'deviceHarnessEffects($runDirectory, $baseUrl, $credentialId) === $legacyBefore',
             'deviceHarnessEffects($runDirectory, $baseUrl, $unboundId) === $unboundBefore',
@@ -81,6 +96,10 @@ it('ships a syntax-valid disposable device authorization harness and private sta
             "Schema::create('bfc_device_harness_effects'",
             "'last_used_at' => '2000-01-01 00:00:00'",
             "RateLimiter::clear('bfc-device-harness-use|'.\$credentialId)",
+            "if (\$input['operation'] === 'device-exchange')",
+            "if (\$input['operation'] === 'clear-decision-limiters')",
+            "RateLimiter::clear(md5('bfc-authorization-decision'.'bfc-authorization-decision|'",
+            "'credential_rows' => is_string(\$authorization->issued_credential_id)",
         )
         ->and(substr_count($source, "\$config[] = 'request = \"'.\$method.'\"';"))->toBe(1)
         ->and($source)->not->toContain(
@@ -102,6 +121,8 @@ it('keeps every exact-bound effect canary durable and independently observable',
         "->increment('authorize_calls')",
     )
         ->and($provider)->toContain(
+            "database.connections.sqlite.transaction_mode', 'IMMEDIATE'",
+            "database.connections.sqlite.busy_timeout', 10_000",
             'DB::listen(static function (QueryExecuted $query): void',
             "->increment('usage_calls')",
             "RateLimiter::hit('bfc-device-harness-use|'.\$credential->id, 60)",
@@ -145,5 +166,31 @@ it('keeps installation live profiles and protected use free of unknown abilities
         "foreach (['live.device', 'live.loopback'] as \$purpose)",
         "CredentialAuthorizationOwnership::Installation,\n                    [],",
         'authenticate($request, $purpose);',
+        "\$request->header('X-Bfc-Harness-App-Purpose-Mapping') === 'drift'",
+        "'live.device' => CredentialPurpose::Mcp->value",
+        "config()->set('built-for-cloud.credentials.app_purposes', \$mapping);",
     )->not->toContain('harness:use');
+});
+
+it('coordinates concurrent real HTTP token requests before the package route executes', function (): void {
+    $server = (string) file_get_contents(__DIR__.'/Live/asymmetric-enrollment-server.php');
+    $harness = (string) file_get_contents(__DIR__.'/Live/run-device-authorization-harness.php');
+
+    expect($server)->toContain(
+        "parse_url((string) (\$_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH) === '/bfc/device/token'",
+        'touch("{$barrierDirectory}/{$barrier}-{$worker}.ready")',
+        'is_file("{$barrierDirectory}/{$barrier}-1.ready")',
+        'is_file("{$barrierDirectory}/{$barrier}-2.ready")',
+        '$deadline = hrtime(true) + 10_000_000_000;',
+        "require __DIR__.'/../../vendor/orchestra/testbench-core/laravel/public/index.php';",
+    )->and($harness)->toContain(
+        "'PHP_CLI_SERVER_WORKERS' => '4'",
+        '$concurrentServer = new Process([',
+        'deviceHarnessStopServer($concurrentServer);',
+        "'concurrent_http_workers' => 4",
+        "'concurrent_request_barrier' => true",
+        "'header = \"X-Bfc-Harness-Concurrent-Exchange: '.\$barrier.'\"'",
+        "'header = \"X-Bfc-Harness-Concurrent-Worker: '.\$worker.'\"'",
+        "new Process(['curl', '--config', '-'], timeout: 20)",
+    )->not->toContain('device_code = "');
 });

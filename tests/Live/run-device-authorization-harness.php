@@ -157,6 +157,77 @@ function deviceHarnessHttp(
     return $response;
 }
 
+/**
+ * @param  list<string>  $inspectedArgv
+ * @return array{responses: list<array{status: int, body: array<string, mixed>}>, barrier_arrivals: int}
+ */
+function deviceHarnessConcurrentTokenExchange(
+    string $runDirectory,
+    string $baseUrl,
+    string $deviceCode,
+    array &$inspectedArgv,
+): array {
+    $barrier = bin2hex(random_bytes(16));
+    $requestBody = "{$runDirectory}/concurrent-token.request";
+    file_put_contents($requestBody, json_encode(['device_code' => $deviceCode], JSON_THROW_ON_ERROR));
+    chmod($requestBody, 0600);
+    $processes = [];
+    $paths = [$requestBody];
+
+    try {
+        foreach ([1, 2] as $worker) {
+            $responseBody = "{$runDirectory}/concurrent-token-{$worker}.body";
+            $responseHeaders = "{$runDirectory}/concurrent-token-{$worker}.headers";
+            $paths[] = $responseBody;
+            $paths[] = $responseHeaders;
+            $config = implode("\n", [
+                'silent',
+                'show-error',
+                'url = "'.deviceHarnessConfigValue($baseUrl.'/bfc/device/token').'"',
+                'request = "POST"',
+                'header = "Accept: application/json"',
+                'header = "Content-Type: application/json"',
+                'header = "X-Bfc-Harness-Concurrent-Exchange: '.$barrier.'"',
+                'header = "X-Bfc-Harness-Concurrent-Worker: '.$worker.'"',
+                'data-binary = "@'.deviceHarnessConfigValue($requestBody).'"',
+                'output = "'.deviceHarnessConfigValue($responseBody).'"',
+                'dump-header = "'.deviceHarnessConfigValue($responseHeaders).'"',
+                'write-out = "%{http_code}"',
+                'max-time = 15',
+            ])."\n";
+            $process = new Process(['curl', '--config', '-'], timeout: 20);
+            $process->setInput($config);
+            $process->start();
+            $inspectedArgv[] = $process->getCommandLine();
+            $processes[] = [$process, $responseBody];
+        }
+
+        $responses = [];
+
+        foreach ($processes as [$process, $responseBody]) {
+            $exit = $process->wait();
+            deviceHarnessAssert($exit === 0, 'A concurrent token request exited unexpectedly.');
+            $body = json_decode((string) file_get_contents($responseBody), true, flags: JSON_THROW_ON_ERROR);
+            deviceHarnessAssert(is_array($body), 'A concurrent token response was not a JSON object.');
+            $responses[] = ['status' => (int) trim($process->getOutput()), 'body' => $body];
+        }
+
+        $arrivals = 0;
+
+        foreach ([1, 2] as $worker) {
+            $arrivals += (int) is_file("{$runDirectory}/barriers/{$barrier}-{$worker}.ready");
+        }
+
+        return ['responses' => $responses, 'barrier_arrivals' => $arrivals];
+    } finally {
+        foreach ($paths as $path) {
+            if (is_file($path)) {
+                unlink($path);
+            }
+        }
+    }
+}
+
 /** @return array<string, string> */
 function deviceHarnessInputs(string $html, string $action): array
 {
@@ -225,12 +296,18 @@ function deviceHarnessStart(string $runDirectory, string $baseUrl, string $csrf,
     return $json;
 }
 
-function deviceHarnessUsePath(string $runDirectory, string $baseUrl, string $path, string $bearer, string $clientIdentity = 'device-live-harness'): int
-{
+function deviceHarnessUsePath(
+    string $runDirectory,
+    string $baseUrl,
+    string $path,
+    string $bearer,
+    string $clientIdentity = 'device-live-harness',
+    bool $driftAppPurposeMapping = false,
+): int {
     $requestBody = "{$runDirectory}/use-empty-body";
     file_put_contents($requestBody, '');
     chmod($requestBody, 0600);
-    $config = implode("\n", [
+    $config = [
         'silent',
         'show-error',
         'url = "'.deviceHarnessConfigValue($baseUrl.$path).'"',
@@ -241,16 +318,28 @@ function deviceHarnessUsePath(string $runDirectory, string $baseUrl, string $pat
         'output = "/dev/null"',
         'write-out = "%{http_code}"',
         'max-time = 10',
-    ])."\n";
+    ];
+
+    if ($driftAppPurposeMapping) {
+        $config[] = 'header = "X-Bfc-Harness-App-Purpose-Mapping: drift"';
+    }
+
+    $config = implode("\n", $config)."\n";
     $status = (int) trim(deviceHarnessRun(new Process(['curl', '--config', '-'], timeout: 15), 'bound bearer use', $config));
     unlink($requestBody);
 
     return $status;
 }
 
-function deviceHarnessUse(string $runDirectory, string $baseUrl, string $profile, string $bearer, string $clientIdentity = 'device-live-harness'): int
-{
-    return deviceHarnessUsePath($runDirectory, $baseUrl, "/_bfc-harness/device/use/{$profile}", $bearer, $clientIdentity);
+function deviceHarnessUse(
+    string $runDirectory,
+    string $baseUrl,
+    string $profile,
+    string $bearer,
+    string $clientIdentity = 'device-live-harness',
+    bool $driftAppPurposeMapping = false,
+): int {
+    return deviceHarnessUsePath($runDirectory, $baseUrl, "/_bfc-harness/device/use/{$profile}", $bearer, $clientIdentity, $driftAppPurposeMapping);
 }
 
 /** @return array<string, mixed> */
@@ -343,10 +432,12 @@ $runDirectory = sys_get_temp_dir().'/bfc-device-authorization-'.bin2hex(random_b
 mkdir($runDirectory, 0700);
 $database = $runDirectory.'/database.sqlite';
 $cache = $runDirectory.'/cache';
+$barriers = $runDirectory.'/barriers';
 $serverLog = $runDirectory.'/server.log';
 $deviceBearerFile = $runDirectory.'/device/bearer';
 $loopbackBearerFile = $runDirectory.'/loopback/bearer';
 mkdir($cache, 0700);
+mkdir($barriers, 0700);
 touch($database);
 touch($serverLog);
 chmod($database, 0600);
@@ -364,6 +455,7 @@ $environment = array_merge($baseEnvironment, [
     'SESSION_DRIVER' => 'database',
     'CACHE_STORE' => 'file',
     'BFC_HARNESS_CACHE_PATH' => $cache,
+    'BFC_HARNESS_CONCURRENT_BARRIER' => $barriers,
     'BFC_HARNESS_DEVICE_AUTHORIZATION' => '1',
     'BUILT_FOR_CLOUD_MANAGED_CLIENT_SECRET' => 'device-live-managed-fixture-secret',
     'BUILT_FOR_CLOUD_SURFACE_DATA_MIGRATIONS' => 'false',
@@ -379,6 +471,8 @@ $stamp = [
         'csrf_forms' => true,
         'bounded_readiness' => true,
         'bounded_teardown' => true,
+        'concurrent_http_workers' => 4,
+        'concurrent_request_barrier' => true,
     ],
     'clients' => [
         'device' => ['stdin_code' => true, 'bounded_attempts' => 180, 'bearer_mode' => '0600'],
@@ -391,6 +485,7 @@ $stamp = [
     'exit_code' => 1,
 ];
 $server = null;
+$concurrentServer = null;
 $deviceClient = null;
 $loopbackClient = null;
 $secrets = [];
@@ -533,6 +628,20 @@ try {
         );
     }
 
+    $mappingDriftBefore = deviceHarnessEffects($runDirectory, $baseUrl, $credentialId);
+    $mappingDriftStatus = deviceHarnessUse($runDirectory, $baseUrl, 'device', $deviceBearer, 'device-live-mapping-drift', true);
+    $mappingDriftAfter = deviceHarnessEffects($runDirectory, $baseUrl, $credentialId);
+    deviceHarnessAssert($mappingDriftStatus === 401 && $mappingDriftAfter === $mappingDriftBefore, 'The app-purpose mapping drift reached a protected-use side effect.');
+    $mappingRestoredStatus = deviceHarnessUse($runDirectory, $baseUrl, 'device', $deviceBearer, 'device-live-mapping-restored');
+    deviceHarnessAssert($mappingRestoredStatus === 200, 'The exact-bound bearer remained refused after the app-purpose mapping was restored.');
+
+    $stamp['cases']['app_purpose_mapping_drift'] = [
+        'positive_status' => $positiveStatus,
+        'drift_status' => $mappingDriftStatus,
+        'drift_effects_unchanged' => true,
+        'restored_status' => $mappingRestoredStatus,
+    ];
+
     $wrongPurposeBefore = deviceHarnessEffects($runDirectory, $baseUrl, $credentialId);
     $wrongPurposeStatus = deviceHarnessUse($runDirectory, $baseUrl, 'loopback', $deviceBearer, 'device-live-wrong-purpose');
     $wrongPurposeAfter = deviceHarnessEffects($runDirectory, $baseUrl, $credentialId);
@@ -591,6 +700,104 @@ try {
     $matrix['unbound_bearer'] = $unboundStatus;
     $stamp['cases']['exact_bound_refusal_matrix'] = $matrix;
 
+    $singleExchange = deviceHarnessStart($runDirectory, $baseUrl, $csrfA, 'Live single token exchange control');
+    $secrets[] = $singleExchange['device_code'];
+    $secrets[] = $singleExchange['user_code'];
+    $singleExchangePage = deviceHarnessHttp($runDirectory, 'a', 'GET', $baseUrl.'/bfc/device');
+    $singleExchangeApprove = deviceHarnessInputs($singleExchangePage['body'], 'approve');
+    deviceHarnessAssert(
+        $singleExchangePage['status'] === 200
+        && deviceHarnessHttp($runDirectory, 'a', 'POST', $baseUrl.'/bfc/device', http_build_query($singleExchangeApprove, '', '&', PHP_QUERY_RFC3986), 'application/x-www-form-urlencoded')['status'] === 200,
+        'The single-exchange positive control was not approved through the package route.',
+    );
+    $singleExchangeResponse = deviceHarnessJson(deviceHarnessHttp(
+        $runDirectory,
+        'single-exchange',
+        'POST',
+        $baseUrl.'/bfc/device/token',
+        json_encode(['device_code' => $singleExchange['device_code']], JSON_THROW_ON_ERROR),
+        'application/json',
+    ), 200);
+    $singleExchangeBearer = $singleExchangeResponse['access_token'] ?? null;
+    deviceHarnessAssert(is_string($singleExchangeBearer) && ($singleExchangeResponse['token_type'] ?? null) === 'Bearer', 'The single-exchange positive control did not return one bearer.');
+    $secrets[] = $singleExchangeBearer;
+    $singleExchangeState = deviceHarnessState($root, $environment, ['operation' => 'device-exchange', 'device_code' => $singleExchange['device_code']]);
+    deviceHarnessAssert($singleExchangeState === ['status' => 'consumed', 'credential_rows' => 1], 'The single-exchange positive control did not consume one grant into one credential row.');
+    $stamp['cases']['device_single_token_exchange'] = [
+        'status' => 200,
+        'token_type' => 'Bearer',
+        'grant_status' => 'consumed',
+        'credential_rows' => 1,
+    ];
+
+    $concurrentExchange = deviceHarnessStart($runDirectory, $baseUrl, $csrfA, 'Live concurrent token exchange');
+    $secrets[] = $concurrentExchange['device_code'];
+    $secrets[] = $concurrentExchange['user_code'];
+    $concurrentExchangePage = deviceHarnessHttp($runDirectory, 'a', 'GET', $baseUrl.'/bfc/device');
+    $concurrentExchangeApprove = deviceHarnessInputs($concurrentExchangePage['body'], 'approve');
+    deviceHarnessAssert(
+        $concurrentExchangePage['status'] === 200
+        && deviceHarnessHttp($runDirectory, 'a', 'POST', $baseUrl.'/bfc/device', http_build_query($concurrentExchangeApprove, '', '&', PHP_QUERY_RFC3986), 'application/x-www-form-urlencoded')['status'] === 200,
+        'The concurrent-exchange grant was not approved through the package route.',
+    );
+    $concurrentPort = deviceHarnessPort();
+    $concurrentBaseUrl = "http://127.0.0.1:{$concurrentPort}";
+    $concurrentEnvironment = array_merge($environment, [
+        'APP_URL' => $concurrentBaseUrl,
+        'PHP_CLI_SERVER_WORKERS' => '4',
+    ]);
+    $concurrentServer = new Process([
+        PHP_BINARY,
+        '-S',
+        "127.0.0.1:{$concurrentPort}",
+        $root.'/tests/Live/asymmetric-enrollment-server.php',
+    ], $root, $concurrentEnvironment);
+    $concurrentServer->setTimeout(null);
+    $concurrentServer->start(static function (string $type, string $output) use ($serverLog): void {
+        file_put_contents($serverLog, $output, FILE_APPEND);
+    });
+    $concurrentDeadline = hrtime(true) + 8_000_000_000;
+
+    do {
+        try {
+            $concurrentReady = deviceHarnessHttp($runDirectory, 'concurrent-readiness', 'GET', $concurrentBaseUrl.'/bfc/meta')['status'] === 200;
+        } catch (Throwable) {
+            $concurrentReady = false;
+        }
+    } while (! $concurrentReady && $concurrentServer->isRunning() && hrtime(true) < $concurrentDeadline);
+
+    deviceHarnessAssert($concurrentReady, 'The concurrent real HTTP server missed its readiness deadline.');
+    $concurrentResult = deviceHarnessConcurrentTokenExchange($runDirectory, $concurrentBaseUrl, $concurrentExchange['device_code'], $inspectedArgv);
+    $successes = array_values(array_filter($concurrentResult['responses'], static fn (array $response): bool => $response['status'] === 200));
+    $refusals = array_values(array_filter($concurrentResult['responses'], static fn (array $response): bool => $response['status'] === 400));
+    $concurrentBearer = $successes[0]['body']['access_token'] ?? null;
+    $concurrentOutcomes = array_map(static fn (array $response): array => [
+        'status' => $response['status'],
+        'error' => is_string($response['body']['error'] ?? null) ? $response['body']['error'] : null,
+        'bearer_present' => is_string($response['body']['access_token'] ?? null),
+    ], $concurrentResult['responses']);
+    deviceHarnessAssert(
+        $concurrentResult['barrier_arrivals'] === 2
+        && count($successes) === 1
+        && count($refusals) === 1
+        && is_string($concurrentBearer)
+        && ($successes[0]['body']['token_type'] ?? null) === 'Bearer'
+        && $refusals[0]['body'] === ['error' => 'invalid_grant'],
+        'Concurrent real-HTTP exchange did not produce one bearer and one terminal invalid_grant. Observed: '.json_encode($concurrentOutcomes, JSON_THROW_ON_ERROR),
+    );
+    $secrets[] = $concurrentBearer;
+    $concurrentExchangeState = deviceHarnessState($root, $environment, ['operation' => 'device-exchange', 'device_code' => $concurrentExchange['device_code']]);
+    deviceHarnessAssert($concurrentExchangeState === ['status' => 'consumed', 'credential_rows' => 1], 'Concurrent exchange did not consume one grant into exactly one credential row.');
+    deviceHarnessStopServer($concurrentServer);
+    $stamp['cases']['device_concurrent_token_exchange'] = [
+        'real_http_requests' => 2,
+        'barrier_arrivals' => 2,
+        'bearer_successes' => 1,
+        'invalid_grant_refusals' => 1,
+        'grant_status' => 'consumed',
+        'credential_rows' => 1,
+    ];
+
     $cadence = deviceHarnessStart($runDirectory, $baseUrl, $csrfA, 'Live pending and denial');
     $secrets[] = $cadence['device_code'];
     $pending = deviceHarnessJson(deviceHarnessHttp($runDirectory, 'public', 'POST', $baseUrl.'/bfc/device/token', json_encode(['device_code' => $cadence['device_code']], JSON_THROW_ON_ERROR), 'application/json'), 400);
@@ -636,6 +843,7 @@ try {
     deviceHarnessAssert(($limitedJson['error'] ?? null) === 'slow_down' && $beforeLimit === $afterLimit, 'Transport limiter refusal changed grant cadence or authorization state.');
     $stamp['cases']['transport_limiter_refusal_before_effect'] = ['status' => 429, 'row_unchanged' => true];
 
+    deviceHarnessState($root, $environment, ['operation' => 'clear-decision-limiters']);
     $loopbackClient = new Process([PHP_BINARY, $root.'/tests/Fixtures/Clients/loopback-client.php', $baseUrl, 'live.loopback', $loopbackBearerFile], $root, $environment);
     $loopbackClient->setTimeout(25);
     $loopbackClient->start();
@@ -676,13 +884,13 @@ try {
     $denyConsent = deviceHarnessHttp($runDirectory, 'a', 'GET', $denyUrl);
     $loopbackDeny = deviceHarnessInputs($denyConsent['body'], 'deny');
     $denyCallback = deviceHarnessHttp($runDirectory, 'a', 'POST', $baseUrl.'/bfc/loopback/authorize', http_build_query($loopbackDeny, '', '&', PHP_QUERY_RFC3986), 'application/x-www-form-urlencoded', follow: true);
-    deviceHarnessAssert($denyCallback['status'] === 400, 'The denied loopback callback was not refused by the client listener.');
+    deviceHarnessAssert($denyCallback['status'] === 400, 'The denied loopback callback was not refused by the client listener; observed HTTP '.$denyCallback['status'].'.');
     $loopbackClient->wait();
     deviceHarnessAssert($loopbackClient->getExitCode() === 1 && ! is_file($deniedLoopbackFile), 'A denied loopback grant produced a bearer.');
     $stamp['cases']['loopback_deny'] = ['callback_status' => 400, 'bearer_written' => false];
 
     $summary = deviceHarnessState($root, $environment, ['operation' => 'summary']);
-    deviceHarnessAssert(($summary['credentials'] ?? null) === 2 && ($summary['consumed'] ?? null) === 2, 'The disposable final state did not contain exactly the two successful credentials.');
+    deviceHarnessAssert(($summary['credentials'] ?? null) === 4 && ($summary['consumed'] ?? null) === 4, 'The disposable final state did not contain exactly the four successful credentials.');
     $stamp['cases']['final_state'] = $summary;
     $stamp['overall_verdict'] = 'pass';
     $stamp['exit_code'] = 0;
@@ -696,6 +904,7 @@ try {
     }
 
     deviceHarnessStopServer($server);
+    deviceHarnessStopServer($concurrentServer);
     $serverContents = is_file($serverLog) ? (string) file_get_contents($serverLog) : '';
     $stamp['secret_canaries']['server_log_clean'] = ! deviceHarnessContainsSecret($serverContents, $secrets);
     $stamp['secret_canaries']['argv_clean'] = ! deviceHarnessContainsSecret($inspectedArgv, $secrets);

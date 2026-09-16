@@ -73,6 +73,8 @@ final class StandaloneHarnessServiceProvider extends ServiceProvider
         }
 
         if (getenv('BFC_HARNESS_DEVICE_AUTHORIZATION') !== false) {
+            $this->app['config']->set('database.connections.sqlite.transaction_mode', 'IMMEDIATE');
+            $this->app['config']->set('database.connections.sqlite.busy_timeout', 10_000);
             $profiles = [];
 
             foreach (['live.device', 'live.loopback'] as $purpose) {
@@ -137,7 +139,20 @@ final class StandaloneHarnessServiceProvider extends ServiceProvider
                     abort(404);
                 }
 
-                $credential = app(BoundBearerCredentialAuthenticator::class)->authenticate($request, $purpose);
+                $mapping = config('built-for-cloud.credentials.app_purposes');
+
+                if ($request->header('X-Bfc-Harness-App-Purpose-Mapping') === 'drift') {
+                    config()->set('built-for-cloud.credentials.app_purposes', [
+                        'live.device' => CredentialPurpose::Mcp->value,
+                        'live.loopback' => CredentialPurpose::Consumption->value,
+                    ]);
+                }
+
+                try {
+                    $credential = app(BoundBearerCredentialAuthenticator::class)->authenticate($request, $purpose);
+                } finally {
+                    config()->set('built-for-cloud.credentials.app_purposes', $mapping);
+                }
 
                 if ($credential !== null && Schema::hasTable('bfc_device_harness_effects')) {
                     RateLimiter::hit('bfc-device-harness-use|'.$credential->id, 60);

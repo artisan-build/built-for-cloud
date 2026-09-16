@@ -38,6 +38,8 @@
                 "device_terminal_binding_cleanup",
                 "device_managed_authority_transition",
                 "device_approve_exchange_and_bound_use",
+                "device_single_token_exchange",
+                "device_concurrent_token_exchange",
                 "device_pending_slow_down_and_deny",
                 "device_expiry",
                 "transport_limiter_refusal_before_effect",
@@ -45,6 +47,7 @@
                 "loopback_cross_browser_refusal",
                 "loopback_deny",
                 "exact_bound_refusal_matrix",
+                "app_purpose_mapping_drift",
                 "final_state"
             ]
         },

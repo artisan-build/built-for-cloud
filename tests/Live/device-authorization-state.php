@@ -85,6 +85,31 @@ if ($input['operation'] === 'device') {
     return;
 }
 
+if ($input['operation'] === 'device-exchange') {
+    $deviceCode = $input['device_code'] ?? null;
+
+    if (! is_string($deviceCode) || preg_match('/\A[A-Za-z0-9_-]{43}\z/D', $deviceCode) !== 1) {
+        throw new RuntimeException('The disposable exchange detail operation requires one valid device code.');
+    }
+
+    $authorization = DB::table('credential_authorizations')
+        ->where('device_code_hash', hash('sha256', $deviceCode))
+        ->first();
+
+    if (! is_object($authorization)) {
+        throw new RuntimeException('The disposable exchange detail operation could not find its grant.');
+    }
+
+    fwrite(STDOUT, json_encode([
+        'status' => $authorization->status,
+        'credential_rows' => is_string($authorization->issued_credential_id)
+            ? DB::table('credentials')->where('id', $authorization->issued_credential_id)->count()
+            : 0,
+    ], JSON_THROW_ON_ERROR)."\n");
+
+    return;
+}
+
 if ($input['operation'] === 'device-decision') {
     $deviceCode = $input['device_code'] ?? null;
     $submissionNonce = $input['submission_nonce'] ?? null;
@@ -222,6 +247,18 @@ if ($input['operation'] === 'managed-authority') {
 if ($input['operation'] === 'clear-token-limiters') {
     foreach (['bfc-device-token|127.0.0.1', 'bfc-loopback-token|127.0.0.1', 'bfc-authorization-token-global'] as $key) {
         RateLimiter::clear(md5('bfc-authorization-token'.$key));
+    }
+
+    fwrite(STDOUT, "{\"cleared\":true}\n");
+
+    return;
+}
+
+if ($input['operation'] === 'clear-decision-limiters') {
+    $userIds = DB::table('users')->whereIn('email', ['owner@example.test', 'admin@example.test'])->pluck('id');
+
+    foreach ($userIds as $userId) {
+        RateLimiter::clear(md5('bfc-authorization-decision'.'bfc-authorization-decision|'.$userId.'|127.0.0.1'));
     }
 
     fwrite(STDOUT, "{\"cleared\":true}\n");
