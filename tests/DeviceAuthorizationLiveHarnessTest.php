@@ -43,8 +43,9 @@ it('ships a syntax-valid disposable device authorization harness and private sta
             'set-credential-dimension',
             'create-unbound-bearer',
             '/_bfc-harness/device/use-legacy',
+            "'algorithm' => 'RS256',",
         )
-        ->and($source)->not->toContain('cloud command:', 'cloud environment:', 'Authorization: Bearer {$');
+        ->and($source)->not->toContain('cloud command:', 'cloud environment:', 'Authorization: Bearer {$', "'algorithm' => 'rs256',");
 });
 
 it('keeps both disposable clients bounded and keeps secrets out of argv', function (): void {

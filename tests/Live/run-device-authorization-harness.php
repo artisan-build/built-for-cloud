@@ -450,7 +450,7 @@ try {
         'installation_ref' => 'wrong-live-installation',
         'application_ref' => 'wrong-live-application',
         'audience' => 'https://wrong-live.example',
-        'algorithm' => 'rs256',
+        'algorithm' => 'RS256',
         'material_role' => 'verification_copy',
         'scope_hash' => str_repeat('0', 64),
     ];
