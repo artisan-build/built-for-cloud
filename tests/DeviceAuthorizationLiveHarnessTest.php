@@ -53,6 +53,7 @@ it('ships a syntax-valid disposable device authorization harness and private sta
             "['operation' => 'managed-authority', 'state' => 'positive']",
             "['operation' => 'managed-authority', 'state' => 'inactive']",
             "['operation' => 'managed-authority', 'state' => 'local']",
+            "\$secrets[] = \$managed['device_code'];\n    \$secrets[] = \$managed['user_code'];",
             "'operation' => 'device-decision'",
             "str_contains(\$managedDecision['body'], 'device-authorization-unavailable')",
             "'denial_reason' => 'authority_denied'",
@@ -125,6 +126,8 @@ it('keeps both disposable clients bounded and keeps secrets out of argv', functi
         '[ "$attempt" -lt 180 ]',
         'chmod 600 "$bearer_file"',
         'curl --silent --show-error --dump-header "$headers" --output "$body" --config -',
+        'connect-timeout = 5',
+        'max-time = 15',
     )->not->toContain('device-client.sh <base-url> <device-code>')
         ->and($loopback)->toContain(
             "stream_socket_server('tcp://127.0.0.1:0'",

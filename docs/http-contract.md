@@ -1842,10 +1842,11 @@ directory, keep Authorization data off argv, clean temporary material and contai
 interception on the approving machine is outside the package boundary. A device code is a bounded
 bearer capability for its one approved grant. Lost successful responses cannot be redelivered.
 Installation-owned grants and durable credentials do not become personal property of their
-initiating approver: removing or changing that approver does not kill them; connection inactivity
-or installation-subject removal does. Capstan N1 owns replacing its host models/controllers and
-composing this wire with its generated installer, fake-crontab behavior and first domain probe. This
-package owns safe authorization acquisition and exact-bound use only.
+initiating approver: removing or changing that approver does not kill them. Fresh connection
+inactivity denies a live installation grant but does not revoke an already durable installation
+credential; installation-subject removal ends both. Capstan N1 owns replacing its host
+models/controllers and composing this wire with its generated installer, fake-crontab behavior and
+first domain probe. This package owns safe authorization acquisition and exact-bound use only.
 
 ---
 

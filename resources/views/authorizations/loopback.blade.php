@@ -16,6 +16,11 @@
                 <dt>Installation</dt><dd>{{ $authorization['installation'] }}</dd>
                 <dt>Application</dt><dd>{{ $authorization['application'] }}</dd>
                 <dt>Ownership</dt><dd>{{ $authorization['ownership'] }}</dd>
+                @if ($authorization['ownership'] === 'personal')
+                    <dt>Management</dt><dd>Only the derived user can manage it; removing that user or personal subject ends it.</dd>
+                @else
+                    <dt>Management</dt><dd>Remaining installation members can manage it; it survives approver removal or role changes, but installation-subject removal ends it.</dd>
+                @endif
                 <dt>Callback</dt><dd>{{ $authorization['callbackAuthority'] }}</dd>
                 @if ($authorization['label'] !== null)
                     <dt>Label</dt><dd>{{ $authorization['label'] }}</dd>

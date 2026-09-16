@@ -40,6 +40,8 @@ while [ "$attempt" -lt 180 ]; do
     curl --silent --show-error --dump-header "$headers" --output "$body" --config - <<EOF
 url = "$base_url/bfc/device/token"
 request = "POST"
+connect-timeout = 5
+max-time = 15
 header = "Content-Type: application/json"
 data = "{\"device_code\":\"$device_code\"}"
 EOF

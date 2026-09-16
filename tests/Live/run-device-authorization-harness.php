@@ -426,6 +426,7 @@ try {
     deviceHarnessState($root, $environment, ['operation' => 'managed-authority', 'state' => 'positive']);
     $managed = deviceHarnessStart($runDirectory, $baseUrl, $csrfA, 'Live managed authority transition');
     $secrets[] = $managed['device_code'];
+    $secrets[] = $managed['user_code'];
     $managedPage = deviceHarnessHttp($runDirectory, 'a', 'GET', $baseUrl.'/bfc/device');
     deviceHarnessAssert($managedPage['status'] === 200 && str_contains($managedPage['body'], $managed['user_code']), 'The managed-positive grant did not render through the package route.');
     $managedApprove = deviceHarnessInputs($managedPage['body'], 'approve');

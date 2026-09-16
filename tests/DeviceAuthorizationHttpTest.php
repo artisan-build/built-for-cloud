@@ -58,18 +58,23 @@ function httpAuthorizationUser(string $email = 'http-device@example.test'): User
     ]);
 }
 
-function httpAuthorizationProfile(User $user, string $purpose): CredentialAuthorizationProfile
-{
+function httpAuthorizationProfile(
+    User $user,
+    string $purpose,
+    CredentialAuthorizationOwnership $ownership = CredentialAuthorizationOwnership::Personal,
+): CredentialAuthorizationProfile {
     $profile = new CredentialAuthorizationProfile(
         $purpose,
         new BoundCredentialScope(
             $purpose,
-            new Subject(SubjectType::UserPrincipal, 'http-user:'.$user->getKey()),
+            $ownership === CredentialAuthorizationOwnership::Personal
+                ? new Subject(SubjectType::UserPrincipal, 'http-user:'.$user->getKey())
+                : new Subject(SubjectType::Installation, 'http-installation-subject-test'),
             'http-installation-test',
             'http-application-test',
             'https://http-audience.example.test',
         ),
-        CredentialAuthorizationOwnership::Personal,
+        $ownership,
         [],
         now()->addDay(),
         600,
@@ -390,6 +395,47 @@ it('refuses malformed callback and PKCE attempts before one loopback exchange', 
         'code_verifier' => $verifier,
     ])->assertStatus(400)->assertExactJson(['error' => 'invalid_grant']);
 });
+
+it('explains personal and installation ownership consequences on both authorization views', function (
+    string $flow,
+    CredentialAuthorizationOwnership $ownership,
+    string $consequence,
+): void {
+    $user = httpAuthorizationUser('http-ownership-'.$flow.'-'.$ownership->value.'@example.test');
+    $purpose = 'http.'.$flow;
+    httpAuthorizationProfile($user, $purpose, $ownership);
+    $this->actingAsVersioned($user, 'web');
+    $label = 'Ownership <'.$flow.' '.$ownership->value.'>';
+
+    if ($flow === 'device') {
+        $this->postJson('/bfc/device-authorizations', [
+            'app_purpose' => $purpose,
+            'label' => $label,
+        ])->assertCreated();
+        $page = $this->get('/bfc/device');
+    } else {
+        $query = http_build_query([
+            'app_purpose' => $purpose,
+            'redirect_uri' => 'http://127.0.0.1:49152/ownership',
+            'code_challenge' => rtrim(strtr(base64_encode(hash('sha256', str_repeat('o', 43), true)), '+/', '-_'), '='),
+            'code_challenge_method' => 'S256',
+            'state' => str_repeat('o', 32),
+            'label' => $label,
+        ]);
+        $page = $this->get('/bfc/loopback/authorize?'.$query);
+    }
+
+    $page->assertOk()
+        ->assertSee('data-testid="device-authorization-profile"', false)
+        ->assertSee($label)
+        ->assertSee($ownership->value)
+        ->assertSee($consequence);
+})->with([
+    'personal device' => ['device', CredentialAuthorizationOwnership::Personal, 'Only the derived user can manage it; removing that user or personal subject ends it.'],
+    'installation device' => ['device', CredentialAuthorizationOwnership::Installation, 'Remaining installation members can manage it; it survives approver removal or role changes, but installation-subject removal ends it.'],
+    'personal loopback' => ['loopback', CredentialAuthorizationOwnership::Personal, 'Only the derived user can manage it; removing that user or personal subject ends it.'],
+    'installation loopback' => ['loopback', CredentialAuthorizationOwnership::Installation, 'Remaining installation members can manage it; it survives approver removal or role changes, but installation-subject removal ends it.'],
+]);
 
 it('idempotently reuses an exact loopback GET intent and creates a distinct intent for a distinct tuple', function (): void {
     $user = httpAuthorizationUser('http-loopback-reuse@example.test');
