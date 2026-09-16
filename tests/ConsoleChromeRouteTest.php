@@ -5,7 +5,9 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\BuiltForCloudServiceProvider;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\DeviceAuthorizations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\LandingPage;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\LoopbackAuthorizations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiInstallationCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiPersonalCredentials;
@@ -166,7 +168,9 @@ it('accounts for every file in src containing the literal bfc:: substring in cod
     expect(ConsoleChromeRouteScan::viewReferencesIn($src))
         ->toBe([
             basename((string) (new ReflectionClass(BuiltForCloudServiceProvider::class))->getFileName()),
+            'Http/Controllers/'.basename((string) (new ReflectionClass(DeviceAuthorizations::class))->getFileName()),
             'Http/Controllers/'.basename((string) (new ReflectionClass(LandingPage::class))->getFileName()),
+            'Http/Controllers/'.basename((string) (new ReflectionClass(LoopbackAuthorizations::class))->getFileName()),
             'Http/Controllers/'.basename((string) (new ReflectionClass(UiHome::class))->getFileName()),
             'Http/Controllers/'.basename((string) (new ReflectionClass(UiInstallationCredentials::class))->getFileName()),
             'Http/Controllers/'.basename((string) (new ReflectionClass(UiPersonalCredentials::class))->getFileName()),

@@ -59,7 +59,9 @@ function packageConformanceExpected(): array
             'path:HMAC|Http\Middleware\VerifyHmacSignature+Hmac\HmacVerifier',
             'path:MCP|Http\Middleware\AuthenticateMcp:store-bearer+v4.public',
             'path:asymmetric|Actions\MintCredential::mintEnrollment+CompleteAsymmetricEnrollment+AsymmetricVerificationKeys',
+            'path:device|Http\Controllers\DeviceAuthorizations+Actions\StartDeviceAuthorization/DecideDeviceAuthorization/PollDeviceAuthorization+BoundBearerCredentialAuthenticator+ContainCredentialAuthorizations',
             'path:enrollment|OnboardingToken+POST:/bfc/claim,/bfc/onboarding/issue,/exchange,/verify',
+            'path:loopback|Http\Controllers\LoopbackAuthorizations+Actions\StartLoopbackAuthorization/DecideLoopbackAuthorization/ExchangeLoopbackAuthorization+BoundBearerCredentialAuthenticator+ContainCredentialAuthorizations',
             'path:system|SubjectType::Operator/Application/Installation+AuditActorType::CliOperator',
         ]),
         'credential_writers' => sortedConformanceMembers([
@@ -87,10 +89,12 @@ function packageConformanceExpected(): array
             'ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand',
             'ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand',
             'ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand',
+            'ArtisanBuild\BuiltForCloud\Commands\PruneCredentialAuthorizationsCommand',
             'ArtisanBuild\BuiltForCloud\Commands\SigningRootProvisionCommand',
             'ArtisanBuild\BuiltForCloud\Commands\SubjectOffboardCommand',
             'ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand',
             DeliverOwnershipWebhook::class,
+            'Closure@package/src/SystemAuthoritySchedule.php:27',
         ]),
         'no_signing_path' => [],
         'ui_config_reads' => sortedConformanceMembers([
