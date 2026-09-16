@@ -76,7 +76,6 @@ function deviceHarnessHttp(
         'silent',
         'show-error',
         'url = "'.deviceHarnessConfigValue($url).'"',
-        'request = "'.$method.'"',
         'output = "'.deviceHarnessConfigValue($responseBody).'"',
         'dump-header = "'.deviceHarnessConfigValue($responseHeaders).'"',
         'cookie = "'.deviceHarnessConfigValue($cookieJar).'"',
@@ -85,6 +84,10 @@ function deviceHarnessHttp(
         'max-time = 15',
         'header = "Accept: application/json, text/html"',
     ];
+
+    if (! $follow) {
+        $config[] = 'request = "'.$method.'"';
+    }
 
     if ($follow) {
         $config[] = 'location';
