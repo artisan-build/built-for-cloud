@@ -568,25 +568,26 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // session-riding forgery on a logged-in user's browser could mint,
         // rotate or revoke credentials.
         $personal = $this->browserSessionMiddleware($router);
+        $authorizationUser = EnsureUserIsAuthenticated::class.':'.EnsureUserIsAuthenticated::DEFER_MANAGED_AUTHORITY;
 
         $authorizationRoutes = [];
         $authorizationRoutes[] = $router->post('/bfc/device-authorizations', [DeviceAuthorizations::class, 'store'])
-            ->middleware([...$personal, EnsureUserIsAuthenticated::class, 'throttle:bfc-authorization-start'])
+            ->middleware([...$personal, $authorizationUser, 'throttle:bfc-authorization-start'])
             ->name('bfc.device.start');
         $authorizationRoutes[] = $router->get('/bfc/device', [DeviceAuthorizations::class, 'show'])
-            ->middleware([...$personal, EnsureUserIsAuthenticated::class])
+            ->middleware([...$personal, $authorizationUser])
             ->name('bfc.device.show');
         $authorizationRoutes[] = $router->post('/bfc/device', [DeviceAuthorizations::class, 'decide'])
-            ->middleware([...$personal, EnsureUserIsAuthenticated::class, 'throttle:bfc-authorization-decision'])
+            ->middleware([...$personal, $authorizationUser, 'throttle:bfc-authorization-decision'])
             ->name('bfc.device.decide');
         $authorizationRoutes[] = $router->post('/bfc/device/token', [DeviceAuthorizations::class, 'token'])
             ->middleware('throttle:bfc-authorization-token')
             ->name('bfc.device.token');
         $authorizationRoutes[] = $router->get('/bfc/loopback/authorize', [LoopbackAuthorizations::class, 'show'])
-            ->middleware([...$personal, EnsureUserIsAuthenticated::class, 'throttle:bfc-authorization-start'])
+            ->middleware([...$personal, $authorizationUser, 'throttle:bfc-authorization-start'])
             ->name('bfc.loopback.authorize');
         $authorizationRoutes[] = $router->post('/bfc/loopback/authorize', [LoopbackAuthorizations::class, 'decide'])
-            ->middleware([...$personal, EnsureUserIsAuthenticated::class, 'throttle:bfc-authorization-decision'])
+            ->middleware([...$personal, $authorizationUser, 'throttle:bfc-authorization-decision'])
             ->name('bfc.loopback.decide');
         $authorizationRoutes[] = $router->post('/bfc/loopback/token', [LoopbackAuthorizations::class, 'token'])
             ->middleware('throttle:bfc-authorization-token')

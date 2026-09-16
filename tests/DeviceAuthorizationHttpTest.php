@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\Actions\DecideLoopbackAuthorization;
 use ArtisanBuild\BuiltForCloud\Actions\StartLoopbackAuthorization;
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
@@ -13,7 +12,9 @@ use ArtisanBuild\BuiltForCloud\CredentialAuthorizationProfile;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\LoopbackAuthorizations;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
+use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\DeviceFlowDeclaration;
@@ -75,6 +76,62 @@ function httpAuthorizationProfile(User $user, string $purpose): CredentialAuthor
     DeviceFlowDeclaration::$resolvedSubject = $profile->scope->subject;
 
     return $profile;
+}
+
+function configureHttpManagedAuthority(User $user, bool $fresh): void
+{
+    DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
+        'mode' => AuthorityMode::Managed->value,
+        'generation' => 7,
+        'issuer' => 'https://issuer.example.test',
+        'connection_id' => 'connection-fixture',
+        'organization_id' => 'organization-fixture',
+        'installation_id' => 'installation-fixture',
+        'authority_base_url' => 'https://authority.example.test',
+        'managed_connection_status' => 'active',
+        'managed_connection_generation' => 7,
+        'managed_connection_roster_version' => 11,
+        'managed_connection_response_sequence' => 11,
+    ]);
+    config(['built-for-cloud.managed.client_secret' => 'fixture-client-secret']);
+    $confirmedAt = $fresh ? now() : now()->subMinutes(31);
+    $user->forceFill([
+        'status' => 'active',
+        'scalpels_issuer' => 'https://issuer.example.test',
+        'scalpels_connection_id' => 'connection-fixture',
+        'scalpels_id' => 'managed-http-user-'.$user->getKey(),
+        'managed_membership_status' => 'active',
+        'managed_membership_role' => $user->role,
+        'managed_membership_generation' => 7,
+        'managed_membership_roster_version' => 11,
+        'managed_membership_response_sequence' => 11,
+        'managed_membership_responded_at' => $confirmedAt,
+        'membership_confirmed_at' => $confirmedAt,
+        'membership_checked_at' => $confirmedAt,
+        'membership_response_at' => $confirmedAt,
+    ])->save();
+    Cache::flush();
+}
+
+function denyHttpManagedAuthority(): void
+{
+    DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
+        'managed_connection_status' => 'inactive',
+    ]);
+    Cache::flush();
+}
+
+function httpLoopbackQuery(string $state, int $port): string
+{
+    $verifier = str_repeat('v', 43);
+
+    return http_build_query([
+        'app_purpose' => 'http.loopback',
+        'redirect_uri' => "http://127.0.0.1:{$port}/managed",
+        'code_challenge' => rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '='),
+        'code_challenge_method' => 'S256',
+        'state' => $state,
+    ]);
 }
 
 /** @return array<string, string> */
@@ -400,89 +457,220 @@ it('actively removes terminal and unsealable bindings while serving both GET sur
         ->not->toBe('stale-loopback-selection');
 });
 
-it('keeps managed loopback authority refusals terminal or retryable without consuming the decision nonce', function (): void {
-    $user = httpAuthorizationUser('http-managed-loopback@example.test');
-    httpAuthorizationProfile($user, 'http.loopback');
+it('routes managed device starts to the frozen transient and terminal authority responses', function (): void {
+    $user = httpAuthorizationUser('http-managed-start@example.test');
+    httpAuthorizationProfile($user, 'http.device');
+    configureHttpManagedAuthority($user, true);
     $this->actingAsVersioned($user, 'web');
-    $verifier = str_repeat('v', 43);
-    $challenge = rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=');
-    $query = static fn (string $state, int $port): string => http_build_query([
-        'app_purpose' => 'http.loopback',
-        'redirect_uri' => "http://127.0.0.1:{$port}/managed",
-        'code_challenge' => $challenge,
-        'code_challenge_method' => 'S256',
-        'state' => $state,
-    ]);
 
-    $positivePage = $this->get('/bfc/loopback/authorize?'.$query(str_repeat('p', 32), 49152))->assertOk();
+    $this->postJson('/bfc/device-authorizations', [
+        'app_purpose' => 'http.device',
+        'label' => 'Fresh managed start',
+    ])->assertCreated();
+    $beforeRows = DB::table('credential_authorizations')->count();
+    $beforeAudits = DB::table('credential_audit_events')->count();
+    $beforeBindings = app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request());
+
+    configureHttpManagedAuthority($user, false);
+    Http::fake(static fn () => Http::response(['error' => 'test-created-outage'], 503));
+    $this->postJson('/bfc/device-authorizations', [
+        'app_purpose' => 'http.device',
+        'label' => 'Retryable managed start',
+    ])->assertStatus(503)
+        ->assertHeader('Retry-After', '5')
+        ->assertExactJson(['error' => 'temporarily_unavailable'])
+        ->assertSessionHas(StandaloneAccess::SESSION_VERSION_KEY, $user->auth_session_version);
+
+    expect(auth('web')->check())->toBeTrue()
+        ->and(DB::table('credential_authorizations')->count())->toBe($beforeRows)
+        ->and(DB::table('credential_audit_events')->count())->toBe($beforeAudits)
+        ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request()))->toBe($beforeBindings);
+
+    denyHttpManagedAuthority();
+    $this->postJson('/bfc/device-authorizations', [
+        'app_purpose' => 'http.device',
+        'label' => 'Denied managed start',
+    ])->assertStatus(403)
+        ->assertExactJson(['error' => 'access_denied']);
+    expect(DB::table('credential_authorizations')->count())->toBe($beforeRows)
+        ->and(DB::table('credential_audit_events')->count())->toBe($beforeAudits)
+        ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request()))->toBe($beforeBindings);
+});
+
+it('routes managed device decisions through retry, success, and terminal containment', function (): void {
+    $user = httpAuthorizationUser('http-managed-device-decision@example.test');
+    httpAuthorizationProfile($user, 'http.device');
+    configureHttpManagedAuthority($user, true);
+    $this->actingAsVersioned($user, 'web');
+
+    $positiveStart = $this->postJson('/bfc/device-authorizations', ['app_purpose' => 'http.device'])->assertCreated();
+    $positivePage = $this->get('/bfc/device')->assertOk();
     $positive = authorizationHiddenInputs($positivePage->getContent(), 'approve');
     $positiveCookie = $positivePage->getCookie((string) config('session.cookie'));
     expect($positiveCookie)->not->toBeNull();
-    $positiveHash = hash('sha256', $positive['submission_nonce']);
-    $this->withCookie((string) config('session.cookie'), $positiveCookie->getValue())
-        ->post('/bfc/loopback/authorize', $positive)
-        ->assertStatus(303);
-    expect(DB::table('bfc_submission_nonces')->where('nonce_hash', $positiveHash)->exists())->toBeFalse();
+    $positiveId = DB::table('credential_authorizations')
+        ->where('user_code_hash', hash('sha256', (string) $positiveStart->json('user_code')))
+        ->value('id');
+    $this->withCookie((string) config('session.cookie'), $positiveCookie->getValue())->post('/bfc/device', $positive)
+        ->assertOk()
+        ->assertSee('data-testid="device-authorization-result"', false);
+    expect(DB::table('credential_authorizations')->where('id', $positiveId)->value('status'))->toBe('approved');
 
-    $deniedPage = $this->get('/bfc/loopback/authorize?'.$query(str_repeat('d', 32), 49153))->assertOk();
+    $deniedStart = $this->postJson('/bfc/device-authorizations', ['app_purpose' => 'http.device'])->assertCreated();
+    $deniedPage = $this->get('/bfc/device')->assertOk();
     $denied = authorizationHiddenInputs($deniedPage->getContent(), 'approve');
+    $deniedCookie = $deniedPage->getCookie((string) config('session.cookie'));
+    expect($deniedCookie)->not->toBeNull();
     $deniedHash = hash('sha256', $denied['submission_nonce']);
-    DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
-        'mode' => AuthorityMode::Managed->value,
-        'generation' => 7,
-        'issuer' => 'https://issuer.example.test',
-        'connection_id' => 'connection-fixture',
-        'organization_id' => 'organization-fixture',
-        'installation_id' => 'installation-fixture',
-        'authority_base_url' => 'https://authority.example.test',
-        'managed_connection_status' => 'inactive',
-    ]);
-    $denialRequest = Request::create('/bfc/loopback/authorize', 'POST', $denied);
-    $denialRequest->setLaravelSession(app('session')->driver());
-    $denialRequest->setUserResolver(static fn (): User => $user);
-    $denialResponse = app(LoopbackAuthorizations::class)->decide(
-        $denialRequest,
-        app(DecideLoopbackAuthorization::class),
-        app(BrowserCredentialAuthorizationStore::class),
-    );
-
-    expect($denialResponse->getStatusCode())->toBe(303)
-        ->and($denialResponse->headers->get('Location'))->toContain('error=access_denied', 'state='.str_repeat('d', 32))
-        ->and(DB::table('credential_authorizations')->where('redirect_uri', 'http://127.0.0.1:49153/managed')->value('status'))->toBe('denied')
+    $deniedId = DB::table('credential_authorizations')
+        ->where('user_code_hash', hash('sha256', (string) $deniedStart->json('user_code')))
+        ->value('id');
+    denyHttpManagedAuthority();
+    $this->withCookie((string) config('session.cookie'), $deniedCookie->getValue())->post('/bfc/device', $denied)
+        ->assertNotFound()
+        ->assertSee('data-testid="device-authorization-unavailable"', false);
+    expect(DB::table('credential_authorizations')->where('id', $deniedId)->value('status'))->toBe('denied')
+        ->and(DB::table('credential_authorizations')->where('id', $deniedId)->value('denial_reason'))->toBe('authority_denied')
         ->and(DB::table('bfc_submission_nonces')->where('nonce_hash', $deniedHash)->exists())->toBeTrue()
+        ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request()))->toBe([])
         ->and(DB::table('credentials')->count())->toBe(0);
 
-    InstallationAuthority::change(InstallationAuthority::current(), AuthorityMode::Standalone);
-    $retryPage = $this->get('/bfc/loopback/authorize?'.$query(str_repeat('r', 32), 49154))->assertOk();
+    configureHttpManagedAuthority($user, true);
+    $retryStart = $this->postJson('/bfc/device-authorizations', ['app_purpose' => 'http.device'])->assertCreated();
+    $retryPage = $this->get('/bfc/device')->assertOk();
     $retry = authorizationHiddenInputs($retryPage->getContent(), 'approve');
+    $retryCookie = $retryPage->getCookie((string) config('session.cookie'));
+    expect($retryCookie)->not->toBeNull();
     $retryHash = hash('sha256', $retry['submission_nonce']);
-    InstallationAuthority::change(InstallationAuthority::current(), AuthorityMode::Managed);
-    DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update(['managed_connection_status' => 'active']);
-    config(['built-for-cloud.managed.client_secret' => 'fixture-client-secret']);
-    $user->forceFill([
-        'status' => 'active',
-        'scalpels_issuer' => 'https://issuer.example.test',
-        'scalpels_connection_id' => 'connection-fixture',
-        'scalpels_id' => 'managed-loopback-user',
-        'membership_confirmed_at' => now()->subMinutes(31),
-        'membership_response_at' => now()->subMinutes(31),
-        'managed_membership_status' => 'active',
-    ])->save();
-    Cache::flush();
-    Http::fake(static fn () => Http::response(['error' => 'test-created-outage'], 503));
-    $retryRequest = Request::create('/bfc/loopback/authorize', 'POST', $retry);
-    $retryRequest->setLaravelSession(app('session')->driver());
-    $retryRequest->setUserResolver(static fn (): User => $user);
-    $retryResponse = app(LoopbackAuthorizations::class)->decide(
-        $retryRequest,
-        app(DecideLoopbackAuthorization::class),
-        app(BrowserCredentialAuthorizationStore::class),
-    );
+    $retryId = DB::table('credential_authorizations')
+        ->where('user_code_hash', hash('sha256', (string) $retryStart->json('user_code')))
+        ->value('id');
+    $beforeBindings = app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request());
+    $beforeAudits = DB::table('credential_audit_events')->count();
 
-    expect($retryResponse->getStatusCode())->toBe(503)
-        ->and($retryResponse->headers->get('Retry-After'))->toBe('5')
-        ->and(DB::table('credential_authorizations')->where('redirect_uri', 'http://127.0.0.1:49154/managed')->value('status'))->toBe('pending')
+    configureHttpManagedAuthority($user, false);
+    Http::fake(static fn () => Http::response(['error' => 'test-created-outage'], 503));
+    $this->withCookie((string) config('session.cookie'), $retryCookie->getValue())->post('/bfc/device', $retry)
+        ->assertStatus(503)
+        ->assertHeader('Retry-After', '5')
+        ->assertSee('data-testid="device-authorization-retry"', false)
+        ->assertSessionHas(StandaloneAccess::SESSION_VERSION_KEY, $user->auth_session_version);
+
+    expect(auth('web')->check())->toBeTrue()
+        ->and(DB::table('credential_authorizations')->where('id', $retryId)->value('status'))->toBe('pending')
         ->and(DB::table('bfc_submission_nonces')->where('nonce_hash', $retryHash)->exists())->toBeTrue()
-        ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts($retryRequest))->toHaveCount(1)
+        ->and(DB::table('credential_audit_events')->count())->toBe($beforeAudits)
+        ->and(DB::table('credentials')->count())->toBe(0)
+        ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request()))->toBe($beforeBindings);
+});
+
+it('routes managed loopback decisions through retry, success, and terminal containment', function (): void {
+    $user = httpAuthorizationUser('http-managed-loopback@example.test');
+    httpAuthorizationProfile($user, 'http.loopback');
+    configureHttpManagedAuthority($user, true);
+    $this->actingAsVersioned($user, 'web');
+
+    $positiveState = str_repeat('p', 32);
+    $positiveRedirect = 'http://127.0.0.1:49152/managed';
+    $positivePage = $this->get('/bfc/loopback/authorize?'.httpLoopbackQuery($positiveState, 49152))->assertOk();
+    $positiveInput = authorizationHiddenInputs($positivePage->getContent(), 'approve');
+    $positiveCookie = $positivePage->getCookie((string) config('session.cookie'));
+    expect($positiveCookie)->not->toBeNull();
+    $positiveId = DB::table('credential_authorizations')->where('redirect_uri', $positiveRedirect)->value('id');
+    $positive = $this->withCookie((string) config('session.cookie'), $positiveCookie->getValue())
+        ->post('/bfc/loopback/authorize', $positiveInput)
+        ->assertStatus(303);
+    expect($positive->headers->get('Location'))->toContain('code=', 'state='.$positiveState)
+        ->and(DB::table('credential_authorizations')->where('id', $positiveId)->value('status'))->toBe('approved');
+
+    $deniedState = str_repeat('d', 32);
+    $deniedRedirect = 'http://127.0.0.1:49153/managed';
+    $deniedPage = $this->get('/bfc/loopback/authorize?'.httpLoopbackQuery($deniedState, 49153))->assertOk();
+    $denied = authorizationHiddenInputs($deniedPage->getContent(), 'approve');
+    $deniedCookie = $deniedPage->getCookie((string) config('session.cookie'));
+    expect($deniedCookie)->not->toBeNull();
+    $deniedHash = hash('sha256', $denied['submission_nonce']);
+    $deniedId = DB::table('credential_authorizations')->where('redirect_uri', $deniedRedirect)->value('id');
+    denyHttpManagedAuthority();
+
+    $denial = $this->withCookie((string) config('session.cookie'), $deniedCookie->getValue())
+        ->post('/bfc/loopback/authorize', $denied)
+        ->assertStatus(303);
+    expect($denial->headers->get('Location'))->toContain('error=access_denied', 'state='.$deniedState)
+        ->and(DB::table('credential_authorizations')->where('id', $deniedId)->value('status'))->toBe('denied')
+        ->and(DB::table('credential_authorizations')->where('id', $deniedId)->value('denial_reason'))->toBe('authority_denied')
+        ->and(DB::table('bfc_submission_nonces')->where('nonce_hash', $deniedHash)->exists())->toBeTrue()
+        ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request()))->toBe([])
         ->and(DB::table('credentials')->count())->toBe(0);
+
+    configureHttpManagedAuthority($user, true);
+    $retryState = str_repeat('r', 32);
+    $retryRedirect = 'http://127.0.0.1:49154/managed';
+    $retryPage = $this->get('/bfc/loopback/authorize?'.httpLoopbackQuery($retryState, 49154))->assertOk();
+    $retry = authorizationHiddenInputs($retryPage->getContent(), 'approve');
+    $retryCookie = $retryPage->getCookie((string) config('session.cookie'));
+    expect($retryCookie)->not->toBeNull();
+    $retryHash = hash('sha256', $retry['submission_nonce']);
+    $retryId = DB::table('credential_authorizations')->where('redirect_uri', $retryRedirect)->value('id');
+    $beforeBindings = app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request());
+    $beforeAudits = DB::table('credential_audit_events')->count();
+
+    configureHttpManagedAuthority($user, false);
+    Http::fake(static fn () => Http::response(['error' => 'test-created-outage'], 503));
+    $this->withCookie((string) config('session.cookie'), $retryCookie->getValue())
+        ->post('/bfc/loopback/authorize', $retry)
+        ->assertStatus(503)
+        ->assertHeader('Retry-After', '5')
+        ->assertSee('data-testid="device-authorization-retry"', false)
+        ->assertSessionHas(StandaloneAccess::SESSION_VERSION_KEY, $user->auth_session_version);
+
+    expect(auth('web')->check())->toBeTrue()
+        ->and(DB::table('credential_authorizations')->where('id', $retryId)->value('status'))->toBe('pending')
+        ->and(DB::table('bfc_submission_nonces')->where('nonce_hash', $retryHash)->exists())->toBeTrue()
+        ->and(DB::table('credential_audit_events')->count())->toBe($beforeAudits)
+        ->and(DB::table('credentials')->count())->toBe(0)
+        ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request()))->toBe($beforeBindings);
+});
+
+it('keeps authorization route authority deferral local to authenticated non-delegated humans', function (): void {
+    $deferred = EnsureUserIsAuthenticated::class.':'.EnsureUserIsAuthenticated::DEFER_MANAGED_AUTHORITY;
+
+    foreach (['bfc.device.start', 'bfc.device.show', 'bfc.device.decide', 'bfc.loopback.authorize', 'bfc.loopback.decide'] as $name) {
+        expect(Route::getRoutes()->getByName($name)?->gatherMiddleware())->toContain($deferred);
+    }
+    expect(Route::getRoutes()->getByName('bfc.ui.home')?->gatherMiddleware())
+        ->toContain(EnsureUserIsAuthenticated::class)
+        ->not->toContain($deferred);
+
+    $this->postJson('/bfc/device-authorizations', ['app_purpose' => 'http.device'])->assertUnauthorized();
+    $this->post('/bfc/device', [])->assertRedirect('/bfc/login');
+    $this->post('/bfc/loopback/authorize', [])->assertRedirect('/bfc/login');
+    expect(DB::table('credential_authorizations')->count())->toBe(0)
+        ->and(DB::table('bfc_submission_nonces')->count())->toBe(0)
+        ->and(DB::table('credentials')->count())->toBe(0);
+
+    $user = httpAuthorizationUser('http-delegated-refusal@example.test');
+    httpAuthorizationProfile($user, 'http.device');
+    $this->actingAsVersioned($user, 'web');
+    $device = $this->postJson('/bfc/device-authorizations', ['app_purpose' => 'http.device'])->assertCreated();
+    $devicePage = $this->get('/bfc/device')->assertOk();
+    $deviceDecision = authorizationHiddenInputs($devicePage->getContent(), 'approve');
+    httpAuthorizationProfile($user, 'http.loopback');
+    $loopbackPage = $this->get('/bfc/loopback/authorize?'.httpLoopbackQuery(str_repeat('x', 32), 49155))->assertOk();
+    $loopbackDecision = authorizationHiddenInputs($loopbackPage->getContent(), 'approve');
+    $beforeRows = DB::table('credential_authorizations')->count();
+    $beforeNonces = DB::table('bfc_submission_nonces')->count();
+    $beforeBindings = app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request());
+    $actor = consoleActor(subject: 'http-delegated-actor');
+    $this->withSession(consoleSessionState($actor));
+
+    $this->postJson('/bfc/device-authorizations', ['app_purpose' => 'http.loopback'])->assertForbidden();
+    $this->post('/bfc/device', $deviceDecision)->assertForbidden();
+    $this->post('/bfc/loopback/authorize', $loopbackDecision)->assertForbidden();
+    expect(DB::table('credential_authorizations')->count())->toBe($beforeRows)
+        ->and(DB::table('credential_authorizations')->where('user_code_hash', hash('sha256', (string) $device->json('user_code')))->value('status'))->toBe('pending')
+        ->and(DB::table('credential_authorizations')->where('redirect_uri', 'http://127.0.0.1:49155/managed')->value('status'))->toBe('pending')
+        ->and(DB::table('bfc_submission_nonces')->count())->toBe($beforeNonces)
+        ->and(DB::table('credentials')->count())->toBe(0)
+        ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request()))->toBe($beforeBindings);
 });
