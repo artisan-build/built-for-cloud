@@ -14,6 +14,7 @@ use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\LoopbackAuthorizations;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
+use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -314,6 +315,106 @@ it('refuses malformed callback and PKCE attempts before one loopback exchange', 
         'redirect_uri' => $redirect,
         'code_verifier' => $verifier,
     ])->assertStatus(400)->assertExactJson(['error' => 'invalid_grant']);
+});
+
+it('idempotently reuses an exact loopback GET intent and creates a distinct intent for a distinct tuple', function (): void {
+    $user = httpAuthorizationUser('http-loopback-reuse@example.test');
+    httpAuthorizationProfile($user, 'http.loopback');
+    $this->actingAsVersioned($user, 'web');
+    $challenge = rtrim(strtr(base64_encode(hash('sha256', str_repeat('r', 43), true)), '+/', '-_'), '=');
+    $parameters = [
+        'app_purpose' => 'http.loopback',
+        'redirect_uri' => 'http://127.0.0.1:49152/reuse',
+        'code_challenge' => $challenge,
+        'code_challenge_method' => 'S256',
+        'state' => str_repeat('s', 32),
+        'label' => '  Test-created reusable client  ',
+    ];
+    $query = http_build_query($parameters);
+
+    for ($attempt = 0; $attempt < 3; $attempt++) {
+        $this->get('/bfc/loopback/authorize?'.$query)->assertOk();
+    }
+
+    $authorization = DB::table('credential_authorizations')->sole();
+    $ciphertexts = app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request());
+    expect($authorization->label)->toBe('Test-created reusable client')
+        ->and(DB::table('credential_authorizations')->pluck('id')->all())->toBe([$authorization->id])
+        ->and(DB::table('credential_audit_events')->pluck('event')->all())->toBe([
+            LifecycleEventType::CredentialAuthorizationStarted->value,
+        ])
+        ->and($ciphertexts)->toHaveCount(1);
+
+    $parameters['state'] = str_repeat('d', 32);
+    $this->get('/bfc/loopback/authorize?'.http_build_query($parameters))->assertOk();
+
+    $authorizationIds = DB::table('credential_authorizations')->pluck('id')->all();
+    expect($authorizationIds)->toHaveCount(2)
+        ->and(array_unique($authorizationIds))->toHaveCount(2)
+        ->and($authorizationIds)->toContain($authorization->id)
+        ->and(DB::table('credential_audit_events')->where('event', LifecycleEventType::CredentialAuthorizationStarted->value)->count())->toBe(2)
+        ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request()))->toHaveCount(2);
+});
+
+it('refuses invalid loopback GET grammar before reusing an existing intent or writing state', function (): void {
+    $user = httpAuthorizationUser('http-loopback-invalid-reuse@example.test');
+    httpAuthorizationProfile($user, 'http.loopback');
+    $this->actingAsVersioned($user, 'web');
+    $challenge = rtrim(strtr(base64_encode(hash('sha256', str_repeat('g', 43), true)), '+/', '-_'), '=');
+    $valid = [
+        'app_purpose' => 'http.loopback',
+        'redirect_uri' => 'http://127.0.0.1:49152/grammar',
+        'code_challenge' => $challenge,
+        'code_challenge_method' => 'S256',
+        'state' => str_repeat('s', 32),
+        'label' => 'Test-created grammar client',
+    ];
+    $this->get('/bfc/loopback/authorize?'.http_build_query($valid))->assertOk();
+    $authorizationId = DB::table('credential_authorizations')->value('id');
+    $ciphertexts = app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request());
+    $invalidRequests = [
+        [...$valid, 'code_challenge_method' => 'plain'],
+        [...$valid, 'code_challenge' => str_repeat('x', 42)],
+        [...$valid, 'state' => str_repeat('s', 31)],
+        [...$valid, 'redirect_uri' => 'http://127.0.0.1:49152/grammar#fragment'],
+        [...$valid, 'label' => str_repeat('l', 65)],
+    ];
+
+    foreach ($invalidRequests as $invalid) {
+        $this->get('/bfc/loopback/authorize?'.http_build_query($invalid))->assertNotFound();
+    }
+
+    expect(DB::table('credential_authorizations')->pluck('id')->all())->toBe([$authorizationId])
+        ->and(DB::table('credential_audit_events')->pluck('event')->all())->toBe([
+            LifecycleEventType::CredentialAuthorizationStarted->value,
+        ])
+        ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request()))->toBe($ciphertexts);
+});
+
+it('keeps the eight-binding loopback capacity for distinct intents', function (): void {
+    $user = httpAuthorizationUser('http-loopback-capacity@example.test');
+    httpAuthorizationProfile($user, 'http.loopback');
+    $this->actingAsVersioned($user, 'web');
+    $challenge = rtrim(strtr(base64_encode(hash('sha256', str_repeat('c', 43), true)), '+/', '-_'), '=');
+    $parameters = [
+        'app_purpose' => 'http.loopback',
+        'redirect_uri' => 'http://127.0.0.1:49152/capacity',
+        'code_challenge' => $challenge,
+        'code_challenge_method' => 'S256',
+        'state' => '',
+    ];
+
+    for ($intent = 0; $intent < BrowserCredentialAuthorizationStore::MAX_LIVE_BINDINGS; $intent++) {
+        $parameters['state'] = str_pad((string) $intent, 32, 's');
+        $this->get('/bfc/loopback/authorize?'.http_build_query($parameters))->assertOk();
+    }
+
+    $parameters['state'] = str_repeat('n', 32);
+    $this->get('/bfc/loopback/authorize?'.http_build_query($parameters))->assertNotFound();
+
+    expect(DB::table('credential_authorizations')->count())->toBe(BrowserCredentialAuthorizationStore::MAX_LIVE_BINDINGS)
+        ->and(DB::table('credential_audit_events')->where('event', LifecycleEventType::CredentialAuthorizationStarted->value)->count())->toBe(BrowserCredentialAuthorizationStore::MAX_LIVE_BINDINGS)
+        ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request()))->toHaveCount(BrowserCredentialAuthorizationStore::MAX_LIVE_BINDINGS);
 });
 
 it('refuses a ninth live browser binding without evicting the existing grants', function (): void {

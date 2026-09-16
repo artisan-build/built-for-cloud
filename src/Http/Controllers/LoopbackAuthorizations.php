@@ -45,12 +45,21 @@ final class LoopbackAuthorizations
                 }
             }
 
+            $redirect = new LoopbackRedirectUri($input['redirect_uri']);
+
+            if ($input['code_challenge_method'] !== 'S256'
+                || preg_match('/\A[A-Za-z0-9_-]{43}\z/D', $input['code_challenge']) !== 1
+                || strlen((string) base64_decode(strtr($input['code_challenge'], '-_', '+/').'=', true)) !== 32
+                || preg_match('/\A[A-Za-z0-9._~-]{32,128}\z/D', $input['state']) !== 1) {
+                throw CredentialAuthorizationRefused::invalidRequest();
+            }
+
             $tuple = [
                 'app_purpose' => $input['app_purpose'],
-                'redirect_uri' => $input['redirect_uri'],
-                'code_challenge' => $input['code_challenge'],
+                'redirect_uri' => $redirect->value,
+                'pkce_challenge' => $input['code_challenge'],
                 'state' => $input['state'],
-                'label' => isset($input['label']) && $input['label'] !== '' ? $input['label'] : null,
+                'label' => $policy->label($input['label'] ?? null),
             ];
             $entry = $browser->loopbackBinding($request, $tuple);
 
@@ -63,7 +72,7 @@ final class LoopbackAuthorizations
                     $request,
                     $tuple['app_purpose'],
                     $tuple['redirect_uri'],
-                    $tuple['code_challenge'],
+                    $tuple['pkce_challenge'],
                     $input['code_challenge_method'],
                     $tuple['state'],
                     $tuple['label'],

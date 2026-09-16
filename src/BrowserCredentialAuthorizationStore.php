@@ -79,7 +79,7 @@ final readonly class BrowserCredentialAuthorizationStore
     }
 
     /**
-     * @param  array{app_purpose: string, redirect_uri: string, code_challenge: string, state: string, label: ?string}  $tuple
+     * @param  array{app_purpose: string, redirect_uri: string, pkce_challenge: string, state: string, label: ?string}  $tuple
      * @return array{payload: array<string, mixed>, authorization: object}|null
      */
     public function loopbackBinding(Request $request, array $tuple): ?array
