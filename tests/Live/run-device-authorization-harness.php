@@ -190,7 +190,7 @@ function deviceHarnessStart(string $runDirectory, string $baseUrl, string $csrf,
     return $json;
 }
 
-function deviceHarnessUse(string $runDirectory, string $baseUrl, string $profile, string $bearer): int
+function deviceHarnessUsePath(string $runDirectory, string $baseUrl, string $path, string $bearer): int
 {
     $requestBody = "{$runDirectory}/use-empty-body";
     file_put_contents($requestBody, '');
@@ -198,7 +198,7 @@ function deviceHarnessUse(string $runDirectory, string $baseUrl, string $profile
     $config = implode("\n", [
         'silent',
         'show-error',
-        'url = "'.deviceHarnessConfigValue("{$baseUrl}/_bfc-harness/device/use/{$profile}").'"',
+        'url = "'.deviceHarnessConfigValue($baseUrl.$path).'"',
         'request = "POST"',
         'header = "Accept: application/json"',
         'header = "Authorization: Bearer '.deviceHarnessConfigValue($bearer).'"',
@@ -210,6 +210,22 @@ function deviceHarnessUse(string $runDirectory, string $baseUrl, string $profile
     unlink($requestBody);
 
     return $status;
+}
+
+function deviceHarnessUse(string $runDirectory, string $baseUrl, string $profile, string $bearer): int
+{
+    return deviceHarnessUsePath($runDirectory, $baseUrl, "/_bfc-harness/device/use/{$profile}", $bearer);
+}
+
+/** @return array<string, mixed> */
+function deviceHarnessEffects(string $runDirectory, string $baseUrl, string $credentialId): array
+{
+    return deviceHarnessJson(deviceHarnessHttp(
+        $runDirectory,
+        'effects',
+        'GET',
+        $baseUrl.'/_bfc-harness/device/effects/'.$credentialId,
+    ), 200);
 }
 
 function deviceHarnessState(string $root, array $environment, array $input): array
@@ -375,6 +391,20 @@ try {
     $page = deviceHarnessHttp($runDirectory, 'a', 'GET', $baseUrl.'/bfc/device');
     deviceHarnessAssert($page['status'] === 200 && str_contains($page['body'], $start['user_code']), 'The initiating browser did not render its device grant.');
     $approve = deviceHarnessInputs($page['body'], 'approve');
+    $missingNonce = $approve;
+    unset($missingNonce['submission_nonce']);
+    $missingNonceRefusal = deviceHarnessHttp($runDirectory, 'a', 'POST', $baseUrl.'/bfc/device', http_build_query($missingNonce, '', '&', PHP_QUERY_RFC3986), 'application/x-www-form-urlencoded');
+    $tamperedNonce = $approve;
+    $tamperedNonce['submission_nonce'] = str_repeat('0', 64);
+    $tamperedNonceRefusal = deviceHarnessHttp($runDirectory, 'a', 'POST', $baseUrl.'/bfc/device', http_build_query($tamperedNonce, '', '&', PHP_QUERY_RFC3986), 'application/x-www-form-urlencoded');
+    $afterNonceRefusals = deviceHarnessState($root, $environment, ['operation' => 'device', 'device_code' => $start['device_code']]);
+    deviceHarnessAssert(
+        $missingNonceRefusal['status'] === 404
+        && $tamperedNonceRefusal['status'] === 404
+        && ($afterNonceRefusals['status'] ?? null) === 'pending',
+        'A missing or tampered submission nonce changed the device grant.',
+    );
+    $stamp['cases']['device_submission_nonce_refusals'] = ['missing' => 404, 'tampered' => 404, 'grant_pending' => true];
     $foreign = $approve;
     $foreign['_token'] = $csrfBSameUser;
     $sameUserRefusal = deviceHarnessHttp($runDirectory, 'b', 'POST', $baseUrl.'/bfc/device', http_build_query($foreign, '', '&', PHP_QUERY_RFC3986), 'application/x-www-form-urlencoded');
@@ -397,6 +427,9 @@ try {
     deviceHarnessAssert(! str_contains($deviceCommand, $start['device_code']), 'The device code appeared in client argv.');
     $decision = deviceHarnessHttp($runDirectory, 'a', 'POST', $baseUrl.'/bfc/device', http_build_query($approve, '', '&', PHP_QUERY_RFC3986), 'application/x-www-form-urlencoded');
     deviceHarnessAssert($decision['status'] === 200, 'The initiating browser could not approve its device grant.');
+    $decisionReplay = deviceHarnessHttp($runDirectory, 'a', 'POST', $baseUrl.'/bfc/device', http_build_query($approve, '', '&', PHP_QUERY_RFC3986), 'application/x-www-form-urlencoded');
+    deviceHarnessAssert($decisionReplay['status'] === 404, 'A decided device grant accepted a replayed decision.');
+    $stamp['cases']['device_decision_replay_refusal'] = ['status' => 404];
     $deviceClient->wait();
     deviceHarnessAssert($deviceClient->getExitCode() === 0 && is_file($deviceBearerFile), 'The device client did not complete its bounded exchange.');
     $deviceBearer = trim((string) file_get_contents($deviceBearerFile));
@@ -405,6 +438,59 @@ try {
     deviceHarnessAssert(deviceHarnessUse($runDirectory, $baseUrl, 'device', $deviceBearer) === 200, 'The exact-bound device bearer was refused.');
     deviceHarnessAssert(deviceHarnessUse($runDirectory, $baseUrl, 'loopback', $deviceBearer) === 401, 'The device bearer crossed into the wrong bound purpose.');
     $stamp['cases']['device_approve_exchange_and_bound_use'] = ['status' => 200, 'wrong_binding_status' => 401, 'mode_0600' => true];
+
+    $deviceCredential = deviceHarnessState($root, $environment, ['operation' => 'credential', 'flow' => 'device']);
+    $credentialId = $deviceCredential['credential_id'] ?? null;
+    deviceHarnessAssert(is_string($credentialId), 'The exact-bound matrix could not identify the device credential.');
+    $wrongDimensions = [
+        'purpose' => 'mcp',
+        'subject_ref' => 'wrong-live-subject',
+        'user_id' => 'first-user',
+        'abilities' => ['wrong:ability'],
+        'installation_ref' => 'wrong-live-installation',
+        'application_ref' => 'wrong-live-application',
+        'audience' => 'https://wrong-live.example',
+        'algorithm' => 'rs256',
+        'material_role' => 'verification_copy',
+        'scope_hash' => str_repeat('0', 64),
+    ];
+    $matrix = ['wrong_app_purpose' => 401];
+
+    foreach ($wrongDimensions as $dimension => $wrongValue) {
+        $beforeEffects = deviceHarnessEffects($runDirectory, $baseUrl, $credentialId);
+        deviceHarnessState($root, $environment, [
+            'operation' => 'set-credential-dimension',
+            'credential_id' => $credentialId,
+            'dimension' => $dimension,
+            'value' => $wrongValue,
+        ]);
+        $status = deviceHarnessUse($runDirectory, $baseUrl, 'device', $deviceBearer);
+        $afterEffects = deviceHarnessEffects($runDirectory, $baseUrl, $credentialId);
+        deviceHarnessState($root, $environment, [
+            'operation' => 'set-credential-dimension',
+            'credential_id' => $credentialId,
+            'dimension' => $dimension,
+            'value' => $deviceCredential[$dimension] ?? null,
+        ]);
+        deviceHarnessAssert($status === 401 && $afterEffects === $beforeEffects, "The {$dimension} refusal reached a protected-use side effect.");
+        $matrix[$dimension === 'scope_hash' ? 'malformed_binding' : $dimension] = $status;
+    }
+
+    $legacyBefore = deviceHarnessEffects($runDirectory, $baseUrl, $credentialId);
+    $legacyStatus = deviceHarnessUsePath($runDirectory, $baseUrl, '/_bfc-harness/device/use-legacy', $deviceBearer);
+    deviceHarnessAssert($legacyStatus === 401 && deviceHarnessEffects($runDirectory, $baseUrl, $credentialId) === $legacyBefore, 'The bound bearer entered the legacy unbound selector.');
+    $matrix['bound_bearer_legacy_entry'] = $legacyStatus;
+    $unbound = deviceHarnessState($root, $environment, ['operation' => 'create-unbound-bearer']);
+    $unboundId = $unbound['credential_id'] ?? null;
+    $unboundBearer = $unbound['access_token'] ?? null;
+    deviceHarnessAssert(is_string($unboundId) && is_string($unboundBearer), 'The unbound bearer control was not created.');
+    $secrets[] = $unboundBearer;
+    $unboundBefore = deviceHarnessEffects($runDirectory, $baseUrl, $unboundId);
+    $unboundStatus = deviceHarnessUse($runDirectory, $baseUrl, 'device', $unboundBearer);
+    deviceHarnessAssert($unboundStatus === 401 && deviceHarnessEffects($runDirectory, $baseUrl, $unboundId) === $unboundBefore, 'An unbound bearer entered exact-bound protected use.');
+    deviceHarnessState($root, $environment, ['operation' => 'delete-credential-control', 'credential_id' => $unboundId]);
+    $matrix['unbound_bearer'] = $unboundStatus;
+    $stamp['cases']['exact_bound_refusal_matrix'] = $matrix;
 
     $cadence = deviceHarnessStart($runDirectory, $baseUrl, $csrfA, 'Live pending and denial');
     $secrets[] = $cadence['device_code'];
@@ -423,7 +509,10 @@ try {
     deviceHarnessState($root, $environment, ['operation' => 'expire', 'device_code' => $expiring['device_code']]);
     $expired = deviceHarnessJson(deviceHarnessHttp($runDirectory, 'public-expiry', 'POST', $baseUrl.'/bfc/device/token', json_encode(['device_code' => $expiring['device_code']], JSON_THROW_ON_ERROR), 'application/json'), 400);
     deviceHarnessAssert($expired === ['error' => 'expired_token'], 'The expired device grant did not return expired_token.');
+    $expiredPage = deviceHarnessHttp($runDirectory, 'a', 'GET', $baseUrl.'/bfc/device');
+    deviceHarnessAssert(! str_contains($expiredPage['body'], $expiring['user_code']), 'An expired device binding remained visible in its initiating browser.');
     $stamp['cases']['device_expiry'] = ['status' => 400, 'error' => 'expired_token'];
+    $stamp['cases']['device_terminal_binding_cleanup'] = ['expired_code_hidden' => true];
 
     $limited = deviceHarnessStart($runDirectory, $baseUrl, $csrfA, 'Live transport limiter');
     $secrets[] = $limited['device_code'];

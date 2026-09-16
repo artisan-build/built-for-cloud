@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
 use ArtisanBuild\BuiltForCloud\BrowserCredentialAuthorizationStore;
+use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationOwnership;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationProfile;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\LoopbackAuthorizations;
+use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\DeviceFlowDeclaration;
@@ -17,6 +20,8 @@ use Illuminate\Http\Request;
 use Illuminate\Session\ArraySessionHandler;
 use Illuminate\Session\Store;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
 
@@ -340,4 +345,141 @@ it('shares one package-global token bucket while separating device and loopback 
         ->and($loopbackLimits[1]->key)->toBe($deviceLimits[1]->key)
         ->and($deviceLimits[1]->maxAttempts)->toBe(6000)
         ->and($loopbackLimits[1]->maxAttempts)->toBe(6000);
+});
+
+it('actively removes terminal and unsealable bindings while serving both GET surfaces', function (): void {
+    $user = httpAuthorizationUser('http-cleanup@example.test');
+    httpAuthorizationProfile($user, 'http.device');
+    $this->actingAsVersioned($user, 'web');
+    $device = $this->postJson('/bfc/device-authorizations', ['app_purpose' => 'http.device'])->assertCreated();
+    $session = app('session')->driver();
+    $deviceCiphertext = app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request())[0];
+    $session->put('bfc_credential_authorizations', [$deviceCiphertext, 'test-created-unsealable-ciphertext']);
+
+    $this->get('/bfc/device')->assertOk()->assertSee((string) $device->json('user_code'));
+    expect(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request()))->toBe([$deviceCiphertext]);
+
+    DB::table('credential_authorizations')->where('device_code_hash', hash('sha256', (string) $device->json('device_code')))->update([
+        'status' => 'denied',
+        'denial_reason' => 'authority_denied',
+        'decided_at' => now(),
+    ]);
+    $this->get('/bfc/device')->assertNotFound();
+    expect(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request()))->toBe([]);
+
+    httpAuthorizationProfile($user, 'http.loopback');
+    $verifier = str_repeat('v', 43);
+    $query = http_build_query([
+        'app_purpose' => 'http.loopback',
+        'redirect_uri' => 'http://127.0.0.1:49152/cleanup',
+        'code_challenge' => rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '='),
+        'code_challenge_method' => 'S256',
+        'state' => str_repeat('c', 32),
+    ]);
+    $this->get('/bfc/loopback/authorize?'.$query)->assertOk();
+    $loopbackCiphertext = app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request())[0];
+    $session->put('bfc_credential_authorizations', [$loopbackCiphertext, 'another-unsealable-ciphertext']);
+    $session->put('bfc_selected_loopback_authorization', 'stale-loopback-selection');
+    $loopbackRequest = Request::create('/bfc/loopback/authorize?'.$query);
+    $loopbackRequest->setLaravelSession($session);
+    $loopbackRequest->setUserResolver(static fn (): User => $user);
+    $loopbackResponse = app(LoopbackAuthorizations::class)->show(
+        $loopbackRequest,
+        app(\ArtisanBuild\BuiltForCloud\Actions\StartLoopbackAuthorization::class),
+        app(BrowserCredentialAuthorizationStore::class),
+        app(\ArtisanBuild\BuiltForCloud\CredentialAuthorizationPolicy::class),
+    );
+
+    $cleanedLoopbackCiphertexts = app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts($loopbackRequest);
+    expect($loopbackResponse->getStatusCode())->toBe(200)
+        ->and($cleanedLoopbackCiphertexts)->not->toContain('another-unsealable-ciphertext')
+        ->and($session->get('bfc_selected_loopback_authorization'))->toBeIn($cleanedLoopbackCiphertexts)
+        ->not->toBe('stale-loopback-selection');
+});
+
+it('keeps managed loopback authority refusals terminal or retryable without consuming the decision nonce', function (): void {
+    $user = httpAuthorizationUser('http-managed-loopback@example.test');
+    httpAuthorizationProfile($user, 'http.loopback');
+    $this->actingAsVersioned($user, 'web');
+    $verifier = str_repeat('v', 43);
+    $challenge = rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=');
+    $query = static fn (string $state, int $port): string => http_build_query([
+        'app_purpose' => 'http.loopback',
+        'redirect_uri' => "http://127.0.0.1:{$port}/managed",
+        'code_challenge' => $challenge,
+        'code_challenge_method' => 'S256',
+        'state' => $state,
+    ]);
+
+    $positivePage = $this->get('/bfc/loopback/authorize?'.$query(str_repeat('p', 32), 49152))->assertOk();
+    $positive = authorizationHiddenInputs($positivePage->getContent(), 'approve');
+    $positiveCookie = $positivePage->getCookie((string) config('session.cookie'));
+    expect($positiveCookie)->not->toBeNull();
+    $positiveHash = hash('sha256', $positive['submission_nonce']);
+    $this->withCookie((string) config('session.cookie'), $positiveCookie->getValue())
+        ->post('/bfc/loopback/authorize', $positive)
+        ->assertStatus(303);
+    expect(DB::table('bfc_submission_nonces')->where('nonce_hash', $positiveHash)->exists())->toBeFalse();
+
+    $deniedPage = $this->get('/bfc/loopback/authorize?'.$query(str_repeat('d', 32), 49153))->assertOk();
+    $denied = authorizationHiddenInputs($deniedPage->getContent(), 'approve');
+    $deniedHash = hash('sha256', $denied['submission_nonce']);
+    DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
+        'mode' => AuthorityMode::Managed->value,
+        'generation' => 7,
+        'issuer' => 'https://issuer.example.test',
+        'connection_id' => 'connection-fixture',
+        'organization_id' => 'organization-fixture',
+        'installation_id' => 'installation-fixture',
+        'authority_base_url' => 'https://authority.example.test',
+        'managed_connection_status' => 'inactive',
+    ]);
+    $denialRequest = Request::create('/bfc/loopback/authorize', 'POST', $denied);
+    $denialRequest->setLaravelSession(app('session')->driver());
+    $denialRequest->setUserResolver(static fn (): User => $user);
+    $denialResponse = app(LoopbackAuthorizations::class)->decide(
+        $denialRequest,
+        app(\ArtisanBuild\BuiltForCloud\Actions\DecideLoopbackAuthorization::class),
+        app(BrowserCredentialAuthorizationStore::class),
+    );
+
+    expect($denialResponse->getStatusCode())->toBe(303)
+        ->and($denialResponse->headers->get('Location'))->toContain('error=access_denied', 'state='.str_repeat('d', 32))
+        ->and(DB::table('credential_authorizations')->where('redirect_uri', 'http://127.0.0.1:49153/managed')->value('status'))->toBe('denied')
+        ->and(DB::table('bfc_submission_nonces')->where('nonce_hash', $deniedHash)->exists())->toBeTrue()
+        ->and(DB::table('credentials')->count())->toBe(0);
+
+    InstallationAuthority::change(InstallationAuthority::current(), AuthorityMode::Standalone);
+    $retryPage = $this->get('/bfc/loopback/authorize?'.$query(str_repeat('r', 32), 49154))->assertOk();
+    $retry = authorizationHiddenInputs($retryPage->getContent(), 'approve');
+    $retryHash = hash('sha256', $retry['submission_nonce']);
+    InstallationAuthority::change(InstallationAuthority::current(), AuthorityMode::Managed);
+    DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update(['managed_connection_status' => 'active']);
+    config(['built-for-cloud.managed.client_secret' => 'fixture-client-secret']);
+    $user->forceFill([
+        'status' => 'active',
+        'scalpels_issuer' => 'https://issuer.example.test',
+        'scalpels_connection_id' => 'connection-fixture',
+        'scalpels_id' => 'managed-loopback-user',
+        'membership_confirmed_at' => now()->subMinutes(31),
+        'membership_response_at' => now()->subMinutes(31),
+        'managed_membership_status' => 'active',
+    ])->save();
+    Cache::flush();
+    Http::fake(static fn () => Http::response(['error' => 'test-created-outage'], 503));
+    $retryRequest = Request::create('/bfc/loopback/authorize', 'POST', $retry);
+    $retryRequest->setLaravelSession(app('session')->driver());
+    $retryRequest->setUserResolver(static fn (): User => $user);
+    $retryResponse = app(LoopbackAuthorizations::class)->decide(
+        $retryRequest,
+        app(\ArtisanBuild\BuiltForCloud\Actions\DecideLoopbackAuthorization::class),
+        app(BrowserCredentialAuthorizationStore::class),
+    );
+
+    expect($retryResponse->getStatusCode())->toBe(503)
+        ->and($retryResponse->headers->get('Retry-After'))->toBe('5')
+        ->and(DB::table('credential_authorizations')->where('redirect_uri', 'http://127.0.0.1:49154/managed')->value('status'))->toBe('pending')
+        ->and(DB::table('bfc_submission_nonces')->where('nonce_hash', $retryHash)->exists())->toBeTrue()
+        ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts($retryRequest))->toHaveCount(1)
+        ->and(DB::table('credentials')->count())->toBe(0);
 });

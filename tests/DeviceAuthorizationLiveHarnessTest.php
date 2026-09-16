@@ -22,6 +22,9 @@ it('ships a syntax-valid disposable device authorization harness and private sta
         ->and($schema['properties']['cases']['required'] ?? [])->toContain(
             'same_user_clean_context_refusal',
             'cross_user_refusal',
+            'device_submission_nonce_refusals',
+            'device_decision_replay_refusal',
+            'device_terminal_binding_cleanup',
             'device_approve_exchange_and_bound_use',
             'device_pending_slow_down_and_deny',
             'device_expiry',
@@ -29,9 +32,18 @@ it('ships a syntax-valid disposable device authorization harness and private sta
             'loopback_callback_pkce_and_bound_use',
             'loopback_cross_browser_refusal',
             'loopback_deny',
+            'exact_bound_refusal_matrix',
             'final_state',
         )
-        ->and($source)->toContain('isolated_cookie_jars', 'bounded_readiness', 'bounded_teardown', 'stamp_contains_secrets')
+        ->and($source)->toContain(
+            'isolated_cookie_jars',
+            'bounded_readiness',
+            'bounded_teardown',
+            'stamp_contains_secrets',
+            'set-credential-dimension',
+            'create-unbound-bearer',
+            '/_bfc-harness/device/use-legacy',
+        )
         ->and($source)->not->toContain('cloud command:', 'cloud environment:', 'Authorization: Bearer {$');
 });
 

@@ -33,6 +33,9 @@
             "required": [
                 "same_user_clean_context_refusal",
                 "cross_user_refusal",
+                "device_submission_nonce_refusals",
+                "device_decision_replay_refusal",
+                "device_terminal_binding_cleanup",
                 "device_approve_exchange_and_bound_use",
                 "device_pending_slow_down_and_deny",
                 "device_expiry",
@@ -40,6 +43,7 @@
                 "loopback_callback_pkce_and_bound_use",
                 "loopback_cross_browser_refusal",
                 "loopback_deny",
+                "exact_bound_refusal_matrix",
                 "final_state"
             ]
         },

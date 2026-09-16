@@ -15,6 +15,7 @@ use ArtisanBuild\BuiltForCloud\CredentialAuthorizationOwnership;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationProfile;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
+use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacSigner;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier;
@@ -121,6 +122,22 @@ final class StandaloneHarnessServiceProvider extends ServiceProvider
                 return $credential === null
                     ? response()->json(['authenticated' => false], 401)
                     : response()->json(['authenticated' => true, 'credential_id' => $credential->id]);
+            });
+            Route::post('/_bfc-harness/device/use-legacy', static function (Request $request) {
+                $credential = app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $request->bearerToken());
+
+                return response()->json(['authenticated' => $credential !== null], $credential === null ? 401 : 200);
+            });
+            Route::get('/_bfc-harness/device/effects/{credential}', static function (string $credential) {
+                $row = Credential::query()->findOrFail($credential);
+
+                return response()->json([
+                    'authorize_calls' => DeviceFlowDeclaration::$authorizeCalls,
+                    'last_used_at' => $row->last_used_at?->toAtomString(),
+                    'client_observations' => DB::table('bfc_client_identity_observations')
+                        ->where('credential_id', $credential)
+                        ->count(),
+                ]);
             });
         }
 

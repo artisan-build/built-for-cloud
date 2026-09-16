@@ -113,8 +113,7 @@ function frozenPurposeDispositions(): array
  * every Part 1.2b row undiscovered, while the independently
  * asserted root inventories keep row classification from hiding a newly
  * discovered mechanism. CredentialPathInventory documents the static-only
- * limits and the unenforced, non-discovered device binding that bound this
- * proof.
+ * limits of the emitted device and loopback chains that bound this proof.
  */
 it('derives the nine discoverable paths with no transitional rows from all five roots', function (): void {
     $inventory = CredentialPathInventory::discover(dirname(__DIR__).'/src');

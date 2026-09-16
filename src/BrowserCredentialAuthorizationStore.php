@@ -241,7 +241,15 @@ final readonly class BrowserCredentialAuthorizationStore
             $live[] = compact('ciphertext', 'payload', 'authorization');
         }
 
-        $this->replace($request, array_column($live, 'ciphertext'));
+        $liveCiphertexts = array_column($live, 'ciphertext');
+        $this->replace($request, $liveCiphertexts);
+
+        $selected = $request->session()->get(self::SELECTED_LOOPBACK_KEY);
+
+        if ($selected !== null
+            && (! is_string($selected) || ! in_array($selected, $liveCiphertexts, true))) {
+            $request->session()->forget(self::SELECTED_LOOPBACK_KEY);
+        }
 
         return $live;
     }
