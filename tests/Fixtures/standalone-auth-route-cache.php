@@ -7,6 +7,7 @@ use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\Database\Factories\CredentialFactory;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\Invitation;
+use ArtisanBuild\BuiltForCloud\RouteMiddleware;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Foundation\Application;
@@ -91,7 +92,7 @@ $case = new class('testProbe') extends TestCase
 
                 // Directive §1 keeps new class-gated routes outside the legacy Unit A/A2 hostile-host probes.
                 if (isset($seen[$id])
-                    || ! in_array(EnsureUserIsAuthenticated::class, $route->middleware(), true)
+                    || RouteMiddleware::indexOfClass($route->middleware(), EnsureUserIsAuthenticated::class) === null
                     || str_starts_with((string) $route->getName(), 'bfc.transitions.')) {
                     continue;
                 }
@@ -127,7 +128,8 @@ $case = new class('testProbe') extends TestCase
             foreach ($routes as $route) {
                 $gateless = array_values(array_filter(
                     $route->middleware(),
-                    static fn (mixed $middleware): bool => $middleware !== EnsureUserIsAuthenticated::class,
+                    static fn (mixed $middleware): bool => ! is_string($middleware)
+                        || explode(':', $middleware, 2)[0] !== EnsureUserIsAuthenticated::class,
                 ));
 
                 if ($vector === 'memo-property') {
@@ -149,11 +151,10 @@ $case = new class('testProbe') extends TestCase
             ? 0
             : count(array_filter(
                 $routes,
-                static fn (Route $route): bool => ! in_array(
-                    EnsureUserIsAuthenticated::class,
+                static fn (Route $route): bool => RouteMiddleware::indexOfClass(
                     $router->gatherRouteMiddleware($route),
-                    true,
-                ),
+                    EnsureUserIsAuthenticated::class,
+                ) === null,
             ));
         $statuses = [];
         $recomputed = [];
@@ -171,11 +172,10 @@ $case = new class('testProbe') extends TestCase
                 'password' => 'not-used-before-refusal',
             ]);
             $statuses[] = $response->getStatusCode();
-            $recomputed[] = in_array(
-                EnsureUserIsAuthenticated::class,
+            $recomputed[] = RouteMiddleware::indexOfClass(
                 $router->gatherRouteMiddleware($route),
-                true,
-            );
+                EnsureUserIsAuthenticated::class,
+            ) !== null;
 
             if (str_contains($response->getContent(), (string) $member->email)) {
                 fwrite(STDERR, "compiled-auth-route-served-{$route->uri()}-{$response->getStatusCode()}".PHP_EOL);
