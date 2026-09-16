@@ -14,10 +14,12 @@ use ArtisanBuild\BuiltForCloud\CredentialAuthorizationOwnership;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationProfile;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
+use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
+use ArtisanBuild\BuiltForCloud\SubmissionNonce;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\DeviceFlowDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Support\PostgresLane;
 use ArtisanBuild\BuiltForCloud\User;
@@ -250,6 +252,62 @@ it('serializes concurrent cadence updates on the authorization row', function ()
         sort($outcomes);
         expect($outcomes)->toBe(['authorization_pending', 'slow_down'])
             ->and(DB::table('credential_authorizations')->sole()->effective_interval)->toBe(10);
+    } finally {
+        foreach ($workers as $worker) {
+            if ($worker->isRunning()) {
+                $worker->stop();
+            }
+        }
+        if ($main->transactionLevel() > 0) {
+            $main->rollBack();
+        }
+    }
+});
+
+it('serializes concurrent browser decisions with the same bound submission nonce', function (): void {
+    $user = User::query()->create(['name' => 'Postgres decision', 'email' => 'postgres-decision@example.test']);
+    $profile = pgAuthorizationProfile($user, 'test.device');
+    $request = pgAuthorizationRequest($this, $user, $profile);
+    $start = app(StartDeviceAuthorization::class)($request, 'test.device');
+    $authorization = DB::table('credential_authorizations')->sole();
+    $userCode = $start->userCode->reveal();
+    $browserNonce = $start->browserNonce->reveal();
+    $sessionId = $request->session()->getId();
+    $submissionNonce = SubmissionNonce::issue(
+        $sessionId,
+        (string) $user->getKey(),
+        CredentialVerb::Issue,
+        'device-authorization:'.$authorization->id.':approve',
+    );
+    $main = $this->postgresLaneConnection();
+    $main->beginTransaction();
+    $main->table('credential_authorizations')->where('id', $authorization->id)->lockForUpdate()->sole();
+    $input = [
+        ...$profile,
+        'operation' => 'decision',
+        'user_id' => (string) $user->getKey(),
+        'authorization_id' => (string) $authorization->id,
+        'user_code' => $userCode,
+        'browser_nonce' => $browserNonce,
+        'session_id' => $sessionId,
+        'submission_nonce' => $submissionNonce,
+    ];
+    $workers = [pgAuthorizationWorker(7, $input), pgAuthorizationWorker(8, $input)];
+
+    try {
+        pgWaitForAuthorizationLocks($workers);
+        $main->commit();
+        $outcomes = array_count_values(array_column(pgFinishAuthorizationWorkers($workers), 'outcome'));
+        ksort($outcomes);
+
+        expect($outcomes)->toBe(['approved' => 1, 'authorization_unavailable' => 1])
+            ->and(DB::table('credential_authorizations')->sole()->status)->toBe('approved')
+            ->and(CredentialAuditEvent::query()
+                ->where('credential_authorization_id', $authorization->id)
+                ->where('event', LifecycleEventType::CredentialAuthorizationApproved->value)
+                ->count())->toBe(1)
+            ->and(Credential::query()->count())->toBe(0)
+            ->and(DB::table('bfc_submission_nonces')->where('nonce_hash', hash('sha256', $submissionNonce))->exists())->toBeFalse();
     } finally {
         foreach ($workers as $worker) {
             if ($worker->isRunning()) {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
+use ArtisanBuild\BuiltForCloud\BrowserCredentialAuthorizationStore;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleReturnTo;
 use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\User;
@@ -22,7 +23,7 @@ final class StandaloneAuthentication
         ]);
     }
 
-    public function store(Request $request): RedirectResponse
+    public function store(Request $request, BrowserCredentialAuthorizationStore $authorizations): RedirectResponse
     {
         $credentials = $request->validate([
             'email' => ['required', 'string', 'max:255'],
@@ -38,7 +39,7 @@ final class StandaloneAuthentication
         }
 
         Auth::guard('web')->login($user, false);
-        $request->session()->regenerate();
+        $authorizations->regenerate($request);
         $request->session()->put(StandaloneAccess::SESSION_VERSION_KEY, $user->auth_session_version);
         $user->forceFill(['last_authenticated_at' => now()])->save();
 
@@ -48,9 +49,10 @@ final class StandaloneAuthentication
         ]));
     }
 
-    public function destroy(Request $request): RedirectResponse
+    public function destroy(Request $request, BrowserCredentialAuthorizationStore $authorizations): RedirectResponse
     {
         Auth::guard('web')->logout();
+        $authorizations->clear($request);
         $request->session()->invalidate();
         $request->session()->regenerateToken();
 

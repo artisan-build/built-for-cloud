@@ -15,6 +15,7 @@ use ArtisanBuild\BuiltForCloud\Commands\InstallOperatorCredentialCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand;
+use ArtisanBuild\BuiltForCloud\Commands\PruneCredentialAuthorizationsCommand;
 use ArtisanBuild\BuiltForCloud\Commands\SigningRootProvisionCommand;
 use ArtisanBuild\BuiltForCloud\Commands\SubjectOffboardCommand;
 use ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand;
@@ -80,6 +81,7 @@ function p5eCommandDisposition(): array
             ConsoleReKeyCommand::class,
             ConsoleRetireKeyCommand::class,
             SigningRootProvisionCommand::class,
+            PruneCredentialAuthorizationsCommand::class,
         ],
         'in-environment-maintenance' => [
             HmacRewrapCommand::class,
@@ -106,14 +108,19 @@ function p5eSource(string $class): string
     return is_string($file) ? (string) file_get_contents($file) : '';
 }
 
-it('derives commands, queued work, and the exact empty schedule ceiling without human authority', function (): void {
+function p5eProductionSchedule(): string
+{
+    return 'Closure@'.dirname(__DIR__).'/src/SystemAuthoritySchedule.php:27';
+}
+
+it('derives commands, queued work, and the exact package schedule without human authority', function (): void {
     $inventory = SystemAuthorityInventory::discover([p5eProvider()], [dirname(__DIR__).'/src']);
     $expectedCommands = p5eSorted(array_merge(...array_values(p5eCommandDisposition())));
 
     expect($inventory['commands'])->toBe($expectedCommands)
-        ->and($inventory['commands'])->toHaveCount(16)
+        ->and($inventory['commands'])->toHaveCount(17)
         ->and($inventory['queued'])->toBe([DeliverOwnershipWebhook::class])
-        ->and($inventory['scheduled'])->toBe([])
+        ->and($inventory['scheduled'])->toBe([p5eProductionSchedule()])
         ->and($inventory['violations'])->toBe([
             'commands' => [],
             'queued' => [],
@@ -228,8 +235,8 @@ it('positive-controls the runtime schedule registry through package-style callAf
         ],
     );
 
-    expect($production['scheduled'])->toBe([])
-        ->and($controlled['scheduled'])->toBe([RogueScheduleRegistration::class])
+    expect($production['scheduled'])->toBe([p5eProductionSchedule()])
+        ->and($controlled['scheduled'])->toBe(p5eSorted([p5eProductionSchedule(), RogueScheduleRegistration::class]))
         ->and($controlled['violations']['scheduled'])->toContain(
             'human-role:'.RogueScheduleRegistration::class,
         );
@@ -294,10 +301,12 @@ it('attributes a mislabelled scheduled closure from its real callable instead of
     $provider = __DIR__.'/Fixtures/RogueMislabelledScheduleServiceProvider.php';
     $inventory = SystemAuthorityInventory::discover([p5eProvider()], [dirname(__DIR__).'/src', $provider]);
 
-    expect($inventory['scheduled'])->toHaveCount(1)
-        ->and($inventory['scheduled'][0])->toStartWith('Closure@'.$provider.':')
+    $rogue = collect($inventory['scheduled'])->first(static fn (string $entry): bool => str_starts_with($entry, 'Closure@'.$provider.':'));
+
+    expect($inventory['scheduled'])->toHaveCount(2)
+        ->and($rogue)->toBeString()
         ->and($inventory['violations']['scheduled'])->toContain(
-            'synthesized-human:'.$inventory['scheduled'][0],
+            'synthesized-human:'.$rogue,
         )->not->toContain('human-role:'.CreateAdminCommand::class);
 });
 
@@ -305,10 +314,11 @@ it('keeps an unnamed closure outside scanned roots fail closed', function (): vo
     app(Schedule::class)->call(static fn (): bool => true);
     $inventory = SystemAuthorityInventory::discover([p5eProvider()], [dirname(__DIR__).'/src']);
 
-    expect($inventory['scheduled'])->toHaveCount(1)
-        ->and($inventory['violations']['scheduled'])->toContain(
-            'uninspectable-schedule:'.$inventory['scheduled'][0],
-        );
+    $uninspectable = collect($inventory['violations']['scheduled'])
+        ->first(static fn (string $violation): bool => str_starts_with($violation, 'uninspectable-schedule:'));
+
+    expect($inventory['scheduled'])->toHaveCount(2)
+        ->and($uninspectable)->toBeString();
 });
 
 it('attributes a command-string schedule through the registered command inventory', function (): void {
@@ -318,7 +328,7 @@ it('attributes a command-string schedule through the registered command inventor
         [__DIR__.'/Fixtures/RogueRoleExistsCommand.php'],
     );
 
-    expect($inventory['scheduled'])->toBe([RogueRoleExistsCommand::class])
+    expect($inventory['scheduled'])->toBe(p5eSorted([RogueRoleExistsCommand::class, p5eProductionSchedule()]))
         ->and($inventory['violations']['scheduled'])->toContain(
             'human-role:'.RogueRoleExistsCommand::class,
         );
@@ -329,7 +339,7 @@ it('tripwires a unit-test-gated schedule registration that the runtime registry 
     $provider = __DIR__.'/Fixtures/RogueConditionalScheduleServiceProvider.php';
     $inventory = SystemAuthorityInventory::discover([p5eProvider()], [dirname(__DIR__).'/src', $provider]);
 
-    expect($inventory['scheduled'])->toBe([])
+    expect($inventory['scheduled'])->toBe([p5eProductionSchedule()])
         ->and($inventory['violations']['scheduled'])->toContain(
             'schedule-reference:'.RogueConditionalScheduleServiceProvider::class,
         );
@@ -346,8 +356,8 @@ it('classifies every derived command exactly once across the five frozen disposi
         'in-environment-maintenance',
         'install-scaffold',
         'read-only',
-    ])->and($members)->toHaveCount(16)
-        ->and(array_unique($members))->toHaveCount(16)
+    ])->and($members)->toHaveCount(17)
+        ->and(array_unique($members))->toHaveCount(17)
         ->and(p5eSorted($members))->toBe($inventory['commands']);
 
     $controlled = SystemAuthorityInventory::discover(

@@ -12,6 +12,8 @@ use ArtisanBuild\BuiltForCloud\CredentialAuthorizationProfile;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\Subject;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 final class DeviceFlowDeclaration implements CredentialDeclaration, DeclaresCredentialAuthorizationProfiles, DeclaresSelfServiceMintPolicy
 {
@@ -19,6 +21,8 @@ final class DeviceFlowDeclaration implements CredentialDeclaration, DeclaresCred
     public static array $profiles = [];
 
     public static int $authorizeCalls = 0;
+
+    public static ?string $authorizedCredentialId = null;
 
     public static ?Subject $resolvedSubject = null;
 
@@ -36,6 +40,14 @@ final class DeviceFlowDeclaration implements CredentialDeclaration, DeclaresCred
     public function authorize(Credential $credential, ?string $ability, Request $request): bool
     {
         self::$authorizeCalls++;
+        self::$authorizedCredentialId = (string) $credential->getKey();
+
+        if (getenv('BFC_HARNESS_DEVICE_AUTHORIZATION') !== false
+            && Schema::hasTable('bfc_device_harness_effects')) {
+            DB::table('bfc_device_harness_effects')
+                ->where('credential_id', self::$authorizedCredentialId)
+                ->increment('authorize_calls');
+        }
 
         return true;
     }

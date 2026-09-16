@@ -451,6 +451,13 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/claim` | `content` | single reveal of the durable secret (`token`), plus the free-text suggested name |
 | `POST /bfc/onboarding/exchange` | `content` | single reveal of the durable secret, plus the free-text credential name |
 | `POST /bfc/asymmetric-enrollments/{application}` | `metadata` | a bounded credential id and the fixed `RS256` algorithm; no key or code is returned |
+| `POST /bfc/device-authorizations` | `content` | single reveal of device and user codes plus the browser session cookie |
+| `GET /bfc/device` | `content` | package HTML containing declared profile identity and the test/client-created user code |
+| `POST /bfc/device` | `content` | package HTML reporting the browser-bound decision outcome |
+| `POST /bfc/device/token` | `content` | single reveal of the exact-bound bearer credential |
+| `GET /bfc/loopback/authorize` | `content` | package HTML containing declared profile identity and exact callback authority |
+| `POST /bfc/loopback/authorize` | `content` | redirect carrying the one-time authorization code and original state |
+| `POST /bfc/loopback/token` | `content` | single reveal of the exact-bound bearer credential |
 | `POST /bfc/hmac-cutovers/activate` | `content` | exact scope references plus ids, timestamps and emergency flag; no key material |
 | `POST /bfc/hmac-cutovers/status` | `content` | exact scope references plus ids, timestamps and emergency flag; no key material |
 | `POST /bfc/onboarding/verify` | `content` | carries the free-text credential name |
@@ -1692,6 +1699,154 @@ own pace. Nothing is left untracked at any point — the listing shows the old r
 the old → new lineage, and if the human misses the window the old row is already dead and the
 new one already works. Use `emergency` only when the old secret is known-compromised, because
 it trades the installation window away.
+
+---
+
+## Device and loopback credential authorization
+
+These two transports share one application-declared authorization profile, one transient
+`credential_authorizations` lifecycle, and the unified credential store. They differ only in how
+the initiating client receives approval: a device client polls with an opaque code, while an
+interactive CLI receives a one-time code on an exact HTTP loopback callback and proves PKCE S256.
+
+The consuming application's credential declaration may implement
+`DeclaresCredentialAuthorizationProfiles`. Each `CredentialAuthorizationProfile` fixes the app
+adoption purpose, exact `BoundCredentialScope` (subject, installation, application and audience),
+`personal|installation` ownership, bearer abilities, optional durable expiry, authorization TTL
+(60–900 seconds) and initial poll interval (5–30 seconds). `AppPurposeRegistry` maps the adoption
+purpose to one protocol purpose. Request input never selects those values, the credential kind,
+algorithm, material role or user id. Both exchange routes mint `bearer` / `originator` material.
+
+Use an issued bearer only through `BoundBearerCredentialAuthenticator`, supplying the expected app
+purpose so the declaration rebuilds the exact scope server-side. The legacy unbound bearer resolver
+deliberately excludes these credentials. A wrong purpose, subject, ownership, installation,
+application, audience, ability or malformed binding refuses before declaration authorization,
+managed-authority cache/rate participation, usage recording or consumer work.
+
+The browser routes require the package's local, non-delegated authenticated human and the host
+application's normal session and CSRF middleware. Ceremony values in that session are package-
+encrypted ciphertext; a different browser, even logged in as the same user and holding the displayed
+device code, cannot decide the grant. The map holds at most eight live grants. A full map refuses a
+new grant and never evicts an existing one. Session regeneration preserves only live ciphertext;
+logout, invalidation and terminal decisions remove it.
+
+### POST /bfc/device-authorizations
+
+Session-authenticated and CSRF-protected. JSON accepts exactly `app_purpose` and optional `label`.
+The label is trimmed ASCII outer whitespace, valid UTF-8 with no control characters, at most 64
+bytes, and is refused rather than truncated. Success is `201`, `Cache-Control: no-store` and
+`Pragma: no-cache`, with exactly:
+
+```json
+{
+  "device_code": "opaque-43-character-value",
+  "user_code": "ABCD-EFGH",
+  "verification_uri": "https://app.example/bfc/device",
+  "expires_in": 600,
+  "interval": 5
+}
+```
+
+There is no public start, complete/code-bearing verification URI, or request-authored scope. Start
+is limited to 15/minute by authenticated-user-plus-source-IP.
+
+### GET /bfc/device
+
+Takes no query fields. It renders only this browser's still-live sealed grants, including the
+test/client-created user code, purpose, audience, installation, application, ownership consequence
+and optional label. An unknown, expired, terminal or foreign-browser grant gets the same unavailable
+page. The generic URI keeps the user code out of URLs, referrers, access logs and browser history.
+
+### POST /bfc/device
+
+CSRF-protected form submission with exactly `user_code`, `action=approve|deny` and the displayed
+single-use `submission_nonce` (plus the framework CSRF field/header). The submission nonce is bound
+to session, user, authorization and exact action. Approval records only `pending -> approved`; it
+never mints a credential. Denial is terminal. Decision attempts are limited to 10/minute by
+authenticated-user-plus-source-IP.
+
+### POST /bfc/device/token
+
+Public and CSRF-free. Requires `Content-Type: application/json` and exactly one string
+`device_code`. Every response is `no-store`. Success is:
+
+```json
+{
+  "access_token": "revealed-once-bearer",
+  "token_type": "Bearer",
+  "credential_id": "credential-uuid",
+  "app_purpose": "declared.app-purpose"
+}
+```
+
+`expires_at` is added as RFC 3339 only when policy set a durable expiry. Errors are closed:
+
+| Condition | Status | Exact JSON |
+| --- | ---: | --- |
+| malformed media/body/fields | 400 | `{"error":"invalid_request"}` |
+| unknown/replayed/consumed | 400 | `{"error":"invalid_grant"}` |
+| expired | 400 | `{"error":"expired_token"}` |
+| denied/withdrawn/removed | 400 | `{"error":"access_denied"}` |
+| pending | 400 | `{"error":"authorization_pending"}` |
+| too early | 400 | `{"error":"slow_down","interval":N}` |
+| authority infrastructure unavailable | 503 | `{"error":"temporarily_unavailable"}` plus `Retry-After: 5` |
+
+The per-grant interval rises by exactly five seconds on early polls, capped at 30. Transport limits
+are 120/minute per source IP (IPv6 aggregated to `/64`) and a package-global 6,000/minute cap.
+Limiter refusal precedes parsing/lookup and is `429 {"error":"slow_down","interval":N}` with the
+same bounded `Retry-After`; it does not change grant cadence or authority cache. The global cap is
+an **availability ceiling**, not a security guarantee: a distributed flood can delay every tenant's
+exchange until the window rolls, and a short-lived grant can expire while a compliant client waits.
+
+### GET /bfc/loopback/authorize
+
+Session-authenticated and limited by the same 15/minute start budget. It accepts exactly
+`app_purpose`, `redirect_uri`, `code_challenge`, `code_challenge_method=S256`, `state` and optional
+`label`. State is 32–128 unreserved ASCII characters. The challenge is a 43-character unpadded
+base64url SHA-256 value. Duplicate, list-valued or unknown fields refuse before persistence.
+
+The callback must round-trip byte-for-byte as `http://localhost:port`,
+the exact IPv4 loopback literal, or `http://[::1]:port`, with explicit port 1024–65535, no userinfo,
+fragment, control/backslash, encoded host, parser ambiguity or existing `code`, `error` or `state`
+query key. Consent displays the same fixed profile fields as device consent plus the exact callback
+host and port. Repeating the exact purpose/callback/challenge/state/label tuple idempotently reuses
+its pending intent.
+
+### POST /bfc/loopback/authorize
+
+CSRF-protected form submission with exactly `action=approve|deny` and `submission_nonce` (plus the
+framework CSRF field/header), under the 10/minute decision budget. Approval returns `303` to the
+exact callback with one-time `code` and exact original `state`; denial returns `error=access_denied`
+and that state. Responses are `no-store` with `Referrer-Policy: no-referrer`. There is no pasted-code
+fallback. A host CSP containing `form-action 'self'` can block this POST-following redirect; hosts
+serving this flow must admit their chosen HTTP loopback origins.
+
+### POST /bfc/loopback/token
+
+Public and CSRF-free. JSON accepts exactly `code`, the byte-identical `redirect_uri`, and an RFC
+7636 unreserved `code_verifier` of 43–128 characters. S256, callback equality, current profile and
+authority are checked under the authorization row lock. Success has the same bearer shape as the
+device token route. Malformed input is `invalid_request`; unknown, wrong callback/verifier, replay
+or consumption is `invalid_grant`; expiry, denial and infrastructure failure use the device table
+above. The same source and global transport limits apply.
+
+**Disposable client safeguards.** The package's test fixtures include bounded device and loopback
+clients. Device proof enters through protected stdin, never argv. The poller waits the greatest of
+its current cadence, a returned slow-down interval and `Retry-After`; temporary unavailability uses
+a validated 1–30 second header or five seconds. The loopback client binds an eligible random local
+port before producing the authorize URL, validates exact callback and state, keeps verifier/state in
+memory and exchanges once. Both place only the final bearer in a mode-0600 file under a mode-0700
+directory, keep Authorization data off argv, clean temporary material and contain no signing root.
+
+**Honest limits and ownership.** `loopback-local-listener`: local compromise or loopback-port
+interception on the approving machine is outside the package boundary. A device code is a bounded
+bearer capability for its one approved grant. Lost successful responses cannot be redelivered.
+Installation-owned grants and durable credentials do not become personal property of their
+initiating approver: removing or changing that approver does not kill them. Fresh connection
+inactivity denies a live installation grant but does not revoke an already durable installation
+credential; installation-subject removal ends both. Capstan N1 owns replacing its host
+models/controllers and composing this wire with its generated installer, fake-crontab behavior and
+first domain probe. This package owns safe authorization acquisition and exact-bound use only.
 
 ---
 

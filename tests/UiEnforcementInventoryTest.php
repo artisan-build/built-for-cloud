@@ -50,7 +50,7 @@ it('pins the exact eleven direct enforcement members dispositions and candidate-
         ['member' => EnsureStandaloneAuthority::class.'::handle', 'path' => 'src/Http/Middleware/EnsureStandaloneAuthority.php', 'line' => 16, 'kind' => 'human-or-mode-gate'],
         ['member' => EnsureUiAuthority::class.'::handle', 'path' => 'src/Http/Middleware/EnsureUiAuthority.php', 'line' => 15, 'kind' => 'human-or-mode-gate'],
         ['member' => EnsureUserIsAdmin::class.'::handle', 'path' => 'src/Http/Middleware/EnsureUserIsAdmin.php', 'line' => 72, 'kind' => 'human-or-mode-gate'],
-        ['member' => EnsureUserIsAuthenticated::class.'::handle', 'path' => 'src/Http/Middleware/EnsureUserIsAuthenticated.php', 'line' => 76, 'kind' => 'human-or-mode-gate'],
+        ['member' => EnsureUserIsAuthenticated::class.'::handle', 'path' => 'src/Http/Middleware/EnsureUserIsAuthenticated.php', 'line' => 78, 'kind' => 'human-or-mode-gate'],
         ['member' => ManagedAccountAccess::class.'::allows', 'path' => 'src/ManagedAccountAccess.php', 'line' => 11, 'kind' => 'managed-human-gate'],
         ['member' => ManagedFreshness::class.'::allows', 'path' => 'src/ManagedFreshness.php', 'line' => 29, 'kind' => 'managed-human-gate'],
         ['member' => StandaloneRouteOwnership::class.'::assertMatched', 'path' => 'src/StandaloneRouteOwnership.php', 'line' => 264, 'kind' => 'route-ownership-assertion'],

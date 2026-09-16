@@ -15,7 +15,7 @@ use SplFileInfo;
  * enrollment, authority classification and HMAC key selection. It derives
  * named classes, provider registrations, direct dependencies/calls, action
  * methods, minter targets, literal routes, enum cases and command signatures
- * from installed PHP source. The seven discoverable path identities and transitional oracles
+ * from installed PHP source. The nine discoverable path identities and transitional oracles
  * deliberately live in the test, not here, so discovery cannot edit its own
  * expected answer. Stable path identities do not embed transitional resolver
  * choices, so P5-AC12 can use the same five roots and positive controls.
@@ -23,14 +23,15 @@ use SplFileInfo;
  * This is source classification, not whole-program data-flow analysis. It
  * cannot see dynamic class names, container bindings assembled outside the
  * provider, routes registered through an unknown wrapper, runtime rebinding,
- * direct model writes, host code or non-PHP generated code. The device path is
- * honestly partial and is NOT emitted as a discovery: its conventional
- * ExternalConsumer/Installation binding is unenforced, so this scanner derives
- * only the enrollment code's real hash, lifetime, single-use and revocation
- * properties. Fixture controls prove the ordinary bypass, second-store
- * resolver, extra enrollment-route and indirect class-bound gate shapes this
- * instrument claims to report; hidden dynamic equivalents remain review/P6
- * concerns.
+ * direct model writes, host code or non-PHP generated code. The emitted device
+ * and loopback rows prove only that the literal package route/action chains,
+ * exact-bound selector and containment participant are present. They do not
+ * prove browser/session binding, transaction order or runtime scope equality.
+ * Fixture controls prove rogue device exchange and loopback selector shapes in
+ * addition to the ordinary bypass, second-store resolver, extra enrollment-route
+ * and indirect class-bound gate shapes this instrument claims to report. Hidden
+ * dynamic/container/host/generated-code equivalents remain review/live concerns;
+ * hostile host reconfiguration is outside the package boundary.
  */
 final class CredentialPathInventory
 {
@@ -203,6 +204,7 @@ final class CredentialPathInventory
         ]));
         $operatorIngresses = [];
         $violations = [];
+        array_push($violations, ...self::authorizationPathViolations($classes));
         $legacyRegistry = implode('\\', ['ArtisanBuild', 'BuiltForCloud', implode('', ['Token', 'Registry'])]);
 
         foreach ($presentedGates as $gate) {
@@ -743,7 +745,62 @@ final class CredentialPathInventory
             $paths[] = 'path:system|SubjectType::Operator/Application/Installation+AuditActorType::CliOperator';
         }
 
+        $provider = $classes['ArtisanBuild\\BuiltForCloud\\BuiltForCloudServiceProvider']['code'] ?? '';
+        $deviceController = $classes['ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\DeviceAuthorizations']['code'] ?? '';
+        $loopbackController = $classes['ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\LoopbackAuthorizations']['code'] ?? '';
+        $bound = $classes['ArtisanBuild\\BuiltForCloud\\BoundBearerCredentialAuthenticator']['code'] ?? '';
+        $contain = $classes['ArtisanBuild\\BuiltForCloud\\Actions\\ContainCredentialAuthorizations']['code'] ?? '';
+
+        if (str_contains($provider, "'/bfc/device-authorizations'")
+            && str_contains($provider, "'/bfc/device'")
+            && str_contains($provider, "'/bfc/device/token'")
+            && str_contains($deviceController, 'StartDeviceAuthorization')
+            && str_contains($deviceController, 'DecideDeviceAuthorization')
+            && str_contains($deviceController, 'PollDeviceAuthorization')
+            && str_contains($bound, 'resolveBoundBearer(')
+            && str_contains($contain, 'credential_authorizations')) {
+            $paths[] = 'path:device|Http\\Controllers\\DeviceAuthorizations+Actions\\StartDeviceAuthorization/DecideDeviceAuthorization/PollDeviceAuthorization+BoundBearerCredentialAuthenticator+ContainCredentialAuthorizations';
+        }
+
+        if (str_contains($provider, "'/bfc/loopback/authorize'")
+            && str_contains($provider, "'/bfc/loopback/token'")
+            && str_contains($loopbackController, 'StartLoopbackAuthorization')
+            && str_contains($loopbackController, 'DecideLoopbackAuthorization')
+            && str_contains($loopbackController, 'ExchangeLoopbackAuthorization')
+            && str_contains($bound, 'resolveBoundBearer(')
+            && str_contains($contain, 'credential_authorizations')) {
+            $paths[] = 'path:loopback|Http\\Controllers\\LoopbackAuthorizations+Actions\\StartLoopbackAuthorization/DecideLoopbackAuthorization/ExchangeLoopbackAuthorization+BoundBearerCredentialAuthenticator+ContainCredentialAuthorizations';
+        }
+
         return $paths;
+    }
+
+    /**
+     * @param  array<string, array{code: string, imports: array<string, string>}>  $classes
+     * @return list<string>
+     */
+    private static function authorizationPathViolations(array $classes): array
+    {
+        $violations = [];
+
+        foreach ($classes as $class => $record) {
+            if ($class === self::class) {
+                continue;
+            }
+
+            if (str_contains($record['code'], 'CredentialAuthorizationFlow::Device')
+                && str_contains($record['code'], "DB::table('credentials')->insert")) {
+                $violations[] = 'rogue-device-exchange:'.$class;
+            }
+
+            if (str_contains($record['code'], 'CredentialAuthorizationFlow::Loopback')
+                && str_contains($record['code'], "DB::table('credentials')")
+                && str_contains($record['code'], "'secret_hash'")) {
+                $violations[] = 'rogue-loopback-selector:'.$class;
+            }
+        }
+
+        return $violations;
     }
 
     /**

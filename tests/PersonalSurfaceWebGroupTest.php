@@ -100,6 +100,8 @@ final class PersonalSurfaceWebGroupTest extends TestCase
      * session-riding route means saying so in this diff.
      * The managed login and callback are browser routes that require the
      * initiating session's nonce to prevent login CSRF.
+     * Device and loopback creation/decision routes also require this stack;
+     * their two public token exchanges must remain absent from this exact set.
      */
     public function test_only_package_browser_routes_ride_the_session_stack(): void
     {
@@ -121,10 +123,12 @@ final class PersonalSurfaceWebGroupTest extends TestCase
             'DELETE /bfc/ui/credentials/installation/{id}',
             'DELETE /bfc/ui/credentials/personal/{id}',
             'GET /bfc/console/chrome.js',
+            'GET /bfc/device',
             'GET /bfc/forgot-password',
             'GET /bfc/installation/credentials',
             'GET /bfc/invitations/accept',
             'GET /bfc/login',
+            'GET /bfc/loopback/authorize',
             'GET /bfc/managed/callback',
             'GET /bfc/managed/login',
             'GET /bfc/members',
@@ -135,12 +139,15 @@ final class PersonalSurfaceWebGroupTest extends TestCase
             'GET /bfc/ui/credentials/installation',
             'GET /bfc/ui/credentials/personal',
             'POST /bfc/console/enter',
+            'POST /bfc/device',
+            'POST /bfc/device-authorizations',
             'POST /bfc/forgot-password',
             'POST /bfc/installation/credentials',
             'POST /bfc/installation/credentials/{id}/rotate',
             'POST /bfc/invitations/accept',
             'POST /bfc/login',
             'POST /bfc/logout',
+            'POST /bfc/loopback/authorize',
             'POST /bfc/members/invitations',
             'POST /bfc/reset-password',
             'POST /bfc/transitions/proposals/{transition}/abandon',

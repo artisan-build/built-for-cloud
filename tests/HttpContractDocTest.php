@@ -45,6 +45,16 @@ final class HttpContractDocTest extends TestCase
         $this->assertStringContainsString('"api_version": 2', $this->contractDoc());
     }
 
+    public function test_device_contract_distinguishes_live_installation_grants_from_durable_credentials(): void
+    {
+        $contract = $this->contractDoc();
+
+        $this->assertMatchesRegularExpression(
+            '/Fresh connection\s+inactivity denies a live installation grant but does not revoke an already durable installation\s+credential; installation-subject removal ends both\./',
+            $contract,
+        );
+    }
+
     /**
      * Spelled counts, so the doc's own "exactly the N operator
      * abilities" is checked rather than trusted. Small on purpose: if

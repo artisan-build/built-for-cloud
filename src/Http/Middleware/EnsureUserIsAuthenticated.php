@@ -68,12 +68,14 @@ use Symfony\Component\HttpFoundation\Response;
  */
 final class EnsureUserIsAuthenticated
 {
+    public const string DEFER_MANAGED_AUTHORITY = 'defer-managed-authority';
+
     public function __construct(private readonly ManagedAccountAccess $managedAccess) {}
 
     /**
      * @param  Closure(Request): Response  $next
      */
-    public function handle(Request $request, Closure $next): Response
+    public function handle(Request $request, Closure $next, ?string $mode = null): Response
     {
         $acting = app(ActingPrincipalResolver::class)->resolve();
 
@@ -124,7 +126,9 @@ final class EnsureUserIsAuthenticated
             abort(403);
         }
 
-        if (! $this->managedAccess->allows($user)) {
+        // Authorization actions own a tri-state authority decision so they can
+        // preserve retryable ceremonies without weakening local-human admission.
+        if ($mode !== self::DEFER_MANAGED_AUTHORITY && ! $this->managedAccess->allows($user)) {
             StandaloneAccess::endCurrentSession(
                 $request,
                 is_string($acting->guard) ? Auth::guard($acting->guard) : null,

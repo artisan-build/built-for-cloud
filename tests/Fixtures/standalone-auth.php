@@ -7,6 +7,7 @@ use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\Database\Factories\CredentialFactory;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\Invitation;
+use ArtisanBuild\BuiltForCloud\RouteMiddleware;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Foundation\Application;
@@ -67,13 +68,14 @@ final class BfcStandaloneAuthGateHostProvider extends ServiceProvider
 
             if (in_array($vector, ['memo-set-action', 'memo-property'], true)) {
                 foreach ($router->getRoutes() as $route) {
-                    if (! in_array(EnsureUserIsAuthenticated::class, $route->middleware(), true)) {
+                    if (RouteMiddleware::indexOfClass($route->middleware(), EnsureUserIsAuthenticated::class) === null) {
                         continue;
                     }
 
                     $gateless = array_values(array_filter(
                         $route->middleware(),
-                        static fn (mixed $middleware): bool => $middleware !== EnsureUserIsAuthenticated::class,
+                        static fn (mixed $middleware): bool => ! is_string($middleware)
+                            || explode(':', $middleware, 2)[0] !== EnsureUserIsAuthenticated::class,
                     ));
 
                     if ($vector === 'memo-property') {
@@ -98,7 +100,7 @@ final class BfcStandaloneAuthGateHostProvider extends ServiceProvider
                 : 'bfc.auth';
 
             foreach ($router->getRoutes() as $route) {
-                if (in_array(EnsureUserIsAuthenticated::class, $route->middleware(), true)) {
+                if (RouteMiddleware::indexOfClass($route->middleware(), EnsureUserIsAuthenticated::class) !== null) {
                     $route->withoutMiddleware($exclusion);
                 }
             }
@@ -148,11 +150,14 @@ $case = new class('testProbe') extends TestCase
         $routes = array_values(array_filter(
             $router->getRoutes()->getRoutes(),
             // Directive §1 keeps new class-gated routes outside the legacy Unit A/A2 hostile-host probes.
-            static fn (Route $route): bool => in_array(EnsureUserIsAuthenticated::class, $route->middleware(), true)
+            static fn (Route $route): bool => RouteMiddleware::indexOfClass(
+                $route->middleware(),
+                EnsureUserIsAuthenticated::class,
+            ) !== null
                 && ! str_starts_with((string) $route->getName(), 'bfc.transitions.'),
         ));
 
-        if (count($routes) !== 25) {
+        if (count($routes) !== 30) {
             fwrite(STDERR, 'standalone-auth-route-count-'.count($routes).PHP_EOL);
 
             return false;
@@ -162,11 +167,10 @@ $case = new class('testProbe') extends TestCase
         $poisonedStacks = $memoPoisoning
             ? count(array_filter(
                 $routes,
-                static fn (Route $route): bool => ! in_array(
-                    EnsureUserIsAuthenticated::class,
+                static fn (Route $route): bool => RouteMiddleware::indexOfClass(
                     $router->gatherRouteMiddleware($route),
-                    true,
-                ),
+                    EnsureUserIsAuthenticated::class,
+                ) === null,
             ))
             : 0;
 
@@ -202,21 +206,20 @@ $case = new class('testProbe') extends TestCase
             ]);
             $statuses[] = $response->getStatusCode();
             $disclosed[] = str_contains($response->getContent(), (string) $member->email);
-            $recomputed[] = in_array(
-                EnsureUserIsAuthenticated::class,
+            $recomputed[] = RouteMiddleware::indexOfClass(
                 $router->gatherRouteMiddleware($route),
-                true,
-            );
+                EnsureUserIsAuthenticated::class,
+            ) !== null;
         }
 
         Notification::assertNothingSent();
 
         $allRefused = $memoPoisoning
-            ? count(array_filter($statuses, static fn (int $status): bool => $status < 200 || $status >= 300)) === 25
-            : $statuses === array_fill(0, 25, 500);
+            ? count(array_filter($statuses, static fn (int $status): bool => $status < 200 || $status >= 300)) === 30
+            : $statuses === array_fill(0, 30, 500);
 
         return $allRefused
-            && (! $memoPoisoning || ($poisonedStacks === 25 && ! in_array(false, $recomputed, true)))
+            && (! $memoPoisoning || ($poisonedStacks === 30 && ! in_array(false, $recomputed, true)))
             && ! in_array(true, $disclosed, true)
             && BfcStandaloneAuthGateState::$paths === []
             && Invitation::query()->count() === 0
@@ -250,7 +253,7 @@ if ($ordering !== 'match' || ! $valid) {
 }
 
 if (in_array($vector, ['memo-set-action', 'memo-property'], true)) {
-    fwrite(STDOUT, "standalone-auth-gate-{$vector}-refused-25\n");
+    fwrite(STDOUT, "standalone-auth-gate-{$vector}-refused-30\n");
 } else {
-    fwrite(STDOUT, "standalone-auth-gate-match-refused-25\n");
+    fwrite(STDOUT, "standalone-auth-gate-match-refused-30\n");
 }

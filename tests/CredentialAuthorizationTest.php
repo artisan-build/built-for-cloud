@@ -13,6 +13,7 @@ use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\BoundBearerCredentialAuthenticator;
 use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
+use ArtisanBuild\BuiltForCloud\BrowserCredentialAuthorizationStore;
 use ArtisanBuild\BuiltForCloud\Console\RequestAssertion;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAlgorithm;
@@ -381,6 +382,8 @@ it('keeps start plaintext out of rows audit outbox and package session serializa
     $userCode = $start->userCode->reveal();
     $nonce = $start->browserNonce->reveal();
     $row = DB::table('credential_authorizations')->sole();
+    $sessionAfter = serialize($request->session()->all());
+    $ciphertexts = app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts($request);
     $persisted = json_encode([
         (array) $row,
         CredentialAuditEvent::query()->get()->toArray(),
@@ -391,7 +394,9 @@ it('keeps start plaintext out of rows audit outbox and package session serializa
         ->and($row->user_code_hash)->toBe(hash('sha256', $userCode))
         ->and($row->browser_session_nonce_hash)->toBe(hash('sha256', $nonce))
         ->and($persisted)->not->toContain($deviceCode, $userCode, $nonce)
-        ->and(serialize($request->session()->all()))->toBe($sessionBefore);
+        ->and($sessionAfter)->not->toBe($sessionBefore)
+        ->and($sessionAfter)->not->toContain($start->authorizationId, $deviceCode, $userCode, $nonce)
+        ->and($ciphertexts)->toHaveCount(1);
 });
 
 it('serializes cadence and contains personal grants before revocation without following installation creators', function (): void {

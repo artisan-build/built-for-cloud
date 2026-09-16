@@ -29,7 +29,7 @@ it('refuses every standalone authentication route before effects or disclosure a
     $process->run();
 
     expect($process->getExitCode())->toBe(0, $process->getOutput().$process->getErrorOutput())
-        ->and($process->getOutput())->toContain('standalone-auth-gate-match-refused-25');
+        ->and($process->getOutput())->toContain('standalone-auth-gate-match-refused-30');
 })->with([
     'FQCN alias' => 'fqcn-alias',
     'FQCN group' => 'fqcn-group',
@@ -48,7 +48,7 @@ it('refuses every standalone authentication route from a real compiled route col
         $load->run();
 
         expect($load->getExitCode())->toBe(0, $load->getOutput().$load->getErrorOutput())
-            ->and($load->getOutput())->toContain('standalone-auth-route-cache-refused-25');
+            ->and($load->getOutput())->toContain('standalone-auth-route-cache-refused-30');
     } finally {
         @unlink($payload);
     }
@@ -59,7 +59,7 @@ it('recomputes poisoned authentication middleware for every uncached and compile
     $uncached->run();
 
     expect($uncached->getExitCode())->toBe(0, $uncached->getOutput().$uncached->getErrorOutput())
-        ->and($uncached->getOutput())->toContain("standalone-auth-gate-{$vector}-refused-25");
+        ->and($uncached->getOutput())->toContain("standalone-auth-gate-{$vector}-refused-30");
 
     $payload = sys_get_temp_dir().'/bfc-standalone-auth-memo-cache-'.bin2hex(random_bytes(8)).'.php';
 
@@ -71,7 +71,7 @@ it('recomputes poisoned authentication middleware for every uncached and compile
         $compiled->run();
 
         expect($compiled->getExitCode())->toBe(0, $compiled->getOutput().$compiled->getErrorOutput())
-            ->and($compiled->getOutput())->toContain("standalone-auth-route-cache-{$vector}-refused-25");
+            ->and($compiled->getOutput())->toContain("standalone-auth-route-cache-{$vector}-refused-30");
     } finally {
         @unlink($payload);
     }
@@ -115,7 +115,7 @@ it('pins an unknown package-namespace middleware without a hardcoded gate list',
     'FQCN exclusion' => 'exclusion',
 ]);
 
-it('recognises a parameterized alias when resolving an inventoried package middleware class', function (): void {
+it('retains a parameterized FQCN when resolving an equivalent parameterized alias', function (): void {
     /** @var Router $router */
     $router = app('router');
     $route = $router->getRoutes()->getByName('bfc.members.index');
@@ -124,13 +124,14 @@ it('recognises a parameterized alias when resolving an inventoried package middl
         throw new RuntimeException('The standalone members route is unavailable.');
     }
 
-    $route->middleware(PackageMiddlewareProbe::class);
+    $parameterized = PackageMiddlewareProbe::class.':product';
+    $route->middleware($parameterized);
     $inventory = StandaloneRouteOwnership::packageMiddlewareInventory([$route]);
     $router->aliasMiddleware('bfc.package-probe', PackageMiddlewareProbe::class);
 
     $action = $route->getAction();
     $action['middleware'] = array_map(
-        static fn (string $entry): string => $entry === PackageMiddlewareProbe::class
+        static fn (string $entry): string => $entry === $parameterized
             ? 'bfc.package-probe:product'
             : $entry,
         (array) ($action['middleware'] ?? []),
@@ -139,5 +140,5 @@ it('recognises a parameterized alias when resolving an inventoried package middl
 
     StandaloneRouteOwnership::assertPackageMiddlewareOwned($router, $inventory);
 
-    expect(true)->toBeTrue();
+    expect($inventory[0]['middleware'])->toContain($parameterized);
 });

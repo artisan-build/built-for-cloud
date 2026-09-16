@@ -20,6 +20,7 @@ use ArtisanBuild\BuiltForCloud\Commands\InstallOperatorCredentialCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand;
+use ArtisanBuild\BuiltForCloud\Commands\PruneCredentialAuthorizationsCommand;
 use ArtisanBuild\BuiltForCloud\Commands\SigningRootProvisionCommand;
 use ArtisanBuild\BuiltForCloud\Commands\SubjectOffboardCommand;
 use ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand;
@@ -41,7 +42,9 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleEnter;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\DeviceAuthorizations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\InstallationCredentials;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\LoopbackAuthorizations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManagedAuthentication;
@@ -198,6 +201,11 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         }
 
         $this->registerRateLimiters();
+        $authoritySchedule = $this->app->make(SystemAuthoritySchedule::class);
+        $this->callAfterResolving(
+            'Illuminate\\Console\\Scheduling\\Schedule',
+            static fn (mixed $schedule) => $authoritySchedule->registerCredentialAuthorizationPrune($schedule),
+        );
 
         // The `bfc-console` guard and provider entries, injected by the
         // PACKAGE so a consuming app adds nothing to its `auth.php`
@@ -560,6 +568,30 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // session-riding forgery on a logged-in user's browser could mint,
         // rotate or revoke credentials.
         $personal = $this->browserSessionMiddleware($router);
+        $authorizationUser = EnsureUserIsAuthenticated::class.':'.EnsureUserIsAuthenticated::DEFER_MANAGED_AUTHORITY;
+
+        $authorizationRoutes = [];
+        $authorizationRoutes[] = $router->post('/bfc/device-authorizations', [DeviceAuthorizations::class, 'store'])
+            ->middleware([...$personal, $authorizationUser, 'throttle:bfc-authorization-start'])
+            ->name('bfc.device.start');
+        $authorizationRoutes[] = $router->get('/bfc/device', [DeviceAuthorizations::class, 'show'])
+            ->middleware([...$personal, $authorizationUser])
+            ->name('bfc.device.show');
+        $authorizationRoutes[] = $router->post('/bfc/device', [DeviceAuthorizations::class, 'decide'])
+            ->middleware([...$personal, $authorizationUser, 'throttle:bfc-authorization-decision'])
+            ->name('bfc.device.decide');
+        $authorizationRoutes[] = $router->post('/bfc/device/token', [DeviceAuthorizations::class, 'token'])
+            ->middleware('throttle:bfc-authorization-token')
+            ->name('bfc.device.token');
+        $authorizationRoutes[] = $router->get('/bfc/loopback/authorize', [LoopbackAuthorizations::class, 'show'])
+            ->middleware([...$personal, $authorizationUser, 'throttle:bfc-authorization-start'])
+            ->name('bfc.loopback.authorize');
+        $authorizationRoutes[] = $router->post('/bfc/loopback/authorize', [LoopbackAuthorizations::class, 'decide'])
+            ->middleware([...$personal, $authorizationUser, 'throttle:bfc-authorization-decision'])
+            ->name('bfc.loopback.decide');
+        $authorizationRoutes[] = $router->post('/bfc/loopback/token', [LoopbackAuthorizations::class, 'token'])
+            ->middleware('throttle:bfc-authorization-token')
+            ->name('bfc.loopback.token');
 
         $uiRoutes = [];
         $uiRoutes[] = $router->get('/bfc/ui', UiHome::class)
@@ -721,6 +753,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             ...$standaloneRoutes,
             ...$personalCredentialRoutes,
             ...$installationCredentialRoutes,
+            ...$authorizationRoutes,
         ]);
 
         $ownedNamedRoutes = [...$landingRoutes, ...$uiRoutes, ...$standaloneRoutes];
@@ -1064,6 +1097,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             OutboxDrainCommand::class,
             OwnershipMintClaimCommand::class,
             OwnershipRemintOwnerTokenCommand::class,
+            PruneCredentialAuthorizationsCommand::class,
             SigningRootProvisionCommand::class,
             SubjectOffboardCommand::class,
             WarnExpiringCredentialsCommand::class,
@@ -1080,6 +1114,31 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
      */
     private function registerRateLimiters(): void
     {
+        $slowDown = static function (Request $request, array $headers) {
+            $retryAfter = max(1, min(30, (int) ($headers['Retry-After'] ?? 1)));
+
+            return response()->json(
+                ['error' => 'slow_down', 'interval' => $retryAfter],
+                429,
+                [...$headers, 'Cache-Control' => 'no-store', 'Pragma' => 'no-cache', 'Retry-After' => (string) $retryAfter],
+            );
+        };
+
+        RateLimiter::for('bfc-authorization-start', fn (Request $request): Limit => Limit::perMinute(15)
+            ->by('bfc-authorization-start|'.($this->limiterPrincipal($request) ?? 'anonymous').'|'.$this->limiterSourceIp($request))
+            ->response($slowDown));
+
+        RateLimiter::for('bfc-authorization-decision', fn (Request $request): Limit => Limit::perMinute(10)
+            ->by('bfc-authorization-decision|'.($this->limiterPrincipal($request) ?? 'anonymous').'|'.$this->limiterSourceIp($request))
+            ->response($slowDown));
+
+        RateLimiter::for('bfc-authorization-token', fn (Request $request): array => [
+            Limit::perMinute(120)->by(
+                ($request->is('bfc/device/token') ? 'bfc-device-token|' : 'bfc-loopback-token|').$this->limiterSourceIp($request),
+            )->response($slowDown),
+            Limit::perMinute(6000)->by('bfc-authorization-token-global')->response($slowDown),
+        ]);
+
         RateLimiter::for('bfc-public', fn (Request $request): Limit => Limit::perMinute(60)->by($request->ip() ?? 'unknown'));
 
         RateLimiter::for('bfc-claim', fn (Request $request): Limit => Limit::perMinute(10)->by($request->ip() ?? 'unknown'));
@@ -1240,5 +1299,17 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $id = $user->getAuthIdentifier();
 
         return is_scalar($id) && (string) $id !== '' ? (string) $id : null;
+    }
+
+    private function limiterSourceIp(Request $request): string
+    {
+        $ip = $request->ip() ?? 'unknown';
+        $packed = @inet_pton($ip);
+
+        if ($packed === false || strlen($packed) !== 16) {
+            return $ip;
+        }
+
+        return (string) inet_ntop(substr($packed, 0, 8).str_repeat("\0", 8)).'/64';
     }
 }

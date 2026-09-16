@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\Actions\DecideDeviceAuthorization;
 use ArtisanBuild\BuiltForCloud\Actions\ExchangeLoopbackAuthorization;
 use ArtisanBuild\BuiltForCloud\Actions\OffboardSubject;
 use ArtisanBuild\BuiltForCloud\Actions\PollDeviceAuthorization;
@@ -10,13 +11,16 @@ use ArtisanBuild\BuiltForCloud\BuiltForCloudServiceProvider;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationOwnership;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationProfile;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
+use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialAuthorizationRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\SubmissionNonceRefused;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConfirmation;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;
 use ArtisanBuild\BuiltForCloud\ManagedMembershipResponses;
 use ArtisanBuild\BuiltForCloud\OffboardOptions;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
+use ArtisanBuild\BuiltForCloud\SubmissionNonce;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\DeviceFlowDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\TestCase;
 use ArtisanBuild\BuiltForCloud\User;
@@ -125,6 +129,26 @@ $case = new class('testProbe') extends TestCase
             $user = User::query()->findOrFail((string) $input['user_id']);
             $request = Request::create('/credential-authorization-worker', 'POST');
             $request->setUserResolver(static fn (): User => $user);
+
+            if ($input['operation'] === 'decision') {
+                $submission = SubmissionNonce::presented(
+                    (string) $input['submission_nonce'],
+                    (string) $input['session_id'],
+                    (string) $user->getKey(),
+                    CredentialVerb::Issue,
+                    'device-authorization:'.(string) $input['authorization_id'].':approve',
+                );
+                $decision = app(DecideDeviceAuthorization::class)(
+                    $request,
+                    (string) $input['user_code'],
+                    (string) $input['browser_nonce'],
+                    true,
+                    $submission,
+                );
+
+                return ['outcome' => $decision->status->value];
+            }
+
             $token = $input['flow'] === 'device'
                 ? app(PollDeviceAuthorization::class)($request, (string) $input['code'])
                 : app(ExchangeLoopbackAuthorization::class)(
@@ -137,6 +161,8 @@ $case = new class('testProbe') extends TestCase
             return ['outcome' => 'success', 'credential_id' => $token->credentialId];
         } catch (CredentialAuthorizationRefused $refused) {
             return ['outcome' => $refused->error];
+        } catch (SubmissionNonceRefused) {
+            return ['outcome' => 'submission_nonce_refused'];
         }
     }
 };

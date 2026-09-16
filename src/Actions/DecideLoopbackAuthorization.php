@@ -16,6 +16,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\CredentialAuthorizationRefused;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintedSecret;
+use ArtisanBuild\BuiltForCloud\SubmissionNonce;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -34,8 +35,9 @@ final readonly class DecideLoopbackAuthorization
         string $browserNonce,
         string $state,
         bool $approve,
+        ?SubmissionNonce $submission = null,
     ): CredentialAuthorizationDecision {
-        $result = DB::transaction(function () use ($request, $authorizationId, $browserNonce, $state, $approve): CredentialAuthorizationDecision|CredentialAuthorizationRefused {
+        $result = DB::transaction(function () use ($request, $authorizationId, $browserNonce, $state, $approve, $submission): CredentialAuthorizationDecision|CredentialAuthorizationRefused {
             $authorization = DB::table('credential_authorizations')->where('id', $authorizationId)->lockForUpdate()->first();
             $user = $request->user();
 
@@ -63,11 +65,21 @@ final readonly class DecideLoopbackAuthorization
                 throw CredentialAuthorizationRefused::temporarilyUnavailable();
             }
 
-            if ($authority === CredentialAuthorizationAuthority::Denied || ! $approve) {
-                $reason = $authority === CredentialAuthorizationAuthority::Denied
-                    ? CredentialAuthorizationDenialReason::AuthorityDenied
-                    : CredentialAuthorizationDenialReason::UserDenied;
-                $this->transitions->deny($authorization, $reason, AuditActor::boundUser((string) $authorization->initiating_user_id));
+            if ($authority === CredentialAuthorizationAuthority::Denied) {
+                $this->transitions->deny($authorization, CredentialAuthorizationDenialReason::AuthorityDenied, AuditActor::boundUser((string) $authorization->initiating_user_id));
+
+                return new CredentialAuthorizationDecision(
+                    $authorizationId,
+                    CredentialAuthorizationStatus::Denied,
+                    redirectUri: (string) $authorization->redirect_uri,
+                    state: $state,
+                );
+            }
+
+            $submission?->consume();
+
+            if (! $approve) {
+                $this->transitions->deny($authorization, CredentialAuthorizationDenialReason::UserDenied, AuditActor::boundUser((string) $authorization->initiating_user_id));
 
                 return new CredentialAuthorizationDecision(
                     $authorizationId,

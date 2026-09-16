@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
+use ArtisanBuild\BuiltForCloud\BrowserCredentialAuthorizationStore;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleReturnTo;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;
@@ -41,6 +42,7 @@ final class ManagedAuthentication
         Request $request,
         ManagedHandoff $handoff,
         ManagedMembershipResponses $responses,
+        BrowserCredentialAuthorizationStore $authorizations,
     ): RedirectResponse|Response {
         try {
             $exchange = $handoff->exchange($request);
@@ -53,7 +55,7 @@ final class ManagedAuthentication
             }
 
             Auth::guard('web')->login($user, false);
-            $request->session()->regenerate();
+            $authorizations->regenerate($request);
             $request->session()->put(StandaloneAccess::SESSION_VERSION_KEY, $user->auth_session_version);
             $request->session()->forget(ManagedHandoff::SESSION_NONCE_KEY);
 
