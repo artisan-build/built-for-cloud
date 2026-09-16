@@ -66,3 +66,13 @@ it('keeps both disposable clients bounded and keeps secrets out of argv', functi
             'unset($accessToken, $body, $callback, $verifier, $state)',
         )->not->toContain('<code-verifier>', '<state>');
 });
+
+it('keeps installation live profiles and protected use free of unknown abilities', function (): void {
+    $provider = (string) file_get_contents(__DIR__.'/Support/StandaloneHarnessServiceProvider.php');
+
+    expect($provider)->toContain(
+        "foreach (['live.device', 'live.loopback'] as \$purpose)",
+        "CredentialAuthorizationOwnership::Installation,\n                    [],",
+        'authenticate($request, $purpose);',
+    )->not->toContain('harness:use');
+});

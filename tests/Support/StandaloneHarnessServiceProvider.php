@@ -83,7 +83,7 @@ final class StandaloneHarnessServiceProvider extends ServiceProvider
                         'https://device-live.example',
                     ),
                     CredentialAuthorizationOwnership::Installation,
-                    ['harness:use'],
+                    [],
                     null,
                     60,
                     5,
@@ -117,7 +117,7 @@ final class StandaloneHarnessServiceProvider extends ServiceProvider
                     abort(404);
                 }
 
-                $credential = app(BoundBearerCredentialAuthenticator::class)->authenticate($request, $purpose, 'harness:use');
+                $credential = app(BoundBearerCredentialAuthenticator::class)->authenticate($request, $purpose);
 
                 return $credential === null
                     ? response()->json(['authenticated' => false], 401)
