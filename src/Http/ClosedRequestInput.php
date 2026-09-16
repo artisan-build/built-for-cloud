@@ -95,7 +95,11 @@ final class ClosedRequestInput
         return $values;
     }
 
-    /** @param array<string, mixed> $values @param list<string> $required @param list<string> $optional */
+    /**
+     * @param  array<string, mixed>  $values
+     * @param  list<string>  $required
+     * @param  list<string>  $optional
+     */
     private static function assertKeys(array $values, array $required, array $optional): void
     {
         $keys = array_keys($values);

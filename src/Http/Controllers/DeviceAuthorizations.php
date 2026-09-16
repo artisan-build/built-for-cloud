@@ -184,7 +184,10 @@ final class DeviceAuthorizations
         return $this->json($payload);
     }
 
-    /** @param array{payload: array<string, mixed>, authorization: object} $entry @return array<string, mixed> */
+    /**
+     * @param  array{payload: array<string, mixed>, authorization: object}  $entry
+     * @return array<string, mixed>
+     */
     private function viewAuthorization(Request $request, array $entry): array
     {
         $authorization = $entry['authorization'];
