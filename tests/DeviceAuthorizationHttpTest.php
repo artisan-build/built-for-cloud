@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\Actions\StartDeviceAuthorization;
 use ArtisanBuild\BuiltForCloud\Actions\StartLoopbackAuthorization;
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
@@ -11,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\CredentialAuthorizationPolicy;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationProfile;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
+use ArtisanBuild\BuiltForCloud\Exceptions\CredentialAuthorizationRefused;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\LoopbackAuthorizations;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
@@ -239,6 +241,78 @@ it('refuses malformed and foreign device HTTP attempts before completing the exa
 
     $this->postJson('/bfc/device/token', ['device_code' => $deviceCode])
         ->assertStatus(400)->assertExactJson(['error' => 'invalid_grant']);
+});
+
+it('binds a direct public device start to its authenticated browser and routes one decision', function (string $action, string $status): void {
+    $user = httpAuthorizationUser('http-direct-'.$action.'@example.test');
+    httpAuthorizationProfile($user, 'http.device');
+    $this->actingAsVersioned($user, 'web');
+    $request = request();
+    $request->setUserResolver(static fn (): User => $user);
+    $request->setLaravelSession(app('session')->driver());
+
+    $start = app(StartDeviceAuthorization::class)($request, 'http.device', 'Direct '.$action.' client');
+    $userCode = $start->userCode->reveal();
+    $row = DB::table('credential_authorizations')->sole();
+    $ciphertexts = app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts($request);
+
+    expect(DB::table('credential_authorizations')->count())->toBe(1)
+        ->and(DB::table('credential_audit_events')->where('event', LifecycleEventType::CredentialAuthorizationStarted->value)->count())->toBe(1)
+        ->and($ciphertexts)->toHaveCount(1)
+        ->and(serialize($request->session()->all()))->not->toContain($start->authorizationId, $userCode)
+        ->and($start->deviceCode->revealed())->toBeFalse()
+        ->and($start->browserNonce->revealed())->toBeFalse()
+        ->and($row->user_code_hash)->toBe(hash('sha256', $userCode));
+
+    $this->withSession($request->session()->all());
+    $page = $this->get('/bfc/device')
+        ->assertOk()
+        ->assertSee($userCode)
+        ->assertSee('Direct '.$action.' client');
+    $decision = authorizationHiddenInputs($page->getContent(), $action);
+    $sessionCookie = $page->getCookie((string) config('session.cookie'));
+
+    expect($decision)->toHaveKeys(['_token', 'user_code', 'action', 'submission_nonce'])
+        ->and($decision['user_code'])->toBe($userCode)
+        ->and($decision['action'])->toBe($action)
+        ->and($sessionCookie)->not->toBeNull();
+
+    $this->withCookie((string) config('session.cookie'), $sessionCookie->getValue())
+        ->post('/bfc/device', $decision)
+        ->assertOk()
+        ->assertSee('data-testid="device-authorization-result"', false)
+        ->assertSee($status);
+
+    expect(DB::table('credential_authorizations')->where('id', $start->authorizationId)->value('status'))->toBe($status)
+        ->and(DB::table('credentials')->count())->toBe(0)
+        ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request()))->toBe([]);
+})->with([
+    'approve' => ['approve', 'approved'],
+    'deny' => ['deny', 'denied'],
+]);
+
+it('refuses a direct public device start when the browser map is full without writing or eviction', function (): void {
+    $user = httpAuthorizationUser('http-direct-capacity@example.test');
+    httpAuthorizationProfile($user, 'http.device');
+    $this->actingAsVersioned($user, 'web');
+    $request = request();
+    $request->setUserResolver(static fn (): User => $user);
+    $request->setLaravelSession(app('session')->driver());
+
+    for ($binding = 0; $binding < BrowserCredentialAuthorizationStore::MAX_LIVE_BINDINGS; $binding++) {
+        app(StartDeviceAuthorization::class)($request, 'http.device', 'Direct binding '.$binding);
+    }
+
+    $authorizationIds = DB::table('credential_authorizations')->orderBy('id')->pluck('id')->all();
+    $auditIds = DB::table('credential_audit_events')->orderBy('id')->pluck('id')->all();
+    $ciphertexts = app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts($request);
+
+    expect(fn () => app(StartDeviceAuthorization::class)($request, 'http.device', 'Refused binding'))
+        ->toThrow(CredentialAuthorizationRefused::class, 'temporarily_unavailable');
+    expect(DB::table('credential_authorizations')->orderBy('id')->pluck('id')->all())->toBe($authorizationIds)
+        ->and(DB::table('credential_audit_events')->orderBy('id')->pluck('id')->all())->toBe($auditIds)
+        ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts($request))->toBe($ciphertexts)
+        ->and($ciphertexts)->toHaveCount(BrowserCredentialAuthorizationStore::MAX_LIVE_BINDINGS);
 });
 
 it('refuses malformed callback and PKCE attempts before one loopback exchange', function (): void {

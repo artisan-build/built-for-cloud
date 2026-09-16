@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Actions;
 
 use ArtisanBuild\BuiltForCloud\AuditActor;
+use ArtisanBuild\BuiltForCloud\BrowserCredentialAuthorizationStore;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationAuthority;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationFlow;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationPolicy;
@@ -25,6 +26,7 @@ final readonly class StartDeviceAuthorization
     public function __construct(
         private CredentialAuthorizationPolicy $policy,
         private LifecycleEventRecorder $recorder,
+        private BrowserCredentialAuthorizationStore $browser,
     ) {}
 
     public function __invoke(Request $authenticatedRequest, string $appPurpose, ?string $label = null): DeviceAuthorizationStart
@@ -41,18 +43,23 @@ final readonly class StartDeviceAuthorization
         }
 
         $label = $this->policy->label($label);
-        $deviceCode = new MintedSecret(self::opaqueCode());
-        $userCode = new MintedSecret(self::userCode());
-        $browserNonce = new MintedSecret(self::opaqueCode());
+
+        if (! $this->browser->hasCapacity($authenticatedRequest)) {
+            throw CredentialAuthorizationRefused::temporarilyUnavailable();
+        }
+
+        $deviceCode = self::opaqueCode();
+        $userCode = self::userCode();
+        $browserNonce = self::opaqueCode();
         $authorizationId = (string) Str::uuid();
         $expiresAt = now()->addSeconds($profile->codeTtlSeconds);
 
-        DB::transaction(function () use ($profile, $purpose, $userId, $label, $deviceCode, $userCode, $browserNonce, $authorizationId, $expiresAt): void {
+        DB::transaction(function () use ($authenticatedRequest, $profile, $purpose, $userId, $label, $deviceCode, $userCode, $browserNonce, $authorizationId, $expiresAt): void {
             DB::table('credential_authorizations')->insert([
                 'id' => $authorizationId,
                 'flow' => CredentialAuthorizationFlow::Device->value,
-                'device_code_hash' => $deviceCode->hash(),
-                'user_code_hash' => $userCode->hash(),
+                'device_code_hash' => hash('sha256', $deviceCode),
+                'user_code_hash' => hash('sha256', $userCode),
                 'status' => CredentialAuthorizationStatus::Pending->value,
                 ...$this->snapshot($profile, $purpose->value, $userId, $label, $browserNonce),
                 'base_interval' => $profile->initialPollInterval,
@@ -66,13 +73,14 @@ final readonly class StartDeviceAuthorization
                 actor: AuditActor::boundUser($userId),
                 credentialAuthorizationId: $authorizationId,
             );
+            $this->browser->putDevice($authenticatedRequest, $authorizationId, $browserNonce, $userCode);
         });
 
         return new DeviceAuthorizationStart(
             $authorizationId,
-            $deviceCode,
-            $userCode,
-            $browserNonce,
+            new MintedSecret($deviceCode),
+            new MintedSecret($userCode),
+            new MintedSecret($browserNonce),
             url('/bfc/device'),
             $profile->codeTtlSeconds,
             $profile->initialPollInterval,
@@ -96,7 +104,7 @@ final readonly class StartDeviceAuthorization
     }
 
     /** @return array<string, mixed> */
-    private function snapshot(object $profile, string $purpose, string $userId, ?string $label, MintedSecret $browserNonce): array
+    private function snapshot(object $profile, string $purpose, string $userId, ?string $label, string $browserNonce): array
     {
         return [
             'app_purpose' => $profile->appPurpose,
@@ -111,7 +119,7 @@ final readonly class StartDeviceAuthorization
             'label' => $label,
             'credential_expires_at' => $profile->expiresAt,
             'initiating_user_id' => $userId,
-            'browser_session_nonce_hash' => $browserNonce->hash(),
+            'browser_session_nonce_hash' => hash('sha256', $browserNonce),
             'profile_code_ttl_seconds' => $profile->codeTtlSeconds,
             'profile_initial_poll_interval' => $profile->initialPollInterval,
         ];

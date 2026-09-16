@@ -20,14 +20,12 @@ use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
-use OverflowException;
 
 final class DeviceAuthorizations
 {
     public function store(
         Request $request,
         StartDeviceAuthorization $start,
-        BrowserCredentialAuthorizationStore $browser,
     ): JsonResponse {
         try {
             $input = ClosedRequestInput::json($request, ['app_purpose'], ['label']);
@@ -38,21 +36,13 @@ final class DeviceAuthorizations
                 throw CredentialAuthorizationRefused::invalidRequest();
             }
 
-            if (! $browser->hasCapacity($request)) {
-                throw CredentialAuthorizationRefused::temporarilyUnavailable();
-            }
-
             $result = $start($request, $input['app_purpose'], $input['label'] ?? null);
             $deviceCode = $result->deviceCode->reveal();
             $userCode = $result->userCode->reveal();
-            $browserNonce = $result->browserNonce->reveal();
-            $browser->putDevice($request, $result->authorizationId, $browserNonce, $userCode);
         } catch (CredentialAuthorizationRefused $refused) {
             return $this->startRefusal($refused);
         } catch (InvalidCredentialInput) {
             return $this->json(['error' => 'access_denied'], 403);
-        } catch (OverflowException) {
-            return $this->json(['error' => 'temporarily_unavailable'], 503, 5);
         }
 
         return $this->json([
