@@ -305,6 +305,7 @@ it('announces the navigation before performing it, so an app can persist unsaved
     expect($observed['events'])->toBe([[
         'type' => 'bfc:console-reentry',
         'detail' => ['reason' => 'assertion_age_cap', 'return_to' => '/orders?page=2', 'cause' => null],
+        'cancelable' => false,
     ]])
         // THE ORDERING, ASSERTED RATHER THAN ASSUMED. The harness records
         // the events and the navigation in ONE ordered channel, so this
