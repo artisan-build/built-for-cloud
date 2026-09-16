@@ -574,7 +574,8 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     // P5-UI-e added the installation credential browser contract and view,
     // increasing blocks by sixteen and absolute/unpaired by three.
     // P6a1 added four scaffold/conformance blocks on these measured surfaces
-    // without changing the absolute pairing vocabulary.
+    // without changing the absolute pairing vocabulary. DEVICE PR B adds its
+    // browser presentation and HTTP contract, including two absolute claims.
     $gateSurfaces = [
         'src/Console', 'src/Audit', 'src/Http/Controllers/ConsoleEnter.php',
         'src/Http/Controllers/ConsoleChromeScript.php', 'resources/views', 'resources/js',
@@ -586,9 +587,9 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
         'blocks' => 1471,
-        'absolute' => 458,
+        'absolute' => 460,
         'paired' => 114,
-        'unpaired' => 344,
+        'unpaired' => 346,
     ]);
 
     // The surfaces the restatement map runs over are wider than the
