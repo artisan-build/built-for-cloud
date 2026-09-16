@@ -55,6 +55,38 @@ function deviceHarnessConfigValue(string $value): string
     return str_replace(['\\', '"', "\r", "\n"], ['\\\\', '\\"', '', '\\n'], $value);
 }
 
+/** @param list<string> $secrets */
+function deviceHarnessContainsSecret(mixed $value, array $secrets): bool
+{
+    $serialized = json_encode($value, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+
+    foreach ($secrets as $secret) {
+        if ($secret !== '' && str_contains($serialized, $secret)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/** @param list<string> $secrets */
+function deviceHarnessRedactSecrets(mixed $value, array $secrets): mixed
+{
+    if (is_array($value)) {
+        foreach ($value as $key => $member) {
+            $value[$key] = deviceHarnessRedactSecrets($member, $secrets);
+        }
+
+        return $value;
+    }
+
+    if (! is_string($value)) {
+        return $value;
+    }
+
+    return str_replace($secrets, '[redacted]', $value);
+}
+
 /** @return array{status: int, body: string, headers: string} */
 function deviceHarnessHttp(
     string $runDirectory,
@@ -193,7 +225,7 @@ function deviceHarnessStart(string $runDirectory, string $baseUrl, string $csrf,
     return $json;
 }
 
-function deviceHarnessUsePath(string $runDirectory, string $baseUrl, string $path, string $bearer): int
+function deviceHarnessUsePath(string $runDirectory, string $baseUrl, string $path, string $bearer, string $clientIdentity = 'device-live-harness'): int
 {
     $requestBody = "{$runDirectory}/use-empty-body";
     file_put_contents($requestBody, '');
@@ -205,6 +237,7 @@ function deviceHarnessUsePath(string $runDirectory, string $baseUrl, string $pat
         'request = "POST"',
         'header = "Accept: application/json"',
         'header = "Authorization: Bearer '.deviceHarnessConfigValue($bearer).'"',
+        'header = "X-BfC-Client-Id: '.deviceHarnessConfigValue($clientIdentity).'"',
         'output = "/dev/null"',
         'write-out = "%{http_code}"',
         'max-time = 10',
@@ -215,9 +248,9 @@ function deviceHarnessUsePath(string $runDirectory, string $baseUrl, string $pat
     return $status;
 }
 
-function deviceHarnessUse(string $runDirectory, string $baseUrl, string $profile, string $bearer): int
+function deviceHarnessUse(string $runDirectory, string $baseUrl, string $profile, string $bearer, string $clientIdentity = 'device-live-harness'): int
 {
-    return deviceHarnessUsePath($runDirectory, $baseUrl, "/_bfc-harness/device/use/{$profile}", $bearer);
+    return deviceHarnessUsePath($runDirectory, $baseUrl, "/_bfc-harness/device/use/{$profile}", $bearer, $clientIdentity);
 }
 
 /** @return array<string, mixed> */
@@ -351,7 +384,7 @@ $stamp = [
         'loopback' => ['random_bound_port' => true, 'pkce' => 'S256', 'bearer_mode' => '0600'],
     ],
     'cases' => [],
-    'secret_canaries' => ['server_log_clean' => false, 'argv_clean' => false, 'stamp_contains_secrets' => false],
+    'secret_canaries' => ['server_log_clean' => null, 'argv_clean' => null, 'stamp_contains_secrets' => null],
     'teardown' => ['server_stopped' => false, 'run_directory_removed' => false],
     'overall_verdict' => 'fail',
     'exit_code' => 1,
@@ -360,6 +393,7 @@ $server = null;
 $deviceClient = null;
 $loopbackClient = null;
 $secrets = [];
+$inspectedArgv = [];
 
 try {
     $stamp['candidate_sha'] = trim(deviceHarnessRun(new Process(['git', 'rev-parse', 'HEAD'], $root), 'candidate SHA read'));
@@ -427,6 +461,7 @@ try {
     $deviceClient->start();
     usleep(300_000);
     $deviceCommand = $deviceClient->getCommandLine();
+    $inspectedArgv[] = $deviceCommand;
     deviceHarnessAssert(! str_contains($deviceCommand, $start['device_code']), 'The device code appeared in client argv.');
     $decision = deviceHarnessHttp($runDirectory, 'a', 'POST', $baseUrl.'/bfc/device', http_build_query($approve, '', '&', PHP_QUERY_RFC3986), 'application/x-www-form-urlencoded');
     deviceHarnessAssert($decision['status'] === 200, 'The initiating browser could not approve its device grant.');
@@ -439,12 +474,29 @@ try {
     $secrets[] = $deviceBearer;
     deviceHarnessAssert((fileperms($deviceBearerFile) & 0777) === 0600, 'The device bearer file was not mode 0600.');
     deviceHarnessAssert(deviceHarnessUse($runDirectory, $baseUrl, 'device', $deviceBearer) === 200, 'The exact-bound device bearer was refused.');
-    deviceHarnessAssert(deviceHarnessUse($runDirectory, $baseUrl, 'loopback', $deviceBearer) === 401, 'The device bearer crossed into the wrong bound purpose.');
     $stamp['cases']['device_approve_exchange_and_bound_use'] = ['status' => 200, 'wrong_binding_status' => 401, 'mode_0600' => true];
 
     $deviceCredential = deviceHarnessState($root, $environment, ['operation' => 'credential', 'flow' => 'device']);
     $credentialId = $deviceCredential['credential_id'] ?? null;
     deviceHarnessAssert(is_string($credentialId), 'The exact-bound matrix could not identify the device credential.');
+    deviceHarnessState($root, $environment, ['operation' => 'reset-effects', 'credential_id' => $credentialId]);
+    $beforePositiveEffects = deviceHarnessEffects($runDirectory, $baseUrl, $credentialId);
+    $positiveStatus = deviceHarnessUse($runDirectory, $baseUrl, 'device', $deviceBearer, 'device-live-positive-control');
+    $afterPositiveEffects = deviceHarnessEffects($runDirectory, $baseUrl, $credentialId);
+    $effectCanaries = ['authorize_calls', 'limiter_attempts', 'usage_calls', 'last_used_at', 'client_identity', 'domain_handler_calls'];
+    deviceHarnessAssert($positiveStatus === 200, 'The exact-bound positive control was refused.');
+
+    foreach ($effectCanaries as $effectCanary) {
+        deviceHarnessAssert(
+            ($afterPositiveEffects[$effectCanary] ?? null) !== ($beforePositiveEffects[$effectCanary] ?? null),
+            "The exact-bound positive control did not change {$effectCanary}.",
+        );
+    }
+
+    $wrongPurposeBefore = deviceHarnessEffects($runDirectory, $baseUrl, $credentialId);
+    $wrongPurposeStatus = deviceHarnessUse($runDirectory, $baseUrl, 'loopback', $deviceBearer, 'device-live-wrong-purpose');
+    $wrongPurposeAfter = deviceHarnessEffects($runDirectory, $baseUrl, $credentialId);
+    deviceHarnessAssert($wrongPurposeStatus === 401 && $wrongPurposeAfter === $wrongPurposeBefore, 'The wrong app-purpose refusal reached a protected-use side effect.');
     $wrongDimensions = [
         'purpose' => 'mcp',
         'subject_ref' => 'wrong-live-subject',
@@ -457,7 +509,10 @@ try {
         'material_role' => 'verification_copy',
         'scope_hash' => str_repeat('0', 64),
     ];
-    $matrix = ['wrong_app_purpose' => 401];
+    $matrix = [
+        'valid_exact_bound' => ['status' => $positiveStatus, 'changed_effects' => $effectCanaries],
+        'wrong_app_purpose' => $wrongPurposeStatus,
+    ];
 
     foreach ($wrongDimensions as $dimension => $wrongValue) {
         $beforeEffects = deviceHarnessEffects($runDirectory, $baseUrl, $credentialId);
@@ -467,7 +522,7 @@ try {
             'dimension' => $dimension,
             'value' => $wrongValue,
         ]);
-        $status = deviceHarnessUse($runDirectory, $baseUrl, 'device', $deviceBearer);
+        $status = deviceHarnessUse($runDirectory, $baseUrl, 'device', $deviceBearer, 'device-live-wrong-'.$dimension);
         $afterEffects = deviceHarnessEffects($runDirectory, $baseUrl, $credentialId);
         deviceHarnessState($root, $environment, [
             'operation' => 'set-credential-dimension',
@@ -480,7 +535,7 @@ try {
     }
 
     $legacyBefore = deviceHarnessEffects($runDirectory, $baseUrl, $credentialId);
-    $legacyStatus = deviceHarnessUsePath($runDirectory, $baseUrl, '/_bfc-harness/device/use-legacy', $deviceBearer);
+    $legacyStatus = deviceHarnessUsePath($runDirectory, $baseUrl, '/_bfc-harness/device/use-legacy', $deviceBearer, 'device-live-legacy-refusal');
     deviceHarnessAssert($legacyStatus === 401 && deviceHarnessEffects($runDirectory, $baseUrl, $credentialId) === $legacyBefore, 'The bound bearer entered the legacy unbound selector.');
     $matrix['bound_bearer_legacy_entry'] = $legacyStatus;
     $unbound = deviceHarnessState($root, $environment, ['operation' => 'create-unbound-bearer']);
@@ -488,8 +543,9 @@ try {
     $unboundBearer = $unbound['access_token'] ?? null;
     deviceHarnessAssert(is_string($unboundId) && is_string($unboundBearer), 'The unbound bearer control was not created.');
     $secrets[] = $unboundBearer;
+    deviceHarnessState($root, $environment, ['operation' => 'reset-effects', 'credential_id' => $unboundId]);
     $unboundBefore = deviceHarnessEffects($runDirectory, $baseUrl, $unboundId);
-    $unboundStatus = deviceHarnessUse($runDirectory, $baseUrl, 'device', $unboundBearer);
+    $unboundStatus = deviceHarnessUse($runDirectory, $baseUrl, 'device', $unboundBearer, 'device-live-unbound-refusal');
     deviceHarnessAssert($unboundStatus === 401 && deviceHarnessEffects($runDirectory, $baseUrl, $unboundId) === $unboundBefore, 'An unbound bearer entered exact-bound protected use.');
     deviceHarnessState($root, $environment, ['operation' => 'delete-credential-control', 'credential_id' => $unboundId]);
     $matrix['unbound_bearer'] = $unboundStatus;
@@ -543,6 +599,7 @@ try {
     $loopbackClient = new Process([PHP_BINARY, $root.'/tests/Fixtures/Clients/loopback-client.php', $baseUrl, 'live.loopback', $loopbackBearerFile], $root, $environment);
     $loopbackClient->setTimeout(25);
     $loopbackClient->start();
+    $inspectedArgv[] = $loopbackClient->getCommandLine();
     $authorizeUrl = deviceHarnessWaitForOutput($loopbackClient, 'loopback client');
     deviceHarnessAssert(! str_contains($loopbackClient->getCommandLine(), 'code_verifier'), 'Loopback proof material appeared in client argv.');
     $consent = deviceHarnessHttp($runDirectory, 'a', 'GET', $authorizeUrl);
@@ -559,14 +616,22 @@ try {
     $secrets[] = $loopbackBearer;
     deviceHarnessAssert((fileperms($loopbackBearerFile) & 0777) === 0600, 'The loopback bearer file was not mode 0600.');
     deviceHarnessAssert(deviceHarnessUse($runDirectory, $baseUrl, 'loopback', $loopbackBearer) === 200, 'The exact-bound loopback bearer was refused.');
-    deviceHarnessAssert(deviceHarnessUse($runDirectory, $baseUrl, 'device', $loopbackBearer) === 401, 'The loopback bearer crossed into the wrong bound purpose.');
-    $stamp['cases']['loopback_callback_pkce_and_bound_use'] = ['callback_status' => 200, 'wrong_binding_status' => 401, 'mode_0600' => true];
+    $loopbackCredential = deviceHarnessState($root, $environment, ['operation' => 'credential', 'flow' => 'loopback']);
+    $loopbackCredentialId = $loopbackCredential['credential_id'] ?? null;
+    deviceHarnessAssert(is_string($loopbackCredentialId), 'The loopback wrong-purpose control could not identify its credential.');
+    deviceHarnessState($root, $environment, ['operation' => 'reset-effects', 'credential_id' => $loopbackCredentialId]);
+    $loopbackWrongPurposeBefore = deviceHarnessEffects($runDirectory, $baseUrl, $loopbackCredentialId);
+    $loopbackWrongPurposeStatus = deviceHarnessUse($runDirectory, $baseUrl, 'device', $loopbackBearer, 'loopback-live-wrong-purpose');
+    $loopbackWrongPurposeAfter = deviceHarnessEffects($runDirectory, $baseUrl, $loopbackCredentialId);
+    deviceHarnessAssert($loopbackWrongPurposeStatus === 401 && $loopbackWrongPurposeAfter === $loopbackWrongPurposeBefore, 'The loopback bearer crossed into the wrong bound purpose or reached a protected-use side effect.');
+    $stamp['cases']['loopback_callback_pkce_and_bound_use'] = ['callback_status' => 200, 'wrong_binding_status' => $loopbackWrongPurposeStatus, 'mode_0600' => true];
     $stamp['cases']['loopback_cross_browser_refusal'] = ['status' => 404, 'no_credential' => true];
 
     $deniedLoopbackFile = $runDirectory.'/loopback-denied/bearer';
     $loopbackClient = new Process([PHP_BINARY, $root.'/tests/Fixtures/Clients/loopback-client.php', $baseUrl, 'live.loopback', $deniedLoopbackFile], $root, $environment);
     $loopbackClient->setTimeout(20);
     $loopbackClient->start();
+    $inspectedArgv[] = $loopbackClient->getCommandLine();
     $denyUrl = deviceHarnessWaitForOutput($loopbackClient, 'denied loopback client');
     $denyConsent = deviceHarnessHttp($runDirectory, 'a', 'GET', $denyUrl);
     $loopbackDeny = deviceHarnessInputs($denyConsent['body'], 'deny');
@@ -578,14 +643,6 @@ try {
 
     $summary = deviceHarnessState($root, $environment, ['operation' => 'summary']);
     deviceHarnessAssert(($summary['credentials'] ?? null) === 2 && ($summary['consumed'] ?? null) === 2, 'The disposable final state did not contain exactly the two successful credentials.');
-    $serverContents = (string) file_get_contents($serverLog);
-
-    foreach ($secrets as $secret) {
-        deviceHarnessAssert(is_string($secret) && $secret !== '' && ! str_contains($serverContents, $secret), 'A ceremony secret appeared in the server log.');
-    }
-
-    $stamp['secret_canaries']['server_log_clean'] = true;
-    $stamp['secret_canaries']['argv_clean'] = true;
     $stamp['cases']['final_state'] = $summary;
     $stamp['overall_verdict'] = 'pass';
     $stamp['exit_code'] = 0;
@@ -599,11 +656,30 @@ try {
     }
 
     deviceHarnessStopServer($server);
+    $serverContents = is_file($serverLog) ? (string) file_get_contents($serverLog) : '';
+    $stamp['secret_canaries']['server_log_clean'] = ! deviceHarnessContainsSecret($serverContents, $secrets);
+    $stamp['secret_canaries']['argv_clean'] = ! deviceHarnessContainsSecret($inspectedArgv, $secrets);
+
+    if (! $stamp['secret_canaries']['server_log_clean'] || ! $stamp['secret_canaries']['argv_clean']) {
+        $stamp['failure'] = ['class' => RuntimeException::class, 'message' => 'A ceremony secret reached a captured process surface.'];
+        $stamp['overall_verdict'] = 'fail';
+        $stamp['exit_code'] = 1;
+    }
+
     $stamp['teardown']['server_stopped'] = true;
-    $secrets = [];
     deviceHarnessRemoveDirectory($runDirectory);
     $stamp['teardown']['run_directory_removed'] = ! is_dir($runDirectory);
-    $stamp['secret_canaries']['stamp_contains_secrets'] = false;
+    $stampContainsSecrets = deviceHarnessContainsSecret($stamp, $secrets);
+
+    if ($stampContainsSecrets) {
+        $stamp = deviceHarnessRedactSecrets($stamp, $secrets);
+        $stamp['failure'] = ['class' => RuntimeException::class, 'message' => 'The stamp payload failed its secret canary and was redacted.'];
+        $stamp['overall_verdict'] = 'fail';
+        $stamp['exit_code'] = 1;
+    }
+
+    $stamp['secret_canaries']['stamp_contains_secrets'] = deviceHarnessContainsSecret($stamp, $secrets);
+    $secrets = [];
     file_put_contents($stampPath, json_encode($stamp, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)."\n");
 }
 

@@ -3,8 +3,10 @@
 declare(strict_types=1);
 
 use Illuminate\Contracts\Console\Kernel;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 define('TESTBENCH_WORKING_PATH', dirname(__DIR__, 2));
@@ -86,6 +88,41 @@ if ($input['operation'] === 'clear-token-limiters') {
     }
 
     fwrite(STDOUT, "{\"cleared\":true}\n");
+
+    return;
+}
+
+if ($input['operation'] === 'reset-effects') {
+    $credentialId = $input['credential_id'] ?? null;
+
+    if (! is_string($credentialId) || ! DB::table('credentials')->where('id', $credentialId)->exists()) {
+        throw new RuntimeException('The disposable effect reset requires one credential.');
+    }
+
+    if (! Schema::hasTable('bfc_device_harness_effects')) {
+        Schema::create('bfc_device_harness_effects', function (Blueprint $table): void {
+            $table->uuid('credential_id')->primary();
+            $table->unsignedInteger('authorize_calls')->default(0);
+            $table->unsignedInteger('usage_calls')->default(0);
+            $table->unsignedInteger('domain_handler_calls')->default(0);
+        });
+    }
+
+    DB::table('bfc_device_harness_effects')->delete();
+    DB::table('bfc_device_harness_effects')->insert([
+        'credential_id' => $credentialId,
+        'authorize_calls' => 0,
+        'usage_calls' => 0,
+        'domain_handler_calls' => 0,
+    ]);
+    DB::table('credentials')->where('id', $credentialId)->update([
+        'last_used_at' => '2000-01-01 00:00:00',
+        'client_identity' => null,
+        'client_identity_last_seen_at' => null,
+    ]);
+    RateLimiter::clear('bfc-device-harness-use|'.$credentialId);
+
+    fwrite(STDOUT, "{\"reset\":true}\n");
 
     return;
 }
@@ -172,6 +209,12 @@ if ($input['operation'] === 'delete-credential-control') {
         || DB::table('credentials')->where('id', $credentialId)->delete() !== 1) {
         throw new RuntimeException('The disposable unbound control cleanup was not exact.');
     }
+
+    if (Schema::hasTable('bfc_device_harness_effects')) {
+        DB::table('bfc_device_harness_effects')->where('credential_id', $credentialId)->delete();
+    }
+
+    RateLimiter::clear('bfc-device-harness-use|'.$credentialId);
 
     fwrite(STDOUT, "{\"deleted\":true}\n");
 
