@@ -3,8 +3,8 @@
 declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
-use ArtisanBuild\BuiltForCloud\Actions\PruneCredentialAuthorizations;
 
+use ArtisanBuild\BuiltForCloud\Actions\PruneCredentialAuthorizations;
 use Illuminate\Console\Scheduling\CallbackEvent;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Container\Container;

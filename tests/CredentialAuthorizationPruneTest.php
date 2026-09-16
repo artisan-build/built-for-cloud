@@ -14,9 +14,9 @@ use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\DeviceFlowDeclaration;
 use ArtisanBuild\BuiltForCloud\User;
+use Illuminate\Console\Scheduling\CallbackEvent;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -109,7 +109,7 @@ it('requires local mode and registers the hourly local system command', function
 
     expect($event)->not->toBeNull()
         ->and($event->expression)->toBe('0 * * * *')
-        ->and($event)->toBeInstanceOf(\Illuminate\Console\Scheduling\CallbackEvent::class);
+        ->and($event)->toBeInstanceOf(CallbackEvent::class);
 });
 
 it('prunes eligible rows in batches larger than five hundred', function (): void {

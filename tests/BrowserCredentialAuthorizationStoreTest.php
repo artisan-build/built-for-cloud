@@ -18,7 +18,6 @@ use Illuminate\Cache\Repository;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
-use Illuminate\Session\ArraySessionHandler;
 use Illuminate\Session\CacheBasedSessionHandler;
 use Illuminate\Session\CookieSessionHandler;
 use Illuminate\Session\DatabaseSessionHandler;

@@ -3,8 +3,8 @@
 declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
-use ArtisanBuild\BuiltForCloud\BrowserCredentialAuthorizationStore;
 
+use ArtisanBuild\BuiltForCloud\BrowserCredentialAuthorizationStore;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;

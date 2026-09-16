@@ -52,7 +52,7 @@ function deviceHarnessPort(): int
 
 function deviceHarnessConfigValue(string $value): string
 {
-    return str_replace(["\\", '"', "\r", "\n"], ["\\\\", '\\"', '', '\\n'], $value);
+    return str_replace(['\\', '"', "\r", "\n"], ['\\\\', '\\"', '', '\\n'], $value);
 }
 
 /** @return array{status: int, body: string, headers: string} */

@@ -3,8 +3,8 @@
 declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
-use ArtisanBuild\BuiltForCloud\BrowserCredentialAuthorizationStore;
 
+use ArtisanBuild\BuiltForCloud\BrowserCredentialAuthorizationStore;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleReturnTo;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;

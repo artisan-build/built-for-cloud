@@ -2,10 +2,13 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\Actions\DecideLoopbackAuthorization;
+use ArtisanBuild\BuiltForCloud\Actions\StartLoopbackAuthorization;
+use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
 use ArtisanBuild\BuiltForCloud\BrowserCredentialAuthorizationStore;
-use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationOwnership;
+use ArtisanBuild\BuiltForCloud\CredentialAuthorizationPolicy;
 use ArtisanBuild\BuiltForCloud\CredentialAuthorizationProfile;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
@@ -19,8 +22,8 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Session\ArraySessionHandler;
 use Illuminate\Session\Store;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
@@ -385,9 +388,9 @@ it('actively removes terminal and unsealable bindings while serving both GET sur
     $loopbackRequest->setUserResolver(static fn (): User => $user);
     $loopbackResponse = app(LoopbackAuthorizations::class)->show(
         $loopbackRequest,
-        app(\ArtisanBuild\BuiltForCloud\Actions\StartLoopbackAuthorization::class),
+        app(StartLoopbackAuthorization::class),
         app(BrowserCredentialAuthorizationStore::class),
-        app(\ArtisanBuild\BuiltForCloud\CredentialAuthorizationPolicy::class),
+        app(CredentialAuthorizationPolicy::class),
     );
 
     $cleanedLoopbackCiphertexts = app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts($loopbackRequest);
@@ -439,7 +442,7 @@ it('keeps managed loopback authority refusals terminal or retryable without cons
     $denialRequest->setUserResolver(static fn (): User => $user);
     $denialResponse = app(LoopbackAuthorizations::class)->decide(
         $denialRequest,
-        app(\ArtisanBuild\BuiltForCloud\Actions\DecideLoopbackAuthorization::class),
+        app(DecideLoopbackAuthorization::class),
         app(BrowserCredentialAuthorizationStore::class),
     );
 
@@ -472,7 +475,7 @@ it('keeps managed loopback authority refusals terminal or retryable without cons
     $retryRequest->setUserResolver(static fn (): User => $user);
     $retryResponse = app(LoopbackAuthorizations::class)->decide(
         $retryRequest,
-        app(\ArtisanBuild\BuiltForCloud\Actions\DecideLoopbackAuthorization::class),
+        app(DecideLoopbackAuthorization::class),
         app(BrowserCredentialAuthorizationStore::class),
     );
 
