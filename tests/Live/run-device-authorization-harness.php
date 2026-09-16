@@ -365,6 +365,7 @@ $environment = array_merge($baseEnvironment, [
     'CACHE_STORE' => 'file',
     'BFC_HARNESS_CACHE_PATH' => $cache,
     'BFC_HARNESS_DEVICE_AUTHORIZATION' => '1',
+    'BUILT_FOR_CLOUD_MANAGED_CLIENT_SECRET' => 'device-live-managed-fixture-secret',
     'BUILT_FOR_CLOUD_SURFACE_DATA_MIGRATIONS' => 'false',
 ]);
 $stamp = [
@@ -422,6 +423,44 @@ try {
 
     $csrfA = deviceHarnessLogin($runDirectory, $baseUrl, 'a', 'owner@example.test');
     $csrfBSameUser = deviceHarnessLogin($runDirectory, $baseUrl, 'b', 'owner@example.test');
+    deviceHarnessState($root, $environment, ['operation' => 'managed-authority', 'state' => 'positive']);
+    $managed = deviceHarnessStart($runDirectory, $baseUrl, $csrfA, 'Live managed authority transition');
+    $secrets[] = $managed['device_code'];
+    $managedPage = deviceHarnessHttp($runDirectory, 'a', 'GET', $baseUrl.'/bfc/device');
+    deviceHarnessAssert($managedPage['status'] === 200 && str_contains($managedPage['body'], $managed['user_code']), 'The managed-positive grant did not render through the package route.');
+    $managedApprove = deviceHarnessInputs($managedPage['body'], 'approve');
+    deviceHarnessState($root, $environment, ['operation' => 'managed-authority', 'state' => 'inactive']);
+    $managedDecision = deviceHarnessHttp($runDirectory, 'a', 'POST', $baseUrl.'/bfc/device', http_build_query($managedApprove, '', '&', PHP_QUERY_RFC3986), 'application/x-www-form-urlencoded');
+    $managedState = deviceHarnessState($root, $environment, [
+        'operation' => 'device-decision',
+        'device_code' => $managed['device_code'],
+        'submission_nonce' => $managedApprove['submission_nonce'],
+    ]);
+    $managedCleanup = deviceHarnessHttp($runDirectory, 'a', 'GET', $baseUrl.'/bfc/device');
+    deviceHarnessAssert(
+        $managedDecision['status'] === 404
+        && str_contains($managedDecision['body'], 'device-authorization-unavailable')
+        && $managedCleanup['status'] === 404
+        && ! str_contains($managedCleanup['body'], $managed['user_code'])
+        && $managedState === [
+            'status' => 'denied',
+            'denial_reason' => 'authority_denied',
+            'issued_credential_id' => null,
+            'decision_events' => 1,
+            'credential_count' => 0,
+            'submission_nonce_present' => true,
+        ],
+        'The routed managed-authority denial did not preserve its terminal, nonce, credential, event, or binding invariants.',
+    );
+    $stamp['cases']['device_managed_authority_transition'] = [
+        'decision_status' => 404,
+        'denial_reason' => 'authority_denied',
+        'submission_nonce_consumed' => false,
+        'binding_removed' => true,
+        'credential_created' => false,
+    ];
+    deviceHarnessState($root, $environment, ['operation' => 'managed-authority', 'state' => 'local']);
+
     $start = deviceHarnessStart($runDirectory, $baseUrl, $csrfA, 'Live device approval');
     $secrets[] = $start['device_code'];
     $secrets[] = $start['user_code'];

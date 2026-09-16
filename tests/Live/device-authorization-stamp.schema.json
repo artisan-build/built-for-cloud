@@ -36,6 +36,7 @@
                 "device_submission_nonce_refusals",
                 "device_decision_replay_refusal",
                 "device_terminal_binding_cleanup",
+                "device_managed_authority_transition",
                 "device_approve_exchange_and_bound_use",
                 "device_pending_slow_down_and_deny",
                 "device_expiry",

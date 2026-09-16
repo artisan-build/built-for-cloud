@@ -2,6 +2,9 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\AuthorityMode;
+use ArtisanBuild\BuiltForCloud\InstallationAuthority;
+use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
@@ -78,6 +81,140 @@ if ($input['operation'] === 'device') {
             ->where('credential_authorization_id', $authorization->id)
             ->count(),
     ], JSON_THROW_ON_ERROR)."\n");
+
+    return;
+}
+
+if ($input['operation'] === 'device-decision') {
+    $deviceCode = $input['device_code'] ?? null;
+    $submissionNonce = $input['submission_nonce'] ?? null;
+
+    if (! is_string($deviceCode) || preg_match('/\A[A-Za-z0-9_-]{43}\z/D', $deviceCode) !== 1
+        || ! is_string($submissionNonce) || preg_match('/\A[0-9a-f]{64}\z/D', $submissionNonce) !== 1) {
+        throw new RuntimeException('The disposable decision detail operation is malformed.');
+    }
+
+    $authorization = DB::table('credential_authorizations')
+        ->where('device_code_hash', hash('sha256', $deviceCode))
+        ->first();
+
+    if (! is_object($authorization)) {
+        throw new RuntimeException('The disposable decision detail operation could not find its grant.');
+    }
+
+    fwrite(STDOUT, json_encode([
+        'status' => $authorization->status,
+        'denial_reason' => $authorization->denial_reason,
+        'issued_credential_id' => $authorization->issued_credential_id,
+        'decision_events' => DB::table('credential_audit_events')
+            ->where('credential_authorization_id', $authorization->id)
+            ->where('event', LifecycleEventType::CredentialAuthorizationDenied->value)
+            ->count(),
+        'credential_count' => DB::table('credentials')->count(),
+        'submission_nonce_present' => DB::table('bfc_submission_nonces')
+            ->where('nonce_hash', hash('sha256', $submissionNonce))
+            ->exists(),
+    ], JSON_THROW_ON_ERROR)."\n");
+
+    return;
+}
+
+if ($input['operation'] === 'managed-authority') {
+    $state = $input['state'] ?? null;
+    $owner = DB::table('users')->where('email', 'owner@example.test')->first();
+
+    if (! is_object($owner) || ! in_array($state, ['positive', 'inactive', 'local'], true)) {
+        throw new RuntimeException('The disposable managed-authority operation is malformed.');
+    }
+
+    if ($state === 'positive') {
+        $authorityUpdated = DB::table('bfc_authority')
+            ->where('key', InstallationAuthority::KEY)
+            ->where('mode', AuthorityMode::Standalone->value)
+            ->update([
+                'mode' => AuthorityMode::Managed->value,
+                'generation' => 2,
+                'issuer' => 'https://device-live-issuer.example.test',
+                'connection_id' => 'device-live-connection',
+                'organization_id' => 'device-live-organization',
+                'installation_id' => 'install_device_live',
+                'authority_base_url' => 'https://device-live-authority.example.test',
+                'managed_connection_status' => 'active',
+                'managed_connection_generation' => 2,
+                'managed_connection_roster_version' => 1,
+                'managed_connection_response_sequence' => 1,
+                'updated_at' => now(),
+            ]);
+        $userUpdated = DB::table('users')->where('id', $owner->id)->update([
+            'scalpels_issuer' => 'https://device-live-issuer.example.test',
+            'scalpels_connection_id' => 'device-live-connection',
+            'scalpels_id' => 'device-live-owner',
+            'membership_confirmed_at' => now(),
+            'membership_checked_at' => now(),
+            'membership_response_at' => now(),
+            'managed_membership_status' => 'active',
+            'managed_membership_role' => 'owner',
+            'managed_membership_generation' => 2,
+            'managed_membership_roster_version' => 1,
+            'managed_membership_response_sequence' => 1,
+            'managed_membership_responded_at' => now()->toAtomString(),
+            'updated_at' => now(),
+        ]);
+
+        if ($authorityUpdated !== 1 || $userUpdated !== 1) {
+            throw new RuntimeException('The disposable managed positive was not installed exactly once.');
+        }
+    } elseif ($state === 'inactive') {
+        $updated = DB::table('bfc_authority')
+            ->where('key', InstallationAuthority::KEY)
+            ->where('mode', AuthorityMode::Managed->value)
+            ->where('managed_connection_status', 'active')
+            ->update(['managed_connection_status' => 'inactive']);
+
+        if ($updated !== 1) {
+            throw new RuntimeException('The disposable managed connection did not become inactive exactly once.');
+        }
+    } else {
+        $authorityUpdated = DB::table('bfc_authority')
+            ->where('key', InstallationAuthority::KEY)
+            ->where('mode', AuthorityMode::Managed->value)
+            ->where('managed_connection_status', 'inactive')
+            ->update([
+                'mode' => AuthorityMode::Standalone->value,
+                'generation' => 3,
+                'issuer' => null,
+                'connection_id' => null,
+                'organization_id' => null,
+                'installation_id' => null,
+                'authority_base_url' => null,
+                'managed_connection_status' => null,
+                'managed_connection_generation' => null,
+                'managed_connection_roster_version' => null,
+                'managed_connection_response_sequence' => null,
+                'updated_at' => now(),
+            ]);
+        $userUpdated = DB::table('users')->where('id', $owner->id)->update([
+            'scalpels_issuer' => null,
+            'scalpels_connection_id' => null,
+            'scalpels_id' => null,
+            'membership_confirmed_at' => null,
+            'membership_checked_at' => null,
+            'membership_response_at' => null,
+            'managed_membership_status' => null,
+            'managed_membership_role' => null,
+            'managed_membership_generation' => null,
+            'managed_membership_roster_version' => null,
+            'managed_membership_response_sequence' => null,
+            'managed_membership_responded_at' => null,
+            'updated_at' => now(),
+        ]);
+
+        if ($authorityUpdated !== 1 || $userUpdated !== 1) {
+            throw new RuntimeException('The disposable local authority was not restored exactly once.');
+        }
+    }
+
+    fwrite(STDOUT, json_encode(['state' => $state], JSON_THROW_ON_ERROR)."\n");
 
     return;
 }
