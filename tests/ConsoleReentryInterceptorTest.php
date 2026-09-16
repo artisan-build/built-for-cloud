@@ -218,6 +218,7 @@ it('degrades honestly when the deployment has configured no re-entry url', funct
         ->and($observed['events'])->toBe([[
             'type' => 'bfc:console-reentry-unavailable',
             'detail' => ['reason' => 'session_invalidated', 'return_to' => '/orders', 'cause' => 'no_destination'],
+            'cancelable' => false,
         ]])
         ->and($observed['chromeElement']['attributes'])
         ->toBe(['data-bfc-console-reentry' => 'unavailable'])
@@ -238,6 +239,7 @@ it('degrades without throwing when the page carries no chrome element at all', f
         ->and($observed['events'])->toBe([[
             'type' => 'bfc:console-reentry-unavailable',
             'detail' => ['reason' => 'session_invalidated', 'return_to' => '/orders', 'cause' => 'no_destination'],
+            'cancelable' => false,
         ]]);
 });
 
@@ -305,6 +307,7 @@ it('announces the navigation before performing it, so an app can persist unsaved
     expect($observed['events'])->toBe([[
         'type' => 'bfc:console-reentry',
         'detail' => ['reason' => 'assertion_age_cap', 'return_to' => '/orders?page=2', 'cause' => null],
+        'cancelable' => false,
     ]])
         // THE ORDERING, ASSERTED RATHER THAN ASSUMED. The harness records
         // the events and the navigation in ONE ordered channel, so this

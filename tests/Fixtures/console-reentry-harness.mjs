@@ -132,7 +132,7 @@ function makeWindow(options) {
     const document = {
         getElementById: (id) => (id === CHROME_ELEMENT_ID ? chromeElement : null),
         dispatchEvent: (event) => {
-            observed.events.push({ type: event.type, detail: event.detail });
+            observed.events.push({ type: event.type, detail: event.detail, cancelable: event.cancelable === true });
             observed.timeline.push('event:' + event.type);
 
             return true;
@@ -142,6 +142,7 @@ function makeWindow(options) {
     function CustomEvent(type, init) {
         this.type = type;
         this.detail = init && init.detail;
+        this.cancelable = !!(init && init.cancelable);
     }
 
     // `origin` is the document's EFFECTIVE origin and is what the script
