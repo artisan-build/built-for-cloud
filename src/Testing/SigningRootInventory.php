@@ -32,6 +32,7 @@ final class SigningRootInventory
     /** @var list<string> */
     private const array EXPECTED_ROOT_DECRYPTS = [
         'ArtisanBuild\\BuiltForCloud\\Commands\\HmacRewrapCommand::rewrap',
+        'ArtisanBuild\\BuiltForCloud\\Commands\\HmacRewrapCommand::rewrapManagedClientSecret',
         'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootMac::mac',
         'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootMac::verify',
     ];

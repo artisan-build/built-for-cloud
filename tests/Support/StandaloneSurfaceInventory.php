@@ -16,6 +16,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\LoopbackAuthorizations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManagedAuthentication;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManagedEnrolments;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
@@ -64,6 +65,7 @@ final class StandaloneSurfaceInventory
             ManageConsoleKeys::class => false,
             ManageCredentials::class => false,
             ManagedAuthentication::class => false,
+            ManagedEnrolments::class => false,
             ManageOnboarding::class => false,
             ManageOwnership::class => false,
             ManageSubjects::class => false,

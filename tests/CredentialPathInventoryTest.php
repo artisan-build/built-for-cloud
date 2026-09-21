@@ -105,6 +105,7 @@ function frozenPurposeDispositions(): array
         'resolver-caller:ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::verifyUnifiedDurable|purpose={consumption,operator_management,enrollment}->scope',
         'resolver-caller:ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\AuthenticateMcp::handle|purpose=mcp|{operator_management+operator+credential:admin}',
         'resolver-caller:ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCredentialAdmin::handle|purpose=operator_management',
+        'resolver-caller:ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCurrentOwnerCredential::handle|purpose=operator_management+current-owner',
     ]);
 }
 
@@ -137,6 +138,7 @@ it('derives the nine discoverable paths with no transitional rows from all five 
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureContractMajor',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin',
+            'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCurrentOwnerCredential',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureManagedAuthority',
             'middleware:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority',
@@ -193,6 +195,7 @@ it('derives the nine discoverable paths with no transitional rows from all five 
             'operator-ingress:ArtisanBuild\BuiltForCloud\Auth\BearerAuthenticator=>ArtisanBuild\BuiltForCloud\Auth\CredentialResolver::resolve',
             'operator-ingress:ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp=>ArtisanBuild\BuiltForCloud\Auth\CredentialResolver::resolve',
             'operator-ingress:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin=>ArtisanBuild\BuiltForCloud\Auth\CredentialResolver::resolve',
+            'operator-ingress:ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCurrentOwnerCredential=>ArtisanBuild\BuiltForCloud\Auth\CredentialResolver::resolve',
         ]))
         ->and($inventory['managed_containment'])->toBe([
             'managed-containment:ArtisanBuild\BuiltForCloud\Auth\CredentialResolver::resolve=>ArtisanBuild\BuiltForCloud\ManagedAccountAccess::allowsCredential',
@@ -246,8 +249,9 @@ it('compares the exact AC2 resolver and ordinary HMAC purpose dispositions', fun
             'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::verifyUnifiedDurable|expressions=1',
             'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\AuthenticateMcp::handle|expressions=1',
             'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCredentialAdmin::handle|expressions=1',
+            'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCurrentOwnerCredential::handle|expressions=1',
         ])
-        ->and($inventory['resolver_expression_count'])->toBe(8)
+        ->and($inventory['resolver_expression_count'])->toBe(9)
         ->and($inventory['hmac_selectors'])->toBe([
             'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacSigner',
             'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacVerifier',

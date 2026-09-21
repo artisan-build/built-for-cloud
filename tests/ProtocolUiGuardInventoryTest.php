@@ -17,6 +17,7 @@ use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCurrentOwnerCredential;
 use ArtisanBuild\BuiltForCloud\ManagedAccountAccess;
 use ArtisanBuild\BuiltForCloud\Testing\ProtocolUiGuardInventory;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConditionedLifecycleRefusal;
@@ -36,7 +37,8 @@ it('copies and compares every inherited AC8 protocol disposition', function (): 
         ManageOnboarding::class.'::verifyUnifiedDurable|expressions=1',
         AuthenticateMcp::class.'::handle|expressions=1',
         EnsureCredentialAdmin::class.'::handle|expressions=1',
-    ])->and($inventory['resolver_expression_count'])->toBe(8)
+        EnsureCurrentOwnerCredential::class.'::handle|expressions=1',
+    ])->and($inventory['resolver_expression_count'])->toBe(9)
         ->and($inventory['ordinary_hmac_selectors'])->toBe([
             HmacSigner::class.'::sign',
             HmacVerifier::class.'::verify',
@@ -50,7 +52,7 @@ it('copies and compares every inherited AC8 protocol disposition', function (): 
             ManagedAccountAccess::class.'::allowsCredential',
             HmacVerifier::class.'::verify',
             AssertionVerifier::class.'::verify',
-        ])->and($inventory['forbidden_members'])->toHaveCount(15)
+        ])->and($inventory['forbidden_members'])->toHaveCount(16)
         ->and($inventory['ui_reads'])->toBe([])
         ->and($inventory['violations'])->toBe([]);
 });
