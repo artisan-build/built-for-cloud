@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Exceptions\HmacKeyUnreadable;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Client\Factory;
@@ -923,7 +924,7 @@ final class ManagedTransitions
                 || ! $owner instanceof User
                 || (! StandaloneAccess::userCanAuthenticate($owner)
                     && ! StandaloneAccess::userCanReceiveRecovery($owner))) {
-                throw new ManagedAuthRefused;
+                throw ManagedAuthRefused::because(ManagedAuthRefusalReason::OwnerNotAccessible);
             }
         }
 
@@ -948,7 +949,20 @@ final class ManagedTransitions
 
     public function abandon(Request $request, ManagedTransition $transition): ManagedTransition
     {
-        $this->assertOwnerRequest($request, false);
+        return $this->abandonPreCommit($this->assertOwnerRequest($request, false), $transition);
+    }
+
+    /**
+     * Durably abandon a pre-commit transition identified by an acting
+     * Owner rather than an owner web session — the same legs the Owner
+     * abandon route walks (authority state check, keyed abandon call,
+     * local status advance), used by the disconnect surface when the
+     * exit guard refuses: the row must not linger as an active
+     * transition an operator cannot name.
+     */
+    public function abandonPreCommit(User $actor, ManagedTransition $transition): ManagedTransition
+    {
+        $this->assertOwnerUser($actor, false);
         $transition = $this->fresh($transition, [
             ManagedTransitionStatus::Prepared,
             ManagedTransitionStatus::Rostered,
@@ -972,7 +986,7 @@ final class ManagedTransitions
             throw new ManagedAuthRefused('transition_state_conflict');
         }
 
-        $transition = DB::transaction(function () use ($request, $transition): ManagedTransition {
+        $transition = DB::transaction(function () use ($actor, $transition): ManagedTransition {
             $locked = $this->locked($transition, [
                 ManagedTransitionStatus::Prepared,
                 ManagedTransitionStatus::Rostered,
@@ -980,7 +994,7 @@ final class ManagedTransitions
                 ManagedTransitionStatus::Staging,
                 ManagedTransitionStatus::Staged,
             ]);
-            $this->assertOwnerRequest($request, true);
+            $this->assertOwnerUser($actor, true);
 
             if ($locked->abandon_idempotency_key === null) {
                 $key = $this->randomKey();
@@ -1332,7 +1346,16 @@ final class ManagedTransitions
             'authority_base_url',
         ]);
         $caBundle = config('built-for-cloud.managed.ca_bundle');
-        $secret = config(self::CREDENTIAL_REFERENCE);
+
+        // P1 custody: persisted ciphertext wins and never falls back to
+        // the environment seam while it exists; the seam answers only
+        // the legacy adopt path with no persisted row ({@see
+        // ManagedClientSecretStore}).
+        try {
+            $secret = app(ManagedClientSecretStore::class)->plaintext() ?? config(self::CREDENTIAL_REFERENCE);
+        } catch (HmacKeyUnreadable) {
+            $secret = null;
+        }
 
         if (! is_object($row)
             || ! in_array($row->mode, [AuthorityMode::Standalone->value, AuthorityMode::Managed->value], true)

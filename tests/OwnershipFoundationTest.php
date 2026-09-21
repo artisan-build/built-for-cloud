@@ -87,7 +87,10 @@ it('returns unauthenticated bfc meta for unclaimed and claimed environments', fu
             // layout and the re-entry interceptor — never for any page
             // of this app wearing them, which is the app's own decision
             // (Console PRD D11).
-            'capabilities' => ['tokens', 'ownership', 'onboarding', 'webhooks', 'credentials', 'console-keys', 'console-key-retire', 'console-vitals', 'app-action-audit-emit', 'console-guard', 'console-enter', 'console-chrome-assets'],
+            // `managed-enrolment` is UNCONDITIONAL: the enrolment verbs
+            // exist on every install; feature-detect them per
+            // docs/http-contract.md "Authority-driven managed enrolment".
+            'capabilities' => ['tokens', 'ownership', 'onboarding', 'webhooks', 'credentials', 'console-keys', 'console-key-retire', 'console-vitals', 'app-action-audit-emit', 'managed-enrolment', 'console-guard', 'console-enter', 'console-chrome-assets'],
             'claimed' => false,
         ]);
 

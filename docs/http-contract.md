@@ -107,6 +107,13 @@ and the following closed `error` vocabulary. Clients branch on `error`.
 
 ### Changelog
 
+**Draft — next additive release (P1 managed enrolment).** New owner-credential-authenticated
+routes provision a pristine installation into managed mode, rotate its stored managed-auth client
+secret, and disconnect it through the existing exit-transition machinery. `GET /bfc/meta` gains the
+`managed-enrolment` capability. The client secret is delivered only in requests, encrypted at rest,
+and never returned. `api_version` remains 2 because these are new routes and one new open-set
+capability member.
+
 **api_version 2** (bfc **0.15.0**, this release). All changes since version 1, in one inventory.
 Additive unless marked otherwise.
 
@@ -461,6 +468,9 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/hmac-cutovers/activate` | `content` | exact scope references plus ids, timestamps and emergency flag; no key material |
 | `POST /bfc/hmac-cutovers/status` | `content` | exact scope references plus ids, timestamps and emergency flag; no key material |
 | `POST /bfc/onboarding/verify` | `content` | carries the free-text credential name |
+| `POST /bfc/managed/enrolment` | `metadata` | bounded mode, generation counters, request id and server timestamp; the request secret is never returned |
+| `POST /bfc/managed/enrolment/client-secret` | `metadata` | bounded generation counters and server timestamp; the replacement secret is never returned |
+| `POST /bfc/managed/enrolment/disconnect` | `metadata` | bounded mode, resulting generation, request id and server timestamp |
 | `GET /bfc/managed/login` | `content` | redirect carrying an opaque one-time browser state, plus the initiating session cookie |
 | `GET /bfc/managed/callback` | `content` | redirect plus a newly established authenticated session cookie |
 | `GET /bfc/ui` | `content` | package-owned HTML containing configured manifest identity and local account navigation |
@@ -1152,16 +1162,206 @@ caller. Foreign, current, and absent identifiers do not produce revocation succe
 
 ---
 
+## Authority-driven managed enrolment
+
+These machine routes are authenticated by the **current owner credential** returned once by
+[`POST /bfc/ownership/claim`](#post-bfcownershipclaim). A different live operator credential,
+including another credential carrying `credential:admin`, is not the current owner credential and
+cannot use them. Missing, unknown, expired or revoked bearer credentials answer `401`; an
+authenticated non-owner credential answers `403`. All three routes carry the operator-write rate
+limit before authentication and return `Cache-Control: no-store`.
+
+The attacker boundary is a party without the owner token, plus a replayed or forged enrolment
+request. Deliberately hostile host configuration is outside the boundary. Every mutation compares
+the request's expected counters and immutable connection binding against locked stored state. A
+stale request cannot roll back a newer enrolment, client-secret rotation or disconnect.
+
+The five connection facts are `issuer`, `connection_id`, `organization_id`, `installation_id` and
+`authority_base_url`. Identifiers are non-empty bounded strings. `issuer` is an absolute HTTPS URI;
+`authority_base_url` is an HTTPS origin with no path other than `/`, query, fragment or userinfo.
+`managed_client_secret` is a non-empty bounded bearer secret. Unknown request fields are refused.
+
+The managed client secret is encrypted before commit under Laravel's current `APP_KEY`; the row
+stores ciphertext, the content-addressed key version, and a domain-separated SHA-256 digest used
+only to compare a retry without decrypting it. Reads select that exact version from `APP_KEY` plus
+`APP_PREVIOUS_KEYS` and fail closed when it is absent or unreadable — they do not scan other keys or
+fall back to the environment when ciphertext exists. The managed secret participates in the
+package's staged APP_KEY rewrap procedure before an old key is removed.
+`BUILT_FOR_CLOUD_MANAGED_CLIENT_SECRET` remains only as a compatibility fallback when no persisted
+secret exists, because the Owner-driven `adopt` transition still needs its pre-P1 provisioning path.
+Persisted enrolment state always takes precedence. **Contract residue:** that environment seam is
+named follow-up work — package issue
+[#150](https://github.com/artisan-build/built-for-cloud/issues/150), which blocks nothing in P1 —
+to deliver the secret through the adopt transition's own staged/acknowledged path and then delete
+the seam rather than guard it.
+
+Every `409` on these three routes carries a bounded `error` code (with a human `message`) drawn
+from ONE shared vocabulary — the same word means the same thing on every route — and the
+disconnect `409`s additionally carry the same code as `reason`, so an operator surface can classify
+a refusal without parsing prose: `owner_not_accessible` (disconnect only: no exactly-one active
+local Owner who can authenticate or receive recovery would remain), `transition_in_progress`,
+`binding_conflict`, `stale_generation`, `not_managed` (rotation/disconnect), `already_managed`
+(enrolment), `not_pristine` (enrolment), and `key_cutover_in_progress` (a staged APP_KEY rewrap
+holds the writer barrier; retry once `bfc:hmac:rewrap` verifies zero old-version rows).
+
+*Pinned by* `ManagedClientSecretStoreTest` (version-selected decrypt, wrong-version refusal,
+APP_PREVIOUS_KEYS read and rewrap) and `ManagedAuthConnectionTest` (persisted-over-environment
+precedence, unreadable persisted state refuses without fallback, environment used only when no
+ciphertext exists). These tests enumerate the package's current store and configuration reads; they
+do not establish anything about direct host database writes, container rebinding or future read
+paths not added to their inventory.
+
+### POST /bfc/managed/enrolment
+
+Enrol a **pristine** claimed installation. Pristine means standalone mode, no local users or pending
+invitations, no active managed transition, no existing connection facts, and the exact
+`expected_generation`. A non-pristine standalone app must use the Owner-driven `adopt` transition.
+
+**Request**
+
+```json
+{
+  "enrolment_id": "018f...",
+  "expected_generation": 1,
+  "issuer": "https://scalpels.example",
+  "connection_id": "connection-id",
+  "organization_id": "organization-id",
+  "installation_id": "installation-id",
+  "authority_base_url": "https://scalpels.example",
+  "managed_client_secret": "single-delivery bearer secret",
+  "client_secret_generation": 1
+}
+```
+
+`enrolment_id` is a caller-generated UUID. `client_secret_generation` MUST be `1`. In one locked
+database transaction the package validates pristine state, encrypts the secret, writes all five
+facts and the server timestamp, then changes `standalone/N` to `managed/N+1`. The database trigger's
+rule is the wire rule: every mode change strictly increments generation. A fresh install therefore
+lands at `managed/2`, and the authority records the returned value before allowing handoffs.
+
+- **201** — first commit:
+  `{"enrolment_id":"...","mode":"managed","generation":2,"client_secret_generation":1,"enrolled_at":"2026-09-21T20:00:00Z"}`.
+- **200** — an exact retry of the same `enrolment_id` and same non-secret fields after a committed
+  response was lost. The digest of the presented secret is compared against the RETAINED LEDGER's
+  commit-time digest — the frozen digest of the request that actually committed — so the original
+  exact request remains replayable even after later rotations replaced the live secret, and the
+  route returns the same committed state without rewriting it. A changed secret (or any changed
+  non-secret field) under the known UUID is `binding_conflict`, as is a committed outcome whose
+  connection the authority has since left.
+- **409** — `already_managed`, `not_pristine`, `transition_in_progress`, `stale_generation`,
+  `binding_conflict`, `key_cutover_in_progress`, or reuse of an `enrolment_id` with different
+  non-secret fields.
+- **422** — malformed or out-of-bounds input. Validation responses never reflect the secret.
+
+### POST /bfc/managed/enrolment/client-secret
+
+Make-before-break rotation of the bearer the app uses for outbound managed-auth calls. The authority
+must keep the old secret valid until this call succeeds, then activate the new secret on its side.
+Authority generation does not change.
+
+**Request**
+
+```json
+{
+  "rotation_id": "018f...",
+  "issuer": "https://scalpels.example",
+  "connection_id": "connection-id",
+  "installation_id": "installation-id",
+  "expected_generation": 2,
+  "expected_client_secret_generation": 1,
+  "managed_client_secret": "replacement bearer secret"
+}
+```
+
+- **200** — first commit or an exact retry (the same retained-ledger commit-time digest rule as
+  enrolment):
+  `{"rotation_id":"...","mode":"managed","generation":2,"client_secret_generation":2,"rotated_at":"2026-09-21T20:05:00Z"}`.
+- **409** — `not_managed`, `transition_in_progress`, `binding_conflict`, `stale_generation`, or
+  `key_cutover_in_progress` (a staged APP_KEY rewrap holds the writer barrier while the persisted
+  row still carries an old key version).
+- **422** — malformed or out-of-bounds input. The replacement secret is never echoed, logged or
+  placed in an audit note.
+
+Here and on disconnect, the immutable operational binding is the triple `issuer`, `connection_id`,
+`installation_id`; `organization_id` and `authority_base_url` are connection attributes, not the
+identity key. All three identity members are compared under the authority-row lock.
+
+### POST /bfc/managed/enrolment/disconnect
+
+**Request**
+
+```json
+{
+  "disconnect_id": "018f...",
+  "issuer": "https://scalpels.example",
+  "connection_id": "connection-id",
+  "installation_id": "installation-id",
+  "expected_generation": 2
+}
+```
+
+The package resumes or drives the existing managed `exit` transition for this exact binding. It
+does not duplicate the exit cleanup: that path invalidates every session and user-bound credential,
+consumes reset state and outstanding managed handoffs, advances session versions, PRESERVES local
+passwords (the standalone owner logs in with hers; only `adopt` nulls them, when the authority
+replaces local auth on the way in), and applies the accessible-Owner recovery guard before local
+commit, WITH THE AUTHORITY ROSTER IN HAND: the disconnect drives the exit path — prepare, roster
+fetch, default mapping, staging — and the guard refuses on the mapped result. On an app managed
+from birth nobody has a local password or locally verified email, so the roster's verification of
+the Owner's contact address is the deciding fact. An unreachable-Owner refusal
+(`owner_not_accessible`) rolls the commit back — the authority row is untouched — and DURABLY
+ABANDONS the transition row through the same legs the documented Owner abandon route walks
+(state check plus keyed abandon, both sides), so no ACTIVE transition remains; the exact retry —
+typically after the operator repaired the Owner's reachability — prepares a fresh transition under
+the same `disconnect_id`. If the abandonment legs are themselves unreachable, the disconnect stays
+durably in flight (202) and the pre-commit Owner abandon route remains the remedy.
+After authority acknowledgement it clears the persisted managed secret and five connection facts.
+The mode change is `managed/N` to `standalone/N+1`; the response carries the committed generation.
+
+- **200** — first completion or an exact completed retry:
+  `{"disconnect_id":"...","status":"completed","mode":"standalone","generation":3,"disconnected_at":"2026-09-21T20:10:00Z"}`.
+- **202** — this exact disconnect is durably in flight. The bounded response carries
+  `disconnect_id`, `status: "pending"`, `transition_id`, current `mode`, current `generation`, and
+  `phase` — the transition row's durable position, one of `prepared`, `staged`, `committed`, or
+  `acknowledging` (an acknowledgement whose outcome is unknown lands `acknowledging`, never a
+  stale `committed`). An exact retry resumes it.
+- **409** — `not_managed`, `binding_conflict`, `stale_generation`, `transition_in_progress` (a
+  different transition is active), `owner_not_accessible`, or `key_cutover_in_progress`. Every
+  disconnect `409` additionally carries the same code as `reason` — a bounded enum, never free
+  text.
+- **422** — malformed or out-of-bounds input.
+
+Pending disconnects do not expire automatically. Before local commit, the returned transition id is
+reachable by the existing Owner abandon route. After local commit the transition cannot be abandoned:
+the app is already standalone, and exact retries continue acknowledgement until the authority
+recovers. Until acknowledgement, the five facts and encrypted secret remain stored but are inert in
+standalone mode. This can hold the transition slot indefinitely; it is the named recovery residue,
+not a success response.
+
+Enrolment, rotation and disconnect idempotency records are retained after disconnect. Re-enrolment
+must use a fresh `enrolment_id`; replaying any id from an earlier connection is refused with `409`.
+
+The environment fallback cannot be erased by HTTP. It is inert in standalone mode and is retained
+solely for the Owner-driven `adopt` compatibility path; operators removing that legacy configuration
+must do so in deployment configuration.
+
+*Pinned by* `ManagedEnrolmentSecretContainmentTest`, which drives canary secrets through validation,
+success, retry conflict, rotation and failure while `DetectsSecretLeaks` inventories logger,
+exception reporter, database plaintext fields, cache, session, queue/trace and audit sinks. The
+instrument covers only those enumerated package sinks and cannot prove containment against hostile
+host code or a future sink omitted from the inventory.
+
 ## Managed human entry
 
 These browser routes are available only while the installation authority is managed; standalone
 authority is refused by the managed-authority gate with Laravel's ordinary 404 response. Both
 routes use the ordinary Laravel web session stack and bind `EnsureManagedAuthority` by class.
 
-The trusted connection origin, installation id, connection id, generation, issuer and
-required client secret are server-side configuration or stored connection facts. Browser input
-cannot select or override them. Origin validation assumes the stored connection record itself has
-not been tampered with; connection-record integrity is outside this contract.
+The trusted connection origin, installation id, connection id, generation, issuer and required
+client secret come from the authenticated enrolment above (or the documented legacy `adopt`
+fallback). Browser input cannot select or override them. Connection state written by the enrolment
+routes is locked, counter-bound and encrypted where secret; direct database tampering by the host is
+outside this contract.
 
 ### GET /bfc/managed/login
 

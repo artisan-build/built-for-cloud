@@ -197,7 +197,7 @@ while (true) {
                 'connection_id' => 'live-connection',
                 'organization_id' => 'live-organization',
                 'installation_id' => 'live-installation',
-                'authority_generation' => 7,
+                'authority_generation' => 2,
                 'roster_version' => 7 + $exchangeCount,
                 'response_sequence' => 12 + $exchangeCount,
                 'responded_at' => gmdate('Y-m-d\TH:i:s+00:00'),
@@ -237,7 +237,7 @@ while (true) {
             && $payload['connection_id'] === 'live-connection'
             && $payload['organization_id'] === 'live-organization'
             && $payload['installation_id'] === 'live-installation'
-            && $payload['authority_generation'] === 7
+            && $payload['authority_generation'] === 2
             && is_int($payload['roster_version'])
             && is_int($payload['response_sequence'])
             && is_string($payload['responded_at'])
@@ -262,7 +262,7 @@ while (true) {
                     'connection_id' => 'live-connection',
                     'organization_id' => 'live-organization',
                     'installation_id' => 'live-installation',
-                    'authority_generation' => 7,
+                    'authority_generation' => 2,
                     'roster_version' => $payload['roster_version'] + 1,
                     'response_sequence' => $payload['response_sequence'] + 1,
                     'responded_at' => gmdate('Y-m-d\TH:i:s+00:00'),

@@ -14,6 +14,9 @@ AUTHORITY_PORT="$(php -r '$socket = stream_socket_server("tcp://127.0.0.1:0", $e
 APP_BASE="http://127.0.0.1:${APP_PORT}"
 AUTHORITY_BASE="https://127.0.0.1:${AUTHORITY_PORT}"
 CLIENT_SECRET="$(php -r 'echo bin2hex(random_bytes(32));')"
+CLAIM_TOKEN="$(php -r 'echo bin2hex(random_bytes(32));')"
+CLAIM_HASH="$(php -r 'echo hash("sha256", $argv[1]);' "${CLAIM_TOKEN}")"
+ENROLMENT_ID="$(php -r '$bytes = random_bytes(16); $bytes[6] = chr((ord($bytes[6]) & 0x0f) | 0x40); $bytes[8] = chr((ord($bytes[8]) & 0x3f) | 0x80); echo vsprintf("%s%s-%s-%s-%s-%s%s%s", str_split(bin2hex($bytes), 4));')"
 CLIENT_APP_KEY="$(php -r 'echo "base64:".base64_encode(random_bytes(32));')"
 AUTHORITY_APP_KEY="$(php -r 'echo "base64:".base64_encode(random_bytes(32));')"
 
@@ -51,6 +54,10 @@ set_confirmation_status() {
 
 confirmation_count() {
     php -r '$status = json_decode(file_get_contents($argv[1]), true, flags: JSON_THROW_ON_ERROR); echo $status["confirmation_count"];' "${STATUS}"
+}
+
+json_value() {
+    php -r '$data = json_decode(stream_get_contents(STDIN), true, flags: JSON_THROW_ON_ERROR); $value = $data[$argv[1]] ?? null; echo is_bool($value) ? ($value ? "true" : "false") : $value;' "$1"
 }
 
 assert_standalone_refusal_matrix() {
@@ -161,20 +168,17 @@ HARNESS_ENV=(
     "CACHE_STORE=array"
     "MAIL_MAILER=array"
     "BUILT_FOR_CLOUD_SURFACE_DATA_MIGRATIONS=false"
-    "BUILT_FOR_CLOUD_MANAGED_CLIENT_SECRET=${CLIENT_SECRET}"
     "BUILT_FOR_CLOUD_MANAGED_CA_BUNDLE=${CERT}"
     "BFC_MANAGED_AUTHORITY_BASE_URL=${AUTHORITY_BASE}"
 )
 "${HARNESS_ENV[@]}" vendor/bin/testbench migrate:fresh --force --no-interaction >"${RUN_DIR}/migrate.log"
-"${HARNESS_ENV[@]}" php tests/Live/seed-managed-harness.php
-STANDALONE_ROUTES="${RUN_DIR}/standalone-routes.tsv"
-"${HARNESS_ENV[@]}" php tests/Live/managed-standalone-routes.php >"${STANDALONE_ROUTES}"
+"${HARNESS_ENV[@]}" vendor/bin/testbench bfc:ownership:mint-claim --execute --local --hash="${CLAIM_HASH}" >"${RUN_DIR}/mint-claim.log"
 "${HARNESS_ENV[@]}" vendor/bin/testbench serve --host=127.0.0.1 --port="${APP_PORT}" >"${SERVER_LOG}" 2>&1 &
 SERVER_PID=$!
 
 for _ in {1..100}; do
     READY_STATUS="$(curl --silent --output /dev/null --write-out '%{http_code}' "${APP_BASE}/bfc/login" || true)"
-    if [[ "${READY_STATUS}" == 404 ]]; then
+    if [[ "${READY_STATUS}" == 200 ]]; then
         break
     fi
     if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
@@ -182,7 +186,49 @@ for _ in {1..100}; do
     fi
     sleep 0.05
 done
-[[ "${READY_STATUS}" == 404 ]] || fail "application did not become ready in managed mode"
+[[ "${READY_STATUS}" == 200 ]] || fail "application did not become ready in standalone mode"
+
+CLAIM_RESPONSE="$(
+    php -r 'echo json_encode(["token" => $argv[1]], JSON_THROW_ON_ERROR);' "${CLAIM_TOKEN}" \
+        | curl --silent --show-error --request POST --header 'Content-Type: application/json' \
+            --data-binary @- --write-out $'\n%{http_code}' "${APP_BASE}/bfc/ownership/claim"
+)"
+CLAIM_STATUS="${CLAIM_RESPONSE##*$'\n'}"
+CLAIM_JSON="${CLAIM_RESPONSE%$'\n'*}"
+[[ "${CLAIM_STATUS}" == 201 ]] || fail "ownership claim returned ${CLAIM_STATUS}"
+OWNER_TOKEN="$(printf '%s' "${CLAIM_JSON}" | json_value owner_token)"
+[[ -n "${OWNER_TOKEN}" ]] || fail "ownership claim omitted the owner token"
+
+ENROLMENT_RESPONSE="$(
+    php -r 'echo json_encode([
+        "enrolment_id" => $argv[1],
+        "expected_generation" => 1,
+        "issuer" => "https://live-issuer.example.test",
+        "connection_id" => "live-connection",
+        "organization_id" => "live-organization",
+        "installation_id" => "live-installation",
+        "authority_base_url" => $argv[2],
+        "managed_client_secret" => $argv[3],
+        "client_secret_generation" => 1,
+    ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);' "${ENROLMENT_ID}" "${AUTHORITY_BASE}" "${CLIENT_SECRET}" \
+        | curl --silent --show-error --request POST --header 'Content-Type: application/json' \
+            --header "Authorization: Bearer ${OWNER_TOKEN}" --data-binary @- \
+            --write-out $'\n%{http_code}' "${APP_BASE}/bfc/managed/enrolment"
+)"
+ENROLMENT_STATUS="${ENROLMENT_RESPONSE##*$'\n'}"
+ENROLMENT_JSON="${ENROLMENT_RESPONSE%$'\n'*}"
+[[ "${ENROLMENT_STATUS}" == 201 ]] || fail "managed enrolment returned ${ENROLMENT_STATUS}"
+[[ "$(printf '%s' "${ENROLMENT_JSON}" | json_value enrolment_id)" == "${ENROLMENT_ID}" ]] || fail "managed enrolment crossed its request id"
+[[ "$(printf '%s' "${ENROLMENT_JSON}" | json_value mode)" == managed ]] || fail "managed enrolment did not return managed mode"
+[[ "$(printf '%s' "${ENROLMENT_JSON}" | json_value generation)" == 2 ]] || fail "managed enrolment did not advance generation 1 to 2"
+[[ "$(printf '%s' "${ENROLMENT_JSON}" | json_value client_secret_generation)" == 1 ]] || fail "managed enrolment did not establish client-secret generation 1"
+[[ "${ENROLMENT_JSON}" != *"${CLIENT_SECRET}"* ]] || fail "managed enrolment reflected the client secret"
+
+"${HARNESS_ENV[@]}" php tests/Live/seed-managed-harness.php
+STANDALONE_ROUTES="${RUN_DIR}/standalone-routes.tsv"
+"${HARNESS_ENV[@]}" php tests/Live/managed-standalone-routes.php >"${STANDALONE_ROUTES}"
+MANAGED_READY_STATUS="$(curl --silent --output /dev/null --write-out '%{http_code}' "${APP_BASE}/bfc/login")"
+[[ "${MANAGED_READY_STATUS}" == 404 ]] || fail "enrolled application did not enter managed mode"
 
 ENTRY_HEADERS="$(curl --silent --show-error --dump-header - --output /dev/null "${APP_BASE}/bfc/managed/login")"
 [[ "$(status_of "${ENTRY_HEADERS}")" == 302 ]] || fail "managed entry did not redirect"
@@ -298,4 +344,4 @@ STANDALONE_MANAGED_STATUS="$(curl --silent --show-error --output /dev/null --wri
 EXCHANGE_COUNT="$(php -r '$status = json_decode(file_get_contents($argv[1]), true, flags: JSON_THROW_ON_ERROR); echo $status["exchange_count"];' "${STATUS}")"
 [[ "${EXCHANGE_COUNT}" == 5 ]] || fail "fixture observed an unexpected exchange count"
 
-printf 'managed live harness passed\nstamp: %s\nchecks: authenticated TLS handoff/exchange, exact authority redirect origin/path, browser-session binding refusal and success, session rotation/protected access, structurally derived standalone refusal matrix after refresh failure/grace/outage expiry/explicit denial/failed managed entry, structurally derived standalone openness matrix, 1800-second outage denial and session ending, same-user restoration after authority recovery, role promotion and demotion on the next authorization decision, immediate authoritative browser denial and session ending, mode exclusivity\n' "${STAMP}"
+printf 'managed live harness passed\nstamp: %s\nchecks: ownership claim plus HTTP managed enrolment generation 1-to-2 with no managed-secret environment injection, authenticated TLS handoff/exchange, exact authority redirect origin/path, browser-session binding refusal and success, session rotation/protected access, structurally derived standalone refusal matrix after refresh failure/grace/outage expiry/explicit denial/failed managed entry, structurally derived standalone openness matrix, 1800-second outage denial and session ending, same-user restoration after authority recovery, role promotion and demotion on the next authorization decision, immediate authoritative browser denial and session ending, mode exclusivity\n' "${STAMP}"

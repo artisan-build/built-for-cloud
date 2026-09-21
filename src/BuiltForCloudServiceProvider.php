@@ -48,6 +48,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\LoopbackAuthorizations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManagedAuthentication;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManagedEnrolments;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
@@ -452,6 +453,29 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
 
         $router->post('/bfc/ownership/claim', [ManageOwnership::class, 'claim'])
             ->middleware('throttle:bfc-claim');
+
+        // The P1 managed-enrolment verbs: owner-credential-authenticated
+        // (the CURRENT ownership-linked credential — not any admin
+        // bearer), throttled before authentication like every operator
+        // write, no-store, secret never returned. See
+        // docs/http-contract.md "Authority-driven managed enrolment".
+        $this->protectOperatorRoute(
+            $router->post('/bfc/managed/enrolment', [ManagedEnrolments::class, 'enrol'])
+                ->middleware('throttle:bfc-operator-write'),
+            $operatorRoutes,
+        );
+
+        $this->protectOperatorRoute(
+            $router->post('/bfc/managed/enrolment/client-secret', [ManagedEnrolments::class, 'rotateClientSecret'])
+                ->middleware('throttle:bfc-operator-write'),
+            $operatorRoutes,
+        );
+
+        $this->protectOperatorRoute(
+            $router->post('/bfc/managed/enrolment/disconnect', [ManagedEnrolments::class, 'disconnect'])
+                ->middleware('throttle:bfc-operator-write'),
+            $operatorRoutes,
+        );
 
         $this->protectOperatorRoute(
             $router->post('/bfc/ownership/release', [ManageOwnership::class, 'release']),
