@@ -1102,6 +1102,7 @@ function p4dAllowedReadTables(): array
 {
     return [
         'bfc_authority',
+        'bfc_managed_client_secrets',
         'bfc_managed_transition_mappings',
         'bfc_managed_transition_roster_cursors',
         'bfc_managed_transition_roster_members',
@@ -1543,7 +1544,7 @@ it('enumerates every transition operation in both directions and permits only fr
     string $disposition = 'link',
 ): void {
     $expectedOperations = [
-        'abandon', 'acknowledge', 'commit', 'complete', 'fetchRoster', 'prepare', 'propose',
+        'abandon', 'abandonPreCommit', 'acknowledge', 'commit', 'complete', 'fetchRoster', 'prepare', 'propose',
         'proposeDefault', 'proposeForOwner', 'recover', 'stage',
     ];
     $actualOperations = collect((new ReflectionClass(ManagedTransitions::class))->getMethods(ReflectionMethod::IS_PUBLIC))
@@ -1563,6 +1564,8 @@ it('enumerates every transition operation in both directions and permits only fr
             $invoke = fn (): ManagedTransition => $service->fetchRoster($transition);
         } elseif ($operation === 'abandon') {
             $invoke = fn (): ManagedTransition => $service->abandon(p4dOwnerRequest($owner), $transition);
+        } elseif ($operation === 'abandonPreCommit') {
+            $invoke = fn (): ManagedTransition => $service->abandonPreCommit($owner, $transition);
         } else {
             $transition = $service->fetchRoster($transition);
             if ($operation === 'propose') {
@@ -1604,7 +1607,7 @@ it('enumerates every transition operation in both directions and permits only fr
     $expectedStatus = match ($operation) {
         'prepare' => ManagedTransitionStatus::Prepared,
         'fetchRoster' => ManagedTransitionStatus::Rostered,
-        'abandon' => ManagedTransitionStatus::Abandoned,
+        'abandon', 'abandonPreCommit' => ManagedTransitionStatus::Abandoned,
         'propose', 'proposeDefault', 'proposeForOwner' => ManagedTransitionStatus::Proposed,
         'stage', 'recover' => ManagedTransitionStatus::Staged,
         'commit' => ManagedTransitionStatus::Committed,
@@ -1619,6 +1622,8 @@ it('enumerates every transition operation in both directions and permits only fr
 })->with([
     'adopt abandon' => ['abandon', ManagedTransitionDirection::Adopt],
     'exit abandon' => ['abandon', ManagedTransitionDirection::Exit],
+    'adopt actor abandon' => ['abandonPreCommit', ManagedTransitionDirection::Adopt],
+    'exit actor abandon' => ['abandonPreCommit', ManagedTransitionDirection::Exit],
     'adopt acknowledge' => ['acknowledge', ManagedTransitionDirection::Adopt],
     'exit acknowledge' => ['acknowledge', ManagedTransitionDirection::Exit],
     'adopt commit' => ['commit', ManagedTransitionDirection::Adopt],

@@ -36,6 +36,7 @@ if ($mode === 'generate') {
             $app['config']->set('auth.guards', []);
             $app['config']->set('auth.providers', []);
             $app['config']->set('built-for-cloud.surfaces.data_migrations', false);
+            $app['config']->set('cache.default', 'array');
             $app['config']->set('app.key', 'base64:'.base64_encode(str_repeat('m', 32)));
         }
 
@@ -130,6 +131,7 @@ $case = new class('testProbe') extends TestCase
         $app['config']->set('auth.guards', []);
         $app['config']->set('auth.providers', []);
         $app['config']->set('built-for-cloud.surfaces.data_migrations', false);
+        $app['config']->set('cache.default', 'array');
         $app['config']->set('app.debug', false);
         $app['config']->set('app.key', 'base64:'.base64_encode(str_repeat('n', 32)));
     }

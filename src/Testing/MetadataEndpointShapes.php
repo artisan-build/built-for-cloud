@@ -132,6 +132,52 @@ final class MetadataEndpointShapes
             'POST /bfc/forgot-password' => ['type' => 'empty'],
             'POST /bfc/reset-password' => ['type' => 'empty'],
             'POST /bfc/members/invitations' => ['type' => 'empty'],
+            'POST /bfc/managed/enrolment' => [
+                'type' => 'object',
+                'fields' => [
+                    'enrolment_id' => ['type' => 'uuid'],
+                    'mode' => ['type' => 'enum', 'values' => ['managed']],
+                    'generation' => ['type' => 'int', 'min' => 2, 'max' => 9_007_199_254_740_991],
+                    'client_secret_generation' => ['type' => 'enum', 'values' => [1]],
+                    'enrolled_at' => ['type' => 'iso8601_timestamp'],
+                ],
+            ],
+            'POST /bfc/managed/enrolment/client-secret' => [
+                'type' => 'object',
+                'fields' => [
+                    'rotation_id' => ['type' => 'uuid'],
+                    'mode' => ['type' => 'enum', 'values' => ['managed']],
+                    'generation' => ['type' => 'int', 'min' => 2, 'max' => 9_007_199_254_740_991],
+                    'client_secret_generation' => ['type' => 'int', 'min' => 2, 'max' => 9_007_199_254_740_991],
+                    'rotated_at' => ['type' => 'iso8601_timestamp'],
+                ],
+            ],
+            'POST /bfc/managed/enrolment/disconnect' => [
+                'type' => 'one_of',
+                'shapes' => [
+                    [
+                        'type' => 'object',
+                        'fields' => [
+                            'disconnect_id' => ['type' => 'uuid'],
+                            'status' => ['type' => 'enum', 'values' => ['completed']],
+                            'mode' => ['type' => 'enum', 'values' => ['standalone']],
+                            'generation' => ['type' => 'int', 'min' => 2, 'max' => 9_007_199_254_740_991],
+                            'disconnected_at' => ['type' => 'iso8601_timestamp'],
+                        ],
+                    ],
+                    [
+                        'type' => 'object',
+                        'fields' => [
+                            'disconnect_id' => ['type' => 'uuid'],
+                            'status' => ['type' => 'enum', 'values' => ['pending']],
+                            'transition_id' => ['type' => 'uuid'],
+                            'mode' => ['type' => 'enum', 'values' => ['managed', 'standalone']],
+                            'generation' => ['type' => 'int', 'min' => 1, 'max' => 9_007_199_254_740_991],
+                            'phase' => ['type' => 'enum', 'values' => ['prepared', 'staged', 'committed', 'acknowledging']],
+                        ],
+                    ],
+                ],
+            ],
             'POST /bfc/transitions/proposals/{transition}/abandon' => ['type' => 'empty'],
             'POST /bfc/transitions/proposals/{transition}/complete' => ['type' => 'empty'],
             'POST /bfc/transitions/{direction}/prepare' => ['type' => 'empty'],
@@ -362,12 +408,14 @@ final class MetadataEndpointShapes
                 return;
 
             case 'token':
+            case 'uuid':
             case 'semver':
             case 'console_key_id':
                 Assert::assertIsString($value, $context.': '.$path.' is not a string.');
                 Assert::assertTrue(
                     match ($type) {
                         'token' => MetadataShape::isToken($value),
+                        'uuid' => preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/D', $value) === 1,
                         'semver' => MetadataShape::isSemver($value),
                         default => MetadataShape::isConsoleKeyId($value),
                     },
@@ -378,8 +426,13 @@ final class MetadataEndpointShapes
 
             case 'atom_timestamp':
             case 'rfc3339_timestamp':
+            case 'iso8601_timestamp':
                 Assert::assertIsString($value, $context.': '.$path.' is not a string.');
-                self::timestamp($value, $type, $context, $path);
+                if ($type === 'iso8601_timestamp') {
+                    self::iso8601Timestamp($value, $context, $path);
+                } else {
+                    self::timestamp($value, $type, $context, $path);
+                }
 
                 return;
 
@@ -435,6 +488,26 @@ final class MetadataEndpointShapes
             $formatted,
             $value,
             $context.': '.$path.' is not in the format its producer emits.',
+        );
+    }
+
+    private static function iso8601Timestamp(string $value, string $context, string $path): void
+    {
+        Assert::assertTrue(
+            MetadataShape::isTimestamp($value),
+            $context.': '.$path.' is not a bounded timestamp. Got: '.var_export($value, true),
+        );
+
+        try {
+            $parsed = CarbonImmutable::parse($value);
+        } catch (Throwable) {
+            Assert::fail($context.': '.$path.' is not a parseable instant. Got: '.var_export($value, true));
+        }
+
+        Assert::assertSame(
+            $parsed->toISOString(),
+            $value,
+            $context.': '.$path.' is not the exact toISOString form emitted by the producer.',
         );
     }
 
