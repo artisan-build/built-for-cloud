@@ -182,6 +182,11 @@ $restatedClaims = [
         'src/Actions/RotateCredential.php',
         'src/Contracts/AuthorizesRotationOverrides.php',
     ],
+    'no exactly-one active local owner who can authenticate or receive' => [
+        'docs/http-contract.md',
+        'src/ManagedAuthRefusalReason.php',
+        'src/ManagedEnrolmentConflict.php',
+    ],
     'no package api assembles a delegated session without verified assertion' => [
         'docs/http-contract.md',
         'release-notes/unified-store-guard.md',
@@ -586,10 +591,10 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1471,
-        'absolute' => 460,
-        'paired' => 114,
-        'unpaired' => 346,
+        'blocks' => 1500,
+        'absolute' => 473,
+        'paired' => 119,
+        'unpaired' => 354,
     ]);
 
     // The surfaces the restatement map runs over are wider than the
