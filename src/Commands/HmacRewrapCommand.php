@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacKeyUnreadable;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
+use ArtisanBuild\BuiltForCloud\ManagedClientSecretStore;
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\FileStore;
 use Illuminate\Cache\Lock;
@@ -37,7 +38,9 @@ use Illuminate\Support\Facades\Cache;
  *
  * COMPLETION IS GATED on verify-zero-old-version-rows: the command exits
  * successfully only when NO hmac ciphertext carries a non-primary
- * version. Until then the cutover is in progress and hmac activation and
+ * version — and, since P1 custody, neither does the managed client
+ * secret row, which this sweep re-encrypts under the same discipline.
+ * Until then the cutover is in progress and hmac activation and
  * rotation stay paused ({@see HmacKeyring::cutoverInProgress()}). A row
  * whose key-version names no ring key is reported BY ID and fails the
  * run — restore the old key to APP_PREVIOUS_KEYS rather than dropping
@@ -177,17 +180,33 @@ final class HmacRewrapCommand extends SystemAuthorityCommand
             $this->error(sprintf('Credential %s could not be re-encrypted: %s', $id, $message));
         }
 
+        // The managed client secret rides the same staged cutover (P1
+        // custody): the singleton row is swept like any hmac ciphertext
+        // and counted by the same completion gate, so APP_PREVIOUS_KEYS
+        // may not drop the old key while it is still the only thing
+        // that can open the enrolment secret.
+        $this->rewrapManagedClientSecret($keyring, $writeVersion);
+
         // The completion gate: verify ZERO old-version rows, freshly
         // counted — completion is a verified state, never an assumption.
-        $remaining = $this->oldVersionRows($writeVersion)->count();
+        $hmacRemaining = $this->oldVersionRows($writeVersion)->count();
+        $managedRemaining = app(ManagedClientSecretStore::class)->oldVersionRow($writeVersion) !== null;
 
-        if ($remaining > 0) {
+        if ($hmacRemaining > 0) {
             $this->error(sprintf(
                 '%d hmac row(s) still carry a non-primary key-version: the cutover is NOT complete, and hmac '
                 .'activation/rotation stay paused. Fix the ring (see above) and run bfc:hmac:rewrap again.',
-                $remaining,
+                $hmacRemaining,
             ));
+        }
 
+        if ($managedRemaining) {
+            $this->error('The managed client secret still carries a non-primary key-version: the cutover is NOT '
+                .'complete. Restore the old key to APP_PREVIOUS_KEYS rather than deleting the enrolment secret, '
+                .'then run bfc:hmac:rewrap again.');
+        }
+
+        if ($hmacRemaining > 0 || $managedRemaining) {
             return self::FAILURE;
         }
 
@@ -208,5 +227,36 @@ final class HmacRewrapCommand extends SystemAuthorityCommand
                 $query->whereNull('secret_key_version')
                     ->orWhere('secret_key_version', '!=', $writeVersion);
             });
+    }
+
+    /**
+     * Sweep the singleton managed client secret row (P1 custody): it is
+     * re-encrypted exactly like an hmac ciphertext — decrypt by the
+     * version the row carries, re-encrypt under the write-primary,
+     * update guarded on the version this run READ so a concurrent
+     * rotation's fresher ciphertext is never clobbered. An unreadable
+     * row is reported and left in place: restore the ring rather than
+     * deleting the enrolment secret. Output carries versions only —
+     * never key material, plaintext or ciphertext.
+     */
+    private function rewrapManagedClientSecret(HmacKeyring $keyring, string $writeVersion): void
+    {
+        $row = app(ManagedClientSecretStore::class)->oldVersionRow($writeVersion);
+
+        if ($row === null) {
+            return;
+        }
+
+        try {
+            $plaintext = $keyring->decrypt($row->secret_ciphertext, $row->secret_key_version);
+        } catch (HmacKeyUnreadable $failure) {
+            $this->error(sprintf('The managed client secret could not be re-encrypted: %s', $failure->getMessage()));
+
+            return;
+        }
+
+        app(ManagedClientSecretStore::class)->rewrap($row->secret_key_version, $keyring->encrypt($plaintext));
+
+        $this->line(sprintf('Managed client secret re-encrypted under key-version %s.', $writeVersion));
     }
 }
