@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use ArtisanBuild\BuiltForCloud\OwnershipClaimMinter;
 use ArtisanBuild\BuiltForCloud\StandaloneAccess;
+use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ManagedAuthorityFixture;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ManagedTransitionAuthorityFixture;
@@ -24,7 +25,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
 
-uses(RefreshDatabase::class, DetectsSecretLeaks::class);
+uses(RefreshDatabase::class, DetectsSecretLeaks::class, ContractAssertions::class);
 
 /** @return array<string, mixed> */
 function p1EnrollmentPayload(array $overrides = []): array
@@ -625,4 +626,171 @@ it('retains enrolment idempotency history after disconnect and requires a fresh 
         ->assertJsonPath('mode', 'managed')
         ->assertJsonPath('generation', 4)
         ->assertJsonPath('client_secret_generation', 1);
+});
+
+it('refuses an abandoned disconnect retry whose facts predate a later disconnect and re-adoption, without mutating anything', function (): void {
+    $ownerToken = p1ClaimOwner();
+    $enrolment = p1EnrollmentPayload();
+    p1Enroll($ownerToken, $enrolment)->assertCreated();
+
+    // The A1 abandoned state: one roster Owner whose contact email the
+    // roster does not verify refuses the commit guard, leaving an
+    // uncommitted ledger row linked to a durably Abandoned transition.
+    $owner = User::query()->create(['name' => 'Blocked Owner', 'email' => 'blocked-owner@example.test']);
+    $owner->forceFill([
+        'role' => 'owner',
+        'status' => 'active',
+        'email_verified_at' => null,
+        'scalpels_issuer' => $enrolment['issuer'],
+        'scalpels_connection_id' => $enrolment['connection_id'],
+        'scalpels_id' => 'blocked-owner',
+    ])->save();
+    $fixture = new ManagedTransitionAuthorityFixture(generation: 2);
+    $fixture->rosterPages = ['NULL' => [[
+        'scalpels_id' => 'blocked-owner',
+        'membership_status' => 'active',
+        'role' => 'owner',
+        'display_name' => 'Blocked Owner',
+        'contact_email' => 'blocked-owner@example.test',
+        'contact_email_verified' => false,
+    ]]];
+    Http::fake(fn (ClientRequest $request): mixed => $fixture->respond($request));
+
+    $abandoned = p1DisconnectPayload($enrolment);
+    $this->postJson('/bfc/managed/enrolment/disconnect', $abandoned, p1OwnerHeaders($ownerToken))
+        ->assertStatus(409)
+        ->assertJsonPath('error', 'owner_not_accessible');
+    expect(ManagedTransition::query()->count())->toBe(1)
+        ->and(ManagedTransition::query()->value('status'))->toBe(ManagedTransitionStatus::Abandoned);
+    $abandonedTransitionId = (string) ManagedTransition::query()->value('id');
+
+    // The supported lifecycle moves on: the roster records the Owner's
+    // address as verified, a DIFFERENT disconnect completes, and a fresh
+    // enrolment re-adopts the installation under a different binding.
+    $fixture->rosterPages['NULL'][0]['contact_email_verified'] = true;
+
+    $this->postJson(
+        '/bfc/managed/enrolment/disconnect',
+        p1DisconnectPayload($enrolment, ['disconnect_id' => (string) Str::uuid()]),
+        p1OwnerHeaders($ownerToken),
+    )->assertOk();
+    expect(InstallationAuthority::current()->mode)->toBe(AuthorityMode::Standalone);
+
+    User::query()->delete();
+    p1Enroll($ownerToken, p1EnrollmentPayload([
+        'issuer' => 'https://later-issuer.example.test',
+        'connection_id' => 'later-connection',
+        'organization_id' => 'later-organization',
+        'installation_id' => 'later-installation',
+        'authority_base_url' => 'https://later-authority.example.test',
+        'managed_client_secret' => 'later-lifecycle-secret',
+        'expected_generation' => 3,
+    ]))->assertCreated()->assertJsonPath('generation', 4);
+
+    // A live local Owner must exist so the refusal below comes from the
+    // revalidation, not the actor gate.
+    $owner = User::query()->create(['name' => 'Later Owner', 'email' => 'later-owner@example.test']);
+    $owner->forceFill(['role' => 'owner', 'status' => 'active'])->save();
+
+    $before = p1AuthorityRow();
+    $transitionsBefore = ManagedTransition::query()->count();
+    $legsBefore = count($fixture->calls);
+
+    // Retrying the OLD id must not exit the newer binding: bounded 409,
+    // no fresh transition, no authority legs, no ledger re-point.
+    $this->postJson('/bfc/managed/enrolment/disconnect', $abandoned, p1OwnerHeaders($ownerToken))
+        ->assertStatus(409)
+        ->assertJsonPath('error', 'binding_conflict')
+        ->assertJsonPath('reason', 'binding_conflict');
+
+    expect(p1AuthorityRow())->toBe($before)
+        ->and(ManagedTransition::query()->count())->toBe($transitionsBefore)
+        ->and(count($fixture->calls))->toBe($legsBefore)
+        ->and((array) DB::table('bfc_managed_enrolment_requests')->where('id', $abandoned['disconnect_id'])->sole())->toMatchArray([
+            'committed_response' => null,
+            'managed_transition_id' => $abandonedTransitionId,
+        ]);
+});
+
+it('accepts a 255-character issuer and refuses a 256-character issuer on every managed enrolment route', function (): void {
+    $ownerToken = p1ClaimOwner();
+
+    // 27-char origin + 114 × "/x" = exactly the 255-character persistence width.
+    $issuer255 = 'https://issuer.example.test'.str_repeat('/x', 114);
+    $issuer256 = $issuer255.'x';
+    expect(strlen($issuer255))->toBe(255)->and(strlen($issuer256))->toBe(256);
+    $before = p1AuthorityRow();
+
+    p1Enroll($ownerToken, p1EnrollmentPayload(['issuer' => $issuer256]))
+        ->assertUnprocessable();
+    expect(p1AuthorityRow())->toBe($before)
+        ->and(DB::table('bfc_managed_enrolment_requests')->count())->toBe(0);
+
+    $enrolment = p1EnrollmentPayload(['issuer' => $issuer255]);
+    p1Enroll($ownerToken, $enrolment)->assertCreated();
+    expect(p1AuthorityRow()['issuer'])->toBe($issuer255)
+        ->and(DB::table('bfc_managed_enrolment_requests')->where('id', $enrolment['enrolment_id'])->value('issuer'))->toBe($issuer255);
+
+    $this->postJson(
+        '/bfc/managed/enrolment/client-secret',
+        p1RotationPayload($enrolment, ['issuer' => $issuer256]),
+        p1OwnerHeaders($ownerToken),
+    )->assertUnprocessable();
+
+    $this->postJson(
+        '/bfc/managed/enrolment/disconnect',
+        p1DisconnectPayload($enrolment, ['issuer' => $issuer256]),
+        p1OwnerHeaders($ownerToken),
+    )->assertUnprocessable();
+
+    expect(p1AuthorityRow()['issuer'])->toBe($issuer255);
+});
+
+it('matches the documented metadata shapes on real enrolment, rotation and disconnect responses', function (): void {
+    $ownerToken = p1ClaimOwner();
+    $enrolment = p1EnrollmentPayload();
+
+    $created = p1Enroll($ownerToken, $enrolment);
+    $created->assertCreated();
+    $this->assertBuiltForCloudMetadataEndpoint($created, 'POST /bfc/managed/enrolment');
+
+    $rotated = $this->postJson(
+        '/bfc/managed/enrolment/client-secret',
+        p1RotationPayload($enrolment),
+        p1OwnerHeaders($ownerToken),
+    );
+    $rotated->assertOk();
+    $this->assertBuiltForCloudMetadataEndpoint($rotated, 'POST /bfc/managed/enrolment/client-secret');
+
+    $owner = User::query()->create(['name' => 'Metadata Owner', 'email' => 'metadata-owner@example.test']);
+    $owner->forceFill([
+        'role' => 'owner',
+        'status' => 'active',
+        'email_verified_at' => now(),
+        'original_contact_email' => $owner->email,
+        'scalpels_issuer' => $enrolment['issuer'],
+        'scalpels_connection_id' => $enrolment['connection_id'],
+        'scalpels_id' => 'metadata-owner',
+    ])->save();
+    $fixture = new ManagedTransitionAuthorityFixture(generation: 2, clientSecret: 'replacement-transition-secret');
+    $fixture->rosterPages = ['NULL' => [[
+        'scalpels_id' => 'metadata-owner',
+        'membership_status' => 'active',
+        'role' => 'owner',
+        'display_name' => 'Metadata Owner',
+        'contact_email' => 'metadata-owner@example.test',
+        'contact_email_verified' => true,
+    ]]];
+    Http::fake(fn (ClientRequest $request): mixed => $fixture->respond($request));
+
+    $disconnect = p1DisconnectPayload($enrolment);
+    $fixture->crashBeforeExecution = 'T4';
+    $pending = $this->postJson('/bfc/managed/enrolment/disconnect', $disconnect, p1OwnerHeaders($ownerToken));
+    $pending->assertAccepted();
+    $this->assertBuiltForCloudMetadataEndpoint($pending, 'POST /bfc/managed/enrolment/disconnect');
+
+    $fixture->crashBeforeExecution = null;
+    $completed = $this->postJson('/bfc/managed/enrolment/disconnect', $disconnect, p1OwnerHeaders($ownerToken));
+    $completed->assertOk();
+    $this->assertBuiltForCloudMetadataEndpoint($completed, 'POST /bfc/managed/enrolment/disconnect');
 });

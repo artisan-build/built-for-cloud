@@ -65,7 +65,7 @@ final class ManagedEnrolments extends OperatorRouteController
             $validated = $this->validateBounded($request, [
                 'enrolment_id' => ['required', 'string', 'uuid'],
                 'expected_generation' => ['required', 'integer', 'min:1', 'max:'.self::MAX_SAFE_INTEGER],
-                'issuer' => ['required', 'string', 'max:2048', 'url:https'],
+                'issuer' => ['required', 'string', 'max:255', 'url:https'],
                 'connection_id' => ['required', 'string', 'max:255'],
                 'organization_id' => ['required', 'string', 'max:255'],
                 'installation_id' => ['required', 'string', 'max:255'],
@@ -177,7 +177,7 @@ final class ManagedEnrolments extends OperatorRouteController
             /** @var array{rotation_id: string, issuer: string, connection_id: string, installation_id: string, expected_generation: int, expected_client_secret_generation: int, managed_client_secret: string} $validated */
             $validated = $this->validateBounded($request, [
                 'rotation_id' => ['required', 'string', 'uuid'],
-                'issuer' => ['required', 'string', 'max:2048', 'url:https'],
+                'issuer' => ['required', 'string', 'max:255', 'url:https'],
                 'connection_id' => ['required', 'string', 'max:255'],
                 'installation_id' => ['required', 'string', 'max:255'],
                 'expected_generation' => ['required', 'integer', 'min:1', 'max:'.self::MAX_SAFE_INTEGER],
@@ -256,7 +256,7 @@ final class ManagedEnrolments extends OperatorRouteController
             /** @var array{disconnect_id: string, issuer: string, connection_id: string, installation_id: string, expected_generation: int} $validated */
             $validated = $this->validateBounded($request, [
                 'disconnect_id' => ['required', 'string', 'uuid'],
-                'issuer' => ['required', 'string', 'max:2048', 'url:https'],
+                'issuer' => ['required', 'string', 'max:255', 'url:https'],
                 'connection_id' => ['required', 'string', 'max:255'],
                 'installation_id' => ['required', 'string', 'max:255'],
                 'expected_generation' => ['required', 'integer', 'min:1', 'max:'.self::MAX_SAFE_INTEGER],
@@ -288,20 +288,6 @@ final class ManagedEnrolments extends OperatorRouteController
                 throw $this->refuse(ManagedEnrolmentConflict::OwnerNotAccessible, withReason: true);
             }
 
-            if ($existing === null) {
-                $authority = $this->lockedManagedAuthority();
-
-                if ($this->bindingTriple($authority) !== [$validated['issuer'], $validated['connection_id'], $validated['installation_id']]) {
-                    throw $this->refuse(ManagedEnrolmentConflict::BindingConflict, withReason: true);
-                }
-
-                if ((int) $authority->generation !== $validated['expected_generation']) {
-                    throw $this->refuse(ManagedEnrolmentConflict::StaleGeneration, withReason: true);
-                }
-
-                $this->assertNoActiveTransition();
-            }
-
             // Exact retries resume the recorded transition while it is
             // still live. A guard-refused disconnect durably abandoned
             // its row (below), so its retry — typically after the
@@ -316,6 +302,31 @@ final class ManagedEnrolments extends OperatorRouteController
                     && ! in_array($candidate->status, [ManagedTransitionStatus::Acknowledged, ManagedTransitionStatus::Abandoned], true)) {
                     $transition = $candidate;
                 }
+            }
+
+            // A fresh request — or a retry whose recorded transition is
+            // no longer resumable (nothing linked, or the row durably
+            // abandoned or already acknowledged) — revalidates against
+            // CURRENT locked authority before preparing anything: managed
+            // mode, the request/ledger binding triple, the recorded
+            // expected generation, and no other active transition.
+            // Without this, an abandoned request recorded against an
+            // earlier binding could exit a LATER disconnect/re-adopt
+            // lifecycle it never named (quality-review round 1). A live
+            // resume is deliberately exempt — its transition already
+            // carries the locked snapshot it drives on.
+            if ($existing === null || $transition === null) {
+                $authority = $this->lockedManagedAuthority();
+
+                if ($this->bindingTriple($authority) !== [$validated['issuer'], $validated['connection_id'], $validated['installation_id']]) {
+                    throw $this->refuse(ManagedEnrolmentConflict::BindingConflict, withReason: true);
+                }
+
+                if ((int) $authority->generation !== $validated['expected_generation']) {
+                    throw $this->refuse(ManagedEnrolmentConflict::StaleGeneration, withReason: true);
+                }
+
+                $this->assertNoActiveTransition();
             }
 
             if ($transition === null) {
