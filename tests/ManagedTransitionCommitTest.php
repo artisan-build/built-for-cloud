@@ -887,10 +887,9 @@ it('keeps an authority-removed member deactivated on exit while activating a nev
         ),
     ))->toBeFalse();
     $removed = $removed->refresh();
-    $removedAt = $removed->getRawOriginal('deactivated_at');
     expect($removed->status)->toBe('inactive')
         ->and($removed->managed_membership_status)->toBe('removed')
-        ->and($removedAt)->not->toBeNull()
+        ->and($removed->deactivated_at)->not->toBeNull()
         ->and($removed->password)->toBeNull();
 
     $service = app(ManagedTransitions::class);
@@ -914,66 +913,13 @@ it('keeps an authority-removed member deactivated on exit while activating a nev
 
     expect($completed->status)->toBe(ManagedTransitionStatus::Acknowledged)
         ->and($removed->status)->toBe('inactive')
-        ->and($removed->getRawOriginal('deactivated_at'))->toBe($removedAt)
+        ->and($removed->deactivated_at)->not->toBeNull()
         ->and($removed->password)->toBeNull()
         ->and($removed->remember_token)->toBeNull()
         ->and($neverListed->status)->toBe('active')
         ->and($neverListed->deactivated_at)->toBeNull()
         ->and(Hash::check('local-password', (string) $neverListed->password))->toBeTrue();
 });
-
-it('refuses exit reactivation only for the exact authority-removal freshness state', function (
-    array $stateChanges,
-    bool $refused,
-): void {
-    $roster = [[
-        'scalpels_id' => 'owner-subject', 'membership_status' => 'active', 'role' => 'owner',
-        'display_name' => 'Shape Owner', 'contact_email' => 'shape-owner@example.test', 'contact_email_verified' => true,
-    ]];
-    [$owner] = p4dConfigure(ManagedTransitionDirection::Exit, $roster);
-    $target = User::query()->create(['name' => 'Shape Local', 'email' => 'shape-local@example.test']);
-    $target->forceFill(array_merge([
-        'role' => 'member',
-        'status' => 'inactive',
-        'password' => null,
-        'deactivated_at' => now()->subDay(),
-        'managed_membership_status' => 'removed',
-    ], $stateChanges))->save();
-    $transition = app(ManagedTransitions::class)->prepare($owner, ManagedTransitionDirection::Exit);
-    $transition = app(ManagedTransitions::class)->fetchRoster($transition);
-    $proposal = static fn () => app(ManagedTransitions::class)->propose($transition, [
-        [
-            'scalpels_id' => 'owner-subject',
-            'local_kind' => 'user',
-            'local_id' => (string) $owner->getKey(),
-            'role' => 'owner',
-            'disposition' => 'link',
-            'final_email' => $owner->email,
-        ],
-        [
-            'scalpels_id' => null,
-            'local_kind' => 'user',
-            'local_id' => (string) $target->getKey(),
-            'role' => 'member',
-            'disposition' => 'retain_local',
-            'final_email' => $target->email,
-        ],
-    ]);
-
-    if ($refused) {
-        expect($proposal)->toThrow(ManagedAuthRefused::class);
-
-        return;
-    }
-
-    expect($proposal()->status)->toBe(ManagedTransitionStatus::Proposed);
-})->with([
-    'exact authority-removal state' => [[], true],
-    'non-removed membership marker' => [['managed_membership_status' => 'active'], false],
-    'active local status' => [['status' => 'active'], false],
-    'null deactivation timestamp' => [['deactivated_at' => null], false],
-    'non-null password' => [['password' => 'not-null'], false],
-]);
 
 it('rejects a pre-commit session re-persisted after exit commit on its next authenticated request', function (): void {
     $roster = [[

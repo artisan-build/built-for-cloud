@@ -832,7 +832,7 @@ final class ManagedTransitions
                 if ($disposition === 'exclude') {
                     $user->forceFill([
                         'status' => 'inactive',
-                        'deactivated_at' => $user->deactivated_at ?? $now,
+                        'deactivated_at' => $now,
                         'password' => null,
                         'remember_token' => null,
                     ])->save();
@@ -1196,10 +1196,7 @@ final class ManagedTransitions
         }
         $roster = $rosterQuery->get(['scalpels_id', 'role'])
             ->keyBy('scalpels_id');
-        $users = $usersQuery->get([
-            'id', 'email', 'status', 'password', 'deactivated_at', 'managed_membership_status',
-            'scalpels_issuer', 'scalpels_connection_id', 'scalpels_id',
-        ])->keyBy(
+        $users = $usersQuery->get(['id', 'email', 'scalpels_issuer', 'scalpels_connection_id', 'scalpels_id'])->keyBy(
             static fn (User $user): string => (string) $user->getKey(),
         );
         $invitations = $invitationsQuery->get(['id', 'email'])
@@ -1288,16 +1285,6 @@ final class ManagedTransitions
                             && ($user->scalpels_issuer !== $transition->issuer
                                 || $user->scalpels_connection_id !== $transition->connection_id
                                 || ($subject !== null && $user->scalpels_id !== $subject)))) {
-                        throw new ManagedAuthRefused;
-                    }
-
-                    $authorityRemoved = $user->managed_membership_status === 'removed'
-                        && $user->status === 'inactive'
-                        && $user->deactivated_at !== null
-                        && $user->password === null;
-                    if ($transition->direction === ManagedTransitionDirection::Exit
-                        && $authorityRemoved
-                        && $disposition !== 'exclude') {
                         throw new ManagedAuthRefused;
                     }
                 }

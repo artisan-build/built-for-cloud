@@ -396,14 +396,6 @@ it('offers exit role corrections while keeping retained invitation fields and ro
     $local->forceFill(['role' => 'member'])->save();
     $generated = User::query()->create(['name' => 'Exit Generated', 'email' => 'exit-generated@example.test']);
     $generated->forceFill(['role' => 'member', 'email_is_generated' => true])->save();
-    $removed = User::query()->create(['name' => 'Exit Removed', 'email' => 'exit-removed@example.test']);
-    $removed->forceFill([
-        'role' => 'member',
-        'status' => 'inactive',
-        'password' => null,
-        'deactivated_at' => now()->subDay(),
-        'managed_membership_status' => 'removed',
-    ])->save();
     $invitation = p4cInvitation('exit-invitation@example.test');
     $transition = p4cBegin($this, $owner, ManagedTransitionDirection::Exit);
 
@@ -435,11 +427,6 @@ it('offers exit role corrections while keeping retained invitation fields and ro
                 'role' => 'member',
                 'final_email' => $generated->email,
             ],
-            [
-                'local_kind' => 'user',
-                'local_id' => (string) $removed->getKey(),
-                'choice' => 'exclude',
-            ],
         ],
     ])->assertRedirect();
 
@@ -464,7 +451,6 @@ it('offers exit role corrections while keeping retained invitation fields and ro
         ->assertSee('keeps local user '.$owner->getKey().' and its product attribution for the matched subject.')
         ->assertSeeHtml('data-testid="transition-consequence-user-retain-local"')
         ->assertSee('keeps local user '.$local->getKey().' active under standalone authority.')
-        ->assertSee('deactivates this user without deleting local ID '.$removed->getKey().' or its attribution.')
         ->assertSeeHtml('data-testid="transition-consequence-invitation-retain-local"')
         ->assertSee('keeps invitation '.$invitation->getKey().' pending with stored role admin and email exit-invitation@example.test unchanged.')
         ->assertSee('local_kind: user / local_id: '.$local->getKey())
@@ -478,12 +464,6 @@ it('offers exit role corrections while keeping retained invitation fields and ro
         ->and($sent->firstWhere('local_id', (string) $local->getKey()))->toMatchArray([
             'role' => 'admin',
             'final_email' => 'exit-corrected@example.test',
-        ])
-        ->and($sent->firstWhere('local_id', (string) $removed->getKey()))->toMatchArray([
-            'scalpels_id' => null,
-            'role' => null,
-            'disposition' => 'exclude',
-            'final_email' => null,
         ]);
 });
 

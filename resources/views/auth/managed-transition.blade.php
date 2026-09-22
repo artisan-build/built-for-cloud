@@ -149,10 +149,6 @@
                                     'local-contact' => 'current local contact',
                                     default => 'Owner-corrected local address',
                                 };
-                                $authorityRemoved = $user->managed_membership_status === 'removed'
-                                    && $user->status === 'inactive'
-                                    && $user->deactivated_at !== null
-                                    && $user->password === null;
                             @endphp
                             <article class="bfc-transition-card" data-testid="transition-local-user">
                                 <strong>{{ $user->name }}</strong>
@@ -172,15 +168,11 @@
                                     <div class="bfc-transition-controls">
                                         <label>Match and disposition
                                             <select name="locals[user-{{ $index }}][choice]" data-testid="transition-match-control">
-                                                @if ($authorityRemoved)
-                                                    <option value="exclude" @selected($mapping?->disposition === 'exclude')>Deactivate</option>
-                                                @else
-                                                    <option value="retain_local" @selected($mapping?->disposition === 'retain_local')>Retain locally</option>
-                                                    <option value="exclude" @selected($mapping?->disposition === 'exclude')>Deactivate</option>
-                                                    @foreach ($roster as $member)
-                                                        <option value="link:{{ $member->scalpels_id }}" @selected($mapping?->scalpels_id === $member->scalpels_id)>Link {{ $member->display_name }} — {{ $member->scalpels_id }}</option>
-                                                    @endforeach
-                                                @endif
+                                                <option value="retain_local" @selected($mapping?->disposition === 'retain_local')>Retain locally</option>
+                                                <option value="exclude" @selected($mapping?->disposition === 'exclude')>Deactivate</option>
+                                                @foreach ($roster as $member)
+                                                    <option value="link:{{ $member->scalpels_id }}" @selected($mapping?->scalpels_id === $member->scalpels_id)>Link {{ $member->display_name }} — {{ $member->scalpels_id }}</option>
+                                                @endforeach
                                             </select>
                                         </label>
                                         @if (in_array($mapping?->disposition, ['link', 'retain_local'], true))
