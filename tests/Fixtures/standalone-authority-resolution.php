@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Database\Factories\CredentialFactory;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\Invitation;
+use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\StandaloneHandoff;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
@@ -158,7 +159,7 @@ $case = new class('testProbe') extends TestCase
             ? $this->get('/_bfc-test/authority-resolution-control')
             : null;
 
-        $responses = [
+        $publicResponses = [
             $this->get('/bfc/login'),
             $this->post('/bfc/login', ['email' => $owner->email, 'password' => 'original resolution password']),
             $this->get('/bfc/forgot-password'),
@@ -179,11 +180,18 @@ $case = new class('testProbe') extends TestCase
                 'password' => 'resolution invitation password',
                 'password_confirmation' => 'resolution invitation password',
             ]),
+        ];
+        $authenticatedAfterPublicRoutes = $this->isAuthenticated();
+        $sessionQueriesAfterPublicRoutes = $sessionQueries;
+
+        $owner->refresh();
+        $this->actingAs($owner);
+        $this->withSession([StandaloneAccess::SESSION_VERSION_KEY => $owner->auth_session_version]);
+        $protectedResponses = [
             $this->get('/bfc/members'),
             $this->get('/bfc/me/sessions'),
         ];
-
-        $authenticated = $this->isAuthenticated();
+        $responses = [...$publicResponses, ...$protectedResponses];
 
         /** @var Router $router */
         $router = $this->app['router'];
@@ -206,7 +214,6 @@ $case = new class('testProbe') extends TestCase
         }
 
         $tokenLookupsAtSweepEnd = $tokenLookups;
-        $sessionQueriesAtSweepEnd = $sessionQueries;
 
         Notification::assertNothingSent();
 
@@ -256,8 +263,8 @@ $case = new class('testProbe') extends TestCase
             'control-route' => $control === null || ($control->getStatusCode() === 200 && $control->getContent() === 'host-control'),
             'marker-runs' => $control === null ? BfcAuthorityResolutionState::$markerRuns === 0 : BfcAuthorityResolutionState::$markerRuns >= 1,
             'token-lookups' => $tokenLookupsAtSweepEnd === 0,
-            'session-queries' => $sessionQueriesAtSweepEnd === 0,
-            'authentication' => ! $authenticated,
+            'session-queries' => $sessionQueriesAfterPublicRoutes === 0,
+            'authentication' => ! $authenticatedAfterPublicRoutes,
             'password' => Hash::check('original resolution password', (string) $member->refresh()->password),
             'reset' => DB::table('password_reset_tokens')->where('email', $member->email)->value('token') === $resetHash,
             'invitation' => $invitation->refresh()->accepted_at === null,

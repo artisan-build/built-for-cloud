@@ -5,11 +5,11 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\BrowserCredentialAuthorizationStore;
-use ArtisanBuild\BuiltForCloud\Console\ConsoleReturnTo;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use ArtisanBuild\BuiltForCloud\ManagedAuthConnection;
 use ArtisanBuild\BuiltForCloud\ManagedHandoff;
 use ArtisanBuild\BuiltForCloud\ManagedMembershipResponses;
+use ArtisanBuild\BuiltForCloud\ManagedReturnTo;
 use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -24,7 +24,7 @@ final class ManagedAuthentication
             $authorizationUrl = $handoff->begin($request);
 
             if ($request->query->has('intended')) {
-                $request->session()->put(ManagedHandoff::SESSION_INTENDED_KEY, ConsoleReturnTo::firstRelative([
+                $request->session()->put(ManagedHandoff::SESSION_INTENDED_KEY, ManagedReturnTo::firstRelative([
                     $request->query('intended'),
                     route('bfc.ui.home', absolute: false),
                 ]));
@@ -59,7 +59,7 @@ final class ManagedAuthentication
             $request->session()->put(StandaloneAccess::SESSION_VERSION_KEY, $user->auth_session_version);
             $request->session()->forget(ManagedHandoff::SESSION_NONCE_KEY);
 
-            return redirect()->to(ConsoleReturnTo::firstRelative([
+            return redirect()->to(ManagedReturnTo::firstRelative([
                 $request->session()->pull(ManagedHandoff::SESSION_INTENDED_KEY),
                 '/',
             ]));

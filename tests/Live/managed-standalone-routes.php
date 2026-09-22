@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\Tests\Support\StandaloneSurfaceInventory;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Routing\Router;
@@ -45,8 +46,13 @@ foreach ($routes as $route) {
 
     $controller = StandaloneSurfaceInventory::controller($route);
     $surface = str_replace('ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\Standalone', '', $controller);
+    $authentication = array_filter(
+        $router->gatherRouteMiddleware($route),
+        static fn (mixed $middleware): bool => is_string($middleware)
+            && explode(':', $middleware, 2)[0] === EnsureUserIsAuthenticated::class,
+    ) !== [] ? 'guarded' : 'public';
 
     foreach (array_diff($route->methods(), ['HEAD']) as $method) {
-        fwrite(STDOUT, implode("\t", [$surface, $name, $method, '/'.$path]).PHP_EOL);
+        fwrite(STDOUT, implode("\t", [$surface, $name, $method, '/'.$path, $authentication]).PHP_EOL);
     }
 }

@@ -10,6 +10,8 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\Invitation;
+use ArtisanBuild\BuiltForCloud\RouteMiddleware;
+use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\StandaloneHandoff;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
@@ -152,16 +154,21 @@ $case = new class('testProbe') extends TestCase
             ]),
         ];
         $authenticatedAfterPublicRoutes = $this->isAuthenticated();
+        $sessionQueriesAfterPublicRoutes = $sessionQueries;
+
+        $owner->refresh();
+        $this->actingAs($owner);
+        $this->withSession([StandaloneAccess::SESSION_VERSION_KEY => $owner->auth_session_version]);
         $responses = [
             ...$publicResponses,
-            $this->actingAs($owner)->post('/bfc/logout'),
-            $this->actingAs($owner)->get('/bfc/members'),
-            $this->actingAs($owner)->post('/bfc/members/invitations', ['email' => 'blocked@example.test', 'role' => 'member']),
-            $this->actingAs($owner)->put('/bfc/members/'.$member->getKey().'/role', ['role' => 'admin']),
-            $this->actingAs($owner)->delete('/bfc/members/'.$member->getKey()),
-            $this->actingAs($owner)->get('/bfc/me/sessions'),
-            $this->actingAs($owner)->delete('/bfc/me/sessions/others', ['password' => 'original collision password']),
-            $this->actingAs($owner)->delete('/bfc/me/sessions/other', ['password' => 'original collision password']),
+            $this->post('/bfc/logout'),
+            $this->get('/bfc/members'),
+            $this->post('/bfc/members/invitations', ['email' => 'blocked@example.test', 'role' => 'member']),
+            $this->put('/bfc/members/'.$member->getKey().'/role', ['role' => 'admin']),
+            $this->delete('/bfc/members/'.$member->getKey()),
+            $this->get('/bfc/me/sessions'),
+            $this->delete('/bfc/me/sessions/others', ['password' => 'original collision password']),
+            $this->delete('/bfc/me/sessions/other', ['password' => 'original collision password']),
         ];
 
         /** @var Router $router */
@@ -200,7 +207,10 @@ $case = new class('testProbe') extends TestCase
             $route = $router->getRoutes()->getByName($name);
 
             if (! $route instanceof Route
-                || ! in_array(EnsureUserIsAuthenticated::class, $router->gatherRouteMiddleware($route), true)) {
+                || RouteMiddleware::indexOfClass(
+                    $router->gatherRouteMiddleware($route),
+                    EnsureUserIsAuthenticated::class,
+                ) === null) {
                 return false;
             }
         }
@@ -230,7 +240,7 @@ $case = new class('testProbe') extends TestCase
             'control-body' => $control->getContent() === 'host-control',
             'host-runs' => BfcMiddlewareCollisionState::$hostRuns === 1,
             'token-lookups' => $tokenLookups === 0,
-            'session-queries' => $sessionQueries === 0,
+            'session-queries' => $sessionQueriesAfterPublicRoutes === 0,
             'authentication' => ! $authenticatedAfterPublicRoutes,
             'password' => Hash::check('original collision password', (string) $member->refresh()->password),
             'reset' => DB::table('password_reset_tokens')->where('email', $member->email)->value('token') === $resetHash,
