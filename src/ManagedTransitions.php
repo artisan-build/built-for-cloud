@@ -207,6 +207,7 @@ final class ManagedTransitions
             ->get(['scalpels_id', 'role', 'contact_email']);
         $users = User::query()->orderBy('id')->get([
             'id', 'email', 'normalized_email', 'role', 'scalpels_issuer', 'scalpels_connection_id', 'scalpels_id',
+            'status', 'password', 'deactivated_at', 'managed_membership_status',
         ]);
         $invitations = Invitation::query()
             ->pending()
@@ -269,6 +270,10 @@ final class ManagedTransitions
                     && is_string($user->scalpels_id)
                         ? $rosterBySubject->get($user->scalpels_id)
                         : null;
+                $authorityRemoved = $user->managed_membership_status === 'removed'
+                    && $user->status === 'inactive'
+                    && $user->deactivated_at !== null
+                    && $user->password === null;
                 $mapping[] = is_object($member)
                     ? [
                         'scalpels_id' => $member->scalpels_id,
@@ -278,14 +283,21 @@ final class ManagedTransitions
                         'disposition' => 'link',
                         'final_email' => $user->email,
                     ]
-                    : [
+                    : ($authorityRemoved ? [
+                        'scalpels_id' => null,
+                        'local_kind' => 'user',
+                        'local_id' => (string) $user->getKey(),
+                        'role' => null,
+                        'disposition' => 'exclude',
+                        'final_email' => null,
+                    ] : [
                         'scalpels_id' => null,
                         'local_kind' => 'user',
                         'local_id' => (string) $user->getKey(),
                         'role' => $user->role,
                         'disposition' => 'retain_local',
                         'final_email' => $user->email,
-                    ];
+                    ]);
             }
 
             foreach ($invitations as $invitation) {
