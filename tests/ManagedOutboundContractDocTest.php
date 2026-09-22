@@ -738,6 +738,7 @@ final class ManagedOutboundContractDocTest extends TestCase
                         continue 2;
                     }
                     $this->assertRetainDeactivatedEligibility($transitions, $transition, $mapping);
+
                     continue 2;
                 case 'unique-local':
                     $indexes = array_keys(array_filter($candidate, static fn (array $element): bool => $element['local_id'] !== null));
