@@ -275,6 +275,34 @@ final class ManagedEnrolments extends OperatorRouteController
                 }
             }
 
+            // Exact retries resume the recorded transition while it is
+            // still live. A guard-refused disconnect durably abandoned
+            // its row (below), so its retry — typically after the
+            // operator repaired the Owner's reachability — prepares a
+            // FRESH transition and re-points the ledger link at it. A
+            // linked local Acknowledged transition is resumable
+            // TERMINAL state: the exit commit and the authority
+            // acknowledgement are already durable, so the retry
+            // bypasses fresh managed-authority validation (and the
+            // actor gate — cleanup needs no actor) and finishes the
+            // endpoint cleanup idempotently; process loss between
+            // acknowledgement and cleanup must not strand the persisted
+            // secret, the five facts or the ledger response.
+            $transition = null;
+
+            if ($existing !== null && is_string($existing->managed_transition_id)) {
+                $candidate = ManagedTransition::query()->find($existing->managed_transition_id);
+
+                if ($candidate !== null && $candidate->status === ManagedTransitionStatus::Acknowledged) {
+                    return $this->json($this->completeDisconnect($validated['disconnect_id']));
+                }
+
+                if ($candidate !== null
+                    && ! in_array($candidate->status, [ManagedTransitionStatus::Acknowledged, ManagedTransitionStatus::Abandoned], true)) {
+                    $transition = $candidate;
+                }
+            }
+
             // The initiating actor: the single active local Owner
             // (the installation-wide owner slot). Accessibility is NOT
             // preflighted here — ruling A1 pins the refusal on the
@@ -286,22 +314,6 @@ final class ManagedEnrolments extends OperatorRouteController
 
             if ($actor === null) {
                 throw $this->refuse(ManagedEnrolmentConflict::OwnerNotAccessible, withReason: true);
-            }
-
-            // Exact retries resume the recorded transition while it is
-            // still live. A guard-refused disconnect durably abandoned
-            // its row (below), so its retry — typically after the
-            // operator repaired the Owner's reachability — prepares a
-            // FRESH transition and re-points the ledger link at it.
-            $transition = null;
-
-            if ($existing !== null && is_string($existing->managed_transition_id)) {
-                $candidate = ManagedTransition::query()->find($existing->managed_transition_id);
-
-                if ($candidate !== null
-                    && ! in_array($candidate->status, [ManagedTransitionStatus::Acknowledged, ManagedTransitionStatus::Abandoned], true)) {
-                    $transition = $candidate;
-                }
             }
 
             // A fresh request — or a retry whose recorded transition is
@@ -331,7 +343,18 @@ final class ManagedEnrolments extends OperatorRouteController
 
             if ($transition === null) {
                 try {
-                    $transition = $this->transitions->prepare($actor, ManagedTransitionDirection::Exit);
+                    // The ledger/request binding rides INTO transition
+                    // creation: prepare() compares it against the locked
+                    // authority row in the same transaction that
+                    // persists the snapshot, so a lifecycle change
+                    // cannot interleave between the revalidation above
+                    // and the transition row (quality-review round 2).
+                    $transition = $this->transitions->prepare($actor, ManagedTransitionDirection::Exit, [
+                        'issuer' => $validated['issuer'],
+                        'connection_id' => $validated['connection_id'],
+                        'installation_id' => $validated['installation_id'],
+                        'generation' => $validated['expected_generation'],
+                    ]);
                 } catch (ManagedAuthRefused $refused) {
                     throw $this->fromTransitionRefusal($refused);
                 } catch (Throwable) {

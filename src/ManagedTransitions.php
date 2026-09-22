@@ -22,7 +22,20 @@ final class ManagedTransitions
 
     public function __construct(private readonly Factory $http) {}
 
-    public function prepare(User $actor, ManagedTransitionDirection $direction): ManagedTransition
+    /**
+     * Prepare a transition for the current managed connection. The
+     * optional expectation is the caller's RECORDED binding (the P1
+     * disconnect ledger's issuer/connection/installation and expected
+     * generation): it is compared against the authority row under the
+     * SAME transaction and row lock that persists the transition
+     * snapshot, so no lifecycle change can interleave between the
+     * caller's own validation and transition creation (quality-review
+     * round 2 — a stale abandoned retry must not snapshot and drive an
+     * exit for a later binding/generation it never named).
+     *
+     * @param  array{issuer: string, connection_id: string, installation_id: string, generation: int}|null  $expected
+     */
+    public function prepare(User $actor, ManagedTransitionDirection $direction, ?array $expected = null): ManagedTransition
     {
         $snapshot = $this->connectionSnapshot();
         $transitionRequestId = $this->randomKey();
@@ -36,11 +49,13 @@ final class ManagedTransitions
         $transition = DB::transaction(function () use (
             $actor,
             $direction,
+            $expected,
             $snapshot,
             $transitionRequestId,
             $body,
         ): ManagedTransition {
             $this->assertSnapshotCurrent($snapshot);
+            $this->assertExpectedAuthority($expected);
             $this->assertOwnerUser($actor, true);
 
             if (ManagedTransition::query()
@@ -1410,6 +1425,36 @@ final class ManagedTransitions
         }
 
         return $current;
+    }
+
+    /**
+     * The caller's recorded binding, enforced under the same lock that
+     * persists the transition: the locked row must still be managed and
+     * still carry exactly the issuer/connection/installation and
+     * generation the caller recorded. Null (ordinary adopt/exit callers)
+     * skips the check — the snapshot guard alone governs them.
+     *
+     * @param  array{issuer: string, connection_id: string, installation_id: string, generation: int}|null  $expected
+     */
+    private function assertExpectedAuthority(?array $expected): void
+    {
+        if ($expected === null) {
+            return;
+        }
+
+        $row = DB::table('bfc_authority')
+            ->where('key', InstallationAuthority::KEY)
+            ->lockForUpdate()
+            ->first(['mode', 'generation', 'issuer', 'connection_id', 'installation_id']);
+
+        if (! is_object($row)
+            || $row->mode !== AuthorityMode::Managed->value
+            || $row->issuer !== $expected['issuer']
+            || $row->connection_id !== $expected['connection_id']
+            || $row->installation_id !== $expected['installation_id']
+            || (int) $row->generation !== $expected['generation']) {
+            throw new ManagedAuthRefused('transition_state_conflict');
+        }
     }
 
     /**

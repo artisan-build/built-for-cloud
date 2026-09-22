@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
+use ArtisanBuild\BuiltForCloud\ManagedClientSecretStore;
 use ArtisanBuild\BuiltForCloud\ManagedTransition;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionDirection;
+use ArtisanBuild\BuiltForCloud\ManagedTransitions;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionStatus;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Ownership;
@@ -793,4 +796,73 @@ it('matches the documented metadata shapes on real enrolment, rotation and disco
     $completed = $this->postJson('/bfc/managed/enrolment/disconnect', $disconnect, p1OwnerHeaders($ownerToken));
     $completed->assertOk();
     $this->assertBuiltForCloudMetadataEndpoint($completed, 'POST /bfc/managed/enrolment/disconnect');
+});
+
+it('finishes disconnect cleanup on exact retry after process loss between durable acknowledgement and cleanup', function (): void {
+    [$ownerToken, $enrolment] = p1PendingDisconnectFixture();
+    $disconnect = p1DisconnectPayload($enrolment);
+
+    $this->postJson('/bfc/managed/enrolment/disconnect', $disconnect, p1OwnerHeaders($ownerToken))
+        ->assertOk()
+        ->assertJsonPath('mode', 'standalone')
+        ->assertJsonPath('generation', 3);
+
+    // Fault seam: rewind to the durable state process loss leaves in
+    // the window after the local transition reached Acknowledged but
+    // before endpoint cleanup ran — ledger row uncommitted, the five
+    // facts and the persisted secret still in place on the (already
+    // standalone, generation-advanced) authority row.
+    DB::table('bfc_managed_enrolment_requests')->where('id', $disconnect['disconnect_id'])->update([
+        'committed_response' => null,
+        'committed_at' => null,
+    ]);
+    DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
+        'issuer' => $enrolment['issuer'],
+        'connection_id' => $enrolment['connection_id'],
+        'organization_id' => $enrolment['organization_id'],
+        'installation_id' => $enrolment['installation_id'],
+        'authority_base_url' => $enrolment['authority_base_url'],
+        'updated_at' => now(),
+    ]);
+    app(ManagedClientSecretStore::class)->install('stranded-custody-secret');
+    expect(InstallationAuthority::current()->mode)->toBe(AuthorityMode::Standalone)
+        ->and(InstallationAuthority::current()->generation)->toBe(3)
+        ->and(ManagedTransition::query()->count())->toBe(1)
+        ->and(ManagedTransition::query()->value('status'))->toBe(ManagedTransitionStatus::Acknowledged);
+
+    $recovered = $this->postJson('/bfc/managed/enrolment/disconnect', $disconnect, p1OwnerHeaders($ownerToken));
+
+    $recovered->assertOk()
+        ->assertJsonPath('disconnect_id', $disconnect['disconnect_id'])
+        ->assertJsonPath('status', 'completed')
+        ->assertJsonPath('mode', 'standalone')
+        ->assertJsonPath('generation', 3)
+        ->assertJsonStructure(['disconnect_id', 'status', 'mode', 'generation', 'disconnected_at']);
+    expect(p1AuthorityRow())->toMatchArray([
+        'issuer' => null,
+        'connection_id' => null,
+        'organization_id' => null,
+        'installation_id' => null,
+        'authority_base_url' => null,
+    ])
+        ->and(DB::table('bfc_managed_client_secrets')->count())->toBe(0)
+        ->and(json_decode((string) DB::table('bfc_managed_enrolment_requests')->where('id', $disconnect['disconnect_id'])->value('committed_response'), true))
+        ->toBe($recovered->json());
+
+    // The next exact retry replays the committed response byte-for-byte.
+    $this->postJson('/bfc/managed/enrolment/disconnect', $disconnect, p1OwnerHeaders($ownerToken))
+        ->assertOk()
+        ->assertExactJson($recovered->json());
+});
+
+it('refuses transition creation when the recorded binding expectation disagrees with locked authority', function (): void {
+    [, $enrolment, $owner] = p1PendingDisconnectFixture();
+
+    expect(fn (): object => app(ManagedTransitions::class)->prepare($owner, ManagedTransitionDirection::Exit, [
+        'issuer' => 'https://later-issuer.example.test',
+        'connection_id' => $enrolment['connection_id'],
+        'installation_id' => $enrolment['installation_id'],
+        'generation' => 2,
+    ]))->toThrow(ManagedAuthRefused::class)
+        ->and(ManagedTransition::query()->count())->toBe(0);
 });
