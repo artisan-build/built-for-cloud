@@ -720,37 +720,40 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $standaloneRoutes[] = $router->post('/bfc/login', [StandaloneAuthentication::class, 'store'])
                 ->middleware('throttle:bfc-login')
                 ->name('bfc.login.store');
-            $standaloneRoutes[] = $router->post('/bfc/logout', [StandaloneAuthentication::class, 'destroy'])
-                ->middleware(EnsureUserIsAuthenticated::class)
-                ->name('bfc.logout');
-
             $standaloneRoutes[] = $router->get('/bfc/forgot-password', [StandalonePasswordRecovery::class, 'create'])
                 ->name('bfc.password.request');
             $standaloneRoutes[] = $router->post('/bfc/forgot-password', [StandalonePasswordRecovery::class, 'store'])
                 ->middleware('throttle:bfc-password-reset')
                 ->name('bfc.password.email');
+        });
+
+        $protectedStandaloneMiddleware = [
+            EnsureUiAuthority::class,
+            ...$personal,
+            $authorizationUser,
+            EnsureStandaloneAuthority::class,
+        ];
+        $router->middleware($protectedStandaloneMiddleware)->group(function (Router $router) use (&$standaloneRoutes): void {
             $standaloneRoutes[] = $router->get('/bfc/members', [StandaloneMemberships::class, 'index'])
-                ->middleware(EnsureUserIsAuthenticated::class)
                 ->name('bfc.members.index');
             $standaloneRoutes[] = $router->post('/bfc/members/invitations', [StandaloneMemberships::class, 'invite'])
-                ->middleware(['throttle:bfc-invitation-issue', EnsureUserIsAuthenticated::class])
+                ->middleware('throttle:bfc-invitation-issue')
                 ->name('bfc.members.invitations.store');
             $standaloneRoutes[] = $router->put('/bfc/members/{user}/role', [StandaloneMemberships::class, 'role'])
-                ->middleware(EnsureUserIsAuthenticated::class)
                 ->name('bfc.members.role.update');
             $standaloneRoutes[] = $router->delete('/bfc/members/{user}', [StandaloneMemberships::class, 'deactivate'])
-                ->middleware(EnsureUserIsAuthenticated::class)
                 ->name('bfc.members.destroy');
 
             $standaloneRoutes[] = $router->get('/bfc/me/sessions', [StandaloneSessions::class, 'index'])
-                ->middleware(EnsureUserIsAuthenticated::class)
                 ->name('bfc.sessions.index');
             $standaloneRoutes[] = $router->delete('/bfc/me/sessions/others', [StandaloneSessions::class, 'destroyOthers'])
-                ->middleware(['throttle:bfc-session-confirm', EnsureUserIsAuthenticated::class])
+                ->middleware('throttle:bfc-session-confirm')
                 ->name('bfc.sessions.destroy-others');
             $standaloneRoutes[] = $router->delete('/bfc/me/sessions/{session}', [StandaloneSessions::class, 'destroy'])
-                ->middleware(['throttle:bfc-session-confirm', EnsureUserIsAuthenticated::class])
+                ->middleware('throttle:bfc-session-confirm')
                 ->name('bfc.sessions.destroy');
+            $standaloneRoutes[] = $router->post('/bfc/logout', [StandaloneAuthentication::class, 'destroy'])
+                ->name('bfc.logout');
         });
         $personalCredentialRoutes = [];
         $personalCredentialRoutes[] = $router->get('/bfc/me/credentials', [PersonalCredentials::class, 'index'])

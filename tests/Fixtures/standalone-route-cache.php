@@ -317,6 +317,17 @@ $case = new class('testProbe') extends TestCase
         $resetBaselineCount = DB::table('password_reset_tokens')->where('email', $member->email)->count();
 
         // Phase B — Managed mode: the same compiled surface refuses.
+        $managedSession = $this->post('/bfc/login', [
+            'email' => $owner->email,
+            'password' => 'owner cache password',
+        ]);
+
+        if ($managedSession->getStatusCode() !== 302) {
+            fwrite(STDERR, 'managed-session-setup-status-'.$managedSession->getStatusCode().PHP_EOL);
+
+            return false;
+        }
+
         InstallationAuthority::change(InstallationAuthority::current(), AuthorityMode::Managed);
 
         $managed = [
@@ -334,8 +345,8 @@ $case = new class('testProbe') extends TestCase
             ]),
             $this->get('/bfc/invitations/managed-bearer-probe'),
             $this->get('/bfc/invitations/accept'),
-            $this->actingAs($owner)->get('/bfc/members'),
-            $this->actingAs($owner)->get('/bfc/me/sessions'),
+            $this->get('/bfc/members'),
+            $this->get('/bfc/me/sessions'),
         ];
 
         foreach ($managed as $index => $response) {

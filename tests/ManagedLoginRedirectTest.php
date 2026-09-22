@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUiAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionDirection;
 use ArtisanBuild\BuiltForCloud\RouteMiddleware;
+use ArtisanBuild\BuiltForCloud\User;
+use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Routing\Route as RoutingRoute;
 use Illuminate\Routing\Router;
@@ -58,7 +61,7 @@ function p3RequestUri(RoutingRoute $route, int $index): string
     );
     expect($path)->toBeString();
 
-    return '/'.$path.'?test-created-destination='.$index;
+    return '/'.$path.'?test-created-destination=route%20'.$index.'%2Fdetail';
 }
 
 it('pins every package route guarded by the local human authentication gate', function (): void {
@@ -113,11 +116,11 @@ it('redirects every managed package route guarded by local human authentication 
     $tested = [];
 
     foreach (Route::getRoutes() as $route) {
-        $middleware = $router->gatherRouteMiddleware($route);
-
         if (! str_starts_with($route->uri(), 'bfc/')
-            || RouteMiddleware::indexOfClass($middleware, EnsureUserIsAuthenticated::class) === null
-            || RouteMiddleware::indexOfClass($middleware, EnsureStandaloneAuthority::class) !== null) {
+            || RouteMiddleware::indexOfClass(
+                $router->gatherRouteMiddleware($route),
+                EnsureUserIsAuthenticated::class,
+            ) === null) {
             continue;
         }
 
@@ -130,10 +133,74 @@ it('redirects every managed package route guarded by local human authentication 
         $tested[] = $method.' '.$route->uri();
     }
 
-    expect($tested)->toHaveCount(28)
+    expect($tested)->toHaveCount(36)
         ->and($tested)->toContain('GET bfc/device')
+        ->and($tested)->toContain('GET bfc/members')
         ->and($tested)->toContain('GET bfc/me/credentials')
         ->and($tested)->toContain('GET bfc/transitions/{direction}/prepare');
+});
+
+it('orders the exact dual-gated class to redirect guests without opening authenticated managed access', function (): void {
+    DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
+        'mode' => AuthorityMode::Managed->value,
+        'generation' => 2,
+        'issuer' => 'https://issuer.example.test',
+        'connection_id' => 'test-created-redirect-connection',
+        'organization_id' => 'test-created-redirect-organization',
+        'installation_id' => 'test-created-redirect-installation',
+        'authority_base_url' => 'https://authority.example.test',
+        'managed_connection_status' => 'active',
+    ]);
+    config(['built-for-cloud.managed.client_secret' => str_repeat('a', 64)]);
+    $user = User::query()->create([
+        'name' => 'Test-created managed route member',
+        'email' => 'managed-route-'.bin2hex(random_bytes(5)).'@example.test',
+    ]);
+    $user->forceFill([
+        'role' => UserRole::Member->value,
+        'status' => 'active',
+        'scalpels_issuer' => 'https://issuer.example.test',
+        'scalpels_connection_id' => 'test-created-redirect-connection',
+        'scalpels_id' => 'test-created-redirect-subject',
+        'managed_membership_status' => 'active',
+        'managed_membership_role' => UserRole::Member->value,
+        'membership_confirmed_at' => now(),
+    ])->save();
+
+    $this->getJson('/bfc/members?test-created-format=json')->assertUnauthorized();
+
+    /** @var Router $router */
+    $router = app('router');
+    $tested = [];
+
+    foreach (Route::getRoutes() as $route) {
+        $middleware = $router->gatherRouteMiddleware($route);
+        $authentication = RouteMiddleware::indexOfClass($middleware, EnsureUserIsAuthenticated::class);
+        $standalone = RouteMiddleware::indexOfClass($middleware, EnsureStandaloneAuthority::class);
+
+        if ($authentication === null || $standalone === null) {
+            continue;
+        }
+
+        $validity = RouteMiddleware::indexOfClass($middleware, EnsureUiAuthority::class);
+        expect($validity)->not->toBeNull()
+            ->and($validity)->toBeLessThan($authentication)
+            ->and($authentication)->toBeLessThan($standalone);
+
+        $method = array_values(array_diff($route->methods(), ['HEAD']))[0];
+        $this->actingAsVersioned($user)
+            ->call($method, p3RequestUri($route, count($tested)))
+            ->assertNotFound();
+        $tested[] = $method.' '.$route->uri();
+    }
+
+    expect($tested)->toHaveCount(8);
+
+    auth()->logout();
+    $this->flushSession();
+    DB::unprepared('DROP TRIGGER bfc_authority_reject_delete');
+    DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->delete();
+    $this->get('/bfc/members?test-created-authority=invalid')->assertNotFound();
 });
 
 it('keeps standalone redirects unchanged across every guarded package route', function (): void {

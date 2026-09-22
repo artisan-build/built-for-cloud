@@ -6,9 +6,11 @@ use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManagedAuthentication;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureManagedAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\ManagedAuthClient;
 use ArtisanBuild\BuiltForCloud\ManagedHandoff;
+use ArtisanBuild\BuiltForCloud\RouteMiddleware;
 use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ManagedAuthorityFixture;
 use ArtisanBuild\BuiltForCloud\User;
@@ -251,8 +253,20 @@ it('carries only a safe UI destination through the managed handoff and callback'
     expect(session(ManagedHandoff::SESSION_INTENDED_KEY))->toBeNull();
 })->with([
     'owner relative' => ['owner', '/bfc/ui?test-created-section=credentials', '/bfc/ui?test-created-section=credentials'],
+    'owner encoded query space' => ['owner', '/bfc/ui?test-created-query=a%20b', '/bfc/ui?test-created-query=a%20b'],
+    'owner encoded query slash' => ['owner', '/bfc/ui?test-created-query=a%2Fb', '/bfc/ui?test-created-query=a%2Fb'],
     'admin off-site' => ['admin', 'https://outside.example.test/bfc/ui', '/bfc/ui'],
     'member scheme-relative' => ['member', '//outside.example.test/bfc/ui', '/bfc/ui'],
+    'member encoded protocol-relative' => ['member', '/%2f%2foutside.example.test/bfc/ui', '/bfc/ui'],
+    'member encoded backslash' => ['member', '/%5coutside.example.test/bfc/ui', '/bfc/ui'],
+    'member encoded traversal' => ['member', '/bfc/%2e%2e/ui', '/bfc/ui'],
+    'member encoded path delimiter traversal' => ['member', '/bfc%3F/%2e%2e/ui', '/bfc/ui'],
+    'member encoded path crlf' => ['member', '/bfc%0d%0a/ui', '/bfc/ui'],
+    'member raw query control' => ['member', "/bfc/ui?test-created-query=a\tb", '/bfc/ui'],
+    'member encoded query control' => ['member', '/bfc/ui?test-created-query=a%09b', '/bfc/ui'],
+    'member encoded query crlf' => ['member', '/bfc/ui?test-created-query=a%0d%0ab', '/bfc/ui'],
+    'member double-encoded query crlf' => ['member', '/bfc/ui?test-created-query=a%250d%250ab', '/bfc/ui'],
+    'member fragment' => ['member', '/bfc/ui#test-created-fragment', '/bfc/ui'],
 ]);
 
 it('refuses foreign authorization origins, insecure bases, and missing client credentials without correlation writes', function (string $case): void {
@@ -378,6 +392,11 @@ it('derives both authority route sets structurally, pins their package gates, an
 
 it('enforces managed and standalone exclusivity in both directions over the derived route sets', function (): void {
     managedConnection();
+    $user = managedUser();
+    $user->forceFill([
+        'managed_membership_status' => 'active',
+        'membership_confirmed_at' => now(),
+    ])->save();
 
     /** @var Router $router */
     $router = app('router');
@@ -387,7 +406,20 @@ it('enforces managed and standalone exclusivity in both directions over the deri
 
         if (str_starts_with($short, '\\Standalone')) {
             $method = in_array('GET', $route->methods(), true) ? 'GET' : $route->methods()[0];
-            $this->call($method, '/'.$route->uri())->assertNotFound();
+            $path = '/'.preg_replace('/\{[^}]+\}/', 'test-created-managed-refusal', $route->uri());
+            $middleware = $router->gatherRouteMiddleware($route);
+            auth('web')->logout();
+            $this->flushSession();
+
+            if (RouteMiddleware::indexOfClass($middleware, EnsureUserIsAuthenticated::class) !== null) {
+                $this->call($method, $path)->assertRedirect(route('bfc.managed.login', [
+                    'intended' => $path,
+                ]));
+            } else {
+                $this->call($method, $path)->assertNotFound();
+            }
+
+            $this->actingAsVersioned($user)->call($method, $path)->assertNotFound();
         }
     }
 

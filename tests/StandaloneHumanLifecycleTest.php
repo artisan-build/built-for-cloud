@@ -722,16 +722,16 @@ it('refuses every local route in managed mode before writes or mail', function (
     $this->post('/bfc/reset-password', [])->assertNotFound();
     $this->get('/bfc/invitations/token')->assertNotFound();
     $this->post('/bfc/invitations/accept', [])->assertNotFound();
-    $this->actingAs($owner)->get('/bfc/members')->assertNotFound();
-    $this->actingAs($owner)->post('/bfc/members/invitations', [
+    $this->actingAsVersioned($owner)->get('/bfc/members')->assertNotFound();
+    $this->actingAsVersioned($owner)->post('/bfc/members/invitations', [
         'email' => 'blocked@example.test', 'role' => 'member',
     ])->assertNotFound();
-    $this->actingAs($owner)->get('/bfc/me/sessions')->assertNotFound();
-    $this->actingAs($owner)->delete('/bfc/me/sessions/others', ['password' => 'correct horse battery staple'])->assertNotFound();
-    $this->actingAs($owner)->delete('/bfc/me/sessions/other', ['password' => 'correct horse battery staple'])->assertNotFound();
-    $this->actingAs($owner)->put('/bfc/members/'.$owner->getKey().'/role', ['role' => 'member'])->assertNotFound();
-    $this->actingAs($owner)->delete('/bfc/members/'.$owner->getKey())->assertNotFound();
-    $this->actingAs($owner)->post('/bfc/logout')->assertNotFound();
+    $this->actingAsVersioned($owner)->get('/bfc/me/sessions')->assertNotFound();
+    $this->actingAsVersioned($owner)->delete('/bfc/me/sessions/others', ['password' => 'correct horse battery staple'])->assertNotFound();
+    $this->actingAsVersioned($owner)->delete('/bfc/me/sessions/other', ['password' => 'correct horse battery staple'])->assertNotFound();
+    $this->actingAsVersioned($owner)->put('/bfc/members/'.$owner->getKey().'/role', ['role' => 'member'])->assertNotFound();
+    $this->actingAsVersioned($owner)->delete('/bfc/members/'.$owner->getKey())->assertNotFound();
+    $this->actingAsVersioned($owner)->post('/bfc/logout')->assertNotFound();
 
     expect(Invitation::query()->count())->toBe(0)
         ->and(DB::table('password_reset_tokens')->count())->toBe(0);
