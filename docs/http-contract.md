@@ -27,13 +27,13 @@ constraint is the package's own and is stated as it is declared: `^8.3` admits 8
 assertion cryptography, and neither is optional:
 
 - **`ext-gmp`** arrives with `paragonie/paseto`, which is what verifies the PASETO `v4.public`
-  assertion [`POST /bfc/console/enter`](#post-bfcconsoleenter) is gated on, and which declares the
-  extension itself.
+  assertion delegated MCP authentication is gated on, and which declares
+  the extension itself.
 - **64-bit** is declared by `paragonie/sodium_compat` as `php-64bit`. A 32-bit PHP build cannot
   install this package even with `gmp` present.
 
-Both requirements are **unconditional** — they are dependencies of the package, not of the Console —
-so a deployment that never enables the Console carries them too.
+Both requirements are **unconditional** — they are dependencies of the package, not of any one
+surface — so a deployment that never serves a delegated assertion carries them too.
 
 These are the requirements. **How Composer enforces them — at install, at runtime, or in a `vendor/`
 directory built on one host and copied to another — is Composer's to document, not this contract's:**
@@ -106,6 +106,15 @@ and the following closed `error` vocabulary. Clients branch on `error`.
 | Canonical integer other than `2` | 426 | `{"error":"unsupported_contract_major","supported_contract_major":2}` |
 
 ### Changelog
+
+**Draft — v0.17.0.** Console entry is retired: `POST /bfc/console/enter` and
+`GET /bfc/console/chrome.js` are removed, along with the Console session guard and the
+`BUILT_FOR_CLOUD_CONSOLE_ENABLED` / `BUILT_FOR_CLOUD_CONSOLE_REENTRY_URL` configuration (and the
+`console-guard`, `console-enter` and `console-chrome-assets` capabilities, which reported exactly
+that machinery). Delegated MCP authentication (`mcp-delegated`) is unchanged and keeps the
+delegated actor record (`bfc_delegated_actors`), `BUILT_FOR_CLOUD_CONSOLE_ISSUER` / `_AUDIENCE`,
+the assertion verifier and the console keyring. `GET /bfc/console/vitals` is unchanged. No
+migration runs; existing `bfc_delegated_actors` rows are untouched.
 
 **Draft — next additive release (P1 managed enrolment).** New owner-credential-authenticated
 routes provision a pristine installation into managed mode, rotate its stored managed-auth client
@@ -522,8 +531,6 @@ server-generated operational text and — per the single-reveal rule above — n
 | `DELETE /bfc/ui/credentials/installation/{id}` | `content` | redirect after installation-owned credential revocation |
 | `POST /bfc/console/re-key` | `metadata` | key ids from a bounded charset, a fixed status enum and a timestamp — no free text, and never any key material |
 | `POST /bfc/console/keys/{key_id}/retire` | `metadata` | a key id from a bounded charset, a fixed status enum, a boolean and a timestamp — no free text, and never any key material |
-| `POST /bfc/console/enter` | `content` | its success is a `303`, not a body: the `Set-Cookie` it establishes IS a single reveal of a live delegated session credential, and the `Location` echoes the return path the issuer signed |
-| `GET /bfc/console/chrome.js` | `content` | not a JSON body at all — a static JavaScript asset shipped inside the package. `metadata` is a claim about a bounded JSON shape, and a response with no such shape cannot make one; nothing in the body comes from this deployment's data |
 | `GET /bfc/console/vitals` | `metadata` | bounded integers, a fixed health enum, a semver-validated `app_version`, a timestamp, and a headline label drawn from the app's declared vocabulary — no free text anywhere, and deliberately no `product` |
 | `POST /bfc/subjects/offboard` | `metadata` | `{"offboarded": true, "fully_contained": bool}` / `{"accepted": true, "fully_contained": bool}` — bounded booleans only |
 
@@ -534,9 +541,7 @@ read-audited credential the Console dashboard uses. **A `metadata` classificatio
 itself an access grant:** the other rows in this table keep the gates they already had, and
 `metadata:read` opens exactly the routes that name it.
 
-**The column describes the success body and nothing else.** One row's success path is a
-redirect rather than a body — [`POST /bfc/console/enter`](#post-bfcconsoleenter) — and it is
-classified `content` on what that redirect carries, which is a session cookie. Error responses
+**The column describes the success body and nothing else.** Error responses
 are outside the column, as stated above: every surface shares prose `message` fields, and a `metadata` classification
 makes no claim about a `401`, `403`, `422` or `429` envelope. It is also not an access grant —
 see the paragraph above.
@@ -618,10 +623,10 @@ below are the ones that do carry a predicate, and each states it.
 `console-keys` means this instance serves the countersigning-key DELIVERY surfaces below: the
 optional claim-time key exchange and `POST /bfc/console/re-key`. It deliberately does **not** say
 `console` — key custody is not the Console, and a control plane that read `console` as "this
-deployment can be entered" would be reading a promise this capability does not make. The delegated
-guard, the enter endpoint and the delegated-actor table all DO exist as of this release, each
-advertised under its own name below; `console-keys` says nothing about any of them, and an instance
-can report it while reporting none of them.
+deployment can be entered" would be reading a promise this capability does not make (the
+delegated-entry door it might once have imagined was retired in v0.17.0). The delegated-actor
+table does exist, retained for delegated MCP authentication; `console-keys` says nothing about
+it, and an instance can report it while serving no delegated surface at all.
 
 `console-key-retire` means this instance serves
 [`POST /bfc/console/keys/{key_id}/retire`](#post-bfcconsolekeyskey_idretire), the operator path
@@ -636,35 +641,12 @@ way.
 It is named for the one surface it serves, not for the dashboard that reads it: the fleet
 dashboard is the vendor's, and nothing in this release renders anything.
 
-`console-guard` means this deployment has the Console ENABLED and therefore carries the
-delegated-session machinery: the `bfc-console` guard, the `bfc_delegated_actors` table and the
-re-entry `401`. It is absent when `built-for-cloud.console.enabled` is off, which is the
-default, because the capability describes this deployment and not the package.
-
-`console-chrome-assets` means this deployment serves the console chrome's machinery: the `bfc::`
-view namespace carrying the single package layout, and the re-entry interceptor at
-[`GET /bfc/console/chrome.js`](#get-bfcconsolechromejs). The name is deliberately about the ASSETS
-— whether any page of the application wears the chrome is that application's own decision, made by
-whichever of its templates extends the layout, and no package capability can report that. It rides
-the chrome route's own predicate, so the capability and the route can never disagree. See
-[the console chrome](#the-console-chrome).
-
 `app-action-audit-emit` means this deployment **records** app-action audit events: the
 `bfc_app_action_events` table, its transactional outbox, and the emission point an app calls. The
 verb is deliberate — see [the app-action audit stream](#the-app-action-audit-stream) — because
 **this release provides no read transport for that stream**, and a capability named
-`app-action-audit` would read as one. It is unconditional, unlike the three Console capabilities
-that carry a predicate — `console-guard`, `console-enter` and `console-chrome-assets`: what it names
-is schema and an emission point every install carries whether or not the Console is enabled. Whether the DOOR emits is what `console-enter` already says.
-
-`console-enter` means this deployment serves
-[`POST /bfc/console/enter`](#post-bfcconsoleenter) — it is the entry that finally says an
-operator can be handed here. Its condition is **stricter** than `console-guard`'s: the Console
-must be enabled AND the `bfc-console` guard must resolve to this package's own driver.
-An app that defined its own `bfc-console` guard keeps it, and the package mounts no door in
-front of somebody else's guard — so that deployment reports `console-guard` and not
-`console-enter`. The capability and the route ride one predicate, so they can never disagree.
-See [Console — what has landed](#console--what-has-landed-and-what-is-still-reserved).
+`app-action-audit` would read as one. It is unconditional, like `console-keys`: what it names
+is schema and an emission point every install carries.
 
 `mcp-serve` means this deployment declares a rooted MCP endpoint path in
 `built-for-cloud.mcp.path`; the same predicate adds `endpoints.mcp`, so the capability and the
@@ -684,7 +666,7 @@ domain-qualified MCP route whose host differs from the one the metadata request 
 unguarded, so the capability is UNDERSTATED there — withheld, never falsely granted — and a
 fallback route at the path is the 404 handler, not the transport. Whether the product runs the
 delegated-tool conformance assertion in its own suite is a product declaration the package cannot
-observe and does not pretend to check: in the voice of `console-chrome-assets`, whether the
+observe and does not pretend to check: whether the
 advertised tools are annotated and classified is the application's own decision, made by its own
 test suite, and no package capability can see that. A deployment may report `mcp-serve` alone when
 it accepts registry bearers but not delegated assertions. The package does not mount an MCP server.
@@ -2463,10 +2445,11 @@ What the ring will hold, and what it will not:
   a fresh key id is refused (`409`). Without that rule, retirement — the only revocation this
   design has, since a console key has no expiry and there is no revocation list — could be
   undone by re-filing.
-- **The deployment must already be claimed.** A key names who may enter as an admin, and a
-  deployment with no owner has not decided who that is. `POST /bfc/console/re-key` refuses with
-  `409` on an unclaimed instance. The ownership claim is exempt by construction: it establishes
-  the owner and files the key in the same transaction, in that order.
+- **The deployment must already be claimed.** A key names whose delegated assertions this
+  deployment verifies, and a deployment with no owner has not decided who that is. `POST
+  /bfc/console/re-key` refuses with `409` on an unclaimed instance. The ownership claim is
+  exempt by construction: it establishes the owner and files the key in the same transaction,
+  in that order.
 - **On the onboarding exchange, the claim code must carry the authority.** See below.
 - **HONEST LIMIT.** These checks do not, and cannot, prove the delivered bytes are a public key.
   A 32-byte Ed25519 SEED — the private half in compact form — is the same size as a public key
@@ -2481,8 +2464,9 @@ What the ring will hold, and what it will not:
 
 ### Who may deliver a key
 
-Filing a key installs a standing authority to mint delegated-ADMIN entry into this deployment,
-so each surface answers "who may do this" explicitly:
+Filing a key installs a standing authority to verify delegated-ADMIN assertions against this
+deployment — an assertion mint under it authenticates as a delegated actor on delegated MCP
+requests — so each surface answers "who may do this" explicitly:
 
 | surface | authority |
 |---|---|
@@ -2495,7 +2479,8 @@ so each surface answers "who may do this" explicitly:
 
 **Retiring is gated the same as filing, and that is a decision.** Ending a signing authority
 reads like the more consequential half, and on this ring it is not: whoever can file a key can
-activate one of its own and enter as a delegated admin, which is more than denying entry. A
+activate one of its own, and an assertion minted under it authenticates as a delegated admin on
+this deployment's MCP surface, which is more than denying that. A
 stricter ability would also have meant no credential already in the field could finish a
 rotation without being reissued first — leaving the outgoing key trusted on exactly the
 deployments the retire verb exists for.
@@ -3051,656 +3036,7 @@ other than the credential.
 
 *Pinned by* `tests/AuthenticateMcpTest.php`, `tests/McpProductAdmissionTest.php`,
 `tests/ConsoleActingPrincipalTest.php`,
-`tests/AuthFoundationTest.php`, `tests/ConsoleChromeTest.php`,
-`tests/ConsoleChromeUnmountedTest.php`, and `tests/PersonalCredentialsTest.php`.
-
----
-
-## Console entry
-
-The door. Everything above in the `/bfc/console/*` namespace is operator- or vendor-facing
-machinery; this is the one surface a **browser** posts to, and the only way a delegated
-operator session begins.
-
-It exists only on a deployment that reports the `console-enter` capability — the Console
-enabled, and the `bfc-console` guard resolving to this package's own driver. Elsewhere
-the path is a `404`, never a refusal.
-
-*Pinned by* `tests/ConsoleEnterSurfaceTest.php` ("the door is mounted by default in a console
-enabled app" and "routes off unmounts the door like every other package route"),
-`tests/ConsoleDisabledTest.php` ("it mounts no enter door and advertises none") and
-`tests/ConsoleEnterForeignGuardTest.php` ("an app that owns the guard owns entry too").
-
-### POST /bfc/console/enter
-
-Unauthenticated by construction: **this is the authentication event.** What stands in for a
-gate is the issuer's Ed25519 signature over a PASETO `v4.public` assertion, the per-deployment
-audience, the 60–120 second TTL and the single-use burn.
-
-**The carrier is POST, and GET is not routed at all** — `405`, not a redirect. A GET assertion
-is a live credential in the customer's own server and CDN logs, in browser history, and in the
-`Referer` of the very next request the entered page makes.
-
-*Pinned by* `tests/ConsoleEnterTest.php` ("does not route GET at the enter path, so an assertion
-can never ride a query string").
-
-**Request** (`application/x-www-form-urlencoded`, the shape an auto-submitting form posts):
-
-```
-assertion=v4.public.<base64url payload>.<base64url footer>
-state=<base64url of {"return_to": "/orders?tab=open"}>
-```
-
-- `assertion` — the signed handoff. Required, ≤ 4096 bytes.
-- `state` — the **signed handoff state**. Required, ≤ 4096 bytes, unpadded base64url of a JSON
-  object. The only member this deployment reads is `return_to`; unknown members are ignored, so
-  an issuer may grow the payload without a contract break. The assertion's `state` claim carries
-  the lower-case hex **sha256 of these exact bytes**, which is what makes the state signed: it
-  is checked before a single byte is decoded, and a state that does not hash to the claim is
-  refused.
-
-**The `purpose` claim** is a signed claim INSIDE the assertion, not a field on this form request —
-an issuer mints it into the token alongside `iss`/`sub`/`aud`/`jti` and the display claims; nothing
-about it is posted separately. Either `console-entry` or `mcp`. In this release it is
-optional at verification for issuer compatibility. This endpoint treats absence as
-`console-entry` and refuses an explicit `mcp`; `AuthenticateMcp` requires an explicit `mcp` and
-refuses both absence and `console-entry`. The MCP half is fully enforced now. Requiring an
-explicit `console-entry` here is deferred and scheduled for removal of the absent-purpose
-tolerance in the next minor.
-
-**303** — entry succeeded. `Location` is the **relative** `return_to`, emitted verbatim and
-never resolved against the request's `Host`, so a spoofed header cannot turn a validated in-app
-path into an absolute URL somewhere else. `Set-Cookie` carries the delegated session; from here
-the operator is authenticated to routes the `bfc-console` guard governs, under D7's clocks.
-
-*Pinned by* `tests/ConsoleEnterTest.php` ("mints a delegated session from a valid handoff and
-lands on the requested relative path" and "carries the handoff its own role and agency into the
-session, not the row's").
-
-**403 — one uniform refusal, for every reason.**
-
-```json
-{"version": 1, "error": "console_entry_refused"}
-```
-
-Every failure answers with that body and that status: an expired assertion, one minted for
-another deployment, a bad signature, an unknown key, a replayed mint, a tampered or absent
-state, an explicit `purpose: mcp`, a return path this deployment will not honour, and an actor this
-deployment has contained. **Nothing in the response distinguishes them.** The reason is recorded in the audit
-stream as a `denied_action` event with the actor typed (`credential_holder`) and a bounded
-reason code in the note — never returned to the caller.
-
-**The refusal is not served unless it was recorded.** If the audit write cannot commit, the
-request answers `500` rather than the ordinary `403`: D13 says verification failures are
-audited, and a promise that lapses during an audit-store outage — precisely when someone is
-probing — is worth less than none, because it is the one an operator believed. The availability
-trade is real and stated: a deployment whose database is unwritable cannot refuse an entry with
-a `403`. It also cannot complete one, so nothing is lost that was otherwise available, and no
-caller can reach this branch on purpose.
-
-*Pinned by* `tests/ConsoleEnterTest.php` ("answers a replayed, a wrong-deployment and an expired
-assertion with byte-identical responses", "says nothing about the reason in the body it hands
-back", "types the actor on every refusal, and names the mint only when it verified", "records
-every refusal it serves, one row per refused entry" and "does not serve a refusal it could not
-record").
-
-**The responses are byte-identical. The TIMING is not, and that is a stated non-goal.** Two
-channels survive:
-
-- a refusal decided **before** the signature check (an unknown, pending or retired key id)
-  returns measurably sooner than one decided after it, so key state stays distinguishable;
-- a **replay** is measurably **slower** than a bad signature, a wrong audience or an expired
-  token, because it is the only refusal that reaches the state binding, the shadow-actor upsert
-  and a contended unique insert before it fails. A holder of a stolen assertion can therefore
-  infer whether it has already been redeemed.
-
-Neither is padded. Constant-time padding on a page-load path would cost real latency to hide
-facts a prober largely supplies itself, and what makes a stolen or forged token worthless is the
-per-deployment audience binding and the single-use burn, not the shape of the clock.
-
-**429** — beyond 30 requests per minute per IP, applied **before** everything else on the route,
-so refused attempts are bounded too and a `429` still says `429`. One bound and no global
-ceiling, both deliberate: this surface is pre-authentication and carries no stable caller
-identity that is not attacker-chosen (a second bucket on the mint id or key id would refresh
-itself for free), and a bucket every caller shares would be a lockout lever on the **only** way
-an operator gets in.
-
-**What the endpoint guarantees**
-
-- **Single use.** The assertion's `jti` is burned in the SAME transaction that opens the
-  session, as an INSERT against a unique index rather than a read-then-write. A second
-  presentation is refused **because the mint is spent**, not because something later noticed it.
-  The two directions both hold: a redemption that fails does not spend the mint, and a burn that
-  loses the race takes the redemption with it.
-
-  *Pinned by* `tests/ConsoleEnterTest.php` ("refuses a genuine second presentation of the same
-  assertion, because the mint id is spent", "rolls the burn back with the redemption, so the two
-  commit or fail together", "keys the burn on a unique index, which is what makes it atomic" and
-  "length-delimits the burn key, so two different issuer and mint pairs cannot hash alike").
-
-  **One refusal deliberately does NOT spend the mint.** A contained (offboarded) actor's entry
-  is refused inside the burn's own transaction, so the burn rolls back with it and that
-  assertion stays presentable until its TTL runs out — every presentation refused, every one
-  audited as `actor_deactivated`. Spending it would make the second attempt audit as `replayed`,
-  which asserts the token was already *redeemed*; it was not, and an operator reading an
-  offboarded human's attempts to get back in would draw exactly the wrong conclusion. The burn
-  table records mints this deployment redeemed; the audit stream records presentations, and it
-  records all of them. The exposure is bounded by the 60–120 second TTL and by the rate limiter,
-  and no session is produced on any attempt.
-
-  *Pinned by* `tests/ConsoleEnterTest.php` ("leaves a contained actor's mint unspent, so every attempt audits as containment").
-
-  **What the suite does not exercise, said plainly: a genuine CONCURRENT double presentation.**
-  sqlite serializes writers in-process, so the tests above drive the sequential replay and the
-  shared-transaction property the race rests on — not the interleaving itself. A mutation-debt
-  row records it, and a two-connection race on a driver with real row locking is what would
-  close it.
-- **The return path cannot be substituted.** It is not a request field; it rides inside the
-  vendor's signature, and it must additionally be a same-origin **relative** path in every
-  percent-decoded form — absolute, protocol-relative, backslash, encoded-slash, double-encoded
-  and control-character forms are all refused, whatever the issuer signed — and inside the
-  deployment's `built-for-cloud.console.return_path_allowlist`, when it configures one. An empty
-  allowlist is the default and means "any path in this app"; the relative check is what closes
-  open redirect.
-
-  **A `.` or `..` PATH SEGMENT is refused outright, in every decoded form**, and that rule is
-  about who normalizes. `/admin/../billing` is legitimately relative, so every other check passes
-  — and the *browser* resolves it to `/billing` before this app sees it, which would bypass a
-  configured landing restriction with a value nothing had rejected. `/admin/%2e%2e/billing` and
-  `/admin/%252e%252e/billing` are the same defect one and two layers down. A dot *inside* a
-  segment is untouched: `/reports..csv` is an ordinary path. The allowlist is then matched
-  against the fully **decoded** path, so `/%61dmin/users` and `/admin/users` cannot be answered
-  differently; the redirect still emits what the issuer signed, verbatim.
-
-  **The path is established ONCE, before anything is decoded**, and that ordering is what makes
-  the rule hold. Query and fragment are split off the *raw* value; everything before the first
-  literal `?` or `#` is the path, for good. A revision that split them off each *decoded* form
-  was bypassed by `/admin%3F/%2e%2e/billing`: it carries no literal `?`, so the raw path is the
-  whole string and looks clean, and decoding invents a `?` behind which the traversal hid — the
-  check saw `/admin` while the browser, which treats `%3F` as an ordinary path character,
-  resolved the `%2e%2e` and landed on `/billing`. `%23` did the same with a fragment.
-
-  **The configured prefixes go through the same door.** A prefix is canonicalized before it is
-  compared, and one that is not itself a safe in-app path matches *nothing* rather than being
-  trimmed into something: a configured `//` used to `rtrim()` to the empty string, which was the
-  wildcard branch, so it silently allowed every path. Only a literal `/` is the wildcard now.
-
-  *Pinned by* `tests/ConsoleEnterTest.php` ("refuses a return path that is not a safe
-  same-origin relative path, whatever the mint signed", "refuses a return path carrying a
-  traversal segment in any decoded form, allowlist or no allowlist", "leaves a dot inside a
-  segment alone, because that is an ordinary path", "matches the allowlist against the fully
-  decoded path, not the raw one", "establishes the path once, so a query string cannot appear
-  out of a decoding round", "honours a configured return-path allowlist, at a segment boundary",
-  "refuses an allowlist prefix that is not itself a safe in-app path, rather than widening on
-  it", "treats a literal root prefix as the wildcard it looks like" and "canonicalizes the
-  configured prefixes the same way it canonicalizes the path").
-- **No CSRF token, and that is not an oversight.** The handoff is a cross-site POST from the
-  issuer's page, and a `SameSite=Lax` session cookie — Laravel's default — is not sent with one,
-  so the app has no session with that browser and no token it could have planted. The signed
-  state is what replaces it.
-
-  *Pinned by* `tests/PersonalSurfaceWebGroupTest.php` ("the console door starts a session
-  without csrf validation" and "only package browser routes ride the session stack").
-
-- **The presented credential is marked sensitive, and then removed.** Every frame in the package
-  that can hold a console assertion — a string named for a token, and the `Request` that carries
-  the submitted form — declares PHP's `#[SensitiveParameter]`. More importantly, the assertion is
-  **taken out of the request object** as soon as it has been read and before anything that can
-  throw runs, because a rich error reporter serializes request *input* alongside a trace
-  regardless of which frames hold what, and no attribute touches that.
-
-  **The claim is narrower than "no frame leaks the credential", deliberately.** The `Request`
-  travels through the entire framework pipeline — routing, middleware, the controller dispatcher
-  — and every one of those frames holds it; they are vendor frames and this package cannot
-  annotate them, which is equally true of every bearer token a Laravel application receives. So
-  does `ParagonIE\Paseto`, which receives the token itself and carries it in the *previous*
-  exception's trace on a cryptographic refusal — kept as the only operator diagnostic for one,
-  and never reaching a response. What **is** enforced: no frame this package declares carries the
-  credential unmarked, and the object those vendor frames hold no longer carries it. What is
-  **not** reachable: the raw request body if something has already buffered it (the documented
-  carrier is a form POST, where nothing does), and any credential held in a shape the scan's two
-  rules do not name.
-
-  The scan itself covers filename-derived classes, enums and interfaces under `src/`; it does
-  **not** cover package functions, anonymous classes or standalone traits, which PHP can also make
-  a frame from. Such a frame is caught by reviewing the diff that adds it, not by this suite, and
-  a debt row names it.
-
-  *Pinned by* `tests/AssertionSecrecyTest.php` ("marks every frame in this package that holds
-  console assertion bytes", "names an unmarked assertion frame when the walk meets one", "names
-  the shapes it cannot reach, so the claim beside it stays true" and "takes the presented
-  assertion out of the request before any validation runs").
-
-**What it does NOT guarantee, stated rather than implied.** The signed state closes open
-redirect and stops a state being moved between mints. It does **not** close forced login: an
-attacker who holds a legitimately-minted assertion for their **own** issuer identity can
-auto-submit it in a victim's browser, leaving that browser entered as the attacker. No state
-parameter closes that here, because every state such an attacker needs is one the issuer minted
-for them, and the classic defence — a state the relying party planted in the caller's session —
-requires a request that carries the app's cookie, which the cross-site POST is not. What bounds
-it is the 60–120 second TTL and the burn: the window is short, the token is spent, and the
-session carries the **attacker's** audited identity, so nothing done under it is attributed to
-the victim. The residue is that a victim may act inside an app under an identity they did not
-choose.
-
-*Pinned by* `tests/ConsoleEnterTest.php` ("refuses an entry whose state was tampered with after
-the mint signed it", "refuses an entry that presents no state at all", "refuses a mint that
-signed no state, whatever state is presented" and "refuses a state lifted from a different
-mint").
-
-**A successful entry writes no event to the credential lifecycle stream.** That stream is
-credential-scoped. A successful entry is audited on the
-[app-action stream](#the-app-action-audit-stream) instead — one `console-entered` event, typed as
-the delegated actor that was admitted, written inside the same transaction as the burn and the
-redemption. All three writes use the default database connection, which is the precondition that
-makes this one transaction rather than three operations against independently committing
-connections. It fails **closed**: an entry that cannot be recorded is not served, and one whose
-transaction rolls back leaves no event. What a successful entry also leaves is the shadow-actor
-row's refreshed `last_handoff_*` copy and its `updated_at`. Verification FAILURES are audited in
-full on the credential stream, which is what D13 requires.
-
-**What that event attests, and what it does not.** It says the REDEMPTION COMMITTED: the mint was
-spent and the delegated principal was written into the request's session, in one transaction with
-the event. It does **not** say the operator ended up with a usable session. The guard writes the
-session in memory and Laravel's `StartSession` persists it to the session store after the
-controller returns — after this transaction has committed — so a session-store failure in that
-window leaves a permanent event for an entry whose session never became durable, and no rollback
-can reach back through a committed transaction to undo it. The fail-closed property runs one way
-only, and this is the sentence that says so rather than leaving a reader to infer the symmetry.
-
-*Pinned by* `tests/ConsoleEnterAuditTest.php` ("records one app-action event for a successful entry, through the real door", "records no entry event when the entry transaction rolls back" and "writes nothing to the credential audit stream on a successful entry").
-
-**Storage.** One row per redeemed mint in `bfc_console_assertion_burns`, keyed on a digest of
-issuer + `jti`. It holds no secret — a `jti` is a mint identifier, worthless without the signed
-token that carried it — and it is the one table in this package that is **pruned**: a row is
-useful only until the assertion it names expires, and each successful redemption drops expired
-rows — after a browser entry and after a stateless MCP authentication alike, the two events that
-write one. The margin points one way on purpose: a row dropped while its assertion could
-still be presented would un-spend a mint.
-
-*Pinned by* `tests/ConsoleEnterTest.php` ("sits exactly on the prune boundary: one second inside keeps a burn row, one second past drops it").
-
----
-
-## The console chrome
-
-**READ THIS SECTION WITH ONE DISTINCTION IN MIND.** Everything here about the SERVER — the routes,
-the middleware, the rendered HTML, the escaping, the 401 shape — is executed by this package's test
-suite. Everything about the BROWSER is not. The interceptor's own logic is executed (in node,
-against a stand-in), but every behaviour it asks a browser for is **read from a standard and has
-never been watched happening**, and each such statement below is marked **"Specified, not
-observed."** That label is not a hedge and not a softening: it tells you which sentences someone
-has checked by running them and which are a careful reading of a specification.
-
-Why it is marked rather than fixed: a package with no application shell cannot execute a browser,
-so for these claims a citation is the ceiling. The list of every one of them, with the concrete
-check that would settle it, is at
-`~/Herd/brain/projects/built-for-cloud/pr5-browser-observable-claims.md`, and the first app
-conversion is where a real browser exists to run them.
-
-Console PRD D11 (one layout) and D7 (re-entry). This section describes what the PACKAGE serves;
-whether any page of a consuming application wears the chrome is that application's own decision,
-made by whichever of its templates extends the layout. `GET /bfc/meta` `capabilities` gains
-`console-chrome-assets` on a deployment serving these, and the name is deliberately about the
-ASSETS: no package capability can report that an app's pages render them.
-
-### One layout, branching internally
-
-The package ships **exactly one** layout, `bfc::layout`, in a `bfc::` view namespace registered
-unconditionally (a view namespace mounts nothing — it is a name an application has to reach for
-— so it is not one of the selectable surface families). It is publishable as
-`built-for-cloud-views`; publishing does not create a second layout, because Laravel's namespaced
-finder prefers the published copy for the SAME view name.
-
-**Layout selection is never conditional.** There is no "console layout" to switch to. What
-differs between a local login and a delegated console session is what the one file renders
-inside itself, driven by the ONE resolved acting principal (D14) — the same value the request
-acts as and the audit stream attributes to.
-
-- A **local** (non-delegated) authenticated session renders **zero** chrome: no attribution bar,
-  no operator identity, and no interceptor script on the page.
-- A **delegated** session renders the attribution D4 promises — the operator, the agency they
-  act for when their handoff named one, the trusted issuer's host, and this session's role from
-  the two-value `admin`/`member` vocabulary.
-
-**Display values are bounded again at render time, and refused rather than truncated.** The
-assertion verifier already bounds `display_name` and `on_behalf_of` to 120 characters and
-rejects control characters, at the door. The chrome applies the same rule a second time, because
-the claims a request acts under are read from the SESSION and anything able to write the session
-store can write a claim that never passed a verifier. A value that is over-long, carries a
-control character, or is not valid UTF-8 is treated as no value at all: the operator renders as
-`Delegated operator` and the agency is omitted. **Bounded is not sanitized** — a short, printable
-hostile string is a legal claim — so every display sink is an escaped Blade echo, in an element
-body or a double-quoted attribute, never in a script, a style, a URL or an unquoted attribute.
-
-**The residue, named:** the bound is on SHAPE and the escaping is on SYNTAX. Neither is a
-statement about TRUTH. A well-formed name that is simply not this operator's renders exactly as
-a correct one would; what makes the claim trustworthy is the vendor's signature at the door.
-
-*Pinned by* `tests/ConsoleChromeTest.php` ("renders one and the same layout file for a local
-session and a delegated one", "renders zero console chrome for a local authenticated session",
-"renders the delegated attribution the operator entered with", "follows the resolved acting
-principal, not the delegated guard the route does not name", "renders a hostile display name,
-agency and issuer inert", "proves the escaping assertion can fail against an unescaped sink" and
-"refuses a display claim that is over-long, control-bearing or invalid UTF-8 rather than
-truncating it").
-
-### GET /bfc/console/chrome.js
-
-The chrome's re-entry interceptor, served from the application's own origin. Mounted under the
-same condition as [the door](#post-bfcconsoleenter): the Console enabled AND the reserved
-`bfc-console` guard resolving to this package's own driver.
-
-**Request.** No body, no parameters. A browser `<script src>` fetch carrying the app's session
-cookie.
-
-**Gate.** Both halves of D14's seam, in this order: `bfc.console` (the structured re-entry 401)
-and then Laravel's own `auth:bfc-console` (which makes the console guard the guard of the
-request). The chrome is a delegated surface end to end, so its one asset route answers on the
-same terms as the page that loads it. This is scoping rather than confidentiality — the script
-is not secret — and what it buys is that every chrome route answers by one rule instead of a
-list of exceptions.
-
-**Response.** `200` with `Content-Type: text/javascript; charset=utf-8`,
-`Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff` and a content `ETag`. The
-`no-store` is deliberate: a response whose availability depends on a session cookie must never
-enter a shared cache, and the cost is a re-fetch per page load of a few hundred static bytes.
-*The headers are executed — the assertion reads them off the real response. That a browser or an
-intermediary HONOURS `no-store` is specified, not observed.*
-
-**Refusals.** No delegated session — absent, capped or invalidated — answers with the same
-structured `401` every other console surface does: header `BFC-Console-Reentry: 1` and the body
-documented under [delegated session clocks](#console--what-has-landed-and-what-is-still-reserved).
-A deployment that mounts no package routes, or whose `bfc-console` guard is its own, answers
-`404`.
-
-**The throttle is INSIDE the gate on this route, and every other route in this contract puts it
-outside.** That inversion is forced by the framework rather than chosen. Laravel sorts a route's
-middleware by its priority map, in which `AuthenticatesRequests` outranks `ThrottleRequests`, so
-a throttle listed in FRONT of `auth:bfc-console` makes Laravel hoist the auth middleware above
-everything that follows it — `bfc.console` included — and a request with no delegated session
-then meets the framework's generic `AuthenticationException` instead of the structured 401. That
-would kill re-entry. The cost, stated: the pre-gate path is not rate-limited by this route. What
-a refused fetch costs is a session read and a guard read, the same as any page in the host
-application.
-
-*Pinned by* `tests/ConsoleChromeRouteTest.php` ("requires both halves of the delegated seam on
-every registered chrome route", "runs the re-entry answer in front of the guard scoping, after
-Laravel has sorted the stack", "names a route whose throttle hoists the guard scoping in front
-of the re-entry answer" and "serves the interceptor to a delegated session and the structured
-401 to nobody").
-
-### What the interceptor does
-
-It wraps `fetch` and `XMLHttpRequest` and watches for the re-entry answer.
-
-**The first check is that the response is SAME-ORIGIN with the console page**, compared as scheme
-plus authority against the response's own URL (`response.url` for fetch, `responseURL` for XHR).
-The wrapper sees every response the page makes, third-party ones included, so without that check
-any CORS-readable endpoint that exposes `BFC-Console-Reentry` through
-`Access-Control-Expose-Headers` could answer `401` with a `reentry_url` of its choosing and send
-an administrator's top-level window there — a phishing primitive on the exact path operators are
-trained to follow. A response whose URL cannot be read (an opaque `no-cors` response, or a
-document that cannot report its own origin) is **ignored entirely**: not acted on, and not
-reported either, because the script cannot establish it is looking at its own application's
-answer.
-
-**The residue of that check, stated:** a redirected response reports its FINAL URL and is judged
-on where it landed; and a same-origin PROXY the application itself operates is
-indistinguishable from the application — if an app forwards a third party's bytes under its own
-origin, an origin comparison cannot see through it.
-
-*Specified, not observed:* that an opaque response carries an empty `url` and that a redirected
-one reports its final URL are read from the Fetch standard. The proxy statement is about origins
-and holds whatever a browser does.
-
-**And it introduced one new limitation, disclosed rather than absorbed.** A document with no
-readable EFFECTIVE origin can never verify any response, so the interceptor cannot function there
-at all. It says so at install time (see the causes below) and then does not install, rather than
-sitting quietly inert. That is a frame sandboxed with `allow-scripts` and **without**
-`allow-same-origin`, or a runtime that does not expose `window.origin`.
-
-The check reads **`window.origin`**, which is the document's effective origin — not
-`location.origin`, which is derived from the URL and still reports a perfectly good origin inside
-a sandboxed frame. An earlier revision of this package read `location.origin`, so this gate could
-never fire in the one case it was written for. There is deliberately no fallback: a runtime
-without `window.origin` gets no interceptor and is told so.
-
-`about:blank` is **not** in this set as a rule — a blank document normally inherits its creator's
-origin. An earlier revision of this sentence listed it flatly and that was too broad.
-
-*Specified, not observed:* that `window.origin` is `"null"` in a sandboxed frame while
-`location.origin` is not, and that the two agree in an ordinary document.
-
-Only then does it read the status and the header — **branching on the header, never on the
-status alone**, so an application's own `401` is left entirely alone.
-
-- With the documented envelope in the body (`version` of `1` and `error` of
-  `console_reentry_required`) and a `reentry_url`, it performs a **top-level** navigation:
-  `window.top.location`, with `return_to` carried across as a percent-encoded query parameter.
-  Never the frame the capped request came from — re-entry means leaving this app, and doing it
-  inside an iframe would either be refused by the issuer's framing policy or leave the outer
-  document on a dead session.
-- With **no** `reentry_url` — which is what the server emits when the deployment has configured
-  none — it **invents nothing**. It navigates nowhere, marks the chrome element
-  `data-bfc-console-reentry="unavailable"`, replaces its text with a notice, and dispatches
-  `bfc:console-reentry-unavailable` on `document` so the host application can respond in its own
-  voice. A `reentry_url` whose scheme is not `http(s)`, a body that is not the documented
-  envelope, and a `window.top` that cannot be reached at all, all take the same path.
-- It **never swallows** the response. The wrapped `fetch` resolves with the original response
-  object (the body is read from a `clone()`), and the XHR wrapper only ADDS a listener, so the
-  caller's own handlers still run and still see the `401`.
-
-**IT NEVER FAILS SILENTLY EITHER, and that is one rule rather than three exceptions.** Every path
-on which the interceptor cannot complete a re-entry ends the same way — the chrome element marked
-`data-bfc-console-reentry="unavailable"` and `bfc:console-reentry-unavailable` dispatched — with
-`detail.cause` naming which of exactly three things happened:
-
-| `detail.cause` | what happened | is the delegated session over? |
-|---|---|---|
-| `origin_unverifiable` | this document reports an opaque origin, so no response can be verified as the application's. Said once at install time; the interceptor then does not install | **no** — so the chrome is marked but its attribution text is left alone |
-| `no_destination` | re-entry is required and the payload names nowhere to go: no `reentry_url`, a scheme this script refuses, an envelope it does not recognise, or an unreachable `window.top` | yes |
-| `navigation_refused` | a destination was found and the **browser refused the navigation**, throwing out of `Location.assign` | yes |
-
-On `origin_unverifiable` the operator's attribution is still TRUE — their session is alive — so
-the bar keeps saying who they are. Replacing D4's attribution with a warning about a capability
-this document lacks would trade a correct statement for a notice.
-
-*Specified, not observed:* what is executed is that the script announces each cause and which one
-it picks. WHEN a browser puts it in `origin_unverifiable` or `navigation_refused` — the sandbox
-and refusal behaviour — is read from a standard.
-
-### The `navigation_refused` guard rests on an unverified premise
-
-This one is called out on its own rather than left in the table, because it is the sharpest case
-in this section and because it concerns a guard added specifically to stop a silent failure.
-
-**The whole path assumes that a browser refusing a top-level navigation RAISES out of
-`Location.assign`.** That is what the `try` catches, and it is what produces the
-`navigation_refused` announcement. It is read from the specification. Nobody has watched a browser
-do it.
-
-**If a refusal is silent in practice, the `try` catches nothing** — no cause is announced, no
-event fires, and the operator sits on a dead page believing re-entry is under way. **That is
-precisely the defect the guard was added to close.** Read it as a guard whose premise is
-unverified, not as a guarantee that a refused re-entry is always reported.
-
-What settles it: load a console page inside `<iframe sandbox="allow-scripts allow-same-origin">`,
-let a request receive the capped 401, and observe whether
-`bfc:console-reentry-unavailable` fires with `cause: "navigation_refused"` or nothing happens at
-all. Until somebody does that, this paragraph is the honest statement of the guard's strength.
-
-### Automatic re-entry is a full-page reload, and unsaved work goes with it
-
-This is D7's stated cost and it is said here rather than left to be discovered. **When the
-interceptor re-enters, it performs a top-level navigation, so any unsaved client-side state on
-the page — a half-written form, an in-flight component's local state, an unsent draft — is
-lost.** At the two-hour assertion cap an operator sees exactly one full-page reload; with a live
-session at the issuer they are not logged out, but the reload still happens. "The caller still
-receives its `401`" does not preserve anything once navigation has begun.
-
-The package will not decide for an application what to do about that, but it does give it the
-moment. **Two DOM events on `document`, and they are a public surface:**
-
-| event | when | `detail` |
-|---|---|---|
-| `bfc:console-reentry` | synchronously, immediately **before** the navigation | `{reason, return_to, cause: null}` |
-| `bfc:console-reentry-unavailable` | when re-entry cannot be completed | `{reason, return_to, cause}` |
-
-`detail.reason` is the `reason` enum from the 401 body (or `null` when the body could not be
-read); `detail.return_to` is the relative path the server chose; `detail.cause` is one of the
-three values in the table above, and is `null` on the departure event.
-
-**The ordering is the point and it is pinned as an ordering**, not as two facts that happen to
-both be true: the departure event is dispatched, and only then is the navigation performed. When
-the browser refuses that navigation, an `unavailable` event follows the departure one — so a
-listener that saved a draft is also told the page is not going anywhere.
-
-*Executed:* that the script dispatches before it calls `assign()`, asserted as a sequence in one
-ordered channel. *Specified, not observed:* that a browser runs every listener to completion
-before the navigation takes effect, and that a synchronous `localStorage` write survives it. A
-listener that saves over the network has no such guarantee under either reading.
-
-**Neither event is cancelable, and `bfc:console-reentry` is deliberately not.** A listener runs
-synchronously, so a `localStorage` write completes before the page starts leaving; a network save
-does not. Cancelling was considered and rejected: the delegated session is already dead
-server-side, so suppressing the navigation grants no authority and buys nothing — it only strands
-the operator on a page whose every request fails, turning D7's honest reload into a silent dead
-end.
-
-**It is a convenience and not an enforcement.** Revocation is enforced server-side, inside the
-guard, on every route: a browser with this script blocked, disabled or simply not loaded still
-cannot act with a dead session — it sits on a page whose requests all fail. That ordering is
-what the amended D7 chose: revocation truth never depends on the browser.
-
-*Pinned by* `tests/ConsoleReentryInterceptorTest.php` ("ignores a cross-origin response carrying
-the re-entry header", "ignores a response whose own url it cannot read", "refuses to navigate on
-a body that is not this contract envelope", "navigates the top-level window through the issuer,
-preserving the return path", "navigates the top window rather than the frame the capped request
-came from", "announces the navigation before performing it, so an app can persist unsaved state",
-"announces every path on which it cannot complete a re-entry, naming the cause", "degrades
-honestly when the deployment has configured no re-entry url", "refuses a re-entry url whose
-scheme is not http or https", "degrades honestly when the top window cannot be reached at all",
-"hands the capped response back to its caller rather than swallowing it", "performs the same
-re-entry for a capped XMLHttpRequest" and "ignores an ordinary 401 that is not a console
-re-entry").
-
-### Content Security Policy
-
-**Every statement in this subsection about how a browser ENFORCES a policy is specified, not
-observed.** What is executed is what the package EMITS — the assertion below inspects the rendered
-response — and nothing more. No page has been served under a real `script-src` and watched. Three
-successive corrections to this subsection each replaced one confident spec claim with another, so
-what changed is the kind of claim it makes, not another attempt at a more careful sentence.
-
-**What the package emits is a single same-origin external `<script src>` with no nonce, no inline
-script and no inline style anywhere on the page.** It is served from a route rather than inlined
-precisely so that a consuming app never has to add `'unsafe-inline'` to `script-src` to make a
-dependency's chrome work — a package that forces that on an app has handed it a downgrade. What
-your policy has to say about that tag depends on which KIND of policy you run, and the two
-answers are different.
-
-*Pinned by* `tests/ConsoleChromeTest.php` ("renders the interceptor as an external script with no
-inline script anywhere on the page").
-
-**Host-allowlist policies — `script-src 'self'` is normally sufficient.** A policy naming
-`'self'` (or an origin that covers this app) admits the tag as it stands. This covers most
-deployments and it is the case the package is designed around.
-
-**With one qualification, because `script-src` is not always the directive that decides.** If
-your policy also sets `script-src-elem`, THAT directive governs `<script src>` elements and
-`script-src` is not consulted for them at all — so `script-src 'self'; script-src-elem 'none'`,
-or any `script-src-elem` that does not cover this origin, blocks the interceptor however
-permissive `script-src` looks. Check the narrowest directive that applies to script ELEMENTS,
-not the fallback. *Specified, not observed.*
-
-**Nonce-only and `'strict-dynamic'` policies — `'self'` is NOT enough, and the tag will not load
-without help.** Two separate reasons, and an earlier revision of this section got both wrong:
-
-- Under `script-src 'nonce-…'` with no host source, nothing is allowed except what carries the
-  nonce. The package's tag carries none, so it is blocked.
-- Under any policy containing `'strict-dynamic'`, CSP Level 3 says host-source and scheme-source
-  expressions — `'self'` included — **are ignored** for script loading, and only a nonce or hash
-  admits a parser-inserted script. Adding `'self'` alongside `'strict-dynamic'` therefore does
-  not help: the tag is still blocked, and the interceptor silently does not exist while capped
-  XHRs sit on a dead page. *Specified, not observed* — as is the browser asymmetry immediately
-  below.
-
-  Worse, this fails *asymmetrically across browsers*: a CSP2-era browser ignores the
-  unrecognised `'strict-dynamic'` keyword and honours `'self'`, so a policy carrying both loads
-  the script in old browsers and blocks it in new ones. Test on a browser that implements CSP3.
-
-**Two supported remedies, and pick whichever fits your policy:**
-
-1. **Publish the views and attach your own nonce.**
-   `php artisan vendor:publish --tag=built-for-cloud-views` puts `layout.blade.php` and
-   `chrome.blade.php` in `resources/views/vendor/bfc`, where you can add
-   `nonce="{{ $yourNonce }}"` to the `<script>` tag. Publishing does **not** create a second
-   layout: Laravel's namespaced finder prefers the published copy for the same view name, so
-   `bfc::layout` still names exactly one template — yours.
-2. **Load it from an already-trusted script.** Under `'strict-dynamic'`, a script injected by a
-   trusted script inherits that trust, which is what the keyword exists for. From your own
-   nonce-carrying bundle:
-   `const s = document.createElement('script'); s.src = '/bfc/console/chrome.js'; document.head.append(s);`
-   In that case remove the package's own tag by publishing the chrome partial and deleting it,
-   or the browser will simply block the duplicate.
-
-**The package will not guess a nonce for you and will not emit an inline tag.** There is no
-config key for a nonce here, deliberately: a nonce has to come from the same request that set the
-header, Laravel has no framework-wide nonce accessor to read it from, and a package inventing one
-would be a package deciding the shape of an app's CSP.
-
-The rest of what the chrome needs is deliberately small, so that no other directive has to be
-widened:
-
-| directive | why |
-|---|---|
-| `script-src` | the interceptor tag, and nothing else is loaded — see the two cases above |
-| `connect-src` | untouched — the interceptor wraps calls the app was already making and issues none of its own |
-| `style-src` | untouched — the chrome ships no stylesheet and no inline `style` attribute |
-| `img-src` | untouched — the chrome loads no images |
-| `frame-ancestors` | your own choice; the interceptor's top-level navigation degrades honestly when it is framed cross-origin, rather than navigating the frame |
-
-**Which directives govern the top-level navigation — corrected twice now, so here is the whole
-of it.** `form-action` does **not** apply: it restricts form submissions, not a script-initiated
-`location.assign()`. `navigate-to` would have applied, but it was dropped from CSP Level 3 and
-never shipped in any browser, so it governs nothing today.
-
-**What DOES apply is sandboxing, and it comes in two forms — one of which is a CSP directive.**
-An earlier revision of this paragraph asserted that no CSP directive stands between this script
-and the issuer, and that sandboxing "is not CSP". Both were wrong:
-
-- the **`sandbox` iframe attribute**, when this page is framed without `allow-top-navigation`; and
-- the **CSP `sandbox` directive**, which applies the same HTML sandboxing flags from a response
-  header. `Content-Security-Policy: script-src 'self'; sandbox allow-scripts allow-same-origin`
-  is a coherent policy under which the interceptor **loads and its navigation is denied** — the
-  script runs, finds a destination, and the browser refuses the assignment.
-
-If you send a CSP `sandbox` directive, include **`allow-top-navigation`** — the full token — or
-accept that automatic re-entry cannot happen on that page.
-
-**`allow-top-navigation-by-user-activation` is NOT a substitute here, and an earlier revision of
-this sentence implied it was.** That token permits a top navigation only under transient user
-activation, and a re-entry triggered by a BACKGROUND Livewire or XHR response has none: the
-operator did not click anything to cause it. It may work when the capped request happens to follow
-a click closely enough to still be within an activation window, which makes it worse than useless
-as a recommendation — it would work in testing and fail in the case the feature exists for.
-*Specified, not observed.*
-
-**When the browser refuses BY THROWING, the interceptor says so rather than failing silently.**
-The call is guarded, and the script marks the chrome element and dispatches
-`bfc:console-reentry-unavailable` with `detail.cause` of `navigation_refused`. That
-`Location.assign` throws on a refused top navigation is *specified, not observed* — see
-[the named entry above](#the-navigation_refused-guard-rests-on-an-unverified-premise), which
-states what follows if it does not.
-
-**The residue, and it is narrow only if the premise holds:** a refusal the browser declines to
-raise — reported only to the developer console — cannot be caught, so that case remains invisible
-to the script. *Specified, not observed:* which refusals raise and which do not. If none of them
-raise, this residue is the whole behaviour rather than an edge of it.
-The operator is then left on a page whose requests all fail, which is where they would have been
-had the script never loaded. Revocation is unaffected either way: it is enforced server-side, in
-the guard, on every route.
+`tests/AuthFoundationTest.php`, and `tests/PersonalCredentialsTest.php`.
 
 ---
 
@@ -3765,11 +3101,12 @@ else.
 **What a consuming app must do to get the guarantee: perform the action and the emission inside ONE
 transaction it opened itself, on the default connection used by the audit models.** Do that and a
 rolled-back action takes both rows with it, so nothing is ever recorded about something that did
-not happen — the stream is transactional, or it is fiction. This package's own emitter is written
-that way: `POST /bfc/console/enter` writes the entry and its event on the default connection in one
-transaction, and serves no entry it could not record.
-*Pinned by* `tests/ConsoleEnterAuditTest.php` ("records no entry event when the entry transaction
-rolls back" and "does not serve an entry it could not record").
+not happen — the stream is transactional, or it is fiction. (Historically the package's own
+emitter was the delegated-entry door, retired in v0.17.0, which wrote the entry and its event on
+the default connection in one transaction and served no entry it could not record; the
+requirement on a consuming app is unchanged.)
+*Pinned by* `tests/RecorderTransactionGuardTest.php` ("refuses to record an app action outside a
+database transaction" and "refuses a direct model write made outside a transaction").
 
 **`bfc_app_action_outbox` is a dedup ledger, not an operational outbox.** The table is
 named for the outbox PATTERN D17 names, and the pattern is what the write side does; the delivery
@@ -3862,10 +3199,9 @@ complete.** A write that satisfies both still gets **no ledger row** — one can
 caller-identified action is likewise a property of the emission point and of nothing else.
 
 **And `on_behalf_of` is caller-supplied on every path, this package's included.** On the package's
-own two paths it originates as an issuer-minted claim, bounded to 120 characters and rejected for
-control characters by the assertion verifier: `POST /bfc/console/enter` passes the claims of the
-session its redemption has just begun, and every other emission passes the request's one resolved
-acting principal. Nothing downstream of those re-checks it, and a consuming app calling the actor
+own path it originates as an issuer-minted claim, bounded to 120 characters and rejected for
+control characters by the assertion verifier: every emission passes the request's one resolved
+acting principal. Nothing downstream of that re-checks it, and a consuming app calling the actor
 factory itself supplies whatever it likes. What IS enforced: the emission point can carry an agency
 only through a delegated actor, and the model's `creating` hook refuses the other combinations on
 the writes that fire it. **The table constrains neither column against the other** — a raw insert
@@ -3880,17 +3216,15 @@ shared enum would hand a reader of either stream members that stream cannot prod
 
 - `local_user` — the host application's own authenticated human, named by the app's own primary key.
 - `api_token` — a credential acting on its own behalf, named by its opaque credential id.
-- `delegated_actor` — a delegated human admitted through the Console door, named by the
+- `delegated_actor` — a delegated human admitted through a verified assertion, named by the
   type-qualified `bfc-console:{id}` form and never the bare integer. `bfc_delegated_actors` is an
   ordinary auto-increment table in the same id space `users` occupies, so a bare `7` would read as
   user 7. This is the only actor type that carries `on_behalf_of`.
 
 Attribution, on emissions the package makes during a request, comes from the **one** acting
-principal it resolves per request (D14) — not from asking a guard, `Auth::` or the request a
-second time. On a route guarded by the app's own guard while a delegated session is also live, the
-acting principal is the local user, and that is what the event names. `POST /bfc/console/enter` is
-the deliberate exception and passes the admitted actor directly, because the request's acting
-principal was resolved before the delegated session existed.
+principal it resolves per request — not from asking a guard, `Auth::` or the request a
+second time. On a route guarded by the app's own guard while a delegated principal is also
+live on the request, the acting principal is the local user, and that is what the event names.
 
 ### The reason vocabulary
 
@@ -3934,253 +3268,55 @@ instance, can tamper with its own history, and this package will neither prevent
 
 ---
 
-## Console — what has landed, and what is still RESERVED
+## Console — what has landed, what has been RETIRED, and what is still RESERVED
 
-The vendor-side Console lands in stages. This section says exactly which of its reserved names
-are now real and which are still only names, so a consumer never has to guess. **Nothing in the
-"Landed" list changes any documented request or response shape, so `api_version` does not
-move**: what it adds is a guard, two tables, a middleware and one browser route whose success
-is a redirect. This section deliberately contains no `### METHOD /path` route headings — the
-mechanical route-completeness check covers live routes only, and the routes named here are
-documented in their own sections above.
+The vendor-side Console lands in stages, and in v0.17.0 one stage was removed again. This
+section says exactly which of its names are real, which were retired, and which are still only
+names, so a consumer never has to guess. This section deliberately contains no `### METHOD
+/path` route headings — the mechanical route-completeness check covers live routes only, and
+the routes named here are documented in their own sections above.
 
 ### Landed
 
-- **The Console is OFF unless a deployment enables it.** `built-for-cloud.console.enabled`
-  gates everything below and defaults to `false`. Installing or upgrading the package changes
-  nothing for an app that has not opted in — no new guard, and no change to how the package's
-  session gates behave. `GET /bfc/meta` `capabilities` gains `console-guard` **only while that
-  flag is on**, because the capability describes this deployment rather than the package.
-- **Guard name `bfc-console`** — with the Console enabled, the delegated-session guard EXISTS
-  and is registered **by the package itself**: a consuming app adds nothing to its `auth.php`.
-  It is a session guard over the delegated-actor provider, and it is a SECOND guard alongside
-  the `bfc` credential driver, which is unchanged. An app that has already defined a
-  `bfc-console` guard of its own keeps it; the package never overwrites one. The provider name
-  `bfc-console-actors` is RESERVED: with the Console **enabled**, an app that has defined it as
-  something else, without defining its own guard, fails boot loudly rather than having the
-  delegated guard built on its user table. With the Console **disabled** that collision is
-  ignored entirely — a deployment that never asked for the Console cannot be stopped from
-  booting by it.
-- **Only `redeem()` mints a delegated session through this package, and it takes the SIGNED
-  ASSERTION BYTES.** `ConsoleGuard::redeem()` verifies the token itself — signature, issuer,
-  audience, TTL bound and clocks — inside the same call that writes the session. No public
-  method accepts an already-built assertion OBJECT, and none logs a delegated actor in on
-  request; `Assertion::fromVerifiedClaims()` is public and is documented as not being proof of
-  provenance, so an operation taking one would have accepted a forged claim set. The guard is
-  also a plain `Guard`, deliberately not a `StatefulGuard`: `attempt`, `once`, `loginUsingId`,
-  `onceUsingId` and `viaRemember` do not exist on it, and its user provider answers null/false
-  to every credential-shaped question for every input. "No password, no login path" is a
-  property of the types, not a set of methods that refuse.
-  **Two scans enforce this, and they cover the two shapes the escape has actually taken.** A
-  FILE scan requires exactly one file under `src/` to be able to write a delegated session key,
-  and that file's writer to be private. A PUBLIC-SURFACE scan requires `ConsoleGuard`'s public
-  API to be exactly a known set, so a new public method cannot quietly call that private writer
-  while every file assertion stays green. Both are driven over fixtures carrying the offence, so
-  both are proven able to fail.
+- **Console key custody** — [`POST /bfc/console/re-key`](#post-bfcconsolere-key) and
+  [`POST /bfc/console/keys/{key_id}/retire`](#post-bfcconsolekeyskey_idretire), plus the
+  claim-time key delivery surfaces. Full contract in
+  [its own section](#console-key-custody).
+- **Table name `bfc_delegated_actors`** — the delegated-actor (shadow actor) table EXISTS and
+  is RETAINED for delegated MCP authentication. It is **not** a `users` table: no password
+  column, no remember-token column, no login path, and no credential can resolve to one — the
+  `bfc-console:` identifier namespace is RESERVED and is refused before any credential's bound
+  `user_id` reaches a user provider. A delegated principal's identity is **type-qualified**
+  (`bfc-console:{id}`) so it can never collide with a `users` id, and the identifier suffix
+  must be a canonical positive decimal. Actor identity is the **digest of a length-delimited
+  issuer+subject encoding**, not a collated comparison of two text columns, so two subjects
+  differing only in case are two humans on every database. Rows are never pruned — they are
+  the referent of delegated audit attribution.
+- **Delegated MCP authentication** — the `bfc.mcp` middleware accepts a purpose-bound
+  delegated assertion as a bearer, records or refreshes the delegated-actor row, burns the
+  mint, and publishes the delegated principal for that one request. Full contract in
+  [its own section](#mcp-authentication).
+- **Console vitals** — [`GET /bfc/console/vitals`](#get-bfcconsolevitals), the
+  `metadata`-classified read behind `metadata:read`. Full contract in
+  [its own section](#console-vitals).
+- **The app-action audit stream's schema and emission** —
+  [above](#the-app-action-audit-stream).
 
-  **What they do not enforce**, because the alternative is an absolute nobody can hold: PHP
-  cannot express "no future public method may call this private method" as a language
-  guarantee. These are tripwires — they make the change impossible to introduce *silently*, not
-  impossible to introduce. Uncovered specifically: a **novel write form** (the scanner
-  recognises a fixed textual list of instance mutators — `->put(`, `->replace(`, `->merge(`,
-  `->push(`, `->flash(`, `->now(`, `->flashInput(` — not all PHP or Laravel write forms); a key
-  **assembled at runtime**; **reflection** into the private writer; anything **outside `src/`**,
-  which is the session-store boundary below; and a change to `redeem()`'s **own body**, which
-  the token tests cover instead.
+### Retired in v0.17.0
 
-  One residue deserves naming rather than a category, because it is the one the public-surface
-  scan cannot reach: **an already-enumerated public method could be modified to call the private
-  writer.** `actor()`, `setUser()` or `logout()` could be edited to call `beginSession()`, and
-  both scans would stay green — the file set is unchanged, and so is the set of public method
-  names. The scans enumerate which files can write and which methods exist; neither reads what
-  an existing method does. Reviewing a diff that touches one of those methods is the control,
-  and it is a human one.
-
-  *Pinned by* `tests/ConsoleSessionWriterScanTest.php` ("has exactly one file in src/ that can
-  write a delegated session key"; "keeps the one writer unreachable from outside the guard";
-  "has exactly the public surface it is meant to have on the one class that can write";
-  "collects and names a differently-named writer when the walk meets one"; "names an unremarked
-  public method, and a removed one"), `tests/ConsoleRedemptionTest.php` ("exposes no way to log
-  a delegated actor in without signed bytes"; "refuses a token whose claims were rewritten to
-  claim the admin role") and `tests/ConsoleDelegatedActorTest.php` ("refuses every credential
-  lookup unconditionally, not merely the ones that do not match"; "has no credential-shaped
-  entry point on the guard at all").
-
-  The one public seam the `Guard` contract forces is `setUser()`, which Laravel's `actingAs()`
-  uses. It sets an in-memory principal for the current request and writes **nothing** to the
-  session, and the guard additionally requires that the session itself names the principal —
-  `SessionGuard::user()` returns whatever `setUser()` was given without consulting the session,
-  so without that cross-check a caller could combine `setUser()` with hand-written claims and
-  act as a delegated admin with no signature anywhere. Nothing else in the package writes
-  delegated session state: the write lives inside the verifying operation, privately.
-
-  **The residue, named rather than glossed.** Any code that can write the session store can
-  write the four claim keys and the guard's own login key, and the result is indistinguishable
-  from a redeemed session. That is irreducible — it is what this package's own test suite does
-  to reach states a real redemption cannot produce — and it is not a credential or a login
-  path, which is what §4.3 governs. The guarantee that is made and held is narrower and exact:
-  **no package API assembles a delegated session without verified assertion bytes.**
-  *Pinned by* `tests/ConsoleSessionWriterScanTest.php` — the enumeration above is what makes this
-  a package-wide statement rather than a claim about the classes someone remembered to name.
-
-  **A failed redemption cannot hand back a usable delegated session.** Laravel writes and
-  regenerates the session before it dispatches its `Login` event, so a host application's
-  listener that throws would otherwise leave a session already carrying the delegated identifier
-  while the redemption reported failure; the operation compensates — the session is destroyed —
-  before the failure propagates. If the compensation *itself* fails (the session store is
-  unreachable), the **original** failure is still what surfaces, and the compensation failure is
-  reported to the application's exception handler rather than replacing it or being dropped.
-
-  Stated exactly, because the two halves differ:
-
-  - **Guaranteed:** the **regenerated session id this redemption hands back** cannot rehydrate a
-    delegated identity, in either double-failure case — the compensation's in-memory flush
-    precedes the store I/O that fails, and that id names a record which was never written
-    (nothing is persisted mid-request; the store is written once, at the end).
-
-  - **Not guaranteed:** a record under the **prior** id may survive, **carrying whatever
-    identity it already held — including a delegated one.** A redemption can begin from an
-    already-delegated session (an operator re-entering the console), and with the store
-    unavailable nothing destroys that record, so a concurrent request or a replay of the prior
-    cookie still authenticates as whoever it already held. The failed redemption grants nothing
-    new; it fails to revoke something already live. No ordering fixes this: destroying the prior
-    record requires the store, and the store is what is unavailable.
-
-  *Pinned by* `tests/ConsoleRedemptionTest.php` ("leaves no usable session when a Login listener
-  throws during redemption"; "surfaces the original failure, not the compensation failure, when
-  the session store is unreachable"; "leaves a later request unauthenticated when the store
-  recovers before the response is saved"; "leaves a later request unauthenticated when the store
-  is still down at save time"; and "leaves a PRE-EXISTING delegated record alive under its own id
-  when the store fails at teardown", which asserts the residue itself).
-
-  **Remember-me:** this guard never queues a recaller cookie. Laravel still *checks* for one
-  when a session carries no identifier, so that branch is reachable; it is fail-closed because
-  the delegated-actor provider's `retrieveByToken()` returns null for every input, so no
-  principal is ever produced from a cookie.
-- **Table name `bfc_delegated_actors`** — the delegated-actor (shadow actor) table EXISTS. It
-  is **not** a `users` table: no password column, no remember-token column, no login path, and
-  no credential can resolve to one — the `bfc-console:` identifier namespace is RESERVED and is
-  refused before any credential's bound `user_id` reaches a user provider. A delegated
-  principal's identity is **type-qualified** (`bfc-console:{id}`) so it can never collide with a
-  `users` id, and the identifier suffix must be a canonical positive decimal. Actor identity is
-  the **digest of a length-delimited issuer+subject encoding**, not a collated comparison of two
-  text columns, so two subjects differing only in case are two humans on every database.
-  Rows are never pruned — they are the referent of delegated audit attribution.
-- **Per-mint claims are SESSION-bound.** The role, display name and `on_behalf_of` a request
-  acts under are the ones that request's own handoff wrote into its session. The actor row
-  keeps a `last_handoff_*` copy for operator listings and audit context only: a second handoff
-  for the same human never changes the role of an already-live session.
-- **Dual-session precedence.** ENFORCED, and enforced by the framework's own scoping rather
-  than by a package-owned repoint. A delegated route carries Laravel's `auth:bfc-console`, so
-  the console guard is the guard OF THAT REQUEST: `$request->user()`, `Auth::user()`,
-  `Auth::id()`, `Gate` and every policy return the delegated actor, and the package's resolver
-  returns the same object. On such a route, with a local `web` session simultaneously live,
-  **the delegated guard wins — for the acting principal and for all UI/attribution branching —
-  never a union of the two.**
-
-  **What `auth:bfc-console` does to global state, stated exactly.** It is Laravel's own
-  `Authenticate` middleware, and it calls `AuthManager::shouldUse()` → `setDefaultDriver()` →
-  a write to `config('auth.defaults.guard')` — precisely what `auth:web` and `auth:api` do in
-  every Laravel application. This package makes no such write itself (it never calls
-  `shouldUse()` and never sets that key), but the write happens, and it is process-global for
-  the life of the config repository. It does not leak between requests on either runtime this
-  package supports, though they get there differently:
-
-  - **PHP-FPM** — *not* because each request gets a fresh process; an FPM worker ordinarily
-    serves many requests, which is what `pm.max_requests` bounds. It is PHP's shared-nothing
-    execution model: at request shutdown all userland state is destroyed — container and config
-    repository included — and the next request re-reads `auth.defaults.guard` from the
-    application's config. The OS process persists; nothing written into PHP memory does.
-  - **Octane**, which *does* reuse userland state and therefore needs an explicit mechanism: it
-    installs a per-request clone of the config repository via
-    `Laravel\Octane\Listeners\CreateConfigurationSandbox`, which runs on every
-    `RequestReceived`.
-
-  Note explicitly that Octane's `FlushAuthenticationState` is **not** what closes this — it
-  forgets the resolved guards and the `auth.driver` instance and never touches config — so do
-  not re-derive the guarantee from that listener.
-
-  **The runtime assumption:** any runtime that reuses a container across requests **without
-  sandboxing the config repository** leaves the default guard pointed at `bfc-console` for
-  every later request in that process, and a request touching no Console route would resolve
-  its principal through the delegated guard. That is the condition under which this becomes a
-  real privilege leak; it is a property of the host runtime and cannot be prevented from inside
-  a guard.
-  *Pinned by* `tests/ConsoleGuardScopingTest.php`, which models the property rather than invoking
-  Octane (no dependency here): "would resolve a non-console route through the delegated guard on a
-  runtime that never sandboxes config" — asserting the resolved PRINCIPAL, since a refusal reports
-  the same guard name — plus "does not leak into the next request when the config repository is
-  cloned per request, the way Octane clones it" and "leaves auth.defaults.guard pointed at the
-  console guard, and forgetting guards does not put it back".
-
-  A **REFUSED** delegated session (capped, unreadable claims, contained actor) is TERMINAL on
-  every route: the request resolves no principal at all and no package surface falls back to
-  the local user, whose session the guard has invalidated anyway.
-  The package's own gates read one resolved value, and the two directions are deliberately
-  asymmetric — **admission is exact, refusal may be broad**:
-  - `bfc.admin` ADMITS a delegated operator whose own handoff carried `role=admin`, but only
-    on a route the console guard actually governs, so the principal it authorizes is the
-    principal everything behind it acts as. A delegated `member` does not pass; a delegated
-    session on a route the console guard does NOT govern is refused rather than resolved to
-    the local user's role; a package Owner or Admin still passes the local branch.
-  - `bfc.auth` and the personal-credentials surface (`/bfc/me/credentials`) REFUSE a delegated
-    session with a `403`, whichever guard the route names, rather than falling through to the
-    local session user. A delegated actor has no personal credentials in this app. On a
-    REFUSED console session they answer `401` and `403` respectively, and never resolve the
-    local user.
-  - The credential gates (`bfc.credential.admin`, `bfc.ability`) never consult a session
-    principal.
-  **This is an AMENDMENT to the v3.1 matrix invariant SEC-V3-10, not an additive slot-in**, and it
-  is recorded as one deliberately rather than left to read as an accident. SEC-V3-10 shipped as a
-  token-vs-session rule over a SINGLE `built-for-cloud.credentials.session_guard` name; the Console
-  makes the matrix session-vs-session as well, so a reader of the old statement would conclude the
-  matrix has one session guard in it when after this release it has two. The full amendment, cell by
-  cell and including the cells that did NOT change, is in `release-notes/unified-store-guard.md`.
-  *Pinned by* `tests/CredentialPrecedenceTest.php`, which runs the whole precedence matrix with both
-  session guards configured ("still rejects mismatched simultaneous principals with the delegated
-  guard configured", "does not turn a delegated session into a false mismatch on a token route" and
-  "still rejects a mismatched local principal when the session guard is the local one" — the last
-  being the shipped configuration, so the delegated exclusion cannot be read as having weakened the
-  rule it sits beside).
-
-- **Delegated session clocks.** A delegated session is bounded by Laravel's own sliding idle
-  window AND by an absolute assertion-age cap of 120 minutes, measured from the assertion's
-  issued-at. The cap is enforced **inside the guard**, so it holds on every route including
-  ones that mount no Console middleware: a capped, orphaned or unreadable delegated session is
-  invalidated server-side the first time anything reads the guard. A route carrying the
-  package's `bfc.console` middleware answers such a request with a `401` carrying the header
-  `BFC-Console-Reentry: 1` and a body of
-  `{"version": 1, "error": "console_reentry_required", "reason": "<enum>", "reentry_url":
-  "<absolute>", "return_to": "<relative path>"}`, where `reason` is one of `assertion_age_cap`,
-  `session_invalidated`, `not_authenticated`, and `reentry_url` is **omitted entirely** when the
-  app has configured none. `return_to` is validated as a same-origin relative path in every
-  percent-decoded form. This is an ERROR body; the metadata/content classification does not
-  apply to it.
-- **The chrome is served, and it is ONE layout.** The `bfc::` view namespace, the single
-  `bfc::layout`, and [`GET /bfc/console/chrome.js`](#get-bfcconsolechromejs) — the XHR re-entry
-  interceptor — are all live on a deployment reporting `console-chrome-assets`. The layout
-  branches INTERNALLY on the resolved acting principal: a local login renders zero chrome, a
-  delegated session renders the full attribution, and there is no second layout to select. The
-  capability names the ASSETS and not the pages: whether an application's own templates extend
-  the layout is that application's decision and nothing here can report it. Full contract,
-  including the render-time bounds on display claims, the escaping, the interceptor's honest
-  degradation when no `reentry_url` is configured, and the CSP guidance, is in
-  [its own section](#the-console-chrome).
-- **The door is open.** [`POST /bfc/console/enter`](#post-bfcconsoleenter) is a live route on a
-  deployment reporting `console-enter`, and it is the only way a delegated session begins over
-  HTTP. It calls `ConsoleGuard::redeem()` — the one operation that mints one — rather than
-  writing session state of its own, so the package-wide writer scan still names exactly one
-  file. Its full contract, including the single-use burn, the signed handoff state, the uniform
-  refusal and the forced-login residue the signed state does **not** close, is in
-  [that route's own section](#post-bfcconsoleenter).
+Console entry is retired. The following are REMOVED, not disabled: `POST /bfc/console/enter`,
+`GET /bfc/console/chrome.js` and the chrome/layout re-entry machinery, the `bfc-console`
+delegated-session guard and its provider, the `bfc.console` middleware alias, the
+delegated-SESSION behaviour of the package's session gates, the `console-guard`,
+`console-enter` and `console-chrome-assets` capabilities, and the
+`BUILT_FOR_CLOUD_CONSOLE_ENABLED` / `BUILT_FOR_CLOUD_CONSOLE_REENTRY_URL` configuration. No
+migration runs and existing `bfc_delegated_actors` rows are untouched — the table now serves
+delegated MCP authentication only. Managed sign-in is the only door into an app.
 
 ### Still RESERVED (not implemented)
 
-Nothing in the `/bfc/console/*` namespace is a reserved name any more: `re-key`,
-`keys/{key_id}/retire`, `vitals`, `enter` and `chrome.js` are all live routes, documented above. The app-action audit stream's
-SCHEMA and EMISSION have landed ([above](#the-app-action-audit-stream)); its **read transport
-has not**, and is not a name this contract offers. The chrome and its single layout have landed
-([above](#the-console-chrome)). Everything else Console-related — the switcher and its roster,
-the fleet dashboard — remains held behind the Console PRD's decision D6, and **no roster claim
-exists in the assertion vocabulary**, so there is nothing of that kind for the chrome to render
-yet.
+Nothing in the `/bfc/console/*` namespace is a reserved name: `re-key`,
+`keys/{key_id}/retire` and `vitals` are live routes, documented above. The app-action audit
+stream's **read transport** has not landed, and is not a name this contract offers. Everything
+else Console-related — the switcher and its roster, the fleet dashboard — remains held behind
+the Console PRD's decision D6, and **no roster claim exists in the assertion vocabulary**.

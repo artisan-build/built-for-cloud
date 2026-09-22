@@ -756,10 +756,11 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // ability. Retirement ends a signing authority where filing
         // begins one, which sounds like the more consequential half and
         // is not: a credential holding `console:key:write` can already
-        // file and activate a key of its own and enter as a delegated
-        // admin, which is more than denying entry. A separate ability
-        // would have meant no credential already in the field could
-        // finish a rotation without being reissued first.
+        // file and activate a key of its own, and assertions minted
+        // under it authenticate as delegated admins on this deployment's
+        // MCP surface, which is more than denying that. A separate
+        // ability would have meant no credential already in the field
+        // could finish a rotation without being reissued first.
         $this->protectOperatorRoute(
             $router->post('/bfc/console/keys/{key_id}/retire', [ManageConsoleKeys::class, 'retire'])
                 ->middleware([

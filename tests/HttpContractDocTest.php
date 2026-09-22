@@ -1045,7 +1045,6 @@ final class HttpContractDocTest extends TestCase
             'tokens', 'ownership', 'onboarding', 'webhooks', 'credentials',
             'console-keys', 'console-key-retire', 'console-vitals', 'app-action-audit-emit',
             'managed-enrolment',
-            'console-guard', 'console-enter', 'console-chrome-assets',
         ];
 
         $reported = (array) $this->getJson('/bfc/meta')->assertOk()->json('capabilities');
