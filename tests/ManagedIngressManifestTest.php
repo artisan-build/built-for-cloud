@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureContractMajor;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCurrentOwnerCredential;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
@@ -35,6 +36,7 @@ function correctedManagedIngressManifest(): array
         EnsureContractMajor::class => 'out of scope — contract admission gate, not an account-bound ingress',
         AuthenticateMcp::class => 'cleared — store bearer converged; assertion wontfix — not account-bound; residue 1',
         EnsureCredentialAdmin::class => 'adapt',
+        EnsureCurrentOwnerCredential::class => 'adapt',
         EnsureCredentialAbility::class => 'adapt',
         EnsureDashboardCredential::class => 'adapt',
         VerifyHmacSignature::class => 'cleared — managed account containment added',
@@ -56,7 +58,7 @@ it('derives exactly the corrected AC17 manifest including class-bound middleware
             static fn (string $disposition): bool => str_contains($disposition, 'deferred'),
         ))->toBe([])
         ->and(array_count_values($manifest))->toBe([
-            'adapt' => 9,
+            'adapt' => 10,
             'wontfix — not account-bound; residue 1' => 2,
             'out of scope — contract admission gate, not an account-bound ingress' => 1,
             'cleared — store bearer converged; assertion wontfix — not account-bound; residue 1' => 1,

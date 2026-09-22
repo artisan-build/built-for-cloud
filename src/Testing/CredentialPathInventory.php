@@ -68,6 +68,7 @@ final class CredentialPathInventory
             'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::verifyUnifiedDurable' => 1,
             'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\AuthenticateMcp::handle' => 1,
             'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCredentialAdmin::handle' => 1,
+            'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCurrentOwnerCredential::handle' => 1,
         ];
         $expectedSelectors = [
             'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacSigner',
@@ -444,6 +445,11 @@ final class CredentialPathInventory
                 'source' => 'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCredentialAdmin::handle',
                 'tokens' => ['CredentialPurpose::OperatorManagement', 'recordUsage'],
                 'rule' => 'operator_management',
+            ],
+            'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCurrentOwnerCredential::handle' => [
+                'source' => 'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCurrentOwnerCredential::handle',
+                'tokens' => ['CredentialPurpose::OperatorManagement', 'recordUsage'],
+                'rule' => 'operator_management+current-owner',
             ],
         ];
         $dispositions = [];

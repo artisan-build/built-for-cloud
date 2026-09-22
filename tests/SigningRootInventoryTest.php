@@ -20,6 +20,7 @@ it('derives the exact signing-root producer selectors decrypt dispositions and d
         'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootMac::verify|named-current-or-grace|identity-before-decrypt|result=bool',
     ])->and($inventory['hmac_decrypt_sites'])->toBe([
         'ArtisanBuild\\BuiltForCloud\\Commands\\HmacRewrapCommand::rewrap',
+        'ArtisanBuild\\BuiltForCloud\\Commands\\HmacRewrapCommand::rewrapManagedClientSecret',
         'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacSigner::sign',
         'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacSigner::signBound',
         'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacVerifier::verify',
@@ -27,8 +28,10 @@ it('derives the exact signing-root producer selectors decrypt dispositions and d
         'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootMac::mac',
         'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootMac::verify',
         'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::deliverPendingSigningKey',
+        'ArtisanBuild\\BuiltForCloud\\ManagedClientSecretStore::plaintext',
     ])->and($inventory['root_decrypt_sites'])->toBe([
         'ArtisanBuild\\BuiltForCloud\\Commands\\HmacRewrapCommand::rewrap',
+        'ArtisanBuild\\BuiltForCloud\\Commands\\HmacRewrapCommand::rewrapManagedClientSecret',
         'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootMac::mac',
         'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootMac::verify',
     ])->and($inventory['delegations'])->toBe([

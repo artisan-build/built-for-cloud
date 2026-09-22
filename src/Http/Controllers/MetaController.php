@@ -164,6 +164,7 @@ final class MetaController
         $capabilities = [
             'tokens', 'ownership', 'onboarding', 'webhooks', 'credentials',
             'console-keys', 'console-key-retire', 'console-vitals', 'app-action-audit-emit',
+            'managed-enrolment',
         ];
 
         if (ConsoleGuardConfiguration::enabled()) {

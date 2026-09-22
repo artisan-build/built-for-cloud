@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Exceptions\HmacKeyUnreadable;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Client\Factory;
@@ -21,8 +22,30 @@ final class ManagedTransitions
 
     public function __construct(private readonly Factory $http) {}
 
-    public function prepare(User $actor, ManagedTransitionDirection $direction): ManagedTransition
+    /**
+     * Prepare a transition for the current managed connection. The
+     * optional expectation is the caller's RECORDED binding (the P1
+     * disconnect ledger's issuer/connection/installation and expected
+     * generation): it is compared against the authority row under the
+     * SAME transaction and row lock that persists the transition
+     * snapshot, so no lifecycle change can interleave between the
+     * caller's own validation and transition creation (quality-review
+     * round 2 — a stale abandoned retry must not snapshot and drive an
+     * exit for a later binding/generation it never named).
+     *
+     * The optional by-reference out-parameter receives the row THIS
+     * call created the moment it is durable — before the first
+     * authority leg — so a caller whose T1 leg fails can link exactly
+     * that row instead of guessing which active row is theirs
+     * (acceptance J1/J-A2). It is reset to null on every call and
+     * stays null when creation never happened, including on any throw
+     * before the durable row exists.
+     *
+     * @param  array{issuer: string, connection_id: string, installation_id: string, generation: int}|null  $expected
+     */
+    public function prepare(User $actor, ManagedTransitionDirection $direction, ?array $expected = null, ?ManagedTransition &$created = null): ManagedTransition /** @phpstan-ignore parameterByRef.unusedType (the null arm of &$created is observable exactly when prepare() throws before the durable row exists — the state the disconnect catch branches on; the rule models by-ref out-types on normal returns only) */
     {
+        $created = null;
         $snapshot = $this->connectionSnapshot();
         $transitionRequestId = $this->randomKey();
         $body = $this->serialize([
@@ -35,11 +58,13 @@ final class ManagedTransitions
         $transition = DB::transaction(function () use (
             $actor,
             $direction,
+            $expected,
             $snapshot,
             $transitionRequestId,
             $body,
         ): ManagedTransition {
             $this->assertSnapshotCurrent($snapshot);
+            $this->assertExpectedAuthority($expected);
             $this->assertOwnerUser($actor, true);
 
             if (ManagedTransition::query()
@@ -76,6 +101,13 @@ final class ManagedTransitions
                 'prepare_body_digest' => hash('sha256', $body),
             ]);
         });
+
+        // The row is durable from here: surface its identity to the
+        // caller BEFORE the first authority leg, so an authority-side
+        // T1 failure (wrapped as ManagedAuthRefused with
+        // recordsFailedAttempt) can still be linked to exactly this
+        // request's transition by the disconnect endpoint.
+        $created = $transition;
 
         return $this->applyPrepared($transition, $this->client($transition)->prepare());
     }
@@ -923,7 +955,7 @@ final class ManagedTransitions
                 || ! $owner instanceof User
                 || (! StandaloneAccess::userCanAuthenticate($owner)
                     && ! StandaloneAccess::userCanReceiveRecovery($owner))) {
-                throw new ManagedAuthRefused;
+                throw ManagedAuthRefused::because(ManagedAuthRefusalReason::OwnerNotAccessible);
             }
         }
 
@@ -948,7 +980,20 @@ final class ManagedTransitions
 
     public function abandon(Request $request, ManagedTransition $transition): ManagedTransition
     {
-        $this->assertOwnerRequest($request, false);
+        return $this->abandonPreCommit($this->assertOwnerRequest($request, false), $transition);
+    }
+
+    /**
+     * Durably abandon a pre-commit transition identified by an acting
+     * Owner rather than an owner web session — the same legs the Owner
+     * abandon route walks (authority state check, keyed abandon call,
+     * local status advance), used by the disconnect surface when the
+     * exit guard refuses: the row must not linger as an active
+     * transition an operator cannot name.
+     */
+    public function abandonPreCommit(User $actor, ManagedTransition $transition): ManagedTransition
+    {
+        $this->assertOwnerUser($actor, false);
         $transition = $this->fresh($transition, [
             ManagedTransitionStatus::Prepared,
             ManagedTransitionStatus::Rostered,
@@ -972,7 +1017,7 @@ final class ManagedTransitions
             throw new ManagedAuthRefused('transition_state_conflict');
         }
 
-        $transition = DB::transaction(function () use ($request, $transition): ManagedTransition {
+        $transition = DB::transaction(function () use ($actor, $transition): ManagedTransition {
             $locked = $this->locked($transition, [
                 ManagedTransitionStatus::Prepared,
                 ManagedTransitionStatus::Rostered,
@@ -980,7 +1025,7 @@ final class ManagedTransitions
                 ManagedTransitionStatus::Staging,
                 ManagedTransitionStatus::Staged,
             ]);
-            $this->assertOwnerRequest($request, true);
+            $this->assertOwnerUser($actor, true);
 
             if ($locked->abandon_idempotency_key === null) {
                 $key = $this->randomKey();
@@ -1332,7 +1377,16 @@ final class ManagedTransitions
             'authority_base_url',
         ]);
         $caBundle = config('built-for-cloud.managed.ca_bundle');
-        $secret = config(self::CREDENTIAL_REFERENCE);
+
+        // P1 custody: persisted ciphertext wins and never falls back to
+        // the environment seam while it exists; the seam answers only
+        // the legacy adopt path with no persisted row ({@see
+        // ManagedClientSecretStore}).
+        try {
+            $secret = app(ManagedClientSecretStore::class)->plaintext() ?? config(self::CREDENTIAL_REFERENCE);
+        } catch (HmacKeyUnreadable) {
+            $secret = null;
+        }
 
         if (! is_object($row)
             || ! in_array($row->mode, [AuthorityMode::Standalone->value, AuthorityMode::Managed->value], true)
@@ -1387,6 +1441,36 @@ final class ManagedTransitions
         }
 
         return $current;
+    }
+
+    /**
+     * The caller's recorded binding, enforced under the same lock that
+     * persists the transition: the locked row must still be managed and
+     * still carry exactly the issuer/connection/installation and
+     * generation the caller recorded. Null (ordinary adopt/exit callers)
+     * skips the check — the snapshot guard alone governs them.
+     *
+     * @param  array{issuer: string, connection_id: string, installation_id: string, generation: int}|null  $expected
+     */
+    private function assertExpectedAuthority(?array $expected): void
+    {
+        if ($expected === null) {
+            return;
+        }
+
+        $row = DB::table('bfc_authority')
+            ->where('key', InstallationAuthority::KEY)
+            ->lockForUpdate()
+            ->first(['mode', 'generation', 'issuer', 'connection_id', 'installation_id']);
+
+        if (! is_object($row)
+            || $row->mode !== AuthorityMode::Managed->value
+            || $row->issuer !== $expected['issuer']
+            || $row->connection_id !== $expected['connection_id']
+            || $row->installation_id !== $expected['installation_id']
+            || (int) $row->generation !== $expected['generation']) {
+            throw new ManagedAuthRefused('transition_state_conflict');
+        }
     }
 
     /**

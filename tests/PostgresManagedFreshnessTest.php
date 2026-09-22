@@ -40,7 +40,7 @@ function p3cPgConfigureAuthority(string $baseUrl): void
         ['key' => InstallationAuthority::KEY],
         [
             'mode' => 'managed',
-            'generation' => 7,
+            'generation' => 2,
             'issuer' => 'https://live-issuer.example.test',
             'connection_id' => 'live-connection',
             'organization_id' => 'live-organization',
@@ -69,7 +69,7 @@ function p3cPgUser(string $subject, int $sequence = 10): User
         'membership_response_at' => now()->subSeconds(300),
         'managed_membership_status' => 'active',
         'managed_membership_role' => 'member',
-        'managed_membership_generation' => 7,
+        'managed_membership_generation' => 2,
         'managed_membership_roster_version' => $sequence,
         'managed_membership_response_sequence' => $sequence,
         'managed_membership_responded_at' => now()->subSeconds(300),
@@ -328,7 +328,7 @@ it('accounts attempts at start and suppresses concurrent and killed-holder retri
         p3cPgUser('storm-subject');
         DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
             'managed_connection_status' => 'active',
-            'managed_connection_generation' => 7,
+            'managed_connection_generation' => 2,
             'managed_connection_roster_version' => 10,
             'managed_connection_response_sequence' => 10,
         ]);
@@ -380,7 +380,7 @@ it('serializes real concurrent cross-subject responses while preserving both ind
     p3cPgSession($b, 'postgres-subject-b');
     DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
         'managed_connection_status' => 'active',
-        'managed_connection_generation' => 7,
+        'managed_connection_generation' => 2,
         'managed_connection_roster_version' => 10,
         'managed_connection_response_sequence' => 10,
     ]);

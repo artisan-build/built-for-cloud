@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Exceptions\HmacKeyUnreadable;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use Illuminate\Support\Facades\DB;
 
@@ -34,7 +35,7 @@ final readonly class ManagedAuthConnection
                 'authority_base_url',
             ]);
 
-        $clientSecret = config('built-for-cloud.managed.client_secret');
+        $clientSecret = self::persistedClientSecret() ?? config('built-for-cloud.managed.client_secret');
         $caBundle = config('built-for-cloud.managed.ca_bundle');
 
         if (! is_object($row)
@@ -82,6 +83,27 @@ final readonly class ManagedAuthConnection
         return strtolower((string) ($candidate['scheme'] ?? '')) === strtolower((string) ($expected['scheme'] ?? ''))
             && strtolower((string) ($candidate['host'] ?? '')) === strtolower((string) ($expected['host'] ?? ''))
             && self::port($candidate) === self::port($expected);
+    }
+
+    /**
+     * Persisted custody wins (P1 enrolment): while encrypted state
+     * exists, the exact-key-version decrypt is the ONLY read path, and
+     * an unreadable row refuses managed auth outright — it is never
+     * answered from the environment seam instead. The environment
+     * fallback answers only while NO ciphertext exists (the Owner-driven
+     * `adopt` path still depends on it; package follow-up #150 owns its
+     * removal).
+     */
+    private static function persistedClientSecret(): ?string
+    {
+        try {
+            return app(ManagedClientSecretStore::class)->plaintext();
+        } catch (HmacKeyUnreadable $failure) {
+            throw new ManagedAuthRefused(
+                'The persisted managed client secret cannot be decrypted.',
+                previous: $failure,
+            );
+        }
     }
 
     private static function nonEmpty(mixed $value): bool

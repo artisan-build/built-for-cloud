@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloud\Exceptions\HmacKeyUnreadable;
 use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use DateTimeImmutable;
 use Illuminate\Http\Client\Factory;
@@ -354,7 +355,16 @@ final class ManagedTransitionClient
 
     private function request(ManagedTransition $transition): PendingRequest
     {
-        $secret = config($transition->client_credential_reference);
+        // P1 custody: persisted ciphertext wins and never falls back to
+        // the environment seam while it exists; the seam answers only
+        // the legacy adopt path with no persisted row ({@see
+        // ManagedClientSecretStore}).
+        try {
+            $secret = app(ManagedClientSecretStore::class)->plaintext() ?? config($transition->client_credential_reference);
+        } catch (HmacKeyUnreadable) {
+            $secret = null;
+        }
+
         if (! is_string($secret) || $secret === '') {
             throw new ManagedAuthRefused;
         }

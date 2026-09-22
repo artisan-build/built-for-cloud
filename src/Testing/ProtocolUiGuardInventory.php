@@ -20,6 +20,7 @@ final class ProtocolUiGuardInventory
         'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::verifyUnifiedDurable|expressions=1',
         'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\AuthenticateMcp::handle|expressions=1',
         'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCredentialAdmin::handle|expressions=1',
+        'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\EnsureCurrentOwnerCredential::handle|expressions=1',
     ];
 
     /** @var list<string> */
@@ -86,8 +87,8 @@ final class ProtocolUiGuardInventory
             ...self::setViolations('root-selector', self::ROOT_SELECTORS, $root['selectors']),
         ];
 
-        if ($purpose['resolver_expression_count'] !== 8) {
-            $violations[] = 'resolver-expression-count:expected=8 actual='.$purpose['resolver_expression_count'];
+        if ($purpose['resolver_expression_count'] !== 9) {
+            $violations[] = 'resolver-expression-count:expected=9 actual='.$purpose['resolver_expression_count'];
         }
 
         foreach (self::DIRECT_MEMBERS as $member) {

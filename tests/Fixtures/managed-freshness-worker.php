@@ -88,7 +88,7 @@ if (($input['mode'] ?? 'decision') === 'apply') {
             'live-connection',
             'live-organization',
             'live-installation',
-            7,
+            2,
             'https://127.0.0.1:1',
             'unused',
             null,

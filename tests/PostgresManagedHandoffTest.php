@@ -58,7 +58,7 @@ it('lets exactly one concurrent callback claim the BfC correlation and reach a r
         ))->toBeTrue();
         DB::table('bfc_authority')->updateOrInsert(['key' => InstallationAuthority::KEY], [
             'mode' => 'managed',
-            'generation' => 7,
+            'generation' => 2,
             'issuer' => 'https://live-issuer.example.test',
             'connection_id' => 'live-connection',
             'organization_id' => 'live-organization',

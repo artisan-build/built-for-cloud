@@ -10,11 +10,13 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManagedEnrolments;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCurrentOwnerCredential;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
 use Illuminate\Http\Request;
@@ -64,6 +66,9 @@ final class StandaloneRouteOwnership
             ManageOnboarding::class.'@verify' => null,
             ManageOwnership::class.'@release',
             ManageOwnership::class.'@cancelTransfer' => EnsureCredentialAdmin::class.':'.OperatorAbility::OwnershipRelease->value,
+            ManagedEnrolments::class.'@enrol',
+            ManagedEnrolments::class.'@rotateClientSecret',
+            ManagedEnrolments::class.'@disconnect' => EnsureCurrentOwnerCredential::class,
             ManageOnboarding::class.'@issue' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialMint->value,
             ClientObservations::class => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRead->value,
             ManageCredentials::class.'@index' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRead->value,
