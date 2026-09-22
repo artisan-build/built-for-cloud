@@ -66,28 +66,64 @@ assert_standalone_refusal_matrix() {
     local route
     local method
     local path
+    local authentication
     local body="${RUN_DIR}/standalone-refusal.txt"
     local result
     local status
     local redirect
+    local intended
     local cells=0
     local mode
 
     mode="$("${HARNESS_ENV[@]}" php tests/Live/managed-user-state.php mode)"
     [[ "${mode}" == managed ]] || fail "${state} standalone sweep did not run in managed mode"
 
-    while IFS=$'\t' read -r surface route method path; do
+    while IFS=$'\t' read -r surface route method path authentication; do
         result="$(curl --silent --show-error --request "${method}" --output "${body}" --write-out '%{http_code}|%{redirect_url}' "${APP_BASE}${path}")"
         status="${result%%|*}"
         redirect="${result#*|}"
-        [[ "${status}" == 404 ]] || fail "${state} reached ${method} ${path} (${route}) with status ${status}"
-        [[ -z "${redirect}" ]] || fail "${state} was redirected from ${method} ${path} (${route}) to ${redirect}"
-        printf 'matrix: state=%s surface=%s route=%s method=%s status=404 authority=managed gate=EnsureStandaloneAuthority\n' \
-            "${state}" "${surface}" "${route}" "${method}"
+
+        if [[ "${authentication}" == guarded ]]; then
+            [[ "${status}" == 302 ]] || fail "${state} did not redirect guarded guest ${method} ${path} (${route}); status ${status}"
+            intended="$(php -r 'parse_str((string) parse_url($argv[1], PHP_URL_QUERY), $query); echo $query["intended"] ?? "";' "${redirect}")"
+            [[ "${redirect%%\?*}" == "${APP_BASE}/bfc/managed/login" ]] || fail "${state} redirected guarded guest ${method} ${path} (${route}) outside managed login"
+            [[ "${intended}" == "${path}" ]] || fail "${state} lost the intended target for guarded guest ${method} ${path} (${route})"
+            printf 'matrix: state=%s surface=%s route=%s method=%s status=302 authority=managed gate=EnsureUserIsAuthenticated intended=exact\n' \
+                "${state}" "${surface}" "${route}" "${method}"
+        else
+            [[ "${status}" == 404 ]] || fail "${state} reached ${method} ${path} (${route}) with status ${status}"
+            [[ -z "${redirect}" ]] || fail "${state} was redirected from ${method} ${path} (${route}) to ${redirect}"
+            printf 'matrix: state=%s surface=%s route=%s method=%s status=404 authority=managed gate=EnsureStandaloneAuthority\n' \
+                "${state}" "${surface}" "${route}" "${method}"
+        fi
         cells=$((cells + 1))
     done <"${STANDALONE_ROUTES}"
 
     [[ "${cells}" -gt 0 ]] || fail "${state} standalone sweep derived no browser routes"
+}
+
+assert_authenticated_standalone_refusal_matrix() {
+    local cookie="$1"
+    local surface
+    local route
+    local method
+    local path
+    local authentication
+    local body="${RUN_DIR}/standalone-authenticated-refusal.txt"
+    local status
+    local cells=0
+
+    while IFS=$'\t' read -r surface route method path authentication; do
+        [[ "${authentication}" == guarded ]] || continue
+        status="$(curl --silent --show-error --request "${method}" --header "Cookie: ${cookie}" \
+            --output "${body}" --write-out '%{http_code}' "${APP_BASE}${path}")"
+        [[ "${status}" == 404 ]] || fail "authenticated managed user reached ${method} ${path} (${route}) with status ${status}"
+        printf 'matrix: state=authenticated surface=%s route=%s method=%s status=404 authority=managed gate=EnsureStandaloneAuthority\n' \
+            "${surface}" "${route}" "${method}"
+        cells=$((cells + 1))
+    done <"${STANDALONE_ROUTES}"
+
+    [[ "${cells}" -gt 0 ]] || fail "authenticated standalone sweep derived no guarded browser routes"
 }
 
 assert_standalone_openness_matrix() {
@@ -105,13 +141,13 @@ assert_standalone_openness_matrix() {
     [[ "${mode}" == standalone ]] || fail "standalone openness sweep did not run in standalone mode"
 
     touch "${cookies}"
-    while IFS=$'\t' read -r surface route method path; do
+    while IFS=$'\t' read -r surface route method path authentication; do
         [[ "${method}" == GET ]] || continue
         curl --silent --show-error --request "${method}" --cookie "${cookies}" --cookie-jar "${cookies}" \
             --output "${body}" "${APP_BASE}${path}"
     done <"${STANDALONE_ROUTES}"
 
-    while IFS=$'\t' read -r surface route method path; do
+    while IFS=$'\t' read -r surface route method path authentication; do
         status="$(curl --silent --show-error --request "${method}" --cookie "${cookies}" --cookie-jar "${cookies}" \
             --output "${body}" --write-out '%{http_code}' "${APP_BASE}${path}")"
         [[ "${status}" != 404 ]] || fail "standalone mode could not reach ${method} ${path} (${route})"
@@ -248,6 +284,7 @@ ROTATED_COOKIE="$(cookie_of "${CALLBACK_HEADERS}")"
 [[ -n "${ROTATED_COOKIE}" ]] && [[ "${ROTATED_COOKIE}" != "${COOKIE}" ]] || fail "managed callback did not rotate the session cookie"
 DOMAIN_STATUS="$(curl --silent --show-error --header "Cookie: ${ROTATED_COOKIE}" --output /dev/null --write-out '%{http_code}' "${APP_BASE}/domain")"
 [[ "${DOMAIN_STATUS}" == 200 ]] || fail "managed session did not reach a protected route"
+assert_authenticated_standalone_refusal_matrix "${ROTATED_COOKIE}"
 
 USER_ID_BEFORE="$("${HARNESS_ENV[@]}" php tests/Live/managed-user-state.php age 300)"
 set_confirmation_status 503
@@ -344,4 +381,4 @@ STANDALONE_MANAGED_STATUS="$(curl --silent --show-error --output /dev/null --wri
 EXCHANGE_COUNT="$(php -r '$status = json_decode(file_get_contents($argv[1]), true, flags: JSON_THROW_ON_ERROR); echo $status["exchange_count"];' "${STATUS}")"
 [[ "${EXCHANGE_COUNT}" == 5 ]] || fail "fixture observed an unexpected exchange count"
 
-printf 'managed live harness passed\nstamp: %s\nchecks: ownership claim plus HTTP managed enrolment generation 1-to-2 with no managed-secret environment injection, authenticated TLS handoff/exchange, exact authority redirect origin/path, browser-session binding refusal and success, session rotation/protected access, structurally derived standalone refusal matrix after refresh failure/grace/outage expiry/explicit denial/failed managed entry, structurally derived standalone openness matrix, 1800-second outage denial and session ending, same-user restoration after authority recovery, role promotion and demotion on the next authorization decision, immediate authoritative browser denial and session ending, mode exclusivity\n' "${STAMP}"
+printf 'managed live harness passed\nstamp: %s\nchecks: ownership claim plus HTTP managed enrolment generation 1-to-2 with no managed-secret environment injection, authenticated TLS handoff/exchange, exact authority redirect origin/path, browser-session binding refusal and success, session rotation/protected access, structurally derived managed guest redirect plus public standalone refusal matrix after refresh failure/grace/outage expiry/explicit denial/failed managed entry, authenticated managed standalone refusal matrix, structurally derived standalone openness matrix, 1800-second outage denial and session ending, same-user restoration after authority recovery, role promotion and demotion on the next authorization decision, immediate authoritative browser denial and session ending, mode exclusivity\n' "${STAMP}"
