@@ -86,10 +86,11 @@ $citedSurfaces = [
     // file was exempt from this rule by the accident of not being
     // listed, which the reviewer and the judge found independently —
     // so the middleware, the whole `src/Mcp` directory and the
-    // conformance instrument are named here for the same reason
-    // ConsoleEnter.php is: the door is new, its guarantees are load-
-    // bearing, and a new file must be classified in the diff that adds
-    // it, not by living somewhere the walk does not go.
+    // conformance instrument are named here for the same reason the
+    // delegated-entry door's files once were: the door was new, its
+    // guarantees were load-bearing, and a new file must be classified
+    // in the diff that adds it, not by living somewhere the walk does
+    // not go.
     'src/Http/Middleware/AuthenticateMcp.php',
     'src/Mcp',
     'src/Testing/McpDelegatedTools.php',
@@ -154,7 +155,7 @@ $exemptFromCitation = [
     'src/Audit/AppActionEventBuilder.php' => 'a two-line binding of the shared AppendOnlyBuilder to one model; it adds and overrides nothing, and every claim is on the base',
     'src/Audit/AppActionLedgerBuilder.php' => 'a two-line binding of the shared AppendOnlyBuilder to one model; it adds and overrides nothing, and every claim is on the base',
     'src/Audit/AppActionReason.php' => 'a bounded enum: the closed app-action reason vocabulary, whose doc-to-code check is HttpContractDocTest\'s',
-    'src/Audit/ConsoleAction.php' => 'a bounded enum: the package\'s own action vocabulary, whose one case is driven by ConsoleEnterAuditTest',
+    'src/Audit/ConsoleAction.php' => 'a bounded enum: the package\'s own action vocabulary, whose one historical case is retained for pre-v0.17.0 rows',
     'src/Console/ActingPrincipal.php' => 'a readonly value object: the resolved principal, carrying no rule of its own',
     'src/Console/ActingPrincipalResolver.php' => 'D14 precedence, whose guarantees are stated and cited on ConsoleGuard',
     'src/Console/Assertion.php' => 'the verified claim set; every property rule is the verifier\'s and is cited there',

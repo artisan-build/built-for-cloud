@@ -71,26 +71,18 @@ it('returns unauthenticated bfc meta for unclaimed and claimed environments', fu
             'product' => 'Sink',
             'bfc_version' => BuiltForCloud::VERSION,
             'api_version' => BuiltForCloud::API_VERSION,
-            // `console-guard` and `console-enter` are present because
-            // this suite's app is a console-ENABLED deployment whose
-            // delegated guard is this package's own (tests/TestCase.php).
-            // Both capabilities are conditional on that;
-            // ConsoleGuardRegistrationTest and ConsoleDisabledTest drive
-            // their absence, and ConsoleEnterForeignGuardTest drives the
-            // case where only `console-enter` goes away.
             // `app-action-audit-emit` is UNCONDITIONAL: it names schema
             // and an emission point every install carries, and the verb
             // is in the name because this release ships no way to READ
             // that stream (Console PRD D17).
-            // `console-chrome-assets` rides the same condition as
-            // `console-enter`, and is named for what is SERVED — the
-            // layout and the re-entry interceptor — never for any page
-            // of this app wearing them, which is the app's own decision
-            // (Console PRD D11).
             // `managed-enrolment` is UNCONDITIONAL: the enrolment verbs
             // exist on every install; feature-detect them per
             // docs/http-contract.md "Authority-driven managed enrolment".
-            'capabilities' => ['tokens', 'ownership', 'onboarding', 'webhooks', 'credentials', 'console-keys', 'console-key-retire', 'console-vitals', 'app-action-audit-emit', 'managed-enrolment', 'console-guard', 'console-enter', 'console-chrome-assets'],
+            // The conditional delegated-entry capabilities this list once
+            // carried (`console-guard`, `console-enter`,
+            // `console-chrome-assets`) were removed with the door in
+            // v0.17.0.
+            'capabilities' => ['tokens', 'ownership', 'onboarding', 'webhooks', 'credentials', 'console-keys', 'console-key-retire', 'console-vitals', 'app-action-audit-emit', 'managed-enrolment'],
             'claimed' => false,
         ]);
 

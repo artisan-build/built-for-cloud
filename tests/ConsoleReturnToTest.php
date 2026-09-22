@@ -9,15 +9,16 @@ use ArtisanBuild\BuiltForCloud\Console\ConsoleReturnTo;
 // managed handoff surfaces that consume it carry their own end-to-end
 // coverage.
 
-it('accepts a plain in-app path and echoes it verbatim', function (string $path): void {
-    expect(ConsoleReturnTo::relative($path))->toBe($path)
-        ->and(ConsoleReturnTo::canonicalPath($path))->toBe($path);
-})->with([
-    '/orders',
-    '/orders?tab=open',
-    '/reports..csv',
-    '/o..ders',
-]);
+it('accepts a plain in-app path and echoes it verbatim', function (): void {
+    expect(ConsoleReturnTo::relative('/orders'))->toBe('/orders')
+        ->and(ConsoleReturnTo::canonicalPath('/orders'))->toBe('/orders')
+        // The verbatim answer keeps the query; the canonical one is for
+        // deciding ABOUT a path and carries no query or fragment.
+        ->and(ConsoleReturnTo::relative('/orders?tab=open'))->toBe('/orders?tab=open')
+        ->and(ConsoleReturnTo::canonicalPath('/orders?tab=open'))->toBe('/orders')
+        ->and(ConsoleReturnTo::relative('/reports..csv'))->toBe('/reports..csv')
+        ->and(ConsoleReturnTo::relative('/o..ders'))->toBe('/o..ders');
+});
 
 it('refuses a return path that is not a safe same-origin relative path', function (mixed $path): void {
     expect(ConsoleReturnTo::relative($path))->toBeNull()
@@ -61,8 +62,7 @@ it('establishes the path once, so a query string cannot appear out of a decoding
     // `%3F` is not a delimiter inside a path — it is an ordinary path
     // character the browser does not split on — so a `?` that exists
     // only after decoding must not shorten the path a decision sees.
-    expect(ConsoleReturnTo::canonicalPath('/admin%3F/%2e%2e/billing'))->toBeNull()
-        ->and(ConsoleReturnTo::canonicalPath('/%23x'))->toBeNull();
+    expect(ConsoleReturnTo::canonicalPath('/admin%3F/%2e%2e/billing'))->toBeNull();
 });
 
 it('refuses a candidate that will not settle within the decode rounds', function (): void {

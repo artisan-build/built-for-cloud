@@ -411,7 +411,7 @@ it('has exactly the public surface it is meant to have on the emission point', f
     // or `dedupKeyFor()` DOES, nothing about their signatures, and
     // nothing about a public method added to any other class. The
     // digest's stability under the name is pinned by the digest tests
-    // above and by `tests/ConsoleEnterAuditTest.php`.
+    // above.
     $expected = ['dedupKeyFor', 'record'];
 
     expect(PublicSurfaceScan::of(AppActionRecorder::class))->toBe($expected)
@@ -903,18 +903,14 @@ it('finds no enumerated deletion spelling against the app-action stream anywhere
         'Audit/AppActionRecorder.php',
     ]);
 
-    // The one EMITTER is deliberately not in that list, and its absence
-    // is luck rather than enforcement — which is worth asserting so the
-    // day it changes, somebody reads why. `ConsoleEnter` prunes expired
-    // assertion burns and reaches this stream only through the recorder,
-    // so it names no model; a type hint added tomorrow would put it in
-    // the walk and report a deletion that has nothing to do with this
-    // stream. The answer to that is NOT a file exemption — an exemption
-    // on the sole emitter is the blind spot the walk exists to prevent —
-    // it is to keep the emitter off the models, or to accept the red and
-    // decide deliberately.
-    expect(AppActionRetentionScan::referencesIn($root))
-        ->not->toContain('Http/Controllers/ConsoleEnter.php');
+    // The delegated-entry door — historically this stream's one
+    // emitter, retired in v0.17.0 — pruned expired assertion burns and
+    // reached this stream only through the recorder, so it named no
+    // model. A future emitter that DOES name a model will appear in this
+    // walk, and the answer to that is NOT a file exemption — an
+    // exemption on the sole emitter is the blind spot the walk exists to
+    // prevent — it is to keep the emitter off the models, or to accept
+    // the red and decide deliberately.
 
     expect(AppActionRetentionScan::scan($root))->toBe([]);
 });
@@ -1106,9 +1102,9 @@ it('follows a read one class past the route, and stops at the emission door', fu
         ->and(AppActionReadTransportScan::bucketFor(ConsoleEventsReport::class, $classes))
         ->toBe(AppActionReadTransportScan::READS);
 
-    // And the door STOPS the walk. The recorder names both models, so a
-    // walk that passed through it would report `ConsoleEnter` — the one
-    // route that is supposed to touch this stream — as a read
+    // And the emission door STOPS the walk. The recorder names both
+    // models, so a walk that passed through it would report an emitter —
+    // a route that is supposed to touch this stream — as a read
     // transport, and the answer to that would have been an exemption on
     // exactly the wrong route.
     expect(AppActionReadTransportScan::reachableFrom(AppActionRecorder::class))

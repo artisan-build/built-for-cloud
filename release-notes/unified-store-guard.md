@@ -156,9 +156,9 @@ this release it has two.
   sandboxing config will leave the default guard pointed at
   `bfc-console` after the first delegated request, and later requests on
   ordinary routes will resolve their principal through the delegated
-  guard. `tests/ConsoleGuardScopingTest.php` asserts both halves — that
-  the leak is real without a config sandbox, and that the clone is what
-  closes it.
+  guard. `tests/ConsoleGuardScopingTest.php` asserted both halves — that
+  the leak was real without a config sandbox, and that the clone is what
+  closed it — and was removed with the guard in v0.17.0.
 - **A delegated actor is never the other half of a mismatch.** The
   credential guard compares a credential's `user_id` — a stringified
   host-app user id — against the session principal. A delegated actor's
