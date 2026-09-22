@@ -1125,10 +1125,10 @@ Owner alone may review a proposal from `prepared` through the durable completion
 presents authority roles as fixed while allowing local match, commit timing, and final-email corrections.
 Exit presents every roster subject, local user, and pending invitation while allowing standalone role,
 match, disposition, and final-email corrections where those fields apply.
-An authority-removed local user absent from the exit roster defaults to `retain_deactivated`: exit keeps
-the row deactivated with no password instead of reactivating it. A never-listed local user absent from
-the same roster still defaults to `retain_local` and remains active. After exit, an Owner may deliberately
-reactivate the removed user through standalone member management.
+An unmatched local user absent from the exit roster defaults to `exclude` only when its freshness state
+is exactly `managed_membership_status=removed`, `status=inactive`, a non-null `deactivated_at`, and a null
+password. Exit keeps that row inactive, preserves its existing deactivation timestamp, and clears its
+password and remember token. A never-listed unmatched local user still defaults to `retain_local` and remains active.
 
 ### PUT /bfc/transitions/proposals/{transition}
 

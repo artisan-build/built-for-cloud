@@ -335,15 +335,6 @@ final class ManageTransitions
                     'disposition' => 'retain_local',
                     'final_email' => null,
                 ];
-            } elseif ($disposition === 'retain_deactivated' && $local['kind'] === 'user') {
-                $mapping[] = [
-                    'scalpels_id' => null,
-                    'local_kind' => 'user',
-                    'local_id' => $local['id'],
-                    'role' => null,
-                    'disposition' => 'retain_deactivated',
-                    'final_email' => null,
-                ];
             } elseif ($disposition === 'exclude') {
                 $mapping[] = [
                     'scalpels_id' => null,

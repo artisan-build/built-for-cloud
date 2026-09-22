@@ -207,7 +207,7 @@ final class ManagedTransitions
             ->get(['scalpels_id', 'role', 'contact_email']);
         $users = User::query()->orderBy('id')->get([
             'id', 'email', 'normalized_email', 'role', 'scalpels_issuer', 'scalpels_connection_id', 'scalpels_id',
-            'managed_membership_status',
+            'status', 'password', 'deactivated_at', 'managed_membership_status',
         ]);
         $invitations = Invitation::query()
             ->pending()
@@ -270,6 +270,10 @@ final class ManagedTransitions
                     && is_string($user->scalpels_id)
                         ? $rosterBySubject->get($user->scalpels_id)
                         : null;
+                $authorityRemoved = $user->managed_membership_status === 'removed'
+                    && $user->status === 'inactive'
+                    && $user->deactivated_at !== null
+                    && $user->password === null;
                 $mapping[] = is_object($member)
                     ? [
                         'scalpels_id' => $member->scalpels_id,
@@ -279,12 +283,12 @@ final class ManagedTransitions
                         'disposition' => 'link',
                         'final_email' => $user->email,
                     ]
-                    : ($user->managed_membership_status === 'removed' ? [
+                    : ($authorityRemoved ? [
                         'scalpels_id' => null,
                         'local_kind' => 'user',
                         'local_id' => (string) $user->getKey(),
                         'role' => null,
-                        'disposition' => 'retain_deactivated',
+                        'disposition' => 'exclude',
                         'final_email' => null,
                     ] : [
                         'scalpels_id' => null,
@@ -828,15 +832,11 @@ final class ManagedTransitions
                 if ($disposition === 'exclude') {
                     $user->forceFill([
                         'status' => 'inactive',
-                        'deactivated_at' => $now,
+                        'deactivated_at' => $user->deactivated_at ?? $now,
                         'password' => null,
                         'remember_token' => null,
                     ])->save();
 
-                    continue;
-                }
-
-                if ($disposition === 'retain_deactivated') {
                     continue;
                 }
 
@@ -1224,7 +1224,7 @@ final class ManagedTransitions
             $localId = $this->nullableInputString($element['local_id'], 64);
             $role = $this->nullableInputEnum($element['role'], ['owner', 'admin', 'member']);
             $disposition = $this->requiredInputEnum($element['disposition'], [
-                'link', 'create', 'retain_local', 'retain_deactivated', 'exclude', 'defer_to_managed_jit',
+                'link', 'create', 'retain_local', 'exclude', 'defer_to_managed_jit',
             ]);
             $email = $this->nullableInputString($element['final_email'], 255);
             $shape = [$kind, $subject !== null, $localId !== null, $role !== null, $email !== null];
@@ -1238,7 +1238,6 @@ final class ManagedTransitions
                     ['user', false, true, true, true],
                     ['invitation', false, true, false, false],
                 ], true),
-                'retain_deactivated' => $shape === ['user', false, true, false, false],
                 'exclude' => in_array($shape, [
                     ['user', false, true, false, false],
                     ['invitation', false, true, false, false],
@@ -1250,7 +1249,7 @@ final class ManagedTransitions
             if (! $legal
                 || ($email !== null && filter_var($email, FILTER_VALIDATE_EMAIL) === false)
                 || ($transition->direction === ManagedTransitionDirection::Adopt
-                    && in_array($disposition, ['retain_local', 'retain_deactivated'], true))
+                    && in_array($disposition, ['retain_local'], true))
                 || ($transition->direction === ManagedTransitionDirection::Exit
                     && in_array($disposition, ['create', 'defer_to_managed_jit'], true))) {
                 throw new ManagedAuthRefused;
@@ -1296,10 +1295,9 @@ final class ManagedTransitions
                         && $user->status === 'inactive'
                         && $user->deactivated_at !== null
                         && $user->password === null;
-                    if (($disposition === 'retain_deactivated' && ! $authorityRemoved)
-                        || ($transition->direction === ManagedTransitionDirection::Exit
-                            && $authorityRemoved
-                            && ! in_array($disposition, ['retain_deactivated', 'exclude'], true))) {
+                    if ($transition->direction === ManagedTransitionDirection::Exit
+                        && $authorityRemoved
+                        && $disposition !== 'exclude') {
                         throw new ManagedAuthRefused;
                     }
                 }

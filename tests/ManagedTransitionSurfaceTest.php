@@ -438,7 +438,7 @@ it('offers exit role corrections while keeping retained invitation fields and ro
             [
                 'local_kind' => 'user',
                 'local_id' => (string) $removed->getKey(),
-                'choice' => 'retain_deactivated',
+                'choice' => 'exclude',
             ],
         ],
     ])->assertRedirect();
@@ -464,8 +464,7 @@ it('offers exit role corrections while keeping retained invitation fields and ro
         ->assertSee('keeps local user '.$owner->getKey().' and its product attribution for the matched subject.')
         ->assertSeeHtml('data-testid="transition-consequence-user-retain-local"')
         ->assertSee('keeps local user '.$local->getKey().' active under standalone authority.')
-        ->assertSeeHtml('data-testid="transition-consequence-user-retain-deactivated"')
-        ->assertSee('keeps local user '.$removed->getKey().' deactivated until an Owner explicitly reactivates it after exit.')
+        ->assertSee('deactivates this user without deleting local ID '.$removed->getKey().' or its attribution.')
         ->assertSeeHtml('data-testid="transition-consequence-invitation-retain-local"')
         ->assertSee('keeps invitation '.$invitation->getKey().' pending with stored role admin and email exit-invitation@example.test unchanged.')
         ->assertSee('local_kind: user / local_id: '.$local->getKey())
@@ -483,7 +482,7 @@ it('offers exit role corrections while keeping retained invitation fields and ro
         ->and($sent->firstWhere('local_id', (string) $removed->getKey()))->toMatchArray([
             'scalpels_id' => null,
             'role' => null,
-            'disposition' => 'retain_deactivated',
+            'disposition' => 'exclude',
             'final_email' => null,
         ]);
 });

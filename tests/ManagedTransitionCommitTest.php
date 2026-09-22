@@ -850,6 +850,7 @@ it('keeps an authority-removed member deactivated on exit while activating a nev
         'managed_membership_roster_version' => 40,
         'managed_membership_response_sequence' => 70,
         'managed_membership_responded_at' => now()->toRfc3339String(),
+        'remember_token' => 'managed-remember-token',
     ])->save();
     $neverListed = User::query()->create([
         'name' => 'Never Listed Local',
@@ -901,7 +902,7 @@ it('keeps an authority-removed member deactivated on exit while activating a nev
         ->get()
         ->keyBy('local_id');
 
-    expect($mappings->get((string) $removed->getKey())?->disposition)->toBe('retain_deactivated')
+    expect($mappings->get((string) $removed->getKey())?->disposition)->toBe('exclude')
         ->and($mappings->get((string) $removed->getKey())?->scalpels_id)->toBeNull()
         ->and($mappings->get((string) $removed->getKey())?->role)->toBeNull()
         ->and($mappings->get((string) $removed->getKey())?->final_email)->toBeNull()
@@ -915,49 +916,32 @@ it('keeps an authority-removed member deactivated on exit while activating a nev
         ->and($removed->status)->toBe('inactive')
         ->and($removed->getRawOriginal('deactivated_at'))->toBe($removedAt)
         ->and($removed->password)->toBeNull()
+        ->and($removed->remember_token)->toBeNull()
         ->and($neverListed->status)->toBe('active')
         ->and($neverListed->deactivated_at)->toBeNull()
         ->and(Hash::check('local-password', (string) $neverListed->password))->toBeTrue();
 });
 
-it('accepts retain_deactivated only for an authority-removed exit user with no roster subject role or email', function (
-    ManagedTransitionDirection $direction,
-    string $invalidShape,
+it('refuses exit reactivation only for the exact authority-removal freshness state', function (
+    array $stateChanges,
+    bool $refused,
 ): void {
     $roster = [[
         'scalpels_id' => 'owner-subject', 'membership_status' => 'active', 'role' => 'owner',
         'display_name' => 'Shape Owner', 'contact_email' => 'shape-owner@example.test', 'contact_email_verified' => true,
     ]];
-    if ($invalidShape === 'subject') {
-        $roster[] = [
-            'scalpels_id' => 'shape-subject', 'membership_status' => 'active', 'role' => 'member',
-            'display_name' => 'Shape Subject', 'contact_email' => 'shape-subject@example.test', 'contact_email_verified' => true,
-        ];
-    }
-    [$owner] = p4dConfigure($direction, $roster);
-    $target = $invalidShape === 'invitation'
-        ? p4dInvitation('shape-invitation@example.test')
-        : User::query()->create(['name' => 'Shape Local', 'email' => 'shape-local@example.test']);
-    if ($target instanceof User && $invalidShape !== 'state') {
-        $target->forceFill([
-            'status' => 'inactive',
-            'password' => null,
-            'deactivated_at' => now()->subDay(),
-            'managed_membership_status' => 'removed',
-        ])->save();
-    }
-    $targetElement = [
-        'scalpels_id' => $invalidShape === 'subject' ? 'shape-subject' : null,
-        'local_kind' => $invalidShape === 'invitation' ? 'invitation' : 'user',
-        'local_id' => (string) $target->getKey(),
-        'role' => in_array($invalidShape, ['role', 'reactivate'], true) ? 'member' : null,
-        'disposition' => $invalidShape === 'reactivate' ? 'retain_local' : 'retain_deactivated',
-        'final_email' => in_array($invalidShape, ['email', 'reactivate'], true) ? 'shape-local@example.test' : null,
-    ];
-    $transition = app(ManagedTransitions::class)->prepare($owner, $direction);
+    [$owner] = p4dConfigure(ManagedTransitionDirection::Exit, $roster);
+    $target = User::query()->create(['name' => 'Shape Local', 'email' => 'shape-local@example.test']);
+    $target->forceFill(array_merge([
+        'role' => 'member',
+        'status' => 'inactive',
+        'password' => null,
+        'deactivated_at' => now()->subDay(),
+        'managed_membership_status' => 'removed',
+    ], $stateChanges))->save();
+    $transition = app(ManagedTransitions::class)->prepare($owner, ManagedTransitionDirection::Exit);
     $transition = app(ManagedTransitions::class)->fetchRoster($transition);
-
-    expect(fn () => app(ManagedTransitions::class)->propose($transition, [
+    $proposal = static fn () => app(ManagedTransitions::class)->propose($transition, [
         [
             'scalpels_id' => 'owner-subject',
             'local_kind' => 'user',
@@ -966,16 +950,29 @@ it('accepts retain_deactivated only for an authority-removed exit user with no r
             'disposition' => 'link',
             'final_email' => $owner->email,
         ],
-        $targetElement,
-    ]))->toThrow(ManagedAuthRefused::class);
+        [
+            'scalpels_id' => null,
+            'local_kind' => 'user',
+            'local_id' => (string) $target->getKey(),
+            'role' => 'member',
+            'disposition' => 'retain_local',
+            'final_email' => $target->email,
+        ],
+    ]);
+
+    if ($refused) {
+        expect($proposal)->toThrow(ManagedAuthRefused::class);
+
+        return;
+    }
+
+    expect($proposal()->status)->toBe(ManagedTransitionStatus::Proposed);
 })->with([
-    'adopt direction' => [ManagedTransitionDirection::Adopt, 'direction'],
-    'invitation local kind' => [ManagedTransitionDirection::Exit, 'invitation'],
-    'non-removed user state' => [ManagedTransitionDirection::Exit, 'state'],
-    'non-null roster subject' => [ManagedTransitionDirection::Exit, 'subject'],
-    'non-null role' => [ManagedTransitionDirection::Exit, 'role'],
-    'non-null final email' => [ManagedTransitionDirection::Exit, 'email'],
-    'removed user reactivation' => [ManagedTransitionDirection::Exit, 'reactivate'],
+    'exact authority-removal state' => [[], true],
+    'non-removed membership marker' => [['managed_membership_status' => 'active'], false],
+    'active local status' => [['status' => 'active'], false],
+    'null deactivation timestamp' => [['deactivated_at' => null], false],
+    'non-null password' => [['password' => 'not-null'], false],
 ]);
 
 it('rejects a pre-commit session re-persisted after exit commit on its next authenticated request', function (): void {

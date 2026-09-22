@@ -546,16 +546,11 @@ final class ManagedOutboundContractDocTest extends TestCase
         $invitationIndex = 0;
         $mapping = [];
         foreach ($allowed as $row) {
-            $localId = null;
-            if ($row['local_kind'] === 'user') {
-                $user = $users[$userIndex++];
-                if ($row['Disposition'] === 'retain_deactivated') {
-                    $this->makeAuthorityRemoved($user);
-                }
-                $localId = (string) $user->getKey();
-            } elseif ($row['local_kind'] === 'invitation') {
-                $localId = (string) $invitations[$invitationIndex++]->getKey();
-            }
+            $localId = match ($row['local_kind']) {
+                'user' => (string) $users[$userIndex++]->getKey(),
+                'invitation' => (string) $invitations[$invitationIndex++]->getKey(),
+                default => null,
+            };
             $mapping[] = $this->mappingElementFromDocument($row, $localId);
         }
 
@@ -586,19 +581,7 @@ final class ManagedOutboundContractDocTest extends TestCase
                 $candidate[] = $this->mappingElementFromDocument($row, null);
             }
 
-            if ($row['Disposition'] === 'retain_deactivated') {
-                $user = User::query()->findOrFail($localId);
-                $this->makeAuthorityRemoved($user);
-                $this->captureRefusal(fn () => $transitions->propose($proposed, $candidate));
-                $user->forceFill([
-                    'status' => 'active',
-                    'password' => null,
-                    'deactivated_at' => null,
-                    'managed_membership_status' => null,
-                ])->save();
-            } else {
-                $this->captureRefusal(fn () => $transitions->propose($proposed, $candidate));
-            }
+            $this->captureRefusal(fn () => $transitions->propose($proposed, $candidate));
         }
 
         $this->assertInvalidDocumentedShapes($transitions, $proposed, $mapping, $direction);
@@ -627,11 +610,6 @@ final class ManagedOutboundContractDocTest extends TestCase
             },
             'retain_local' => static function (array $element): array {
                 $element['role'] = null;
-
-                return $element;
-            },
-            'retain_deactivated' => static function (array $element): array {
-                $element['role'] = 'member';
 
                 return $element;
             },
@@ -668,7 +646,7 @@ final class ManagedOutboundContractDocTest extends TestCase
             'Disposition',
         )));
         $this->assertSame(
-            ['link', 'create', 'retain_local', 'retain_deactivated', 'exclude', 'defer_to_managed_jit'],
+            ['link', 'create', 'retain_local', 'exclude', 'defer_to_managed_jit'],
             $documentedDispositions,
         );
         $this->assertContains(
@@ -733,13 +711,6 @@ final class ManagedOutboundContractDocTest extends TestCase
                     break;
                 case 'managed-user-binding':
                     continue 2;
-                case 'retain-deactivated-eligibility':
-                    if ($direction !== ManagedTransitionDirection::Exit) {
-                        continue 2;
-                    }
-                    $this->assertRetainDeactivatedEligibility($transitions, $transition, $mapping);
-
-                    continue 2;
                 case 'unique-local':
                     $indexes = array_keys(array_filter($candidate, static fn (array $element): bool => $element['local_id'] !== null));
                     $candidate[$indexes[1]]['local_kind'] = $candidate[$indexes[0]]['local_kind'];
@@ -773,43 +744,6 @@ final class ManagedOutboundContractDocTest extends TestCase
 
             $this->captureRefusal(fn () => $transitions->propose($transition, $candidate));
         }
-    }
-
-    /** @param list<array<string, mixed>> $mapping */
-    private function assertRetainDeactivatedEligibility(
-        ManagedTransitions $transitions,
-        ManagedTransition $transition,
-        array $mapping,
-    ): void {
-        $index = $this->mappingIndex(
-            $mapping,
-            static fn (array $element): bool => $element['disposition'] === 'retain_deactivated',
-        );
-        $user = User::query()->findOrFail($mapping[$index]['local_id']);
-        $invalidStates = [
-            ['managed_membership_status' => 'active'],
-            ['status' => 'active'],
-            ['deactivated_at' => null],
-            ['password' => 'not-null'],
-        ];
-
-        foreach ($invalidStates as $invalidState) {
-            $this->makeAuthorityRemoved($user);
-            $user->forceFill($invalidState)->save();
-            $this->captureRefusal(fn () => $transitions->propose($transition, $mapping));
-        }
-
-        $this->makeAuthorityRemoved($user);
-    }
-
-    private function makeAuthorityRemoved(User $user): void
-    {
-        $user->forceFill([
-            'status' => 'inactive',
-            'password' => null,
-            'deactivated_at' => now()->subMinute(),
-            'managed_membership_status' => 'removed',
-        ])->save();
     }
 
     /** @param array<string, string> $row @return array<string, ?string> */

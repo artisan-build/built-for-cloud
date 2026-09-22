@@ -149,6 +149,10 @@
                                     'local-contact' => 'current local contact',
                                     default => 'Owner-corrected local address',
                                 };
+                                $authorityRemoved = $user->managed_membership_status === 'removed'
+                                    && $user->status === 'inactive'
+                                    && $user->deactivated_at !== null
+                                    && $user->password === null;
                             @endphp
                             <article class="bfc-transition-card" data-testid="transition-local-user">
                                 <strong>{{ $user->name }}</strong>
@@ -168,8 +172,7 @@
                                     <div class="bfc-transition-controls">
                                         <label>Match and disposition
                                             <select name="locals[user-{{ $index }}][choice]" data-testid="transition-match-control">
-                                                @if ($user->managed_membership_status === 'removed')
-                                                    <option value="retain_deactivated" @selected($mapping?->disposition === 'retain_deactivated')>Keep deactivated</option>
+                                                @if ($authorityRemoved)
                                                     <option value="exclude" @selected($mapping?->disposition === 'exclude')>Deactivate</option>
                                                 @else
                                                     <option value="retain_local" @selected($mapping?->disposition === 'retain_local')>Retain locally</option>
@@ -202,8 +205,6 @@
                                         keeps local user {{ $user->getKey() }} and its product attribution for the matched subject.
                                     @elseif ($mapping?->disposition === 'retain_local')
                                         keeps local user {{ $user->getKey() }} active under standalone authority.
-                                    @elseif ($mapping?->disposition === 'retain_deactivated')
-                                        keeps local user {{ $user->getKey() }} deactivated until an Owner explicitly reactivates it after exit.
                                     @else
                                         deactivates this user without deleting local ID {{ $user->getKey() }} or its attribution.
                                     @endif
