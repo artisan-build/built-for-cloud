@@ -107,9 +107,7 @@ and the following closed `error` vocabulary. Clients branch on `error`.
 
 ### Changelog
 
-**RELEASE WINDOW: this document describes `bfc_version` 0.17.0; `BuiltForCloud::VERSION` is 0.16.1 until the tag lands.**
-
-**Draft — v0.17.0.** Console entry is retired: `POST /bfc/console/enter` and
+**v0.17.0.** Console entry is retired: `POST /bfc/console/enter` and
 `GET /bfc/console/chrome.js` are removed, along with the Console session guard and the
 `BUILT_FOR_CLOUD_CONSOLE_ENABLED` / `BUILT_FOR_CLOUD_CONSOLE_REENTRY_URL` configuration (and the
 `built-for-cloud.console.return_path_allowlist` config key, which existed only to narrow the
@@ -120,7 +118,7 @@ authentication (`mcp-delegated`) is unchanged and keeps the delegated actor reco
 and the console keyring. `GET /bfc/console/vitals` is unchanged. No migration runs; existing
 `bfc_delegated_actors` rows are untouched.
 
-**Draft — next additive release (P1 managed enrolment).** New owner-credential-authenticated
+**P1 managed enrolment (shipped).** New owner-credential-authenticated
 routes provision a pristine installation into managed mode, rotate its stored managed-auth client
 secret, and disconnect it through the existing exit-transition machinery. `GET /bfc/meta` gains the
 `managed-enrolment` capability. The client secret is delivered only in requests, encrypted at rest,
