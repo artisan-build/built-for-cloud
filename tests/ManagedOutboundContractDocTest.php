@@ -432,6 +432,66 @@ final class ManagedOutboundContractDocTest extends TestCase
         $this->assertDocumentedMappingMatrix(ManagedTransitionDirection::Exit);
     }
 
+    public function test_documented_managed_user_binding_compatibility_is_enforced_by_the_production_flow(): void
+    {
+        $this->assertContains(
+            'managed-user-binding',
+            array_column($this->documentedTable('Complete-list constraints'), 'Constraint'),
+        );
+        [$owner, , $transitions] = $this->configureTransition(ManagedTransitionDirection::Exit);
+        $owner->forceFill([
+            'scalpels_issuer' => 'https://foreign-issuer-'.strtolower(Str::random(12)).'.example.test',
+            'scalpels_connection_id' => (string) Str::uuid(),
+            'scalpels_id' => 'direct-member',
+        ])->save();
+        $transition = $transitions->prepare($owner->refresh(), ManagedTransitionDirection::Exit);
+        $transition = $transitions->fetchRoster($transition);
+
+        $this->captureRefusal(fn () => $transitions->propose($transition, [[
+            'scalpels_id' => 'direct-member',
+            'local_kind' => 'user',
+            'local_id' => (string) $owner->getKey(),
+            'role' => 'member',
+            'disposition' => 'link',
+            'final_email' => strtolower(Str::random(12)).'@example.test',
+        ]]));
+        $this->assertSame(0, DB::table('bfc_managed_transition_mappings')->count());
+    }
+
+    public function test_documented_excluded_user_email_collision_is_enforced_by_the_production_flow(): void
+    {
+        $constraint = array_values(array_filter(
+            $this->documentedTable('Complete-list constraints'),
+            static fn (array $row): bool => $row['Constraint'] === 'unique-projected-email',
+        ));
+        $this->assertCount(1, $constraint);
+        $this->assertStringContainsString('excluded users', $constraint[0]['Rule']);
+        $this->assertStringContainsString('retained invitations', $constraint[0]['Rule']);
+        [$owner, , $transitions] = $this->configureTransition(ManagedTransitionDirection::Adopt);
+        $transition = $transitions->prepare($owner, ManagedTransitionDirection::Adopt);
+        $transition = $transitions->fetchRoster($transition);
+
+        $this->captureRefusal(fn () => $transitions->propose($transition, [
+            [
+                'scalpels_id' => 'direct-member',
+                'local_kind' => null,
+                'local_id' => null,
+                'role' => 'member',
+                'disposition' => 'create',
+                'final_email' => strtoupper($owner->email),
+            ],
+            [
+                'scalpels_id' => null,
+                'local_kind' => 'user',
+                'local_id' => (string) $owner->getKey(),
+                'role' => null,
+                'disposition' => 'exclude',
+                'final_email' => null,
+            ],
+        ]));
+        $this->assertSame(0, DB::table('bfc_managed_transition_mappings')->count());
+    }
+
     private function assertDocumentedMappingMatrix(ManagedTransitionDirection $direction): void
     {
         $matrix = $this->documentedTable('Shape matrix');
@@ -649,6 +709,8 @@ final class ManagedOutboundContractDocTest extends TestCase
                     $index = $this->mappingIndex($candidate, static fn (array $element): bool => $element['local_id'] !== null);
                     $candidate[$index]['local_id'] = 'unknown-local';
                     break;
+                case 'managed-user-binding':
+                    continue 2;
                 case 'unique-local':
                     $indexes = array_keys(array_filter($candidate, static fn (array $element): bool => $element['local_id'] !== null));
                     $candidate[$indexes[1]]['local_kind'] = $candidate[$indexes[0]]['local_kind'];

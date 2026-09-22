@@ -514,11 +514,12 @@ The complete-list constraints are also normative:
 | `known-subject` | Every non-null `scalpels_id` exists in the frozen roster. |
 | `unique-subject` | A non-null `scalpels_id` appears at most once. |
 | `known-local` | Every non-null (`local_kind`, `local_id`) identifies a current local user or pending invitation. |
+| `managed-user-binding` | An existing managed local user's issuer and connection equal this transition's issuer and connection; when `scalpels_id` is non-null, it also equals the user's existing subject. |
 | `unique-local` | A (`local_kind`, `local_id`) pair appears at most once. |
 | `all-locals` | Every current local user and pending invitation appears exactly once. |
 | `all-adopt-subjects` | In adopt, every frozen-roster subject appears exactly once. |
 | `adopt-role-match` | In adopt, every `link` and `create` role equals the frozen-roster role. |
-| `unique-projected-email` | Projected retained, linked, and created email addresses are unique case-insensitively. |
+| `unique-projected-email` | The case-insensitive collision set is exactly: `final_email` for linked users, linked invitations, retained users, and created subjects; the stored database email for excluded users and retained invitations. Every address in the set is unique. |
 
 #### Response fields
 
