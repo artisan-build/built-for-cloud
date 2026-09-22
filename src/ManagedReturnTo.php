@@ -24,11 +24,16 @@ final class ManagedReturnTo
         $query = $cut === false ? null : substr($candidate, $cut + 1);
         $canonicalPath = ConsoleReturnTo::canonicalPath($path);
 
-        if ($canonicalPath === null || strpbrk($canonicalPath, '?#') !== false) {
+        if (! self::percentEscapesAreComplete($path)
+            || $canonicalPath === null
+            || strpbrk($canonicalPath, '?#') !== false) {
             return null;
         }
 
-        return $query === null || self::queryIsSafe($query) ? $candidate : null;
+        return $query === null
+            || (self::percentEscapesAreComplete($query) && self::queryIsSafe($query))
+            ? $candidate
+            : null;
     }
 
     /** @param list<mixed> $candidates */
@@ -55,6 +60,27 @@ final class ManagedReturnTo
                 : preg_match('/[^\x20-\x7E]|\\\\/', $form) !== 0;
 
             if ($unsafe) {
+                return false;
+            }
+
+            $decoded = rawurldecode($form);
+
+            if ($decoded === $form) {
+                return true;
+            }
+
+            $form = $decoded;
+        }
+
+        return false;
+    }
+
+    private static function percentEscapesAreComplete(string $value): bool
+    {
+        $form = $value;
+
+        for ($round = 0; $round <= self::MAX_DECODE_ROUNDS; $round++) {
+            if (preg_match('/%(?![0-9A-Fa-f]{2})/', $form) !== 0) {
                 return false;
             }
 

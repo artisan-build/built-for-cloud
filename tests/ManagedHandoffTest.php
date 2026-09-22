@@ -266,6 +266,11 @@ it('carries only a safe UI destination through the managed handoff and callback'
     'member encoded query control' => ['member', '/bfc/ui?test-created-query=a%09b', '/bfc/ui'],
     'member encoded query crlf' => ['member', '/bfc/ui?test-created-query=a%0d%0ab', '/bfc/ui'],
     'member double-encoded query crlf' => ['member', '/bfc/ui?test-created-query=a%250d%250ab', '/bfc/ui'],
+    'member raw malformed query percent' => ['member', '/bfc/ui?test-created-query=%', '/bfc/ui'],
+    'member non-hex query percent' => ['member', '/bfc/ui?test-created-query=%GG', '/bfc/ui'],
+    'member half-hex query percent' => ['member', '/bfc/ui?test-created-query=%2', '/bfc/ui'],
+    'member non-hex path percent' => ['member', '/bfc/%GG/ui', '/bfc/ui'],
+    'member encoded malformed query percent' => ['member', '/bfc/ui?test-created-query=%25GG', '/bfc/ui'],
     'member fragment' => ['member', '/bfc/ui#test-created-fragment', '/bfc/ui'],
 ]);
 
