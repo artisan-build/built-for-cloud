@@ -447,6 +447,8 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     // retirement: the door's controller, the chrome script, the js
     // assets and the console-enter release note left the tree, and the
     // numbers fell with them.
+    // The v0.17.0 bump then removed the changelog's RELEASE WINDOW
+    // declaration paragraph: one block fewer, no claim changed.
     $gateSurfaces = [
         'src/Console', 'src/Audit', 'resources/views',
         'docs/http-contract.md',
@@ -456,7 +458,7 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1028,
+        'blocks' => 1027,
         'absolute' => 328,
         'paired' => 62,
         'unpaired' => 266,
