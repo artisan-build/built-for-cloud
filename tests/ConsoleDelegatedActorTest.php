@@ -101,24 +101,26 @@ it('type-qualifies the delegated identity so it can never equal a users id', fun
         ->and($actor->getAuthIdentifier())->toBe('bfc-console:'.$actor->getKey());
 
     // The adversarial case: the bare numeric key — exactly what a
-    // `users` id looks like — names no delegated actor here.
-    expect(DelegatedActor::keyFrom((string) $user->getAuthIdentifier()))->toBeNull()
-        ->and(DelegatedActor::keyFrom($user->getAuthIdentifier()))->toBeNull()
-        ->and(DelegatedActor::keyFrom(DelegatedActor::IDENTIFIER_PREFIX))->toBeNull()
-        ->and(DelegatedActor::keyFrom($actor->getAuthIdentifier()))->toBe((string) $actor->getKey());
+    // `users` id looks like — does not sit in the reserved namespace.
+    expect(DelegatedActor::isReservedIdentifier((string) $user->getAuthIdentifier()))->toBeFalse()
+        ->and(DelegatedActor::isReservedIdentifier(DelegatedActor::IDENTIFIER_PREFIX))->toBeTrue();
 
     // ...and the crossing does not work in the other direction either:
     // the app's own user provider does not answer for a qualified id.
     expect(Auth::createUserProvider('users')?->retrieveById($actor->getAuthIdentifier()))->toBeNull();
 });
 
-it('refuses a non-canonical delegated identifier before it ever reaches the database', function (string $suffix): void {
+it('recognises every spelling inside the reserved namespace, well-formed or not, without touching the database', function (string $suffix): void {
+    // The reserved-namespace rule is prefix-shaped on purpose: even a
+    // value that names no row must be recognised as reserved, because it
+    // must never reach a user provider whose own coercion decides what
+    // it means. The check is pure — no query, by construction.
     consoleActor();
 
     DB::enableQueryLog();
     DB::flushQueryLog();
 
-    expect(DelegatedActor::keyFrom(DelegatedActor::IDENTIFIER_PREFIX.$suffix))->toBeNull()
+    expect(DelegatedActor::isReservedIdentifier(DelegatedActor::IDENTIFIER_PREFIX.$suffix))->toBeTrue()
         ->and(DB::getQueryLog())->toBe([]);
 })->with([
     'trailing junk' => ['1junk'],
@@ -133,19 +135,13 @@ it('refuses a non-canonical delegated identifier before it ever reaches the data
     'empty' => [''],
 ]);
 
-it('recognises the whole reserved namespace, canonical or not, so nothing inside it reaches a user provider', function (): void {
+it('keeps bare keys outside the reserved namespace, so a users id is never mistaken for a delegated one', function (): void {
     $actor = consoleActor();
 
-    // The canonical form names the row; a non-canonical spelling of the
-    // same row names nothing — but BOTH sit inside the reserved
-    // namespace, which is the rule the credential guard refuses on
-    // before any provider is asked.
-    expect(DelegatedActor::keyFrom($actor->getAuthIdentifier()))->toBe((string) $actor->getKey())
-        ->and(DelegatedActor::keyFrom(DelegatedActor::IDENTIFIER_PREFIX.'0'.$actor->getKey()))->toBeNull()
-        ->and(DelegatedActor::isReservedIdentifier($actor->getAuthIdentifier()))->toBeTrue()
-        ->and(DelegatedActor::isReservedIdentifier(DelegatedActor::IDENTIFIER_PREFIX.'0'.$actor->getKey()))->toBeTrue()
-        ->and(DelegatedActor::isReservedIdentifier(DelegatedActor::IDENTIFIER_PREFIX.'1junk'))->toBeTrue()
-        ->and(DelegatedActor::isReservedIdentifier((string) $actor->getKey()))->toBeFalse();
+    expect(DelegatedActor::isReservedIdentifier($actor->getAuthIdentifier()))->toBeTrue()
+        ->and(DelegatedActor::isReservedIdentifier((string) $actor->getKey()))->toBeFalse()
+        ->and(DelegatedActor::isReservedIdentifier(null))->toBeFalse()
+        ->and(DelegatedActor::isReservedIdentifier(7))->toBeFalse();
 });
 
 // ─── AC3: a delegated actor is not a user ───────────────────────────────────

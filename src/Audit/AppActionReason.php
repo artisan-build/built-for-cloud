@@ -33,7 +33,9 @@ enum AppActionReason: string
 {
     /**
      * A delegated session was opened at this deployment's door. The
-     * package's own reason, and the only one it emits today.
+     * package's own reason, and its only emitter's reason. HISTORICAL:
+     * the door was retired in v0.17.0, so no new emission carries it;
+     * rows recorded before that retirement keep it.
      */
     case ConsoleEntry = 'console_entry';
 

@@ -337,11 +337,10 @@ final class CredentialGuard implements Guard
      * coerces the non-numeric string toward `0` and can resolve the row
      * with key 0, while PostgreSQL raises. "No credential can resolve a
      * delegated actor" therefore has to be enforced on the way IN, not
-     * hoped for from the driver — and the check is broader than the
-     * canonical-identifier rule ({@see DelegatedActor::keyFrom()}
-     * accepts only well-formed suffixes) because `bfc-console:1junk`
-     * names no actor and must still never be handed to a provider whose
-     * own coercion decides what it means.
+     * hoped for from the driver — and the check is deliberately broad,
+     * prefix-shaped and not well-formedness-shaped, because
+     * `bfc-console:1junk` names no actor and must still never be handed
+     * to a provider whose own coercion decides what it means.
      *
      * A returned {@see DelegatedActor} is rejected too. That is
      * unreachable through the namespace check above, and it is the

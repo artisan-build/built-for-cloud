@@ -112,11 +112,13 @@ and the following closed `error` vocabulary. Clients branch on `error`.
 **Draft — v0.17.0.** Console entry is retired: `POST /bfc/console/enter` and
 `GET /bfc/console/chrome.js` are removed, along with the Console session guard and the
 `BUILT_FOR_CLOUD_CONSOLE_ENABLED` / `BUILT_FOR_CLOUD_CONSOLE_REENTRY_URL` configuration (and the
-`console-guard`, `console-enter` and `console-chrome-assets` capabilities, which reported exactly
-that machinery). Delegated MCP authentication (`mcp-delegated`) is unchanged and keeps the
-delegated actor record (`bfc_delegated_actors`), `BUILT_FOR_CLOUD_CONSOLE_ISSUER` / `_AUDIENCE`,
-the assertion verifier and the console keyring. `GET /bfc/console/vitals` is unchanged. No
-migration runs; existing `bfc_delegated_actors` rows are untouched.
+`built-for-cloud.console.return_path_allowlist` config key, which existed only to narrow the
+door's landing paths), together with the `console-guard`, `console-enter` and
+`console-chrome-assets` capabilities, which reported exactly that machinery. Delegated MCP
+authentication (`mcp-delegated`) is unchanged and keeps the delegated actor record
+(`bfc_delegated_actors`), `BUILT_FOR_CLOUD_CONSOLE_ISSUER` / `_AUDIENCE`, the assertion verifier
+and the console keyring. `GET /bfc/console/vitals` is unchanged. No migration runs; existing
+`bfc_delegated_actors` rows are untouched.
 
 **Draft — next additive release (P1 managed enrolment).** New owner-credential-authenticated
 routes provision a pristine installation into managed mode, rotate its stored managed-auth client
@@ -130,8 +132,10 @@ Additive unless marked otherwise.
 
 **Everything the Console adds through this release is additive or a documented removal, so `api_version` stays 2. What carries the
 signal is `bfc_version` 0.17.0 plus the `capabilities` entries** — `console-keys`,
-`console-key-retire`, `console-vitals`, `console-guard`, `console-enter`, `console-chrome-assets`,
-`app-action-audit-emit`, `mcp-serve` and `mcp-delegated`.
+`console-key-retire`, `console-vitals`,
+`app-action-audit-emit`, `mcp-serve` and `mcp-delegated`. (The `console-guard`, `console-enter`
+and `console-chrome-assets` entries this list once named were RETIRED in v0.17.0 with the
+machinery they advertised — see [Retired in v0.17.0](#retired-in-v0170).)
 
 **What "additive" covers here, stated as what actually shipped rather than as one paradigm case**,
 because a reader applying rule 1 to their own change needs the real list:
@@ -191,11 +195,12 @@ with the three things that WOULD have moved the major and none of which happened
   emission (Console PRD D17). Additive: no request or response shape changes, and the stream has
   no read transport — see [the app-action audit stream](#the-app-action-audit-stream).
 - New `capabilities` entry `console-chrome-assets` and one new route,
-  [`GET /bfc/console/chrome.js`](#get-bfcconsolechromejs) — the console chrome's re-entry
+  `GET /bfc/console/chrome.js` — the console chrome's re-entry
   interceptor, plus the `bfc::` view namespace carrying the single package layout (Console PRD
   D11/D7). Additive: no existing request or response shape changes, and the capability names
-  what this deployment SERVES, never that any page of the application renders it. See
-  [the console chrome](#the-console-chrome).
+  what this deployment SERVES, never that any page of the application renders it. (The chrome
+  and its route were retired in v0.17.0 — see
+  [Retired in v0.17.0](#retired-in-v0170).)
 - New rotation route (PRD 1.7): `POST /bfc/credentials/{id}/rotate` — rotate-by-id on the unified
   store. Summary rows gained the nullable `rotated_at` field (rotation provenance). A row
   already superseded by rotation never mints again (the lineage never forks): with a live
@@ -327,11 +332,11 @@ with the three things that WOULD have moved the major and none of which happened
   personal-credentials surface) refuses a delegated session rather than acting as the local
   session user. This AMENDS the v3.1 matrix invariant SEC-V3-10 from a token-vs-session rule to
   a session-vs-session one — see `release-notes/unified-store-guard.md`. Full detail under
-  [Console — what has landed](#console--what-has-landed-and-what-is-still-reserved).
+  [Console — what has landed, what has been RETIRED](#console--what-has-landed-what-has-been-retired-and-what-is-still-reserved).
 
 - **The Console's enter endpoint ships (Console PRD D12/D13).** All additive, and `api_version`
   stays 2: no documented request or response shape changes. New route
-  [`POST /bfc/console/enter`](#post-bfcconsoleenter), classified `content`, mounted only on a
+  `POST /bfc/console/enter`, classified `content`, mounted only on a
   deployment that has the Console enabled AND whose `bfc-console` guard is this
   package's own — `GET /bfc/meta` `capabilities` gains `console-enter` under exactly that
   predicate, and `/bfc/console/enter` therefore moves out of the RESERVED list. What lands with

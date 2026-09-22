@@ -887,7 +887,11 @@ it('keeps authorization route authority deferral local to authenticated non-dele
     // is retired and these browser routes carry no delegated publisher,
     // so no delegated principal can reach them at all. What stays
     // pinned is that nothing REPLACED the door with a stub on these
-    // surfaces either.
+    // surfaces either — EVEN IF a host still carries the pre-v0.17.0
+    // enable switch in its config, so a flag-gated re-add cannot
+    // quietly bring the door back.
+    config(['built-for-cloud.console.enabled' => true]);
+
     expect(array_filter(
         Route::getRoutes()->getRoutes(),
         static fn ($route): bool => is_object($route) && in_array($route->uri(), ['bfc/console/enter', 'bfc/console/chrome.js'], true),

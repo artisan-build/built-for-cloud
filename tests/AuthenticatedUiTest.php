@@ -378,7 +378,11 @@ final class AuthenticatedUiTest extends TestCase
         // browser surface at all, so the delegation vector is now held
         // by the route set itself rather than by a refusal at the gate.
         // What stays pinned here is that the route no longer exists and
-        // nothing replaced it with a disabled stub.
+        // nothing replaced it with a disabled stub — EVEN IF a host
+        // still carries the pre-v0.17.0 enable switch in its config, so
+        // a flag-gated re-add cannot quietly bring the door back.
+        config(['built-for-cloud.console.enabled' => true]);
+
         $this->assertSame(
             [],
             array_values(array_filter(

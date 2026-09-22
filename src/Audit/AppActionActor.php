@@ -156,12 +156,11 @@ final readonly class AppActionActor
      * recorder that asked `Auth::`, a guard, or `$request->user()` a
      * second time could disagree with the principal the request actually
      * acted as, and an audit line naming the wrong one of two live
-     * identities is exactly the failure D14 exists to forbid. On a route
-     * guarded by the app's own guard while a delegated session is also
-     * live, the acting principal is the LOCAL user, and so is this
-     * actor — the delegated actor on the same request is reported by
-     * {@see ActingPrincipal::$delegatedActor} and is deliberately not
-     * what attributes.
+     * identities is exactly the failure D14 exists to forbid. A verified
+     * delegated request assertion outranks the local session for the
+     * acting principal, so on a request carrying both, this actor IS the
+     * delegated actor with THIS handoff's claims — never a union of the
+     * two identities.
      *   Pinned by `tests/AppActionAuditTest.php` — "keeps co-resident
      *   attribution precedence as defence in depth".
      *

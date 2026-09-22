@@ -91,13 +91,6 @@ final class DelegatedActor extends Model implements Authenticatable
      */
     public const string IDENTIFIER_PREFIX = 'bfc-console:';
 
-    /**
-     * A canonical positive decimal with no leading zero, bounded to 18
-     * digits so the value is always inside PHP's and every supported
-     * driver's signed 64-bit range.
-     */
-    private const string CANONICAL_KEY = '/^[1-9][0-9]{0,17}\z/';
-
     protected $table = 'bfc_delegated_actors';
 
     /**
@@ -130,29 +123,9 @@ final class DelegatedActor extends Model implements Authenticatable
     }
 
     /**
-     * The primary key a qualified identifier names, or null when the
-     * identifier is not one. PUBLIC because the credential guard uses the
-     * same rule to recognise — and refuse — the reserved namespace before
-     * it hands anything to a user provider; one definition of "this is a
-     * delegated identifier", not two that can drift.
-     */
-    public static function keyFrom(mixed $identifier): ?string
-    {
-        if (! is_string($identifier) || ! str_starts_with($identifier, self::IDENTIFIER_PREFIX)) {
-            return null;
-        }
-
-        $key = substr($identifier, strlen(self::IDENTIFIER_PREFIX));
-
-        return preg_match(self::CANONICAL_KEY, $key) === 1 ? $key : null;
-    }
-
-    /**
      * Whether a stored `user_id` sits inside the RESERVED delegated
-     * namespace, canonical or not. Deliberately broader than
-     * {@see keyFrom()}: `bfc-console:1junk` names no actor, but it is
-     * still a value that must never reach a user provider, where a
-     * driver's own coercion decides what it means.
+     * namespace, canonical or not — the rule the credential guard refuses
+     * on before any user provider is asked.
      */
     public static function isReservedIdentifier(mixed $identifier): bool
     {
