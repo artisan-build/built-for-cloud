@@ -33,6 +33,132 @@ refusal.
 The threat boundary is an attacker who does not hold the current owner token but may replay or forge
 enrolment input. Deliberately hostile host configuration is outside the boundary.
 
+### Executable transport profiles
+
+These structured tables are the normative representation consumed by
+`ManagedOutboundContractDocTest`. Endpoint field tables define required keys. The field rules below
+define their types and common value constraints; contextual rules narrow them where production does.
+
+| Protocol | Method | Path | Accept | Content-Type | Authorization | Version header | Success status |
+| --- | --- | --- | --- | --- | --- | --- | ---: |
+| `managed-auth-v1` | `POST` | `/managed-auth/v1/handoffs` | `application/json` | `application/json` | `Bearer enrolled-secret` | `Bfc-Contract-Version: managed-auth-v1` | 200 |
+| `managed-auth-v1` | `POST` | `/managed-auth/v1/handoffs/{request_id}/exchange` | `application/json` | `application/json` | `Bearer enrolled-secret` | `Bfc-Contract-Version: managed-auth-v1` | 200 |
+| `managed-auth-v1` | `POST` | `/managed-auth/v1/memberships/confirm` | `application/json` | `application/json` | `Bearer enrolled-secret` | `Bfc-Contract-Version: managed-auth-v1` | 200 |
+| `managed-transition-v1` | `POST` | `/managed-transition/v1/ownership` | `application/json` | `application/json` | `Bearer enrolled-secret` | `Bfc-Contract-Version: managed-transition-v1` | 200 |
+| `managed-transition-v1` | `POST` | `/managed-transition/v1/transitions` | `application/json` | `application/json` | `Bearer enrolled-secret` | `Bfc-Contract-Version: managed-transition-v1` | 200 |
+| `managed-transition-v1` | `POST` | `/managed-transition/v1/transitions/{transition_id}/roster` | `application/json` | `application/json` | `Bearer enrolled-secret` | `Bfc-Contract-Version: managed-transition-v1` | 200 |
+| `managed-transition-v1` | `POST` | `/managed-transition/v1/transitions/{transition_id}/stage` | `application/json` | `application/json` | `Bearer enrolled-secret` | `Bfc-Contract-Version: managed-transition-v1` | 200 |
+| `managed-transition-v1` | `POST` | `/managed-transition/v1/transitions/{transition_id}` | `application/json` | `application/json` | `Bearer enrolled-secret` | `Bfc-Contract-Version: managed-transition-v1` | 200 |
+| `managed-transition-v1` | `POST` | `/managed-transition/v1/transition-requests/{transition_request_id}` | `application/json` | `application/json` | `Bearer enrolled-secret` | `Bfc-Contract-Version: managed-transition-v1` | 200 |
+| `managed-transition-v1` | `POST` | `/managed-transition/v1/transitions/{transition_id}/abandon` | `application/json` | `application/json` | `Bearer enrolled-secret` | `Bfc-Contract-Version: managed-transition-v1` | 200 |
+| `managed-transition-v1` | `POST` | `/managed-transition/v1/transitions/{transition_id}/ack` | `application/json` | `application/json` | `Bearer enrolled-secret` | `Bfc-Contract-Version: managed-transition-v1` | 200 |
+
+### Executable field rules
+
+Every field is a required key wherever an endpoint or nested-object table lists it. Rules are
+semicolon-delimited. `uint` means a non-negative integer and `rfc3339` means the strict timestamp
+form stated above.
+
+#### Common rules
+
+| Field | Type | Rules |
+| --- | --- | --- |
+| `contract_version` | `string` | `enum=managed-auth-v1,managed-transition-v1` |
+| `issuer` | `string` | `non-empty` |
+| `connection_id` | `string` | `non-empty` |
+| `organization_id` | `string` | `non-empty` |
+| `installation_id` | `string` | `non-empty` |
+| `authority_generation` | `integer` | `uint` |
+| `roster_version` | `integer` | `uint` |
+| `response_sequence` | `integer` | `uint` |
+| `responded_at` | `string` | `non-empty;rfc3339` |
+| `request_id` | `string` | `non-empty` |
+| `authorization_url` | `string` | `non-empty;https-url` |
+| `expires_at` | `string` | `non-empty;rfc3339` |
+| `code` | `string` | `non-empty` |
+| `scalpels_id` | `string` | `non-empty` |
+| `membership_id` | `string` | `non-empty` |
+| `membership_status` | `string` | `enum=active,removed,disabled` |
+| `connection_status` | `string` | `enum=active,inactive` |
+| `role` | `string` | `enum=owner,admin,member` |
+| `display_name` | `string` | `string` |
+| `contact_email` | `string` | `non-empty` |
+| `contact_email_verified` | `boolean` | `boolean` |
+| `seated_owner_scalpels_id` | `string` | `non-empty` |
+| `owner` | `object` | `object` |
+| `seated_owner` | `object` | `object` |
+| `direction` | `string` | `enum=adopt,exit` |
+| `transition_request_id` | `string` | `non-empty;max-bytes=255` |
+| `transition_id` | `string` | `non-empty;max-bytes=255` |
+| `status` | `string` | `non-empty` |
+| `roster_cutoff_at` | `string` | `non-empty;max-bytes=64;rfc3339` |
+| `roster_total` | `integer` | `uint;max=50000` |
+| `cursor` | `string` | `max-bytes=4096` |
+| `members` | `list` | `max-count=500` |
+| `next_cursor` | `string` | `max-bytes=4096` |
+| `page_total` | `integer` | `uint;max=500` |
+| `mapping` | `list` | `list` |
+| `idempotency_key` | `string` | `non-empty;bytes=43` |
+| `local_commit_receipt` | `string` | `non-empty;max-bytes=255` |
+| `mode_after` | `string` | `enum=managed,standalone` |
+| `generation_after` | `integer` | `uint;max=9007199254740991` |
+| `acknowledged_at` | `string` | `non-empty;max-bytes=64;rfc3339` |
+
+#### Contextual rules
+
+The following contextual rules are additional to the common field rules:
+
+| Context | Field | Rules |
+| --- | --- | --- |
+| `managed-transition-v1 binding` | `authority_generation` | `max=9007199254740991` |
+| `managed-transition-v1 binding` | `roster_version` | `max=9007199254740991` |
+| `managed-transition-v1 binding` | `response_sequence` | `max=9007199254740991` |
+| `handoff request` | `request_id` | `bytes=43` |
+| `T1 request` | `transition_request_id` | `bytes=43` |
+| `owner subject` | `scalpels_id` | `max-bytes=255` |
+| `roster member` | `scalpels_id` | `max-bytes=255` |
+| `roster member` | `display_name` | `max-bytes=255` |
+| `roster member` | `contact_email` | `max-bytes=255;valid-email` |
+
+#### Nullable locations
+
+These are the only endpoint-table locations whose values may be null. A listed field remains a
+required key.
+
+| Method and path | Table | Field |
+| --- | --- | --- |
+| `POST /managed-transition/v1/ownership` | `Request fields` | `seated_owner_scalpels_id` |
+| `POST /managed-transition/v1/ownership` | `Response fields` | `seated_owner` |
+| `POST /managed-transition/v1/transitions/{transition_id}/roster` | `Request fields` | `cursor` |
+| `POST /managed-transition/v1/transitions/{transition_id}/roster` | `Response fields` | `next_cursor` |
+| `POST /managed-transition/v1/transitions/{transition_id}` | `Response fields` | `local_commit_receipt` |
+| `POST /managed-transition/v1/transitions/{transition_id}` | `Response fields` | `acknowledged_at` |
+| `POST /managed-transition/v1/transition-requests/{transition_request_id}` | `Response fields` | `transition_id` |
+| `POST /managed-transition/v1/transition-requests/{transition_request_id}` | `Response fields` | `status` |
+
+#### Response enums
+
+Endpoint-specific response enums narrow the field rules:
+
+| Method and path | Field | Values |
+| --- | --- | --- |
+| `POST /managed-transition/v1/transitions` | `status` | `prepared` |
+| `POST /managed-transition/v1/transitions/{transition_id}/stage` | `status` | `staged` |
+| `POST /managed-transition/v1/transitions/{transition_id}` | `status` | `prepared,staged,acknowledged,abandoned` |
+| `POST /managed-transition/v1/transition-requests/{transition_request_id}` | `status` | `prepared,staged,acknowledged,abandoned` |
+| `POST /managed-transition/v1/transitions/{transition_id}/abandon` | `status` | `abandoned` |
+| `POST /managed-transition/v1/transitions/{transition_id}/ack` | `status` | `acknowledged` |
+
+### Executable refusal response shape
+
+Every HTTP refusal body requires these fields. Unknown response fields are ignored as stated above;
+`Retry-After`, when present, is a response header rather than a body field.
+
+| Field | Type | Required | Rules |
+| --- | --- | --- | --- |
+| `contract_version` | `string` | `yes` | `request protocol` |
+| `error` | `string` | `yes` | `status-paired vocabulary below` |
+
 ## Response binding
 
 Except for handoff creation, every successful response carries a binding block. The client compares
@@ -181,13 +307,14 @@ most 300 seconds. Missing, malformed, or shorter values use 30 seconds; longer v
 
 The client refuses every non-`200` response. The authority's closed refusal vocabulary is:
 
-| Status | `error` |
-| ---: | --- |
-| 400 | `invalid_grant`, `unsupported_contract_version` |
-| 401 | `invalid_client` |
-| 429 | `rate_limited` |
-| 500 | `server_error` |
-| 503 | `server_error` |
+| Status | `error` | Classification | `Retry-After` |
+| ---: | --- | --- | --- |
+| 400 | `invalid_grant` | `refusal` | `optional-decimal;cap=300` |
+| 400 | `unsupported_contract_version` | `refusal` | `optional-decimal;cap=300` |
+| 401 | `invalid_client` | `refusal` | `optional-decimal;cap=300` |
+| 429 | `rate_limited` | `retryable-refusal` | `optional-decimal;cap=300` |
+| 500 | `server_error` | `retryable-refusal` | `optional-decimal;cap=300` |
+| 503 | `server_error` | `retryable-refusal` | `optional-decimal;cap=300` |
 
 The client also refuses transport failure; malformed JSON; an absent or wrong contract version;
 missing, null, mistyped, empty, out-of-range, or invalid-enum required fields; invalid timestamps;
@@ -351,14 +478,47 @@ against a different roster version or cutoff.
 
 #### Mapping fields
 
-| Field | Requirement |
+Every element has exactly these six required keys:
+
+| Field | Type | Nullability | Rules |
+| --- | --- | --- | --- |
+| `scalpels_id` | `string` | `nullable` | `non-empty;max-bytes=255` |
+| `local_kind` | `string` | `nullable` | `enum=user,invitation` |
+| `local_id` | `string` | `nullable` | `non-empty;max-bytes=64` |
+| `role` | `string` | `nullable` | `enum=owner,admin,member` |
+| `disposition` | `string` | `required` | `enum=link,create,retain_local,exclude,defer_to_managed_jit` |
+| `final_email` | `string` | `nullable` | `non-empty;max-bytes=255;valid-email` |
+
+`required` means a non-empty string and `null` means JSON null. These rows are the complete shape
+matrix, not examples:
+
+##### Shape matrix
+
+| Shape | Disposition | `local_kind` | `scalpels_id` | `local_id` | `role` | `final_email` | Adopt | Exit |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `link-user` | `link` | `user` | `required` | `required` | `required` | `required` | `allowed` | `allowed` |
+| `link-invitation` | `link` | `invitation` | `required` | `required` | `required` | `required` | `allowed` | `allowed` |
+| `create` | `create` | `null` | `required` | `null` | `required` | `required` | `allowed` | `forbidden` |
+| `retain-user` | `retain_local` | `user` | `null` | `required` | `required` | `required` | `forbidden` | `allowed` |
+| `retain-invitation` | `retain_local` | `invitation` | `null` | `required` | `null` | `null` | `forbidden` | `allowed` |
+| `exclude-user` | `exclude` | `user` | `null` | `required` | `null` | `null` | `allowed` | `allowed` |
+| `exclude-invitation` | `exclude` | `invitation` | `null` | `required` | `null` | `null` | `allowed` | `allowed` |
+| `defer-to-managed-jit` | `defer_to_managed_jit` | `null` | `required` | `null` | `null` | `null` | `allowed` | `forbidden` |
+
+##### Complete-list constraints
+
+The complete-list constraints are also normative:
+
+| Constraint | Rule |
 | --- | --- |
-| `scalpels_id` | Authority subject id or `null` |
-| `local_kind` | `user`, `invitation`, or `null` |
-| `local_id` | Local id or `null` |
-| `role` | `owner`, `admin`, `member`, or `null` |
-| `disposition` | Direction-appropriate mapping disposition |
-| `final_email` | Final email or `null` |
+| `known-subject` | Every non-null `scalpels_id` exists in the frozen roster. |
+| `unique-subject` | A non-null `scalpels_id` appears at most once. |
+| `known-local` | Every non-null (`local_kind`, `local_id`) identifies a current local user or pending invitation. |
+| `unique-local` | A (`local_kind`, `local_id`) pair appears at most once. |
+| `all-locals` | Every current local user and pending invitation appears exactly once. |
+| `all-adopt-subjects` | In adopt, every frozen-roster subject appears exactly once. |
+| `adopt-role-match` | In adopt, every `link` and `create` role equals the frozen-roster role. |
+| `unique-projected-email` | Projected retained, linked, and created email addresses are unique case-insensitively. |
 
 #### Response fields
 
@@ -526,14 +686,19 @@ must equal the locally committed values.
 
 The transition client recognizes these status/error pairs; all are refusals:
 
-| Status | `error` |
-| ---: | --- |
-| 400 | `invalid_grant`, `unsupported_contract_version`, `invalid_transition` |
-| 401 | `invalid_client` |
-| 409 | `idempotency_conflict`, `roster_changed`, `transition_state_conflict`, `transition_in_progress` |
-| 429 | `rate_limited` |
-| 500 | `server_error` |
-| 503 | `server_error` |
+| Status | `error` | Classification | `Retry-After` |
+| ---: | --- | --- | --- |
+| 400 | `invalid_grant` | `refusal` | `optional-decimal;cap=300` |
+| 400 | `unsupported_contract_version` | `refusal` | `optional-decimal;cap=300` |
+| 400 | `invalid_transition` | `refusal` | `optional-decimal;cap=300` |
+| 401 | `invalid_client` | `refusal` | `optional-decimal;cap=300` |
+| 409 | `idempotency_conflict` | `conflict-refusal` | `optional-decimal;cap=300` |
+| 409 | `roster_changed` | `conflict-refusal` | `optional-decimal;cap=300` |
+| 409 | `transition_state_conflict` | `conflict-refusal` | `optional-decimal;cap=300` |
+| 409 | `transition_in_progress` | `conflict-refusal` | `optional-decimal;cap=300` |
+| 429 | `rate_limited` | `retryable-refusal` | `optional-decimal;cap=300` |
+| 500 | `server_error` | `retryable-refusal` | `optional-decimal;cap=300` |
+| 503 | `server_error` | `retryable-refusal` | `optional-decimal;cap=300` |
 
 A decimal `Retry-After` is retained but capped at 300 seconds. Unknown status/error pairs, transport
 failure, malformed JSON, wrong contract versions, invalid field shapes, binding mismatches, wrong
