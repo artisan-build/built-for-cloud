@@ -172,16 +172,15 @@ it('does not let an unbound credential inherit anything from a session', functio
         ->assertJsonPath('principal', $minted->credential->id);
 });
 
-// ─── SEC-V3-10, amended: the matrix with TWO session guards present ─────────
+// ─── SEC-V3-10: the shipped single-session-guard matrix ─────────────────────
 //
-// The Console adds a SECOND, session-based guard (`bfc-console`) to every
-// app that enables it — the package registers it, so every test in this
-// file already runs with both configured. These name the interaction
-// explicitly rather than leaving it implied.
+// The delegated-entry release once added a SECOND, session-based guard
+// (`bfc-console`) to this matrix; it was retired in v0.17.0, and the
+// guard no longer exists to configure. What the delegated rows pinned
+// is now held structurally: no guard resolves a delegated actor, so no
+// session principal can collide with a credential's `user_id`.
 
-it('still rejects mismatched simultaneous principals with the delegated guard configured', function (): void {
-    expect(config('auth.guards.bfc-console'))->toBeArray();
-
+it('still rejects mismatched simultaneous principals', function (): void {
     $sessionUser = precedenceUser('session@example.com');
     $boundUser = precedenceUser('bound@example.com');
     $minted = $this->mintCredential(['user_id' => (string) $boundUser->id]);
@@ -194,29 +193,6 @@ it('still rejects mismatched simultaneous principals with the delegated guard co
     expect($minted->credential->refresh()->last_used_at)->toBeNull();
 });
 
-it('does not turn a delegated session into a false mismatch on a token route', function (): void {
-    // The adversarial configuration: this app points the credential
-    // guard's mismatch check at the DELEGATED guard. A delegated actor's
-    // identifier is type-qualified, so comparing it to a credential's
-    // `user_id` could only ever mismatch — every token route would 401
-    // for anyone simultaneously inside a console session. It is excluded
-    // as "not a comparable local principal", and the credential
-    // principal stays authoritative.
-    config(['built-for-cloud.credentials.session_guard' => 'bfc-console']);
-
-    $boundUser = precedenceUser('bound@example.com');
-    $actor = consoleActor();
-    $minted = $this->mintCredential(['user_id' => (string) $boundUser->id]);
-
-    $this->withSession(consoleSessionState($actor));
-
-    expect(auth('bfc-console')->id())->toBe($actor->getAuthIdentifier());
-
-    $this->getJson('/token-route', ['Authorization' => $minted->bearerHeader()])
-        ->assertOk()
-        ->assertJsonPath('principal', $boundUser->id);
-});
-
 it('still rejects a mismatched local principal when the session guard is the local one', function (): void {
     // The same shape as above with the SHIPPED configuration, so the
     // exclusion above cannot be read as having weakened the rule it
@@ -225,10 +201,9 @@ it('still rejects a mismatched local principal when the session guard is the loc
 
     $sessionUser = precedenceUser('session@example.com');
     $boundUser = precedenceUser('bound@example.com');
-    $actor = consoleActor();
     $minted = $this->mintCredential(['user_id' => (string) $boundUser->id]);
 
-    $this->actingAs($sessionUser)->withSession(consoleSessionState($actor));
+    $this->actingAs($sessionUser);
 
     $this->getJson('/token-route', ['Authorization' => $minted->bearerHeader()])
         ->assertStatus(401);

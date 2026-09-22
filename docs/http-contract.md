@@ -107,6 +107,8 @@ and the following closed `error` vocabulary. Clients branch on `error`.
 
 ### Changelog
 
+**RELEASE WINDOW: this document describes `bfc_version` 0.17.0; `BuiltForCloud::VERSION` is 0.16.1 until the tag lands.**
+
 **Draft — v0.17.0.** Console entry is retired: `POST /bfc/console/enter` and
 `GET /bfc/console/chrome.js` are removed, along with the Console session guard and the
 `BUILT_FOR_CLOUD_CONSOLE_ENABLED` / `BUILT_FOR_CLOUD_CONSOLE_REENTRY_URL` configuration (and the
@@ -123,11 +125,11 @@ secret, and disconnect it through the existing exit-transition machinery. `GET /
 and never returned. `api_version` remains 2 because these are new routes and one new open-set
 capability member.
 
-**api_version 2** (bfc **0.16.1**, this release). All changes since version 1, in one inventory.
+**api_version 2** (bfc **0.17.0**, this release). All changes since version 1, in one inventory.
 Additive unless marked otherwise.
 
-**Everything the Console adds through 0.16.1 is additive, so `api_version` stays 2. What carries the
-signal is `bfc_version` 0.16.1 plus the `capabilities` entries** — `console-keys`,
+**Everything the Console adds through this release is additive or a documented removal, so `api_version` stays 2. What carries the
+signal is `bfc_version` 0.17.0 plus the `capabilities` entries** — `console-keys`,
 `console-key-retire`, `console-vitals`, `console-guard`, `console-enter`, `console-chrome-assets`,
 `app-action-audit-emit`, `mcp-serve` and `mcp-delegated`.
 
@@ -600,7 +602,7 @@ Public (`bfc-public` throttle). Identifies the instance.
 ```json
 {
   "product": "Sink",
-  "bfc_version": "0.16.1",
+  "bfc_version": "0.17.0",
   "api_version": 2,
   "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials", "console-keys", "console-key-retire", "console-vitals", "app-action-audit-emit", "mcp-serve", "mcp-delegated"],
   "claimed": true,
@@ -2771,7 +2773,7 @@ field.
 {
   "version": 1,
   "api_version": 2,
-  "bfc_version": "0.16.1",
+  "bfc_version": "0.17.0",
   "app_version": "1.4.2",
   "health": "ok",
   "deployed_at": "2026-08-29T09:14:00+00:00",
@@ -2970,8 +2972,8 @@ attempt and current claims survive refusal. In the middleware's own database tra
 inserts the single-use `jti` burn, locks and re-reads that actor, refuses an inactive actor, and
 publishes an `ActingPrincipal` on the current request object. Claims come directly from this
 verified assertion, never from the actor row's shared `last_handoff_*` fields. No login occurs and
-the middleware writes no session key. The resolver's existing order still applies: a Console-session
-refusal is terminal, then the request assertion outranks a local principal, and identities are
+the middleware writes no session key. The resolver's order still applies: the request assertion
+outranks a local principal, and identities are
 never unioned. The request object is also the scope boundary, so a singleton resolver cannot carry
 that principal into the next request.
 

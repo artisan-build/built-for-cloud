@@ -7,7 +7,6 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
@@ -15,7 +14,6 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\OperatorRouteController;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
@@ -126,7 +124,6 @@ function packageOperatorGateInventory(): array
         'POST /bfc/console/re-key' => ['uri' => 'bfc/console/re-key', 'methods' => ['POST'], 'action' => ManageConsoleKeys::class.'@reKey', 'gate' => EnsureCredentialAdmin::class.':'.OperatorAbility::ConsoleKeyWrite->value],
         'POST /bfc/console/keys/{key_id}/retire' => ['uri' => 'bfc/console/keys/{key_id}/retire', 'methods' => ['POST'], 'action' => ManageConsoleKeys::class.'@retire', 'gate' => EnsureCredentialAdmin::class.':'.OperatorAbility::ConsoleKeyWrite->value],
         'GET /bfc/console/vitals' => ['uri' => 'bfc/console/vitals', 'methods' => ['GET', 'HEAD'], 'action' => ConsoleVitals::class, 'gate' => EnsureDashboardCredential::class],
-        'GET /bfc/console/chrome.js' => ['uri' => 'bfc/console/chrome.js', 'methods' => ['GET', 'HEAD'], 'action' => ConsoleChromeScript::class, 'gate' => EnsureConsoleSession::class],
         'POST /bfc/subjects/offboard' => ['uri' => 'bfc/subjects/offboard', 'methods' => ['POST'], 'action' => ManageSubjects::class.'@offboard', 'gate' => EnsureCredentialAdmin::class.':'.OperatorAbility::SubjectOffboard->value],
         'GET /bfc/client-observations' => ['uri' => 'bfc/client-observations', 'methods' => ['GET', 'HEAD'], 'action' => ClientObservations::class, 'gate' => EnsureCredentialAdmin::class.':'.OperatorAbility::CredentialRead->value],
     ];
@@ -181,11 +178,9 @@ function applyOperatorGateAttack(Router $router, array $ownedRoutes, string $vec
 {
     $restoreAliases = static function () use ($router): void {
         $router->aliasMiddleware('bfc.credential.admin', EnsureCredentialAdmin::class);
-        $router->aliasMiddleware('bfc.console', EnsureConsoleSession::class);
         $router->middlewareGroup('bfc.credential.admin', [EnsureCredentialAdmin::class]);
-        $router->middlewareGroup('bfc.console', [EnsureConsoleSession::class]);
 
-        foreach ([EnsureCredentialAdmin::class, EnsureConsoleSession::class, EnsureDashboardCredential::class] as $gate) {
+        foreach ([EnsureCredentialAdmin::class, EnsureDashboardCredential::class] as $gate) {
             $router->aliasMiddleware($gate, $gate);
         }
 
@@ -197,7 +192,7 @@ function applyOperatorGateAttack(Router $router, array $ownedRoutes, string $vec
     }
 
     if ($vector === 'fqcn-alias') {
-        foreach ([EnsureCredentialAdmin::class, EnsureConsoleSession::class, EnsureDashboardCredential::class] as $gate) {
+        foreach ([EnsureCredentialAdmin::class, EnsureDashboardCredential::class] as $gate) {
             $router->aliasMiddleware($gate, HostilePackageGateMiddleware::class);
         }
 
@@ -205,7 +200,7 @@ function applyOperatorGateAttack(Router $router, array $ownedRoutes, string $vec
     }
 
     if ($vector === 'fqcn-group') {
-        foreach ([EnsureCredentialAdmin::class, EnsureConsoleSession::class, EnsureDashboardCredential::class] as $gate) {
+        foreach ([EnsureCredentialAdmin::class, EnsureDashboardCredential::class] as $gate) {
             $router->middlewareGroup($gate, [HostilePackageGateMiddleware::class]);
         }
 
@@ -227,7 +222,6 @@ function applyOperatorGateAttack(Router $router, array $ownedRoutes, string $vec
 
         foreach ($ownedRoutes as ['route' => $route, 'gate' => $gate]) {
             $alias = match (true) {
-                $gate === EnsureConsoleSession::class => 'bfc.console',
                 str_starts_with($gate, EnsureCredentialAdmin::class.':') => 'bfc.credential.admin:'.explode(':', $gate, 2)[1],
                 default => null,
             };
@@ -251,7 +245,7 @@ function applyOperatorGateAttack(Router $router, array $ownedRoutes, string $vec
     if ($vector === 'later-wildcard-alias') {
         Event::listen(Routing::class, $restoreAliases);
         Event::listen(RouteMatched::class.'*', static function () use ($router): void {
-            foreach ([EnsureCredentialAdmin::class, EnsureConsoleSession::class, EnsureDashboardCredential::class] as $gate) {
+            foreach ([EnsureCredentialAdmin::class, EnsureDashboardCredential::class] as $gate) {
                 $router->aliasMiddleware($gate, HostilePackageGateMiddleware::class);
             }
 
@@ -274,7 +268,6 @@ it('keeps every inventoried operator gate effective through package-alias collis
 
     expect(array_keys($scan['checked']))->toBe($expectedLabels)
         ->and(array_values(array_unique($scan['checked'])))->toContain(
-            EnsureConsoleSession::class,
             EnsureCredentialAdmin::class.':credential:read',
             EnsureDashboardCredential::class,
         )
@@ -463,7 +456,7 @@ it('refuses every credential-admin and console-session route before domain effec
 
     if ($vector === 'later-wildcard-alias') {
         expect($tripwireRefusals)->toBe(count($routesToDrive))
-            ->and(HostilePackageGateMiddleware::$paths)->toHaveCount(count($routesToDrive) + 1);
+            ->and(HostilePackageGateMiddleware::$paths)->toHaveCount(count($routesToDrive));
     }
 
     Mail::assertNothingSent();
@@ -529,11 +522,6 @@ it('refuses one route from each gate family before controller effects under the 
         'purpose' => CredentialPurpose::Consumption->value,
         'name' => 'collision-mint',
     ])->assertUnauthorized();
-    $this->get('/bfc/console/chrome.js')
-        ->assertUnauthorized()
-        ->assertHeader('BFC-Console-Reentry', '1')
-        ->assertJsonPath('error', 'console_reentry_required');
-
     expect($ownership->refresh()->pending_claim_id)->toBeNull()
         ->and(Credential::query()->where('name', 'collision-mint')->doesntExist())->toBeTrue()
         ->and(HostilePackageGateMiddleware::$paths)->toBe([]);

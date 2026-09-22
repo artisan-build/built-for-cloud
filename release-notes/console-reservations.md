@@ -82,10 +82,13 @@ the two differ are the rows worth reading.
    package repoints, which is not what a reader of the reserved row would have assumed.
    `release-notes/unified-store-guard.md` carries the amendment cell by cell.
 
-   *Pinned by* `tests/CredentialPrecedenceTest.php`, which runs the whole precedence matrix with
-   both session guards configured ("still rejects mismatched simultaneous principals with the
-   delegated guard configured", "does not turn a delegated session into a false mismatch on a token
-   route" and "still rejects a mismatched local principal when the session guard is the local one").
+   **Retired in v0.17.0:** the delegated guard this row described was
+   removed with the delegated-entry door, and the matrix is
+   single-session-guard again — held structurally, because no guard
+   resolves a delegated actor at all.
+   *Pinned by* `tests/CredentialPrecedenceTest.php` ("still rejects
+   mismatched simultaneous principals" and "still rejects a mismatched
+   local principal when the session guard is the local one").
 
 5. **`metadata:read` — implemented, and deliberately not what the reservation implied about
    break-glass.** It is enforced by `GET /bfc/console/vitals`, which requires an operator subject

@@ -6,9 +6,7 @@ use ArtisanBuild\BuiltForCloud\Auth\BasicAuthenticator;
 use ArtisanBuild\BuiltForCloud\Auth\BearerAuthenticator;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
-use ArtisanBuild\BuiltForCloud\Console\ConsoleGuard;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureContractMajor;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
@@ -26,13 +24,11 @@ function correctedManagedIngressManifest(): array
 {
     return [
         CredentialGuard::class => 'adapt',
-        ConsoleGuard::class => 'wontfix — not account-bound; residue 1',
         BasicAuthenticator::class => 'adapt',
         BearerAuthenticator::class => 'adapt',
         CredentialResolver::class => 'adapt',
         EnsureUserIsAuthenticated::class => 'adapt',
         EnsureUserIsAdmin::class => 'adapt',
-        EnsureConsoleSession::class => 'wontfix — not account-bound; residue 1',
         EnsureContractMajor::class => 'out of scope — contract admission gate, not an account-bound ingress',
         AuthenticateMcp::class => 'cleared — store bearer converged; assertion wontfix — not account-bound; residue 1',
         EnsureCredentialAdmin::class => 'adapt',
@@ -59,7 +55,6 @@ it('derives exactly the corrected AC17 manifest including class-bound middleware
         ))->toBe([])
         ->and(array_count_values($manifest))->toBe([
             'adapt' => 10,
-            'wontfix — not account-bound; residue 1' => 2,
             'out of scope — contract admission gate, not an account-bound ingress' => 1,
             'cleared — store bearer converged; assertion wontfix — not account-bound; residue 1' => 1,
             'cleared — managed account containment added' => 1,

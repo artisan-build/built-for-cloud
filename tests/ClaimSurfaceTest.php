@@ -71,248 +71,108 @@ $claimSurfaces = [
  * @var array<string, list<string>>
  */
 $restatedClaims = [
-    'a declaration that has not opted in denies every override' => [
-        'docs/http-contract.md',
-        'release-notes/rotation.md',
-        'src/Actions/RotateCredential.php',
-    ],
-    'a deployment whose database is unwritable cannot refuse an entry with a 403 it' => [
-        'docs/http-contract.md',
-        'release-notes/console-enter.md',
-        'src/Http/Controllers/ConsoleEnter.php',
-    ],
-    'a traversal segment in any decoded form allowlist or no allowlist' => [
-        'docs/http-contract.md',
-        'release-notes/console-enter.md',
-        'src/Console/ConsoleEntryState.php',
-        'src/Console/ConsoleReturnTo.php',
-    ],
+        'a declaration that has not opted in denies every override' => [
+            'docs/http-contract.md',
+            'release-notes/rotation.md',
+            'src/Actions/RotateCredential.php',
+        ],
     'a unique index only rejects a duplicate while the row it collides with' => [
-        'database/migrations/2026_08_29_300002_create_bfc_app_action_outbox_table.php',
-        'docs/http-contract.md',
-        'src/Audit/AppActionOutboxEntry.php',
-    ],
+            'database/migrations/2026_08_29_300002_create_bfc_app_action_outbox_table.php',
+            'docs/http-contract.md',
+            'src/Audit/AppActionOutboxEntry.php',
+        ],
     'answers 404 the same answer an id that never existed gets' => [
-        'docs/http-contract.md',
-        'release-notes/personal-credentials.md',
-        'src/Http/Controllers/PersonalCredentials.php',
-    ],
+            'docs/http-contract.md',
+            'release-notes/personal-credentials.md',
+            'src/Http/Controllers/PersonalCredentials.php',
+        ],
     'as its holder and holds no operator mcp or signing power' => [
-        'docs/http-contract.md',
-        'release-notes/personal-credentials.md',
-        'src/Contracts/DeclaresSelfServiceMintPolicy.php',
-        'src/PersonalCredentialSurface.php',
-    ],
+            'docs/http-contract.md',
+            'release-notes/personal-credentials.md',
+            'src/Contracts/DeclaresSelfServiceMintPolicy.php',
+            'src/PersonalCredentialSurface.php',
+        ],
     'at the model layer refuses every enumerated bulk mutation on the app-action stream' => [
-        'docs/http-contract.md',
-        'src/Audit/AppActionEvent.php',
-        'src/Audit/AppActionOutboxEntry.php',
-    ],
-    'audience or an expired token because it is the only refusal that reaches the state binding the shadow-actor upsert' => [
-        'docs/http-contract.md',
-        'release-notes/console-enter.md',
-        'src/Http/Controllers/ConsoleEnter.php',
-    ],
+            'docs/http-contract.md',
+            'src/Audit/AppActionEvent.php',
+            'src/Audit/AppActionOutboxEntry.php',
+        ],
     'authenticates as its holder and holds no operator mcp or' => [
-        'docs/http-contract.md',
-        'release-notes/personal-credentials.md',
-        'src/PersonalCredentialSurface.php',
-    ],
+            'docs/http-contract.md',
+            'release-notes/personal-credentials.md',
+            'src/PersonalCredentialSurface.php',
+        ],
     'because crate\'s authorize reads the credential\'s own abilities and never the holder\'s role' => [
-        'docs/http-contract.md',
-        'release-notes/personal-credentials.md',
-        'src/PersonalCredentialSurface.php',
-    ],
-    'burn key so two different issuer and mint pairs cannot hash alike' => [
-        'docs/http-contract.md',
-        'release-notes/console-enter.md',
-        'src/Console/AssertionBurn.php',
-    ],
+            'docs/http-contract.md',
+            'release-notes/personal-credentials.md',
+            'src/PersonalCredentialSurface.php',
+        ],
     'every bound credential in every lifecycle state active rotation-grace and pending unexchanged enrollments and' => [
-        'docs/http-contract.md',
-        'release-notes/offboarding.md',
-        'src/Actions/OffboardSubject.php',
-    ],
+            'docs/http-contract.md',
+            'release-notes/offboarding.md',
+            'src/Actions/OffboardSubject.php',
+        ],
     'every other driver reports pending from the connection\'s own size' => [
-        'docs/http-contract.md',
-        'src/Vitals/CollectVitals.php',
-        'src/Vitals/QueueVitals.php',
-    ],
-    'exactly a known set so a new public method cannot quietly call that private writer while every file assertion stays green both are' => [
-        'docs/http-contract.md',
-        'release-notes/unified-store-guard.md',
-        'src/Console/ConsoleGuard.php',
-    ],
-    'get at the enter path so an assertion can never ride a query string' => [
-        'docs/http-contract.md',
-        'release-notes/console-enter.md',
-        'src/Http/Controllers/ConsoleEnter.php',
-    ],
-    'has no credential-shaped entry point on the guard at all' => [
-        'docs/http-contract.md',
-        'src/Console/ConsoleGuard.php',
-        'src/Console/DelegatedActor.php',
-        'src/Console/DelegatedActorProvider.php',
-    ],
+            'docs/http-contract.md',
+            'src/Vitals/CollectVitals.php',
+            'src/Vitals/QueueVitals.php',
+        ],
     'is ddl and no row trigger sees it a raw insert' => [
-        'database/migrations/2026_08_29_300002_create_bfc_app_action_outbox_table.php',
-        'docs/http-contract.md',
-        'src/Audit/AppActionEvent.php',
-    ],
-    'is shared by every live session for the same subject' => [
-        'src/Audit/AppActionActor.php',
-        'src/Console/ActingPrincipal.php',
-        'src/Console/ConsoleSession.php',
-        'src/Console/DelegatedClaims.php',
-        'src/Http/Controllers/ConsoleEnter.php',
-    ],
-    'leaves a contained actor\'s mint unspent so every attempt audits as containment' => [
-        'docs/http-contract.md',
-        'release-notes/console-enter.md',
-        'src/Console/AssertionBurn.php',
-        'src/Http/Controllers/ConsoleEnter.php',
-    ],
+            'database/migrations/2026_08_29_300002_create_bfc_app_action_outbox_table.php',
+            'docs/http-contract.md',
+            'src/Audit/AppActionEvent.php',
+        ],
     'never behind a configurable prefix never behind its own env flag' => [
-        'docs/http-contract.md',
-        'src/BuiltForCloudServiceProvider.php',
-        'src/Http/Controllers/ManageOnboarding.php',
-    ],
+            'docs/http-contract.md',
+            'src/BuiltForCloudServiceProvider.php',
+            'src/Http/Controllers/ManageOnboarding.php',
+        ],
     'never produce a credential a mint of that shape could' => [
-        'src/Actions/Concerns/ConsultsDeclaration.php',
-        'src/Actions/RotateCredential.php',
-        'src/Contracts/AuthorizesRotationOverrides.php',
-    ],
+            'src/Actions/Concerns/ConsultsDeclaration.php',
+            'src/Actions/RotateCredential.php',
+            'src/Contracts/AuthorizesRotationOverrides.php',
+        ],
     'no exactly-one active local owner who can authenticate or receive' => [
-        'docs/http-contract.md',
-        'src/ManagedAuthRefusalReason.php',
-        'src/ManagedEnrolmentConflict.php',
-    ],
-    'no package api assembles a delegated session without verified assertion' => [
-        'docs/http-contract.md',
-        'release-notes/unified-store-guard.md',
-        'src/Console/ConsoleSession.php',
-    ],
-    'php cannot express no future public method may call this private method' => [
-        'docs/http-contract.md',
-        'release-notes/unified-store-guard.md',
-        'src/Console/ConsoleGuard.php',
-    ],
-    'php requires both halves of the delegated seam on every registered chrome route' => [
-        'docs/http-contract.md',
-        'src/Console/ServesConsoleChrome.php',
-        'src/Http/Controllers/ConsoleChromeScript.php',
-    ],
-    'pinned by tests assertionsecrecytest php marks every frame in this package' => [
-        'docs/http-contract.md',
-        'src/Console/AssertionVerifier.php',
-        'src/Http/Controllers/ConsoleEnter.php',
-    ],
-    'records every refusal it serves one row per refused entry' => [
-        'docs/http-contract.md',
-        'release-notes/console-enter.md',
-        'src/Http/Controllers/ConsoleEnter.php',
-    ],
-    'records no entry event when the entry transaction rolls back' => [
-        'docs/http-contract.md',
-        'release-notes/console-enter.md',
-        'src/Http/Controllers/ConsoleEnter.php',
-    ],
-    'refuses every credential lookup unconditionally not merely the ones that do' => [
-        'docs/http-contract.md',
-        'src/Console/ConsoleGuard.php',
-        'src/Console/DelegatedActor.php',
-        'src/Console/DelegatedActorProvider.php',
-    ],
+            'docs/http-contract.md',
+            'src/ManagedAuthRefusalReason.php',
+            'src/ManagedEnrolmentConflict.php',
+        ],
     'refuses every enumerated bulk mutation on the app-action stream on both' => [
-        'docs/http-contract.md',
-        'src/Audit/AppActionEvent.php',
-        'src/Audit/AppActionOutboxEntry.php',
-        'src/Audit/AppendOnlyBuilder.php',
-    ],
+            'docs/http-contract.md',
+            'src/Audit/AppActionEvent.php',
+            'src/Audit/AppActionOutboxEntry.php',
+            'src/Audit/AppendOnlyBuilder.php',
+        ],
     'revokes every credential under the subject and every credential bound to the user' => [
-        'docs/http-contract.md',
-        'release-notes/personal-credentials.md',
-        'src/PersonalCredentialSurface.php',
-    ],
-    'shared by every live session for the same subject so' => [
-        'src/Audit/AppActionActor.php',
-        'src/Console/ConsoleSession.php',
-        'src/Console/DelegatedClaims.php',
-    ],
+            'docs/http-contract.md',
+            'release-notes/personal-credentials.md',
+            'src/PersonalCredentialSurface.php',
+        ],
     'so a nonce accepted once cannot be accepted again anywhere in its valid window boundary' => [
-        'config/built-for-cloud.php',
-        'release-notes/hmac-kind.md',
-        'src/Hmac/HmacVerifier.php',
-    ],
+            'config/built-for-cloud.php',
+            'release-notes/hmac-kind.md',
+            'src/Hmac/HmacVerifier.php',
+        ],
     'surface cannot honestly make when it does not know whose credentials' => [
-        'docs/http-contract.md',
-        'release-notes/personal-credentials.md',
-        'src/Http/Controllers/PersonalCredentials.php',
-    ],
-    'tests assertionsecrecytest php marks every frame in this package that holds console assertion bytes' => [
-        'docs/http-contract.md',
-        'release-notes/console-enter.md',
-        'src/Console/AssertionVerifier.php',
-        'src/Http/Controllers/ConsoleEnter.php',
-    ],
-    'tests consoledelegatedactortest php refuses every credential lookup unconditionally not merely the ones' => [
-        'docs/http-contract.md',
-        'src/Console/ConsoleGuard.php',
-        'src/Console/DelegatedActorProvider.php',
-    ],
-    // The key shortened in rework 2: the contained-actor paragraph in
-    // AssertionBurn gained the 403/401 door-translation parenthetical,
-    // which breaks the normalized run at the same three sites.
-    'that assertion stays presentable until its ttl runs out every presentation refused every one audited as actor deactivated' => [
-        'docs/http-contract.md',
-        'release-notes/console-enter.md',
-        'src/Console/AssertionBurn.php',
-    ],
-    'the acting principal and for all ui attribution branching never a union' => [
-        'docs/http-contract.md',
-        'release-notes/console-reservations.md',
-        'release-notes/unified-store-guard.md',
-        'src/Auth/CredentialGuard.php',
-    ],
-    // Added in the MCP rework round, deliberately: R2 narrowed
-    // AuthenticateMcp's secrecy claim in the exact voice the enter door
-    // established, so the phrase is now restated at three sites by
-    // decision, and this map is where the diff says so.
-    'the claim is narrower than no frame leaks the credential' => [
-        'docs/http-contract.md',
-        'src/Http/Controllers/ConsoleEnter.php',
-        'src/Http/Middleware/AuthenticateMcp.php',
-    ],
+            'docs/http-contract.md',
+            'release-notes/personal-credentials.md',
+            'src/Http/Controllers/PersonalCredentials.php',
+        ],
     'the lock is only as exclusive as the cache store is shared' => [
-        'release-notes/hmac-kind.md',
-        'src/Commands/HmacRewrapCommand.php',
-        'src/Hmac/HmacWriterBarrier.php',
-    ],
+            'release-notes/hmac-kind.md',
+            'src/Commands/HmacRewrapCommand.php',
+            'src/Hmac/HmacWriterBarrier.php',
+        ],
     'the matrix consults the subject the row declares never anything the caller supplies sec-v3-07' => [
-        'src/Actions/ActivateCredential.php',
-        'src/Actions/RevokeCredential.php',
-        'src/Actions/RotateCredential.php',
-    ],
-    'the mint signed it refuses an entry that presents no state at all refuses a mint that signed no state whatever state is presented and refuses a state' => [
-        'docs/http-contract.md',
-        'release-notes/console-enter.md',
-        'src/Console/ConsoleEntryState.php',
-    ],
+            'src/Actions/ActivateCredential.php',
+            'src/Actions/RevokeCredential.php',
+            'src/Actions/RotateCredential.php',
+        ],
     'the package cannot invalidate an arbitrary session store it does not own' => [
-        'docs/http-contract.md',
-        'release-notes/offboarding.md',
-        'src/Actions/OffboardSubject.php',
-    ],
-    'unmarked and the object those vendor frames hold no longer carries it' => [
-        'docs/http-contract.md',
-        'release-notes/console-enter.md',
-        'src/Http/Controllers/ConsoleEnter.php',
-    ],
-    'when the walk meets one names the shapes it cannot reach so the claim beside it stays true and' => [
-        'docs/http-contract.md',
-        'release-notes/console-enter.md',
-        'src/Http/Controllers/ConsoleEnter.php',
-    ],
+            'docs/http-contract.md',
+            'release-notes/offboarding.md',
+            'src/Actions/OffboardSubject.php',
+        ],
 ];
 
 it('lists every guarantee phrase this package restates at three or more sites', function () use ($claimSurfaces, $restatedClaims): void {
@@ -325,7 +185,7 @@ it('lists every guarantee phrase this package restates at three or more sites', 
     // enumeration is asserted before anything is concluded from it.
     expect(count($prose))->toBeGreaterThan(250)
         ->and($prose['docs/http-contract.md'])->toContain('bfc_version')
-        ->and($prose['src/Console/ConsoleGuard.php'])->not->toBe('');
+        ->and($prose['src/Console/AssertionVerifier.php'])->not->toBe('');
 
     expect(ClaimSurfaceScan::restatedClaimsIn($prose))->toBe($restatedClaims);
 });
@@ -583,20 +443,23 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     // browser presentation and HTTP contract, including two absolute claims.
     // P5 managed exit adds one absolute-bearing HTTP-contract paragraph that
     // distinguishes a never-listed local user from an authority-removed user.
+    // v0.17.0 narrowed the gate surfaces with the delegated-entry
+    // retirement: the door's controller, the chrome script, the js
+    // assets and the console-enter release note left the tree, and the
+    // numbers fell with them.
     $gateSurfaces = [
-        'src/Console', 'src/Audit', 'src/Http/Controllers/ConsoleEnter.php',
-        'src/Http/Controllers/ConsoleChromeScript.php', 'resources/views', 'resources/js',
-        'docs/http-contract.md', 'release-notes/console-enter.md',
+        'src/Console', 'src/Audit', 'resources/views',
+        'docs/http-contract.md',
         'release-notes/unified-store-guard.md', 'release-notes/console-reservations.md',
     ];
 
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1500,
-        'absolute' => 474,
-        'paired' => 119,
-        'unpaired' => 355,
+        'blocks' => 1029,
+        'absolute' => 327,
+        'paired' => 62,
+        'unpaired' => 265,
     ]);
 
     // The surfaces the restatement map runs over are wider than the

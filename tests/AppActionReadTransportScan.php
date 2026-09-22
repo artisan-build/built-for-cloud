@@ -51,12 +51,12 @@ use Throwable;
  *  - {@see EMITS} — it reaches {@see AppActionRecorder} and nothing
  *    further. The recorder is where the walk STOPS rather than a class
  *    it passes through, and that is the whole distinction the bucket
- *    rests on: `POST /bfc/console/enter` reaches the stream on purpose,
- *    to write one event, and a scan that could not tell writing from
- *    reading would either report the door as a read transport or have
- *    to exempt it by name — and an exemption on the one route that
- *    legitimately touches the stream is exactly the blind spot this
- *    exists to prevent.
+ *    rests on: a route that reaches the stream on purpose, to write one
+ *    event, must be told apart from one that reads it, and an exemption
+ *    by name would be exactly the blind spot this exists to prevent.
+ *    (The one emitting route this package shipped, the delegated-entry
+ *    door, was retired in v0.17.0; the bucket remains so a future
+ *    emitter is classified rather than overlooked.)
  *  - {@see UNRELATED} — the walk reached neither. It is also where a
  *    route lands when the walk could not follow it: a closure action,
  *    an unloadable class, or a read through a collaborator outside

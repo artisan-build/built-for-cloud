@@ -98,7 +98,6 @@ final class AssertionParameterScan
      */
     public const array ROOTS = [
         'Console',
-        'Http/Controllers/ConsoleEnter.php',
         'Http/Middleware/AuthenticateMcp.php',
     ];
 

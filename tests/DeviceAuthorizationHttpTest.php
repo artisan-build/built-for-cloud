@@ -882,15 +882,20 @@ it('keeps authorization route authority deferral local to authenticated non-dele
     $beforeRows = DB::table('credential_authorizations')->count();
     $beforeNonces = DB::table('bfc_submission_nonces')->count();
     $beforeBindings = app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request());
-    $actor = consoleActor(subject: 'http-delegated-actor');
-    $this->withSession(consoleSessionState($actor));
 
-    $this->postJson('/bfc/device-authorizations', ['app_purpose' => 'http.loopback'])->assertForbidden();
-    $this->post('/bfc/device', $deviceDecision)->assertForbidden();
-    $this->post('/bfc/loopback/authorize', $loopbackDecision)->assertForbidden();
+    // The delegated vector is structural now: the delegated-entry door
+    // is retired and these browser routes carry no delegated publisher,
+    // so no delegated principal can reach them at all. What stays
+    // pinned is that nothing REPLACED the door with a stub on these
+    // surfaces either.
+    expect(array_filter(
+        Route::getRoutes()->getRoutes(),
+        static fn ($route): bool => is_object($route) && in_array($route->uri(), ['bfc/console/enter', 'bfc/console/chrome.js'], true),
+    ))->toBe([]);
+
+    // …and the authenticated local human's ceremonies, already driven
+    // above, changed nothing they did not themselves write.
     expect(DB::table('credential_authorizations')->count())->toBe($beforeRows)
-        ->and(DB::table('credential_authorizations')->where('user_code_hash', hash('sha256', (string) $device->json('user_code')))->value('status'))->toBe('pending')
-        ->and(DB::table('credential_authorizations')->where('redirect_uri', 'http://127.0.0.1:49155/managed')->value('status'))->toBe('pending')
         ->and(DB::table('bfc_submission_nonces')->count())->toBe($beforeNonces)
         ->and(DB::table('credentials')->count())->toBe(0)
         ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request()))->toBe($beforeBindings);

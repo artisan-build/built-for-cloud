@@ -3,13 +3,15 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Http\Controllers\BoundHmacCutovers;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use Symfony\Component\Process\Process;
 
-it('derives the complete operator route inventory with and without the console', function (bool $console, int $expected): void {
+it('derives the complete operator route inventory whatever the retired console flag said', function (bool $console, int $expected): void {
+    // `BUILT_FOR_CLOUD_CONSOLE_ENABLED` is retired: the flag no longer
+    // exists, and both rows of the dataset prove an environment still
+    // carrying it boots the SAME route inventory as one without it.
     $repoRoot = dirname(__DIR__);
     $artisan = $repoRoot.'/vendor/orchestra/testbench-core/laravel/artisan';
     $process = new Process(
@@ -23,7 +25,7 @@ it('derives the complete operator route inventory with and without the console',
     $process->mustRun();
 
     $routes = json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
-    $gates = [EnsureCredentialAdmin::class, EnsureConsoleSession::class, EnsureDashboardCredential::class];
+    $gates = [EnsureCredentialAdmin::class, EnsureDashboardCredential::class];
     $operatorRoutes = array_values(array_filter($routes, static function (array $route) use ($gates): bool {
         foreach ($route['middleware'] as $middleware) {
             foreach ($gates as $gate) {
@@ -66,6 +68,6 @@ it('derives the complete operator route inventory with and without the console',
             ],
         ]);
 })->with([
-    'console enabled' => [true, 16],
-    'console disabled' => [false, 15],
+    'flag set true' => [true, 15],
+    'flag set false' => [false, 15],
 ]);

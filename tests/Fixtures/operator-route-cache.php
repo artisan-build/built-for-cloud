@@ -5,7 +5,6 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\BuiltForCloudServiceProvider;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
@@ -184,7 +183,7 @@ $case = new class('testProbe') extends TestCase
             return false;
         }
 
-        foreach ([EnsureCredentialAdmin::class, EnsureConsoleSession::class, EnsureDashboardCredential::class] as $gate) {
+        foreach ([EnsureCredentialAdmin::class, EnsureDashboardCredential::class] as $gate) {
             $router->aliasMiddleware($gate, CachedHostileOperatorGate::class);
         }
 

@@ -128,11 +128,11 @@ use LogicException;
  * to, and a hook that called nothing would be a moving part pretending
  * to be a guarantee. The reasoning that would apply even once a consumer
  * exists is worth stating now, because the decision will be re-opened
- * then: the first emitter is `POST /bfc/console/enter`, a page-load path
- * an operator waits on, and a drain is O(claimable rows) and may send
- * mail — hanging one off the door's redirect buys nothing and costs the
- * operator's first paint. The refusal path on that same route already
- * declines a drain for the harder version of the same argument.
+ * then: the stream's historical first emitter was a page-load path an
+ * operator waited on, and a drain is O(claimable rows) and may send
+ * mail — hanging one off a route someone waits on buys nothing and
+ * costs the first paint. Any emitter this package ships in the future
+ * inherits the same argument.
  *
  * @see AppActionEvent for the append-only guarantee, its three layers and its residue
  */
