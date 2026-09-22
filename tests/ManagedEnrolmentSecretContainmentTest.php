@@ -6,14 +6,10 @@ use ArtisanBuild\BuiltForCloud\Exceptions\ManagedAuthRefused;
 use ArtisanBuild\BuiltForCloud\ManagedClientSecretStore;
 use ArtisanBuild\BuiltForCloud\OwnershipClaimMinter;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
-use FilesystemIterator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
 use PHPUnit\Framework\Assert;
-use RecursiveDirectoryIterator;
-use RecursiveIteratorIterator;
-use SplFileInfo;
 
 uses(RefreshDatabase::class, DetectsSecretLeaks::class);
 
@@ -23,7 +19,8 @@ uses(RefreshDatabase::class, DetectsSecretLeaks::class);
  * validation refusal, changed-secret replay conflict, rotation success
  * and rotation failure — while DetectsSecretLeaks watches logger,
  * database plaintext, cache, session and queue/trace sinks, plus the
- * response channel and the exception surface of the custody store.
+ * response channel, the exception reporter path and the exception
+ * object of the custody store.
  */
 
 /** @return array<string, mixed> */
@@ -132,22 +129,29 @@ it('contains canary secrets across enrolment success, replay conflict, rotation 
     $this->assertResponseCarriesNoSecret($refused, $refusedSecret);
 });
 
-it('carries no canary secret through the exception surface of the custody store', function (): void {
+it('carries no canary secret through the exception and reporter surfaces of the custody store', function (): void {
     $ownerToken = p1scClaimOwner();
     $secret = 'containment-canary-exception-'.bin2hex(random_bytes(8));
     p1scEnroll($ownerToken, p1scEnrollmentPayload($secret))->assertCreated();
 
     // The double-install backstop throws with the SQL failure chained as
-    // previous: message, rendered trace, context and the whole previous
-    // chain must stay marker-free.
+    // previous. Inside the leak watch, the refusal ALSO travels the
+    // application's real exception reporting path — report() reaches
+    // the handler, whose log record is a watched channel, so reporter
+    // output carrying the marker fails the test — and the exception
+    // object itself (message, rendered trace, context, previous chain)
+    // is asserted separately.
     $second = 'containment-canary-exception-two-'.bin2hex(random_bytes(8));
 
-    try {
-        app(ManagedClientSecretStore::class)->install($second);
-        Assert::fail('The double-install backstop did not refuse.');
-    } catch (ManagedAuthRefused $refused) {
-        $this->assertExceptionCarriesNoSecret($refused, $second);
-    }
+    $this->assertNoSecretLeakage($second, function () use ($second): void {
+        try {
+            app(ManagedClientSecretStore::class)->install($second);
+            Assert::fail('The double-install backstop did not refuse.');
+        } catch (ManagedAuthRefused $refused) {
+            report($refused);
+            $this->assertExceptionCarriesNoSecret($refused, $second);
+        }
+    });
 });
 
 it('inventories every persisted-secret and configuration-seam read site in production source', function (): void {
