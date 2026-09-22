@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
+use ArtisanBuild\BuiltForCloud\RouteMiddleware;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -39,15 +40,15 @@ it('accepts parameterized aliases in the reusable human lifecycle middleware ass
 
     foreach ([
         [$login, EnsureStandaloneAuthority::class, 'bfc.standalone:product'],
-        [$account, EnsureUserIsAuthenticated::class, 'bfc.auth:product'],
+        [$account, EnsureUserIsAuthenticated::class, 'bfc.auth:'.EnsureUserIsAuthenticated::DEFER_MANAGED_AUTHORITY],
     ] as [$route, $class, $alias]) {
         $action = $route->getAction();
         $middleware = (array) ($action['middleware'] ?? []);
 
-        expect($middleware)->toContain($class);
+        expect(RouteMiddleware::indexOfClass($middleware, $class))->not->toBeNull();
 
         $action['middleware'] = array_map(
-            static fn (string $entry): string => $entry === $class ? $alias : $entry,
+            static fn (string $entry): string => explode(':', $entry, 2)[0] === $class ? $alias : $entry,
             $middleware,
         );
         $route->setAction($action);

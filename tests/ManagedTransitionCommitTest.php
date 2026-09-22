@@ -425,7 +425,12 @@ it('atomically applies every adoption disposition and invalidates local authorit
     foreach ($staleSecrets as $secret) {
         expect(app(CredentialResolver::class)->resolve(CredentialKind::Bearer, $secret))->toBeNull();
     }
-    $this->get(route('bfc.members.index', absolute: false))->assertNotFound();
+
+    $members = route('bfc.members.index', absolute: false);
+    auth('web')->logout();
+    $this->flushSession();
+    $this->get($members)->assertRedirect(route('bfc.managed.login', ['intended' => $members]));
+    $this->actingAsVersioned($linkedOwner)->get($members)->assertNotFound();
 });
 
 it('refuses adoption with a distinct reason when an excluded standalone Owner would strand the installation slot', function (): void {
