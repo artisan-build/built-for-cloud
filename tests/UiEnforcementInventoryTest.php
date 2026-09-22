@@ -49,14 +49,14 @@ it('pins the exact eleven direct enforcement members dispositions and candidate-
         ['member' => EnsureManagedAuthority::class.'::handle', 'path' => 'src/Http/Middleware/EnsureManagedAuthority.php', 'line' => 16, 'kind' => 'human-or-mode-gate'],
         ['member' => EnsureStandaloneAuthority::class.'::handle', 'path' => 'src/Http/Middleware/EnsureStandaloneAuthority.php', 'line' => 16, 'kind' => 'human-or-mode-gate'],
         ['member' => EnsureUiAuthority::class.'::handle', 'path' => 'src/Http/Middleware/EnsureUiAuthority.php', 'line' => 15, 'kind' => 'human-or-mode-gate'],
-        ['member' => EnsureUserIsAdmin::class.'::handle', 'path' => 'src/Http/Middleware/EnsureUserIsAdmin.php', 'line' => 72, 'kind' => 'human-or-mode-gate'],
-        ['member' => EnsureUserIsAuthenticated::class.'::handle', 'path' => 'src/Http/Middleware/EnsureUserIsAuthenticated.php', 'line' => 78, 'kind' => 'human-or-mode-gate'],
+        ['member' => EnsureUserIsAdmin::class.'::handle', 'path' => 'src/Http/Middleware/EnsureUserIsAdmin.php', 'line' => 44, 'kind' => 'human-or-mode-gate'],
+        ['member' => EnsureUserIsAuthenticated::class.'::handle', 'path' => 'src/Http/Middleware/EnsureUserIsAuthenticated.php', 'line' => 70, 'kind' => 'human-or-mode-gate'],
         ['member' => ManagedAccountAccess::class.'::allows', 'path' => 'src/ManagedAccountAccess.php', 'line' => 11, 'kind' => 'managed-human-gate'],
         ['member' => ManagedFreshness::class.'::allows', 'path' => 'src/ManagedFreshness.php', 'line' => 29, 'kind' => 'managed-human-gate'],
-        ['member' => StandaloneRouteOwnership::class.'::assertMatched', 'path' => 'src/StandaloneRouteOwnership.php', 'line' => 269, 'kind' => 'route-ownership-assertion'],
-        ['member' => StandaloneRouteOwnership::class.'::assertOwned', 'path' => 'src/StandaloneRouteOwnership.php', 'line' => 223, 'kind' => 'route-ownership-assertion'],
-        ['member' => StandaloneRouteOwnership::class.'::assertPackageMiddlewareMatched', 'path' => 'src/StandaloneRouteOwnership.php', 'line' => 199, 'kind' => 'route-ownership-assertion'],
-        ['member' => StandaloneRouteOwnership::class.'::assertPackageMiddlewareOwned', 'path' => 'src/StandaloneRouteOwnership.php', 'line' => 173, 'kind' => 'route-ownership-assertion'],
+        ['member' => StandaloneRouteOwnership::class.'::assertMatched', 'path' => 'src/StandaloneRouteOwnership.php', 'line' => 266, 'kind' => 'route-ownership-assertion'],
+        ['member' => StandaloneRouteOwnership::class.'::assertOwned', 'path' => 'src/StandaloneRouteOwnership.php', 'line' => 220, 'kind' => 'route-ownership-assertion'],
+        ['member' => StandaloneRouteOwnership::class.'::assertPackageMiddlewareMatched', 'path' => 'src/StandaloneRouteOwnership.php', 'line' => 196, 'kind' => 'route-ownership-assertion'],
+        ['member' => StandaloneRouteOwnership::class.'::assertPackageMiddlewareOwned', 'path' => 'src/StandaloneRouteOwnership.php', 'line' => 170, 'kind' => 'route-ownership-assertion'],
     ];
     $inventory = UiEnforcementInventory::discover(dirname(__DIR__).'/src');
 

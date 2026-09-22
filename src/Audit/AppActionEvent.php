@@ -114,12 +114,9 @@ use LogicException;
  * **The schema itself does not constrain the relationship**: a raw or
  * event-free insert can store `actor_type=local_user` beside a non-null
  * `on_behalf_of`. What the value SAYS is the caller's to be right about
- * on every path. The package has two paths and both are legitimate:
- * `POST /bfc/console/enter` calls {@see AppActionActor::delegated()}
- * directly with the claims of the session it has just opened, because
- * the request-scoped acting principal was resolved before that session
- * existed; every other emission goes through
- * {@see AppActionActor::fromActingPrincipal()}. On both, the value
+ * on every path. The package has one path and it is legitimate: every
+ * emission goes through
+ * {@see AppActionActor::fromActingPrincipal()}. On it, the value
  * originates as an issuer-minted claim that
  * {@see AssertionVerifier} bounded to 120 characters and rejected for
  * control characters. A consuming app calling the factory itself

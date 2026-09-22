@@ -72,7 +72,6 @@ $case = new class('testProbe') extends TestCase
         $app['config']->set('cache.default', 'array');
         $app['config']->set('session.driver', 'array');
         $app['config']->set('queue.default', 'sync');
-        $app['config']->set('built-for-cloud.console.enabled', true);
         $app['config']->set('built-for-cloud.client_identity.observe_unauthenticated', true);
         $app['config']->set('built-for-cloud.client_identity.max_observations', 10);
         $app['config']->set('built-for-cloud.surfaces.data_migrations', false);

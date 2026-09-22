@@ -31,17 +31,12 @@ use LogicException;
  * {@see delegated()} passes its argument through verbatim, `null`
  * included, and any caller may pass anything.
  *
- * **THE PACKAGE HAS TWO PATHS AND BOTH ARE LEGITIMATE**, which an
- * earlier revision of this paragraph got wrong by naming only one.
- * `POST /bfc/console/enter` calls {@see delegated()} DIRECTLY, with the
- * claims read out of the session its own redemption has just begun —
- * because the request-scoped acting principal was resolved before that
- * session existed, and reaching for it there would attribute the entry
- * to whoever was on the request beforehand. Every other emission goes
- * through {@see fromActingPrincipal()}, which reads the agency off the
- * request's one resolved principal. On both, the value originates as an
- * issuer claim the verifier bounded; on neither does anything in this
- * class check that. A consuming app calling these factories owns the
+ * **THE PACKAGE HAS ONE PATH, and it is legitimate**, which an earlier
+ * revision of this paragraph got wrong by naming two. Every emission
+ * goes through {@see fromActingPrincipal()}, which reads the agency off
+ * the request's one resolved principal. On that path the value
+ * originates as an issuer claim the verifier bounded; nothing in this
+ * class checks that. A consuming app calling these factories owns the
  * truth of what it hands over. **Escape it at every sink.**
  *
  * The tests below establish the SHAPE — that the agency travels intact,
@@ -52,10 +47,6 @@ use LogicException;
  *   delegated handoff named", "records a delegated event with no agency
  *   as null rather than inventing one" and "cannot construct a
  *   non-delegated actor that carries an agency at all".
- *
- *   Pinned by `tests/ConsoleEnterAuditTest.php` — "records the agency
- *   the entering handoff named, and null when it named none", which is
- *   the door's direct-call path driven end to end.
  *
  * **THE DELEGATED REF IS TYPE-QUALIFIED ON THIS PATH**, because this
  * factory does not take a ref at all: it takes the actor and asks it.
@@ -118,7 +109,7 @@ final readonly class AppActionActor
 
     /**
      * A delegated operator, named by the type-qualified identity, acting
-     * for the agency THIS request or session handoff named — or for none.
+     * for the agency THIS handoff named — or for none.
      *
      * **THE AGENCY IS CALLER-SUPPLIED, and an earlier revision of this
      * paragraph said it was issuer-supplied.** That was false for any
@@ -127,15 +118,14 @@ final readonly class AppActionActor
      * verbatim. Nothing here bounds it, and nothing here establishes
      * where it came from.
      *
-     * On the package's own two paths it IS an issuer claim, and both take
-     * it from the current handoff's request/session copy rather than the
-     * actor row's `last_handoff_on_behalf_of` — that column is shared by
-     * every live session for the same subject, so a later request or session
-     * handoff naming a different agency would retroactively re-attribute this action to it.
-     * `POST /bfc/console/enter` calls this factory directly with the claims
-     * of the session it has just opened; {@see fromActingPrincipal()} reads
-     * it off the request's one resolved {@see ActingPrincipal}, which took
-     * it from {@see DelegatedClaims}. Either way it began as an assertion claim
+     * On the package's own path it IS an issuer claim, and it takes it
+     * from the current handoff's request copy rather than the actor
+     * row's `last_handoff_on_behalf_of` — that column is shared by
+     * every request for the same subject, so a later request handoff
+     * naming a different agency would retroactively re-attribute this
+     * action to it. {@see fromActingPrincipal()} reads it off the
+     * request's one resolved {@see ActingPrincipal}, which took it from
+     * {@see DelegatedClaims}. Either way it began as an assertion claim
      * {@see AssertionVerifier} bounded to 120 characters and rejected
      * for control characters.
      *
@@ -166,20 +156,18 @@ final readonly class AppActionActor
      * recorder that asked `Auth::`, a guard, or `$request->user()` a
      * second time could disagree with the principal the request actually
      * acted as, and an audit line naming the wrong one of two live
-     * identities is exactly the failure D14 exists to forbid. On a route
-     * guarded by the app's own guard while a delegated session is also
-     * live, the acting principal is the LOCAL user, and so is this
-     * actor — the delegated actor on the same request is reported by
-     * {@see ActingPrincipal::$delegatedActor} and is deliberately not
-     * what attributes.
+     * identities is exactly the failure D14 exists to forbid. A verified
+     * delegated request assertion outranks the local session for the
+     * acting principal, so on a request carrying both, this actor IS the
+     * delegated actor with THIS handoff's claims — never a union of the
+     * two identities.
      *   Pinned by `tests/AppActionAuditTest.php` — "keeps co-resident
      *   attribution precedence as defence in depth".
      *
-     * A resolution with no principal — nobody acting, or a delegated
-     * session that was REFUSED — throws. An app action is a thing
-     * somebody did; recording one with the actor left blank would be a
-     * row asserting less than the stream promises, and the fail-closed
-     * direction is to refuse the emission.
+     * A resolution with no principal — nobody acting — throws. An app
+     * action is a thing somebody did; recording one with the actor left
+     * blank would be a row asserting less than the stream promises, and
+     * the fail-closed direction is to refuse the emission.
      *
      * @throws LogicException when nobody is acting on this request
      */

@@ -2,31 +2,20 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\Console\ActingPrincipal;
-use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleRole;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
-use ArtisanBuild\BuiltForCloud\Console\DelegatedActorProvider;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\DelegatedActorBoundToCanonicalUser;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\DelegatedActorReturnedAsCanonicalUser;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
 use ArtisanBuild\BuiltForCloud\Tests\PublicSurfaceScan;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
 
 uses(RefreshDatabase::class);
-
-beforeEach(function (): void {
-    Route::middleware([StartSession::class])->get('/delegated-identity', fn (): array => [
-        'delegated' => auth(ConsoleGuardConfiguration::GUARD)->id(),
-        'local' => auth('web')->id(),
-    ]);
-});
 
 function delegatedTestUser(string $email = 'local@example.com'): User
 {
@@ -96,8 +85,7 @@ it('does not reactivate a deactivated actor on a later handoff', function (): vo
 
     expect($refreshed->getKey())->toBe($actor->getKey())
         ->and($refreshed->last_handoff_display_name)->toBe('Jane Again')
-        ->and($refreshed->fresh()?->deactivated_at)->not->toBeNull()
-        ->and((new DelegatedActorProvider)->retrieveById($actor->getAuthIdentifier()))->toBeNull();
+        ->and($refreshed->fresh()?->deactivated_at)->not->toBeNull();
 });
 
 // ─── AC2: the identity is type-qualified and cannot collide with a users id ──
@@ -112,27 +100,27 @@ it('type-qualifies the delegated identity so it can never equal a users id', fun
     expect($user->getKey())->toBe($actor->getKey())
         ->and($actor->getAuthIdentifier())->toBe('bfc-console:'.$actor->getKey());
 
-    $provider = new DelegatedActorProvider;
-
     // The adversarial case: the bare numeric key — exactly what a
-    // `users` id looks like — resolves to nothing here.
-    expect($provider->retrieveById($user->getAuthIdentifier()))->toBeNull()
-        ->and($provider->retrieveById((string) $user->getAuthIdentifier()))->toBeNull()
-        ->and($provider->retrieveById(DelegatedActor::IDENTIFIER_PREFIX))->toBeNull()
-        ->and($provider->retrieveById($actor->getAuthIdentifier())?->getKey())->toBe($actor->getKey());
+    // `users` id looks like — does not sit in the reserved namespace.
+    expect(DelegatedActor::isReservedIdentifier((string) $user->getAuthIdentifier()))->toBeFalse()
+        ->and(DelegatedActor::isReservedIdentifier(DelegatedActor::IDENTIFIER_PREFIX))->toBeTrue();
 
     // ...and the crossing does not work in the other direction either:
     // the app's own user provider does not answer for a qualified id.
     expect(Auth::createUserProvider('users')?->retrieveById($actor->getAuthIdentifier()))->toBeNull();
 });
 
-it('refuses a non-canonical delegated identifier before it ever reaches the database', function (string $suffix): void {
+it('recognises every spelling inside the reserved namespace, well-formed or not, without touching the database', function (string $suffix): void {
+    // The reserved-namespace rule is prefix-shaped on purpose: even a
+    // value that names no row must be recognised as reserved, because it
+    // must never reach a user provider whose own coercion decides what
+    // it means. The check is pure — no query, by construction.
     consoleActor();
 
     DB::enableQueryLog();
     DB::flushQueryLog();
 
-    expect((new DelegatedActorProvider)->retrieveById(DelegatedActor::IDENTIFIER_PREFIX.$suffix))->toBeNull()
+    expect(DelegatedActor::isReservedIdentifier(DelegatedActor::IDENTIFIER_PREFIX.$suffix))->toBeTrue()
         ->and(DB::getQueryLog())->toBe([]);
 })->with([
     'trailing junk' => ['1junk'],
@@ -147,25 +135,13 @@ it('refuses a non-canonical delegated identifier before it ever reaches the data
     'empty' => [''],
 ]);
 
-it('refuses a delegated identifier whose row would answer with a different one', function (): void {
+it('keeps bare keys outside the reserved namespace, so a users id is never mistaken for a delegated one', function (): void {
     $actor = consoleActor();
 
-    // The canonical form resolves; nothing else that names the same row
-    // does, because the round trip has to be character-exact.
-    expect((new DelegatedActorProvider)->retrieveById($actor->getAuthIdentifier())?->getKey())->toBe($actor->getKey())
-        ->and((new DelegatedActorProvider)->retrieveById(DelegatedActor::IDENTIFIER_PREFIX.'0'.$actor->getKey()))->toBeNull();
-});
-
-it('reports the type-qualified identity through the guard while a local session reports its own', function (): void {
-    $user = delegatedTestUser();
-    $actor = consoleActor();
-
-    $this->actingAs($user)->withSession(consoleSessionState($actor));
-
-    $this->getJson('/delegated-identity')
-        ->assertOk()
-        ->assertJsonPath('delegated', 'bfc-console:'.$actor->getKey())
-        ->assertJsonPath('local', $user->getKey());
+    expect(DelegatedActor::isReservedIdentifier($actor->getAuthIdentifier()))->toBeTrue()
+        ->and(DelegatedActor::isReservedIdentifier((string) $actor->getKey()))->toBeFalse()
+        ->and(DelegatedActor::isReservedIdentifier(null))->toBeFalse()
+        ->and(DelegatedActor::isReservedIdentifier(7))->toBeFalse();
 });
 
 // ─── AC3: a delegated actor is not a user ───────────────────────────────────
@@ -195,9 +171,7 @@ it('derives the complete public surface and pins its sole request-context identi
         'subject',
         'updated_at',
     ])->and($kinds)->toBe(['asymmetric', 'basic', 'bearer', 'hmac'])
-        ->and(PublicSurfaceScan::canonicalUserBindings($surface))->toBe([
-            'src/Console/ActingPrincipal.php:160 ['.ActingPrincipal::class.'::local($user,$delegatedActor)]',
-        ]);
+        ->and(PublicSurfaceScan::canonicalUserBindings($surface))->toBe([]);
 });
 
 it('discovers and reports a fixture that publicly binds a delegated actor to a canonical user', function (): void {
@@ -210,7 +184,6 @@ it('discovers and reports a fixture that publicly binds a delegated actor to a c
     );
 
     expect(PublicSurfaceScan::canonicalUserBindings($surface))->toBe([
-        'src/Console/ActingPrincipal.php:160 ['.ActingPrincipal::class.'::local($user,$delegatedActor)]',
         'tests/Fixtures/DelegatedActorBoundToCanonicalUser.php:15 ['.DelegatedActorBoundToCanonicalUser::class.'::bind($user,$actor)]',
         'tests/Fixtures/DelegatedActorReturnedAsCanonicalUser.php:13 ['.DelegatedActorReturnedAsCanonicalUser::class.'::userFor($actor):return]',
         'tests/Fixtures/DelegatedActorReturnedAsCanonicalUser.php:15 ['.DelegatedActorReturnedAsCanonicalUser::class.'::authenticatableFor($actor):return]',
@@ -218,45 +191,11 @@ it('discovers and reports a fixture that publicly binds a delegated actor to a c
     ]);
 });
 
-it('refuses every credential lookup unconditionally, not merely the ones that do not match', function (): void {
-    $actor = consoleActor();
-    $provider = new DelegatedActorProvider;
-
-    // The distinguishing assertion: validateCredentials is handed the
-    // ACTUAL principal and still says no. A stock provider would only
-    // answer false because the secret was wrong; this one has nothing to
-    // compare and never says yes.
-    expect($provider->validateCredentials($actor, ['password' => 'secret']))->toBeFalse()
-        ->and($provider->validateCredentials($actor, []))->toBeFalse()
-        ->and($provider->retrieveByCredentials(['email' => 'jane@example.com', 'password' => 'secret']))->toBeNull()
-        ->and($provider->retrieveByCredentials([]))->toBeNull()
-        ->and($provider->retrieveByToken($actor->getAuthIdentifier(), 'remember-me'))->toBeNull();
-
-    expect(auth(ConsoleGuardConfiguration::GUARD)->check())->toBeFalse();
-});
-
-it('has no credential-shaped entry point on the guard at all', function (string $method): void {
-    // §4.3's "no login path" is STRUCTURAL: these methods do not exist
-    // on the console guard, so there is nothing to call and nothing to
-    // refuse. A StatefulGuard would have carried every one of them.
-    expect(method_exists(auth(ConsoleGuardConfiguration::GUARD), $method))->toBeFalse();
-})->with(['attempt', 'once', 'loginUsingId', 'onceUsingId', 'viaRemember', 'basic', 'onceBasic', 'attemptWhen']);
-
-it('answers false to the one credential-shaped method the Guard contract demands, for every input', function (): void {
-    $actor = consoleActor();
-    $guard = auth(ConsoleGuardConfiguration::GUARD);
-
-    expect($guard->validate([]))->toBeFalse()
-        ->and($guard->validate(['email' => 'jane@example.com', 'password' => 'secret']))->toBeFalse()
-        ->and($guard->validate(['id' => $actor->getAuthIdentifier()]))->toBeFalse();
-});
-
 it('carries password and remember-token values nothing can turn into a match', function (): void {
     $actor = consoleActor();
 
-    // Inert rather than throwing: no caller asks (see the guard and the
-    // provider), and every value here is one a hasher or a provider
-    // already treats as "never matches".
+    // Inert rather than throwing: no caller asks, and every value here
+    // is one a hasher or a provider already treats as "never matches".
     expect($actor->getAuthPassword())->toBe('')
         ->and(Hash::check('anything', $actor->getAuthPassword()))->toBeFalse()
         ->and($actor->getAuthPasswordName())->toBe('')
@@ -267,8 +206,4 @@ it('carries password and remember-token values nothing can turn into a match', f
 
     expect($actor->getRememberToken())->toBeNull()
         ->and($actor->fresh()?->getRememberToken())->toBeNull();
-
-    (new DelegatedActorProvider)->updateRememberToken($actor, 'anything');
-
-    expect($actor->fresh()?->getRememberToken())->toBeNull();
 });

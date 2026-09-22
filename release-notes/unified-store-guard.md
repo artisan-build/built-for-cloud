@@ -1,5 +1,14 @@
 # The unified credential store and the one guard
 
+> **Retired in v0.17.0 — read this note as history.** The delegated-session
+> half this note describes (the `bfc-console` guard, `ConsoleGuard::redeem()`,
+> the delegated-session behaviour of `bfc.admin`/`bfc.auth`, the session
+> writer boundary and its scans) was removed with the delegated-entry door:
+> managed sign-in is the only door into an app, and a delegated principal
+> exists only as a request-scoped MCP assertion. The unified store, the `bfc`
+> guard and the reserved `bfc-console:` identifier namespace are unchanged,
+> and the note below keeps its place as the record of what shipped and how.
+
 This release introduces the framework's unified credential store — the
 `credentials` table and `Credential` model — and a Laravel auth guard
 (driver `bfc`) that authenticates requests against it. Both coexist with the
@@ -147,9 +156,9 @@ this release it has two.
   sandboxing config will leave the default guard pointed at
   `bfc-console` after the first delegated request, and later requests on
   ordinary routes will resolve their principal through the delegated
-  guard. `tests/ConsoleGuardScopingTest.php` asserts both halves — that
-  the leak is real without a config sandbox, and that the clone is what
-  closes it.
+  guard. `tests/ConsoleGuardScopingTest.php` asserted both halves — that
+  the leak was real without a config sandbox, and that the clone is what
+  closed it — and was removed with the guard in v0.17.0.
 - **A delegated actor is never the other half of a mismatch.** The
   credential guard compares a credential's `user_id` — a stringified
   host-app user id — against the session principal. A delegated actor's
@@ -166,8 +175,9 @@ this release it has two.
   that safely fails. A returned delegated actor is rejected as well, and the
   resolved principal must emit exactly the identifier the credential stored.
 - **Every previously shipped cell is unchanged**, and its tests are
-  unchanged: `tests/CredentialPrecedenceTest.php` runs the whole matrix with
-  both session guards configured.
+  unchanged: `tests/CredentialPrecedenceTest.php` runs the whole matrix.
+  (The two delegated rows the original release added to that matrix were
+  removed with the guard in v0.17.0.)
 
 ### What this changes for a consuming app
 
@@ -231,13 +241,9 @@ already held, including a delegated one, because a redemption can begin
 from an already-delegated session and destroying that record requires the
 store that is unavailable. The failed redemption grants nothing new; it
 fails to revoke something already live, and no ordering fixes that.
-*Pinned by* `tests/ConsoleRedemptionTest.php` — "surfaces the original
-failure, not the compensation failure, when the session store is
-unreachable", "leaves a later request unauthenticated when the store
-recovers before the response is saved", "leaves a later request
-unauthenticated when the store is still down at save time", and "leaves
-a PRE-EXISTING delegated record alive under its own id when the store
-fails at teardown".
+The tests that pinned those two halves were removed with the machinery
+in v0.17.0: there is no redemption, no delegated session record, and no
+compensation path to drive.
 
 The residue, stated rather than glossed: code that can write the session
 store directly can assemble a delegated session, because that is what
@@ -273,16 +279,10 @@ which methods exist; neither reads what an existing method does.
 Reviewing a diff that touches one of those methods is the control, and it
 is a human one.
 
-*Pinned by* `tests/ConsoleSessionWriterScanTest.php` — "has exactly one
-file in src/ that can write a delegated session key", "keeps the one
-writer unreachable from outside the guard", "has exactly the public
-surface it is meant to have on the one class that can write" and "names
-an unremarked public method, and a removed one".
-
-Also by `tests/ConsoleRedemptionTest.php` — "offers no public way to
-write a delegated session's claims" and "does not authenticate a
-principal handed to setUser, even alongside hand-written claims", whose
-positive control pins the residue itself.
+The scans that enforced this were removed with the machinery in v0.17.0:
+there is no delegated session key to write and no guard public surface to
+enumerate. The reserved-namespace refusal above remains, driven by
+`tests/ConsoleCredentialNamespaceTest.php`.
 `ConsoleGuard::logout()` ends a session without calling the framework's
 `SessionGuard::logout()`, deliberately: that method sets a sticky
 `loggedOut` flag on a guard the auth manager caches for the life of the

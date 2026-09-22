@@ -33,33 +33,25 @@ function expectPostgresLockRefusal(?Throwable $failure, string $message): void
         ->and((string) $failure?->getCode())->toBe('55P03');
 }
 
-it('holds the delegated actor lock from its redemption re-read through login', function (): void {
-    $secret = consoleKeypair();
-    consoleFileKey('pg-redemption-k1', $secret);
+it('holds the delegated actor row lock that containment and the MCP lock-check share', function (): void {
+    // DelegatedActor::lockedById() is the read/write boundary the
+    // retained MCP path still depends on: AuthenticateMcp lock-checks
+    // the actor inside its burn transaction, and deactivation takes the
+    // same lock. Driven here directly against the model method, on the
+    // driver that actually implements row locks.
+    $actor = DelegatedActor::recordHandoff(consoleAssertionFor(subject: 'postgres-lock-actor'));
 
-    $actor = DelegatedActor::recordHandoff(consoleAssertionFor(subject: 'postgres-redemption-actor'));
+    $main = $this->postgresLaneConnection();
     $probe = $this->postgresLaneProbe();
-    $interleaved = false;
 
-    DelegatedActor::saved(function (DelegatedActor $saved) use ($actor, $probe, &$interleaved): void {
-        if ($interleaved || $saved->getKey() !== $actor->getKey()) {
-            return;
-        }
+    $probe->beginTransaction();
+    $probe->select('select id from bfc_delegated_actors where id = ? for update', [$actor->getKey()]);
 
-        $interleaved = true;
-        $probe->beginTransaction();
-        $probe->select('select id from bfc_delegated_actors where id = ? for update', [$actor->getKey()]);
-    });
-
-    $token = consoleMint($secret, consoleClaims([
-        'sub' => 'postgres-redemption-actor',
-    ]), 'pg-redemption-k1');
-
-    $this->postgresLaneConnection()->statement("set lock_timeout = '".BFC_POSTGRES_LOCK_TIMEOUT."'");
+    $main->statement("set lock_timeout = '".BFC_POSTGRES_LOCK_TIMEOUT."'");
     $failure = null;
 
     try {
-        consoleGuard()->redeem($token);
+        DB::transaction(fn () => DelegatedActor::lockedById($actor->getKey()));
     } catch (Throwable $exception) {
         $failure = $exception;
     } finally {
@@ -67,15 +59,14 @@ it('holds the delegated actor lock from its redemption re-read through login', f
             $probe->rollBack();
         }
 
-        $this->postgresLaneConnection()->statement('set lock_timeout = default');
+        $main->statement('set lock_timeout = default');
     }
 
-    expect($interleaved)->toBeTrue();
     expectPostgresLockRefusal(
         $failure,
-        'Redemption completed while deactivation held the actor row; the locked re-read is absent.',
+        'The locked re-read completed while deactivation held the actor row; the row lock is absent.',
     );
-})->note('Mutation: remove lockForUpdate() from DelegatedActor::lockedById(). This test must then complete redemption instead of receiving SQLSTATE 55P03. Debt row bfc-console-redemption-lock.');
+})->note('Mutation: remove lockForUpdate() from DelegatedActor::lockedById(). This test must then complete the read instead of receiving SQLSTATE 55P03. Debt row bfc-console-redemption-lock.');
 
 it('serializes two inserts for one assertion at the unique burn index', function (): void {
     $assertion = consoleAssertionFor(subject: 'postgres-burn-actor');

@@ -6,7 +6,6 @@ namespace ArtisanBuild\BuiltForCloud;
 
 use ArtisanBuild\BuiltForCloud\Http\Controllers\BoundHmacCutovers;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
@@ -14,7 +13,6 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ManagedEnrolments;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCurrentOwnerCredential;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
@@ -81,7 +79,6 @@ final class StandaloneRouteOwnership
             ManageConsoleKeys::class.'@reKey',
             ManageConsoleKeys::class.'@retire' => EnsureCredentialAdmin::class.':'.OperatorAbility::ConsoleKeyWrite->value,
             ManageSubjects::class.'@offboard' => EnsureCredentialAdmin::class.':'.OperatorAbility::SubjectOffboard->value,
-            ConsoleChromeScript::class => EnsureConsoleSession::class,
             ConsoleVitals::class => EnsureDashboardCredential::class,
             default => throw new RuntimeException("The package controller action [{$action}] is missing from the operator route inventory."),
         };

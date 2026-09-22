@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Auth;
 
-use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
-use ArtisanBuild\BuiltForCloud\Console\DelegatedActorProvider;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialAuthenticator;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
@@ -37,17 +35,6 @@ use Throwable;
  * - Session-guarded routes never reach this guard, so a bearer riding along
  *   on one is never consumed and never stamps usage.
  *
- * The SESSION-VS-SESSION row (Console PRD D14, shipped — this AMENDS the
- * v3.1 matrix invariant SEC-V3-10 rather than adding to it): on a request
- * carrying both a local `web` session and a delegated `bfc-console` session,
- * the delegated guard wins for the acting principal AND for all
- * UI/attribution branching, never a union. That row is a session-vs-session
- * rule and is therefore NOT decided here — this guard's `session_guard` key
- * is singular and its job is rejecting mismatched principals on a TOKEN
- * route. The route's own guard is what decides which principal governs
- * (`auth:bfc-console`), and {@see ActingPrincipalResolver} is what reads
- * that one decision for the chrome and the audit stream.
- *
  * A DELEGATED ACTOR IS NEVER THE OTHER HALF OF A MISMATCH. The mismatch
  * check below compares a credential's `user_id` — a stringified HOST-APP
  * user id — against the session principal, and a {@see DelegatedActor} is
@@ -55,7 +42,7 @@ use Throwable;
  * (`bfc-console:{id}`) precisely so it can never equal one. Comparing them
  * could therefore only ever produce a FALSE mismatch — a token route
  * refusing a perfectly good credential because its holder happens to also
- * be inside a console session — so {@see sessionUser()} excludes it
+ * be a delegated principal — so {@see sessionUser()} excludes it
  * explicitly. Every previously shipped cell of the matrix is unchanged.
  *
  * AND NO CREDENTIAL RESOLVES A DELEGATED ACTOR. The `bfc-console:`
@@ -315,17 +302,13 @@ final class CredentialGuard implements Guard
      * must treat it as a failed lookup and reject, never as an absent
      * session, so the exception propagates.
      *
-     * A DELEGATED CONSOLE ACTOR is excluded, and that is a fourth
-     * structural case rather than a policy choice. Since the Console
-     * shipped, an app may point `credentials.session_guard` (or
-     * `auth.defaults.guard`) at `bfc-console`, and the principal that guard
-     * resolves is not a canonical package user: its identifier is type-qualified so
-     * that it can never equal a credential's `user_id`, which means every
+     * A DELEGATED ACTOR is excluded, and that is a fourth structural case
+     * rather than a policy choice. A principal of that type is not a
+     * canonical package user: its identifier is type-qualified so that it
+     * can never equal a credential's `user_id`, which means every
      * comparison against one would mismatch and every token route would
-     * 401 for anyone simultaneously inside a console session. "Not a
-     * comparable local principal" is therefore the same answer as "no
-     * session user" here — and the session-vs-session precedence that DOES
-     * govern a delegated actor is D14's, decided by the route's own guard.
+     * 401 for anyone simultaneously carrying one. "Not a comparable local
+     * principal" is therefore the same answer as "no session user" here.
      */
     private function sessionUser(): ?Authenticatable
     {
@@ -354,11 +337,10 @@ final class CredentialGuard implements Guard
      * coerces the non-numeric string toward `0` and can resolve the row
      * with key 0, while PostgreSQL raises. "No credential can resolve a
      * delegated actor" therefore has to be enforced on the way IN, not
-     * hoped for from the driver — and the check is broader than the
-     * canonical-identifier rule ({@see DelegatedActorProvider::keyFrom()}
-     * accepts only well-formed suffixes) because `bfc-console:1junk`
-     * names no actor and must still never be handed to a provider whose
-     * own coercion decides what it means.
+     * hoped for from the driver — and the check is deliberately broad,
+     * prefix-shaped and not well-formedness-shaped, because
+     * `bfc-console:1junk` names no actor and must still never be handed
+     * to a provider whose own coercion decides what it means.
      *
      * A returned {@see DelegatedActor} is rejected too. That is
      * unreachable through the namespace check above, and it is the
@@ -375,7 +357,7 @@ final class CredentialGuard implements Guard
     {
         $userId = $credential->user_id;
 
-        if ($userId === null || DelegatedActorProvider::isReservedIdentifier($userId)) {
+        if ($userId === null || DelegatedActor::isReservedIdentifier($userId)) {
             return null;
         }
 

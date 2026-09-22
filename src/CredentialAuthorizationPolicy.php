@@ -32,7 +32,7 @@ final readonly class CredentialAuthorizationPolicy
         $acting = $this->principals->resolve();
         $userId = $acting->identifier();
 
-        if ($acting->wasRefused() || $acting->delegatedSessionPresent() || ! $acting->principal instanceof Authenticatable || $userId === null) {
+        if ($acting->delegatedSessionPresent() || ! $acting->principal instanceof Authenticatable || $userId === null) {
             throw CredentialAuthorizationRefused::denied();
         }
 

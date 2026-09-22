@@ -77,26 +77,14 @@ final class PersonalSurfaceWebGroupTest extends TestCase
      * by a broad pattern. The installation-credential entries intentionally
      * join the personal surface on the browser stack.
      *
-     * `POST /bfc/console/enter` is a BROWSER route by construction: it
-     * exists to create a delegated session, so it cannot do its job
-     * without starting one (Console PRD D12/D13, PR4). What it
-     * deliberately does NOT ride is the host's `web` GROUP, which is
-     * where the personal surface goes — and the difference is the point.
-     * The group carries CSRF validation, and the console handoff is a
-     * cross-site POST from the issuer's page: a `SameSite=Lax` session
-     * cookie is not sent with one, so the app has no session with that
-     * browser and no token it could have planted. What stands in for the
-     * token is the vendor's signature over the return path (D13's signed
-     * state), the assertion's 60-120s TTL and its single-use burn.
+     * The delegated-entry door (`POST /bfc/console/enter`) and the
+     * console chrome's re-entry interceptor (`GET /bfc/console/chrome.js`)
+     * were the two non-personal browser routes this enumeration once
+     * carried; both were retired in v0.17.0, so the set below is the
+     * personal, installation, standalone and authorization surfaces
+     * alone.
      *
-     * `GET /bfc/console/chrome.js` is the console chrome's re-entry
-     * interceptor (Console PRD D7/D11, PR5), and it starts a session for
-     * the opposite reason: it READS the delegated one. It is a browser
-     * route serving a browser, gated on the delegated session like the
-     * page that loads it, so it rides the host's `web` group exactly as
-     * the personal surface does.
-     *
-     * So the assertion below is a SET, not an emptiness: adding a third
+     * So the assertion below is a SET, not an emptiness: adding a new
      * session-riding route means saying so in this diff.
      * The managed login and callback are browser routes that require the
      * initiating session's nonce to prevent login CSRF.
@@ -122,7 +110,6 @@ final class PersonalSurfaceWebGroupTest extends TestCase
             'DELETE /bfc/members/{user}',
             'DELETE /bfc/ui/credentials/installation/{id}',
             'DELETE /bfc/ui/credentials/personal/{id}',
-            'GET /bfc/console/chrome.js',
             'GET /bfc/device',
             'GET /bfc/forgot-password',
             'GET /bfc/installation/credentials',
@@ -138,7 +125,6 @@ final class PersonalSurfaceWebGroupTest extends TestCase
             'GET /bfc/ui',
             'GET /bfc/ui/credentials/installation',
             'GET /bfc/ui/credentials/personal',
-            'POST /bfc/console/enter',
             'POST /bfc/device',
             'POST /bfc/device-authorizations',
             'POST /bfc/forgot-password',
@@ -161,42 +147,6 @@ final class PersonalSurfaceWebGroupTest extends TestCase
             'PUT /bfc/members/{user}/role',
             'PUT /bfc/transitions/proposals/{transition}',
         ], $sessioned);
-    }
-
-    /**
-     * The chrome asset takes the OTHER branch: the host's own `web`
-     * group, like the personal surface, because it is an ordinary
-     * same-site GET from the app's own page and there is nothing about
-     * it that needs a second, divergent session stack.
-     */
-    public function test_the_chrome_interceptor_rides_the_hosts_own_web_group(): void
-    {
-        $chrome = collect(Route::getRoutes()->getRoutes())
-            ->sole(fn (RoutingRoute $route): bool => $route->uri() === 'bfc/console/chrome.js');
-
-        $this->assertContains('web', $chrome->gatherMiddleware());
-
-        $resolved = $this->app['router']->gatherRouteMiddleware($chrome);
-
-        $this->assertContains(StartSession::class, $resolved);
-        $this->assertContains(EncryptCookies::class, $resolved);
-    }
-
-    /**
-     * …and the door is on the CONCRETE stack rather than the host's
-     * `web` group, which is the half the enumeration above cannot say.
-     */
-    public function test_the_console_door_starts_a_session_without_csrf_validation(): void
-    {
-        $door = collect(Route::getRoutes()->getRoutes())
-            ->sole(fn (RoutingRoute $route): bool => $route->uri() === 'bfc/console/enter');
-
-        $resolved = $this->app['router']->gatherRouteMiddleware($door);
-
-        $this->assertContains(StartSession::class, $resolved);
-        $this->assertContains(EncryptCookies::class, $resolved);
-        $this->assertNotContains(PreventRequestForgery::class, $resolved);
-        $this->assertNotContains('web', $door->gatherMiddleware());
     }
 
     public function test_the_personal_controller_is_the_only_action_behind_that_stack(): void

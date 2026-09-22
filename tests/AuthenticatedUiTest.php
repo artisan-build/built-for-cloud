@@ -14,6 +14,7 @@ use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Route as RoutingRoute;
 use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -361,7 +362,7 @@ final class AuthenticatedUiTest extends TestCase
         $this->assertSame(0, $pageRenders);
     }
 
-    public function test_no_session_and_delegated_console_principal_never_render_the_page_action(): void
+    public function test_no_session_and_no_delegated_door_ever_render_the_page_action(): void
     {
         $pageRenders = 0;
         View::composer('bfc::home', static function () use (&$pageRenders): void {
@@ -372,14 +373,29 @@ final class AuthenticatedUiTest extends TestCase
             ->assertRedirect(route('bfc.login', ['intended' => '/bfc/ui']));
         $this->assertSame(0, $pageRenders);
 
-        $entered = $this->post('/bfc/console/enter', consoleHandoff('/bfc/ui'));
-        $entered->assertRedirect('/bfc/ui');
-        $cookie = $entered->getCookie((string) config('session.cookie'));
-        $this->assertNotNull($cookie);
-        $this->withCookie((string) config('session.cookie'), (string) $cookie?->getValue())
-            ->get('/bfc/ui')
-            ->assertForbidden();
-        $this->assertSame(0, $pageRenders);
+        // The delegated-entry door is RETIRED: there is no package route
+        // a delegated operator can authenticate through to reach this
+        // browser surface at all, so the delegation vector is now held
+        // by the route set itself rather than by a refusal at the gate.
+        // What stays pinned here is that the route no longer exists and
+        // nothing replaced it with a disabled stub — INCLUDING under the
+        // pre-v0.17.0 enable switch a host may still carry. Nothing in
+        // the package reads `built-for-cloud.console.enabled` any more
+        // (the key is gone from the merged config too), so the honest
+        // form of the pin is the ENV VAR a host actually sets, applied
+        // before a FRESH boot: a re-add that restores the env()-backed
+        // key mounts the door and reds this assertion.
+        putenv('BUILT_FOR_CLOUD_CONSOLE_ENABLED=true');
+        $this->refreshApplication();
+
+        $this->assertSame(
+            [],
+            array_values(array_filter(
+                Route::getRoutes()->getRoutes(),
+                static fn (RoutingRoute $route): bool => in_array($route->uri(), ['bfc/console/enter', 'bfc/console/chrome.js'], true),
+            )),
+        );
+        putenv('BUILT_FOR_CLOUD_CONSOLE_ENABLED');
     }
 
     public function test_invalid_authority_has_one_404_gate_and_never_invokes_the_page_action(): void

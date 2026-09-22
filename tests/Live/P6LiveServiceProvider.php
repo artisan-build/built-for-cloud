@@ -56,7 +56,6 @@ final class P6LiveServiceProvider extends ServiceProvider
         $this->app['config']->set('session.cookie', 'bfc_p6_session');
         $this->app['config']->set('queue.default', 'database');
         $this->app['config']->set('mail.default', 'array');
-        $this->app['config']->set('built-for-cloud.console.enabled', true);
         $this->app['config']->set('built-for-cloud.console.issuer', 'https://p6-authority.test');
         $this->app['config']->set('built-for-cloud.console.audience', (string) env('BFC_P6_AUDIENCE'));
         $this->app['config']->set('built-for-cloud.managed.client_secret', (string) env('BFC_P6_AUTHORITY_SECRET'));

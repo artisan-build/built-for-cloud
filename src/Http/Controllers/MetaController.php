@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Http\Controllers;
 
 use ArtisanBuild\BuiltForCloud\BuiltForCloud;
-use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Mcp\McpConfiguration;
 use ArtisanBuild\BuiltForCloud\Ownership;
 use Illuminate\Http\JsonResponse;
@@ -30,58 +29,14 @@ final class MetaController
             // "this deployment can be entered" would be reading a
             // promise this capability does not make — and would now be
             // reading it wrongly rather than merely early, since the
-            // guard, the door and the actor table have all since
-            // shipped and each is advertised below under its own name.
-            // This one is unconditional; those are not.
+            // door was retired in v0.17.0 while this capability and the
+            // keyring it names remain. This one is unconditional.
             //
             // `console-vitals` is likewise named for what it serves —
             // the ops-vitals READ (Console PRD D9), one
             // `metadata`-classified endpoint behind `metadata:read`.
             // Not `console`, and not `dashboard`: the dashboard is the
             // vendor's, this is the one surface it reads.
-            //
-            // `console-guard` is named for what THIS release serves: the
-            // delegated-session guard, the shadow-actor table and the
-            // re-entry 401 — the machinery an entered operator's session
-            // runs on. Still not `console`, and deliberately not
-            // `console-enter`: the door has its own capability below
-            // under a STRICTER predicate, so a control plane that read
-            // this one as "you can hand an operator to this deployment"
-            // would be reading a promise this one does not make — an app
-            // that defined its own `bfc-console` guard reports this and
-            // not `console-enter`. It appears only when the deployment has
-            // actually enabled the Console, because with the flag off
-            // none of that machinery is registered and advertising it
-            // would be a lie about this deployment rather than about
-            // the package.
-            //
-            // `console-enter` is the one that finally says a delegated
-            // operator can be handed to this deployment: `POST
-            // /bfc/console/enter` is mounted and will redeem a signed
-            // assertion. Its condition is STRICTER than
-            // `console-guard`'s — it also requires that the reserved
-            // guard name resolves to this package's own driver, which
-            // is exactly the condition the route is mounted under, so
-            // the capability and the route can never disagree. An app
-            // that defined its own `bfc-console` guard has the guard
-            // machinery and does NOT get the package's door.
-            //
-            // `console-chrome-assets` is named for the two things this
-            // deployment SERVES: the `bfc::layout` view namespace and
-            // the re-entry interceptor at
-            // `GET /bfc/console/chrome.js`. Not `console-chrome`, and
-            // the difference is the whole of the name — whether any
-            // PAGE in this app actually wears the chrome is the
-            // application's own decision, made by whichever of its
-            // templates extends `bfc::layout`, and no package
-            // capability can see that or promise it. A control plane
-            // reading `console-chrome` as "an operator handed here will
-            // see whose session they are in" would be reading a promise
-            // this package cannot keep; `console-chrome-assets` says
-            // only that the machinery is served, which is exactly what
-            // is true. Its condition is the one the chrome route is
-            // mounted under, so the capability and the route can never
-            // disagree.
             //
             // `console-key-retire` says this deployment serves the
             // RETIREMENT verb, `POST /bfc/console/keys/{key_id}/retire`
@@ -104,15 +59,9 @@ final class MetaController
             // purpose — there is NO read transport for this stream in
             // this release, and `app-action-audit` on its own is exactly
             // the name a control plane would read as "I can query this".
-            // It is UNCONDITIONAL, unlike the three predicated ones
-            // above it, because what
-            // it describes is schema and an emission point that every
-            // install carries whether or not the Console is enabled —
-            // the same standing `credentials` has. The DOOR's own
-            // emission is already conditional and already advertised:
-            // that is what `console-enter` says, and duplicating its
-            // predicate here would give a control plane two names for
-            // one fact.
+            // It is UNCONDITIONAL because what it describes is schema
+            // and an emission point that every install carries —
+            // the same standing `credentials` has.
             //
             // `mcp-serve` says this deployment DECLARES that it serves
             // an MCP endpoint at the advertised path: the same
@@ -138,8 +87,7 @@ final class MetaController
             // route understates, never overstates). The other half —
             // that the product's own suite runs the delegated-tool
             // conformance assertion — is a declaration no package
-            // check can see, exactly as `console-chrome-assets` cannot
-            // see whether any page wears the chrome.
+            // check can see.
             'capabilities' => self::capabilities(),
             'claimed' => $ownership !== null && $ownership->hasOwner(),
         ];
@@ -166,15 +114,6 @@ final class MetaController
             'console-keys', 'console-key-retire', 'console-vitals', 'app-action-audit-emit',
             'managed-enrolment',
         ];
-
-        if (ConsoleGuardConfiguration::enabled()) {
-            $capabilities[] = 'console-guard';
-        }
-
-        if (ConsoleGuardConfiguration::servesDelegatedEntry()) {
-            $capabilities[] = 'console-enter';
-            $capabilities[] = 'console-chrome-assets';
-        }
 
         if (McpConfiguration::serves()) {
             $capabilities[] = 'mcp-serve';

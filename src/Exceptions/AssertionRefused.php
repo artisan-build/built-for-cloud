@@ -14,7 +14,7 @@ use Throwable;
  * class for every refusal, carrying ONE uniform, reason-free message:
  * {@see self::MESSAGE}. The CLASS and the MESSAGE are identical for all
  * thirteen reasons, so nothing an attacker reads back — from the
- * exception, or from the uniform response the enter endpoint renders
+ * exception, or from the uniform response the MCP door renders
  * from it — says whether the signature was wrong, the key unknown, the
  * audience another deployment's, or the clock past `exp`.
  *
@@ -28,10 +28,10 @@ use Throwable;
  * which key id a prober already chose. What the message must never do
  * is hand the answer over for free, and it does not.
  *
- * {@see AssertionVerifier} throws this and nothing else, so the enter
- * endpoint has exactly one refusal shape to render. The machine-readable
+ * {@see AssertionVerifier} throws this and nothing else, so the MCP
+ * door has exactly one refusal shape to render. The machine-readable
  * {@see AssertionRefusalReason} rides alongside for the AUDIT RECORD
- * that endpoint writes — the server may know precisely why; the caller
+ * that door writes — the server may know precisely why; the caller
  * may not.
  *
  * `$previous` carries the underlying cryptographic failure where one

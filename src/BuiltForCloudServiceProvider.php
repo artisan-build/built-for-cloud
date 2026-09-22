@@ -25,11 +25,6 @@ use ArtisanBuild\BuiltForCloud\Commands\SigningRootProvisionCommand;
 use ArtisanBuild\BuiltForCloud\Commands\SubjectOffboardCommand;
 use ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
-use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
-use ArtisanBuild\BuiltForCloud\Console\ConsoleChrome;
-use ArtisanBuild\BuiltForCloud\Console\ConsoleGuard;
-use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
-use ArtisanBuild\BuiltForCloud\Console\DelegatedActorProvider;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\DurableCredentialMinter;
 use ArtisanBuild\BuiltForCloud\Contracts\ResolvesAsymmetricEnrollmentScope;
@@ -39,8 +34,6 @@ use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\AsymmetricEnrollments;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\BoundHmacCutovers;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleChromeScript;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleEnter;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\DeviceAuthorizations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\InstallationCredentials;
@@ -65,7 +58,6 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\UiInstallationCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiLogout;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiPersonalCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureContractMajor;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
@@ -78,22 +70,18 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\ExpireStandaloneHandoffOnRefusal;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\VerifyHmacSignature;
-use ArtisanBuild\BuiltForCloud\Listeners\EvictConsolePrincipal;
 use ArtisanBuild\BuiltForCloud\Listeners\QueueOwnershipWebhook;
 use ArtisanBuild\BuiltForCloud\Listeners\RefuseSystemAuthorityAuthentication;
 use ArtisanBuild\BuiltForCloud\Listeners\SystemAuthorityQueueScope;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Auth\Events\Authenticated;
 use Illuminate\Auth\Events\Login;
-use Illuminate\Auth\SessionGuard;
 use Illuminate\Bus\Dispatcher as BusDispatcher;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Contracts\Bus\Dispatcher as BusDispatcherContract;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
-use Illuminate\Contracts\Session\Session;
-use Illuminate\Contracts\View\View as ViewContract;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
@@ -107,10 +95,8 @@ use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
-use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
-use Livewire\LivewireManager;
 use ReflectionProperty;
 use RuntimeException;
 use Throwable;
@@ -133,10 +119,10 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $this->app->bind(DurableCredentialMinter::class, UnifiedStoreCredentialMinter::class);
         $this->app->bind(ResolvesAsymmetricEnrollmentScope::class, NullAsymmetricEnrollmentScopeResolver::class);
 
-        // D14's single resolved value (Console PRD): one instance per
+        // The single resolved acting principal, one instance per
         // application, memoizing per REQUEST inside itself, so the
-        // acting principal and the chrome's attribution branch cannot be
-        // computed twice and disagree.
+        // acting principal and its audit consumers cannot be computed
+        // twice and disagree.
         $this->app->singleton(ActingPrincipalResolver::class);
 
         $this->app->bind(CredentialDeclaration::class, function (Application $app): CredentialDeclaration {
@@ -174,27 +160,13 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
         }
 
-        // The package view namespace (Console PRD D11). NOT a selectable
-        // surface, and for the same reason the middleware aliases are
-        // not: it mounts nothing. A namespace is a name an application
-        // has to reach for — an app that never writes `bfc::` renders
-        // nothing of ours — so there is no behaviour here for a flag to
-        // switch off.
+        // The package view namespace. NOT a selectable surface, and for
+        // the same reason the middleware aliases are not: it mounts
+        // nothing. A namespace is a name an application has to reach
+        // for — an app that never writes `bfc::` renders nothing of
+        // ours — so there is no behaviour here for a flag to switch
+        // off.
         $this->loadViewsFrom(__DIR__.'/../resources/views', 'bfc');
-
-        // D14 in the template layer: the ONE layout reads the ONE
-        // resolved acting principal, and it reads it HERE rather than
-        // inside the Blade file. A layout that called a resolver, a
-        // guard or `auth()` for itself would be a second read of the
-        // request's identity, which is precisely what D14 forbids —
-        // this composer takes the value the resolver already built for
-        // this request and hands the template a bounded view of it.
-        View::composer('bfc::layout', function (ViewContract $view): void {
-            $view->with(
-                'bfcConsoleChrome',
-                ConsoleChrome::from($this->app->make(ActingPrincipalResolver::class)->resolve()),
-            );
-        });
 
         if ($this->surfaceEnabled('listeners')) {
             Event::listen(OwnershipReleasePending::class, QueueOwnershipWebhook::class);
@@ -208,65 +180,11 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             static fn (mixed $schedule) => $authoritySchedule->registerCredentialAuthorizationPrune($schedule),
         );
 
-        // The `bfc-console` guard and provider entries, injected by the
-        // PACKAGE so a consuming app adds nothing to its `auth.php`
-        // (FLEET-C-14). In boot, not register, so the app's OWN
-        // `config/auth.php` is fully loaded first — an app that defined
-        // its own `bfc-console` guard must be seen to have defined it.
-        // ConsoleGuardConfiguration carries the rest: nothing happens
-        // unless `console.enabled` is on, an app's own guard is never
-        // overwritten, and a hijacked reserved PROVIDER name fails boot
-        // loudly rather than backing the delegated guard with the app's
-        // user table.
-        ConsoleGuardConfiguration::apply($this->app->make(Repository::class));
-
-        if (ConsoleGuardConfiguration::servesDelegatedEntry()) {
-            Event::listen(Login::class, EvictConsolePrincipal::class);
-        }
-
-        $localGuardName = config('auth.defaults.guard');
-
-        Auth::resolved(function (AuthManager $auth) use ($localGuardName): void {
+        Auth::resolved(function (AuthManager $auth): void {
             $auth->extend('bfc', function (Application $app, string $name, array $config): CredentialGuard {
                 /** @var array<string, mixed> $config */
                 return new CredentialGuard($app, $name, $config, $app->make(CredentialResolver::class));
             });
-
-            // The delegated guard (Console PRD D10) — a SECOND,
-            // session-based guard that does not touch the first: the
-            // `bfc` credential driver above is unchanged and still the
-            // default for `credentials.guard`.
-            //
-            // COMPOSITION: the inner guard is built by the framework's
-            // OWN `createSessionDriver()`, so Laravel's sliding idle
-            // window, cookie jar, events and request refresh all come
-            // from the framework, and ConsoleGuard wraps it to enforce
-            // D7's absolute cap and the session-bound claims. Nothing
-            // here mirrors framework internals, and nothing here
-            // repoints the application's default guard: scoping the
-            // delegated principal to a route is `auth:bfc-console`'s
-            // job, which is the framework's own.
-            $auth->extend(
-                ConsoleGuardConfiguration::DRIVER,
-                function (Application $app, string $name, array $config) use ($auth, $localGuardName): ConsoleGuard {
-                    /** @var array<string, mixed> $config */
-                    $localGuard = is_string($localGuardName) && $localGuardName !== $name
-                        ? $auth->guard($localGuardName)
-                        : null;
-
-                    return new ConsoleGuard(
-                        $auth->createSessionDriver($name, $config),
-                        $app->make(Session::class),
-                        $app->make(AssertionVerifier::class),
-                        $localGuard instanceof SessionGuard ? $localGuard : null,
-                    );
-                },
-            );
-
-            $auth->provider(
-                ConsoleGuardConfiguration::PROVIDER,
-                fn (): DelegatedActorProvider => new DelegatedActorProvider,
-            );
         });
 
         if ($this->app->bound('router')) {
@@ -281,14 +199,6 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             // The verify half of the hmac pair (PRD 1.21, SEC-V3-07):
             // consuming apps put it in front of signed-message routes.
             $router->aliasMiddleware('bfc.hmac', VerifyHmacSignature::class);
-            // The delegated-session re-entry answer (Console PRD D7). It
-            // goes IN FRONT of `auth:bfc-console` on a console route:
-            // the framework's own middleware is what makes the console
-            // guard that route's guard, and this alias is what turns an
-            // absent or refused session into the structured 401 rather
-            // than a generic one. It enforces no clock of its own —
-            // ConsoleGuard does that on every route.
-            $router->aliasMiddleware('bfc.console', EnsureConsoleSession::class);
             $router->aliasMiddleware('bfc.mcp', AuthenticateMcp::class);
             $router->aliasMiddleware('bfc.standalone', EnsureStandaloneAuthority::class);
             $this->prioritizeContractMajorAdmission($router);
@@ -297,12 +207,6 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             // verify their resolved gate on match, and each final operator
             // controller derives its required gate from the action it is about
             // to execute and requires that gate's receipt before invocation.
-
-            // Livewire remains optional; its provider is what supplies this binding.
-            if ($this->app->bound(LivewireManager::class)) {
-                $this->app->make(LivewireManager::class)
-                    ->addPersistentMiddleware(EnsureConsoleSession::class);
-            }
 
             if ($this->surfaceEnabled('routes')) {
                 $this->mountRoutes($router);
@@ -318,13 +222,13 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 __DIR__.'/../config/built-for-cloud.php' => $this->app->configPath('built-for-cloud.php'),
             ], 'built-for-cloud-config');
 
-            // The one layout and its chrome partial, publishable the
-            // ordinary Laravel way so an app can restyle the chrome
-            // without forking the package. Publishing does NOT create a
-            // second layout: Laravel's namespaced view finder prefers
-            // the published copy over the package's for the SAME view
-            // name, so `bfc::layout` still names one template — the
-            // app's, once it has taken ownership of it.
+            // The package view namespace, publishable the ordinary
+            // Laravel way so an app can restyle it without forking the
+            // package. Publishing does NOT create a second layout:
+            // Laravel's namespaced view finder prefers the published
+            // copy over the package's for the SAME view name, so
+            // `bfc::layout` still names one template — the app's, once
+            // it has taken ownership of it.
             $this->publishes([
                 __DIR__.'/../resources/views' => $this->app->resourcePath('views/vendor/bfc'),
             ], 'built-for-cloud-views');
@@ -338,7 +242,6 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $authentication = [
             EnsureManagedAuthority::class,
             EnsureStandaloneAuthority::class,
-            EnsureConsoleSession::class,
             AuthenticateMcp::class,
             VerifyHmacSignature::class,
             EnsureDashboardCredential::class,
@@ -851,10 +754,11 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // ability. Retirement ends a signing authority where filing
         // begins one, which sounds like the more consequential half and
         // is not: a credential holding `console:key:write` can already
-        // file and activate a key of its own and enter as a delegated
-        // admin, which is more than denying entry. A separate ability
-        // would have meant no credential already in the field could
-        // finish a rotation without being reissued first.
+        // file and activate a key of its own, and assertions minted
+        // under it authenticate as delegated admins on this deployment's
+        // MCP surface, which is more than denying that. A separate
+        // ability would have meant no credential already in the field
+        // could finish a rotation without being reissued first.
         $this->protectOperatorRoute(
             $router->post('/bfc/console/keys/{key_id}/retire', [ManageConsoleKeys::class, 'retire'])
                 ->middleware([
@@ -863,39 +767,6 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 ]),
             $operatorRoutes,
         );
-
-        // THE DOOR (Console PRD D12/D13): `POST /bfc/console/enter`,
-        // at a fixed `/bfc/console/*` path like every other package
-        // surface, an ordinary member of the routes family — and
-        // additionally gated on this deployment actually serving
-        // delegated entry, because an endpoint that hands signed bytes
-        // to a guard needs that guard to be ours.
-        //
-        // POST ONLY, and the verb is the security decision: a GET
-        // assertion lands a live credential in the customer's own
-        // server and CDN logs, in browser history, and in the `Referer`
-        // of the next request the entered page makes. GET is not
-        // routed at all, so a misconfigured link gets a 405 rather than
-        // a redirect that has already leaked.
-        //
-        // Its stack, outermost first:
-        //
-        //  1. `throttle:bfc-console-enter` — bounded before anything
-        //     else runs, so refused attempts cost budget too and a
-        //     429 still says 429;
-        //  2. the SESSION stack, deliberately assembled here rather
-        //     than taken from the host's `web` group — see
-        //     consoleEntrySessionMiddleware(), which is where the
-        //     absence of CSRF is argued rather than assumed.
-        //
-        // There is no auth middleware, because this IS the
-        // authentication event. What stands in for a gate is the
-        // vendor's Ed25519 signature, the per-deployment audience, the
-        // 60-120s TTL and the single-use burn.
-        if (ConsoleGuardConfiguration::servesDelegatedEntry()) {
-            $router->post('/bfc/console/enter', ConsoleEnter::class)
-                ->middleware(['throttle:bfc-console-enter', ...$this->consoleEntrySessionMiddleware()]);
-        }
 
         // The Console's ops-vitals read (Console PRD D9/D15/D16): a
         // `metadata`-classified surface at a fixed `/bfc/console/*`
@@ -927,62 +798,6 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 ->middleware('throttle:bfc-vitals'),
             $operatorRoutes,
         );
-
-        // THE CHROME'S ONE ROUTE (Console PRD D7/D11): the re-entry
-        // interceptor, served from the app's own origin so a consuming
-        // app never has to loosen `script-src` to run it. Fixed
-        // `/bfc/console/*` path, an ordinary member of the routes
-        // family, mounted under the SAME condition as the door — the
-        // chrome is only reachable through this package's own delegated
-        // guard, so an app that brought its own `bfc-console` guard gets
-        // neither.
-        //
-        // Its stack, outermost first:
-        //
-        //  1. the browser session stack, because the delegated session
-        //     lives in the app's cookie session;
-        //  2. `bfc.console` — the structured re-entry 401 IN FRONT of
-        //     the framework's own answer;
-        //  3. `auth:bfc-console` — Laravel's own middleware, which is
-        //     what makes the console guard the guard of this request;
-        //  4. `throttle:bfc-console-chrome`.
-        //
-        // BOTH of the middle two, on every chrome route. A chrome route
-        // carrying only the guard scoping renders nothing for a capped
-        // operator and never tells their browser to re-enter;
-        // `tests/ConsoleChromeRouteScan.php` enumerates that, and their
-        // ORDER, rather than trusting either.
-        //
-        // **THE THROTTLE IS LAST, AND EVERY OTHER ROUTE IN THIS FILE
-        // PUTS IT FIRST.** That inversion is forced by the framework and
-        // it is not a preference. Laravel sorts a route's middleware by
-        // `$middlewarePriority`, in which `AuthenticatesRequests`
-        // outranks `ThrottleRequests`; a throttle listed IN FRONT of
-        // `auth:bfc-console` therefore causes Laravel to hoist the auth
-        // middleware above everything that follows the throttle —
-        // `bfc.console` included — and a request with no delegated
-        // session then gets the framework's generic
-        // `AuthenticationException` (a redirect to a `login` route that
-        // a headless app does not have) instead of D7's structured 401.
-        // Re-entry would be dead. Neither `bfc.console` nor
-        // `PreventRequestForgery` is in the priority map, so with the
-        // throttle last the declared order survives the sort intact.
-        //
-        // THE COST, named: the PRE-GATE path is not rate-limited by this
-        // route. What a refused fetch costs is a session read and a
-        // guard read — the same as any page in the host application, and
-        // nothing this route does amplifies it — and the throttle still
-        // bounds a runaway client that IS entitled to the script.
-        if (ConsoleGuardConfiguration::servesDelegatedEntry()) {
-            $chrome = $router->get('/bfc/console/chrome.js', ConsoleChromeScript::class)
-                ->name(ConsoleChrome::SCRIPT_ROUTE)
-                ->middleware($this->browserSessionMiddleware($router));
-            $this->protectOperatorRoute($chrome, $operatorRoutes)
-                ->middleware([
-                    'auth:'.ConsoleGuardConfiguration::GUARD,
-                    'throttle:bfc-console-chrome',
-                ]);
-        }
 
         // The offboard verb (PRD 1.15, SEC-V3-04): full account
         // containment behind its OWN verb-family ability — the widest
@@ -1029,10 +844,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     /**
      * The browser-session stack the package's BROWSER routes ride — the
      * personal-credentials surface (PRD 1.17, rework Fix 1), the CSRF
-     * protection on its mutating verbs included, and the console
-     * chrome's interceptor asset (Console PRD D11), which needs the same
-     * session started for a different reason: it is what the delegated
-     * guard reads.
+     * protection on its mutating verbs included.
      *
      * PREFERRED: the host's own `web` group. It is the right answer in a
      * standard Laravel app for two reasons — it is the stack that app's
@@ -1063,45 +875,6 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             StartSession::class,
             ShareErrorsFromSession::class,
             PreventRequestForgery::class,
-        ];
-    }
-
-    /**
-     * The session stack `POST /bfc/console/enter` rides (Console PRD
-     * D12/D13) — assembled here rather than taken from the host's `web`
-     * group, which is the opposite of what the personal-credentials
-     * surface does above, and for one reason.
-     *
-     * **The `web` group carries CSRF validation, and this route cannot
-     * pass it.** The handoff is a cross-site POST from the issuer's
-     * page: Laravel's default `SameSite=Lax` session cookie is not sent
-     * with a cross-site POST at all, so at the moment the entry arrives
-     * the app has no session with that browser and there is no token it
-     * could have planted. Mounting the group would make every entry a
-     * `419`.
-     *
-     * What replaces the token is D13's SIGNED STATE — the return path
-     * rides inside the vendor's signature rather than in a request
-     * field — plus the assertion's 60-120s TTL and its single-use burn.
-     * {@see ConsoleEntryState} states exactly what that closes and what
-     * it does not.
-     *
-     * THE COST, named rather than glossed: an app that customized its
-     * `web` group (a different cookie encrypter, a session driver
-     * decorator, tenancy) does not get those layers here. The three
-     * below are the framework's own and produce the SAME session — the
-     * cookie name and driver come from the app's `session` config —
-     * which is what makes the delegated session the app's other
-     * middleware will read on every later request.
-     *
-     * @return list<class-string>
-     */
-    private function consoleEntrySessionMiddleware(): array
-    {
-        return [
-            EncryptCookies::class,
-            AddQueuedCookiesToResponse::class,
-            StartSession::class,
         ];
     }
 
@@ -1249,48 +1022,6 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 Limit::perMinute(300)->by('bfc-vitals-ip|'.($request->ip() ?? 'unknown')),
             ];
         });
-
-        // The door's limiter (Console PRD D13). ONE bound, keyed on the
-        // IP, and both halves of that are deliberate.
-        //
-        // One bound because this surface is PRE-AUTHENTICATION and
-        // carries no stable caller identity that is not attacker-chosen.
-        // The operator limiters bucket on a bearer digest, which works
-        // because a stolen credential is a fixed string; here the
-        // equivalents — the mint id, the key id — are fields the caller
-        // writes, so a second bucket on any of them refreshes itself
-        // for free and only looks like a limit.
-        //
-        // And NO global ceiling, unlike `bfc-operator-write`. This is
-        // the only way an operator gets in, so a bucket every caller
-        // shares is a lockout lever: one flood and no legitimate
-        // operator can enter until the window rolls. That is the same
-        // reading `bfc-vitals` made for the same reason. The per-IP
-        // bound is what stops one source spending this app's CPU on
-        // Ed25519 verifications; it is not, and is not claimed to be,
-        // a bound on a distributed flood.
-        //
-        // 30/min is sized for humans clicking through a console from
-        // behind one office NAT, not for a machine: the assertions are
-        // vendor-signed and single-use, so the limiter bounds noise
-        // rather than search.
-        // The chrome asset's limiter. Keyed on the IP alone: the fetch
-        // rides a session cookie rather than a bearer, so there is no
-        // credential digest to bucket on. It sits INSIDE the gate rather
-        // than in front of it — mountRoutes() carries the framework
-        // reason — so what it bounds is a client that is entitled to the
-        // script and asking for it too often. 120/min is a page-load
-        // budget for a human with several tabs open, against a response
-        // of a few hundred static bytes.
-        RateLimiter::for(
-            'bfc-console-chrome',
-            fn (Request $request): Limit => Limit::perMinute(120)->by('bfc-console-chrome-ip|'.($request->ip() ?? 'unknown')),
-        );
-
-        RateLimiter::for(
-            'bfc-console-enter',
-            fn (Request $request): Limit => Limit::perMinute(30)->by('bfc-console-enter-ip|'.($request->ip() ?? 'unknown')),
-        );
 
         RateLimiter::for('bfc-operator-write', function (Request $request): array {
             $bearer = $request->bearerToken();

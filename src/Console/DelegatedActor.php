@@ -4,65 +4,51 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Console;
 
-use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\UniqueConstraintViolationException;
-use Illuminate\Hashing\AbstractHasher;
 use Illuminate\Support\Facades\DB;
 
 /**
  * The SHADOW ACTOR: the stable identity of a delegated human this
- * deployment has admitted (Console PRD §4.3), identified by issuer +
- * subject.
+ * deployment has admitted through a verified MCP assertion, identified
+ * by issuer + subject.
  *
  * WHAT THIS IS NOT — TWICE OVER.
  *
- * It is not a `users` row, and §4.3's "no password, no login path" holds
- * STRUCTURALLY rather than by anything this class does: the only guard
- * that resolves this type is {@see ConsoleGuard}, which has no
- * `attempt()`, no `loginUsingId()` and never remembers a login, and the
- * only user provider behind it is {@see DelegatedActorProvider}, which
- * answers null/false to every credential-shaped question for every
- * input. There is therefore no caller anywhere that asks this object for
- * a password, and the password-shaped methods the {@see Authenticatable}
- * contract demands are inert — see {@see getAuthPassword()} for exactly
- * why they return what they do and why they are not the enforcement.
- * (Laravel's remember-me BRANCH is nonetheless reachable on any session
- * guard; it is fail-closed here, and {@see getRememberToken()} says
- * where that is driven.)
+ * It is not a `users` row, and "no password, no login path" holds
+ * STRUCTURALLY rather than by anything this class does: nothing in this
+ * package resolves this type from a credential, on any driver — the
+ * reserved `bfc-console:` identifier namespace is refused by
+ * {@see isReservedIdentifier()} before any user provider is asked, and
+ * the one principal path that exists ({@see RequestAssertion::publish()})
+ * takes a VERIFIED assertion, never a secret. There is therefore no
+ * caller anywhere that asks this object for a password, and the
+ * password-shaped methods the {@see Authenticatable} contract demands
+ * are inert — see {@see getAuthPassword()} for exactly why they return
+ * what they do and why they are not the enforcement.
  *   Pinned by `tests/ConsoleDelegatedActorTest.php` — "has no password
- *   or remember-token column", "refuses every credential lookup
- *   unconditionally, not merely the ones that do not match", "has no
- *   credential-shaped entry point on the guard at all" and
- *   "type-qualifies the delegated identity so it can never equal a users
- *   id"; and by `tests/ConsoleCredentialNamespaceTest.php` for the
- *   credential half — no credential resolves one, on any driver.
+ *   or remember-token column" and "type-qualifies the delegated identity
+ *   so it can never equal a users id"; and by
+ *   `tests/ConsoleCredentialNamespaceTest.php` for the credential half —
+ *   no credential resolves one, on any driver.
  *
  * It is also not the live claim store. `last_handoff_display_name`,
  * `last_handoff_role` and `last_handoff_on_behalf_of` are what their
- * names say — the MOST RECENT handoff's claims, shared by every live
- * session for this subject, kept for operator listings and audit
- * context. Browser-entry claims are copied into {@see ConsoleSession};
- * MCP assertion claims are copied into {@see RequestAssertion} on the
- * current request. {@see DelegatedClaims} carries either copy to the
- * acting-principal consumers. A later handoff does not replace the
- * claims of an already-live browser session.
- *   Pinned by `tests/ConsoleActingPrincipalTest.php` — "holds two
- *   concurrent sessions for one subject at the roles they each entered
- *   with" and "does not let a concurrent admin session promote a member
- *   session past the admin gate", which drive two live sessions
- *   interleaved rather than one session re-read after a row write.
- * MCP request scoping is pinned by `tests/AuthenticateMcpTest.php` —
- * "publishes the assertion actor and this handoff claims on the request"
- * and "authenticates a unified bearer, records its use and does not leak
- * the prior request assertion memo".
+ * names say — the MOST RECENT handoff's claims, kept for operator
+ * listings and audit context. The claims a request actually acts under
+ * are copied into {@see RequestAssertion} on the current request, and
+ * {@see DelegatedClaims} carries them to the acting-principal consumers.
+ *   Pinned by `tests/AuthenticateMcpTest.php` — "publishes the assertion
+ *   actor and this handoff claims on the request" and "authenticates a
+ *   unified bearer, records its use and does not leak the prior request
+ *   assertion memo".
  *
  * RESIDUE — NOT ESTABLISHED HERE: these tests do not constrain claim
  * storage or principal resolution implemented by a consuming application
- * outside {@see ConsoleSession} and {@see RequestAssertion}.
+ * outside {@see RequestAssertion}.
  *
  * IDENTITY IS A DIGEST. {@see identityHash()} is the unique key: sha256
  * over a length-delimited encoding of issuer and subject, computed in PHP
@@ -77,10 +63,9 @@ use Illuminate\Support\Facades\DB;
  * ordinary auto-increment in the SAME id space `users` occupies, so
  * actor 7 and user 7 both exist routinely; the qualifier is the only
  * thing that keeps them apart, and it is applied at the one place every
- * caller goes through. That matters because application code written
- * before the Console keys caches, policies and ownership checks on
- * `auth()->id()`, and a bare `7` from a delegated session would silently
- * read as user 7's data.
+ * caller goes through. That matters because application code that keys
+ * caches, policies and ownership checks on `auth()->id()` must never
+ * silently read a bare `7` from a delegated principal as user 7's data.
  *
  * @property int $id
  * @property string $identity_hash
@@ -97,10 +82,11 @@ final class DelegatedActor extends Model implements Authenticatable
 {
     /**
      * The qualifier every delegated identifier carries. It is a RESERVED
-     * namespace fleet-wide: {@see CredentialGuard} refuses to hand any
-     * `user_id` starting with it to a user provider.
-     * Changing it changes the identity of every live delegated session —
-     * a session holding the old form simply stops resolving, which is the
+     * namespace fleet-wide: {@see isReservedIdentifier()} is what a
+     * credential guard consults to refuse any `user_id` starting with it
+     * before a user provider is asked.
+     * Changing it changes the identity of every delegated actor — an
+     * identifier holding the old form simply stops resolving, which is the
      * safe direction.
      */
     public const string IDENTIFIER_PREFIX = 'bfc-console:';
@@ -137,6 +123,16 @@ final class DelegatedActor extends Model implements Authenticatable
     }
 
     /**
+     * Whether a stored `user_id` sits inside the RESERVED delegated
+     * namespace, canonical or not — the rule the credential guard refuses
+     * on before any user provider is asked.
+     */
+    public static function isReservedIdentifier(mixed $identifier): bool
+    {
+        return is_string($identifier) && str_starts_with($identifier, self::IDENTIFIER_PREFIX);
+    }
+
+    /**
      * Record a handoff: create the actor for this issuer + subject, or
      * refresh the `last_handoff_*` copy of the one already on file. Keyed
      * on the identity digest, so a SECOND handoff for the same pair
@@ -145,12 +141,10 @@ final class DelegatedActor extends Model implements Authenticatable
      *
      * INTERNAL. This is the storage half and it does NOT decide whether
      * the actor may act: it returns deactivated rows too, and it verifies
-     * nothing — writing a row here grants nothing, because neither a
-     * session nor a request principal can be created from it. TWO
-     * operations turn an actor into a principal, and both fail closed
-     * on a deactivated one under a row lock BEFORE anything is
-     * published: {@see ConsoleGuard::redeem()} for a browser entry
-     * (session keys, via the enter door), and
+     * nothing — writing a row here grants nothing, because no principal
+     * can be created from it. The one operation that turns an actor into
+     * a principal fails closed on a deactivated one under a row lock
+     * BEFORE anything is published:
      * {@see RequestAssertion::publish()} for a stateless MCP call (a
      * principal scoped to the one request object, via
      * `AuthenticateMcp`).
@@ -269,11 +263,10 @@ final class DelegatedActor extends Model implements Authenticatable
      * this table" honestly reduces to.
      *
      * IT IS NOT THE ENFORCEMENT, and it is important not to read it as
-     * such. §4.3's "no login path" is held by there being no guard that
-     * would accept credentials for this type: {@see ConsoleGuard} has no
-     * `attempt()` and no by-id login, and
-     * {@see DelegatedActorProvider::validateCredentials()} answers false
-     * for every input including the correct one. Nothing therefore calls
+     * such. "No login path" is held by there being no code that would
+     * accept credentials for this type: no credential resolves one (the
+     * reserved-namespace refusal in the credential guard), and the only
+     * principal path takes a VERIFIED assertion. Nothing therefore calls
      * this method at all — the callers in Laravel are password-validating
      * providers and `SessionGuard`'s remember-me path, and this type
      * meets neither.
@@ -283,10 +276,9 @@ final class DelegatedActor extends Model implements Authenticatable
      * statement of a property held somewhere else entirely, which is
      * exactly the docblock-stronger-than-the-code failure this codebase
      * has spent rounds on. The empty string is chosen over null because
-     * it is what every hasher already treats as "never matches"
-     * ({@see AbstractHasher::check()} returns false
-     * for it before calling `password_verify`), so even a caller that
-     * appeared in some future refactor could not turn it into a match.
+     * it is what every hasher already treats as "never matches", so even
+     * a caller that appeared in some future refactor could not turn it
+     * into a match.
      */
     public function getAuthPassword(): string
     {
@@ -303,23 +295,16 @@ final class DelegatedActor extends Model implements Authenticatable
     }
 
     /**
-     * Always null. {@see ConsoleGuard} never queues a recaller cookie, so
-     * nothing this package writes could ever produce a token to return —
-     * a delegated session's life is bounded by D7's clocks and by nothing
-     * else, and a cookie that outlived them would be the one way the
-     * browser got a say in revocation.
+     * Always null. Nothing this package writes could ever produce a
+     * token to return — a delegated principal's life is bounded by the
+     * assertion that published it and by nothing else, and a cookie that
+     * outlived that would be the one way the browser got a say in
+     * revocation.
      *
      * Null is LOAD-BEARING, not incidental:
      * `EloquentUserProvider::retrieveByToken()` refuses outright on a
      * falsy one, so even a stock provider pointed at this model cannot
-     * recall a session from a cookie. That is driven, against a real
-     * `EloquentUserProvider`, in `tests/ConsoleRememberMeTest.php`
-     * rather than argued here.
-     *
-     * `SessionGuard::logout()` also reads it, to decide whether to cycle
-     * a token — but this package never calls that method
-     * ({@see ConsoleGuard::logout()} says why), so that is a claim about
-     * a path this guard does not take and nothing here depends on it.
+     * recall a session from a cookie.
      */
     public function getRememberToken(): ?string
     {
@@ -329,13 +314,10 @@ final class DelegatedActor extends Model implements Authenticatable
     /**
      * A no-op: there is no `remember_token` column to write to.
      *
-     * Nothing in this package calls it — {@see ConsoleGuard} never
-     * remembers a login, and its `logout()` does not call the
-     * framework's, which is the only caller that would cycle a token —
-     * so this is not "unreachable" so much as "not on any path taken
-     * here". What matters is the observable effect, and it is driven
-     * directly in `tests/ConsoleRememberMeTest.php`: calling this and
-     * saving the model stores nothing and creates no attribute.
+     * Nothing in this package calls it, so this is not "unreachable" so
+     * much as "not on any path taken here". What matters is the
+     * observable effect: calling this and saving the model stores
+     * nothing and creates no attribute.
      *
      * @param  string  $value
      */
@@ -352,8 +334,7 @@ final class DelegatedActor extends Model implements Authenticatable
      * Its caller inside Laravel is
      * `EloquentUserProvider::updateRememberToken()`. A stock provider
      * that reached it could still not recall a session, because
-     * `retrieveByToken()` refuses on a falsy {@see getRememberToken()} —
-     * driven in `tests/ConsoleRememberMeTest.php`.
+     * `retrieveByToken()` refuses on a falsy {@see getRememberToken()}.
      */
     public function getRememberTokenName(): string
     {

@@ -9,7 +9,6 @@ use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureContractMajor;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
@@ -203,7 +202,6 @@ it('registers the exact alias and resolves admission before every package authen
     $authentication = [
         EnsureManagedAuthority::class,
         EnsureStandaloneAuthority::class,
-        EnsureConsoleSession::class,
         AuthenticateMcp::class,
         VerifyHmacSignature::class,
         EnsureDashboardCredential::class,

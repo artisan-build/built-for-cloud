@@ -281,21 +281,16 @@ final readonly class PersonalCredentialSurface
     /**
      * Refuse unless the request is acting as a local human.
      *
-     * A delegated console session on the request — live or just refused
-     * — is turned away rather than resolved to whoever else is logged
-     * in. See {@see SelfServiceUnavailable::delegatedPrincipal()} and
-     * {@see SelfServiceUnavailable::consoleSessionRefused()} for why
-     * each is terminal rather than a fall-through.
+     * A delegated actor on the request is turned away rather than
+     * resolved to whoever else is logged in. See
+     * {@see SelfServiceUnavailable::delegatedPrincipal()} for why that
+     * is terminal rather than a fall-through.
      *
      * @throws SelfServiceUnavailable
      */
     private function requireLocalPrincipal(): ActingPrincipal
     {
         $acting = app(ActingPrincipalResolver::class)->resolve();
-
-        if ($acting->wasRefused()) {
-            throw SelfServiceUnavailable::consoleSessionRefused();
-        }
 
         if ($acting->delegatedSessionPresent()) {
             throw SelfServiceUnavailable::delegatedPrincipal();
@@ -406,14 +401,14 @@ final readonly class PersonalCredentialSurface
     }
 
     /**
-     * The authenticated human, resolved through D14's SINGLE acting-
+     * The authenticated human, resolved through the SINGLE acting-
      * principal value ({@see ActingPrincipalResolver}) — the same value
-     * the package's session gate ({@see EnsureUserIsAuthenticated}), the
-     * chrome and the audit stream read — so the gate that admitted the
+     * the package's session gate ({@see EnsureUserIsAuthenticated}) and
+     * the audit stream read — so the gate that admitted the
      * request and the surface that acts on it can never disagree about
      * who is calling.
      *
-     * A DELEGATED session on the request is refused outright rather than
+     * A DELEGATED actor on the request is refused outright rather than
      * resolved to the local session user. The gate already refuses one,
      * so this is the second lock on the same door: this class is public
      * API that a consuming app's own Livewire screen calls directly,

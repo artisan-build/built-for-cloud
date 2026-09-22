@@ -67,18 +67,10 @@ $citedSurfaces = [
     // The enter endpoint's guarantees live on the controller and in its
     // release note, both outside src/Console — so both are named
     // explicitly rather than left uncheckable (Console PRD D12/D13).
-    'src/Http/Controllers/ConsoleEnter.php',
-    // The console chrome (Console PRD D11/D7). Its guarantees are spread
-    // across a value object under src/Console (already a surface), one
-    // controller, the two Blade templates and the interceptor script —
-    // so the two RESOURCE directories are added as surfaces rather than
-    // file by file, for the reason src/Audit was: everything under them
-    // must be classified from the day it appears.
-    'src/Http/Controllers/ConsoleChromeScript.php',
-    'resources/views',
-    'resources/js',
     'docs/http-contract.md',
-    'release-notes/console-enter.md',
+    // The package's view templates: everything under the directory must
+    // be classified from the day it appears.
+    'resources/views',
     'release-notes/unified-store-guard.md',
     // The reservations note (PR8). It states, item by item, that each of
     // the five reserved Console names is now implemented and where two
@@ -94,10 +86,11 @@ $citedSurfaces = [
     // file was exempt from this rule by the accident of not being
     // listed, which the reviewer and the judge found independently —
     // so the middleware, the whole `src/Mcp` directory and the
-    // conformance instrument are named here for the same reason
-    // ConsoleEnter.php is: the door is new, its guarantees are load-
-    // bearing, and a new file must be classified in the diff that adds
-    // it, not by living somewhere the walk does not go.
+    // conformance instrument are named here for the same reason the
+    // delegated-entry door's files once were: the door was new, its
+    // guarantees were load-bearing, and a new file must be classified
+    // in the diff that adds it, not by living somewhere the walk does
+    // not go.
     'src/Http/Middleware/AuthenticateMcp.php',
     'src/Mcp',
     'src/Testing/McpDelegatedTools.php',
@@ -110,34 +103,22 @@ $citedSurfaces = [
  * and a file that is expected to have them and has none at all.
  */
 $expectedCitations = [
-    'docs/http-contract.md' => 75,
+    'docs/http-contract.md' => 47,
     'src/Audit/AppAction.php' => 5,
-    'src/Audit/AppActionActor.php' => 7,
+    'src/Audit/AppActionActor.php' => 6,
     'src/Audit/AppActionEvent.php' => 14,
     'src/Audit/AppendOnlyBuilder.php' => 2,
     'src/Audit/AppActionOutboxEntry.php' => 9,
     'src/Audit/AppActionRecorder.php' => 7,
     'src/Audit/AppActorType.php' => 1,
-    'release-notes/console-enter.md' => 28,
-    'release-notes/unified-store-guard.md' => 8,
-    'release-notes/console-reservations.md' => 4,
+    'release-notes/unified-store-guard.md' => 0,
+    'release-notes/console-reservations.md' => 3,
     'src/Console/AssertionBurn.php' => 6,
     'src/Console/AssertionVerifier.php' => 2,
     'src/Console/RequestAssertion.php' => 1,
-    'src/Console/ConsoleEntryState.php' => 8,
-    'src/Console/ConsoleGuard.php' => 17,
     'src/Console/ConsoleReturnTo.php' => 2,
     'src/Console/ConsoleKeyRetired.php' => 1,
-    'src/Console/ConsoleSession.php' => 2,
-    'src/Console/DelegatedActor.php' => 6,
-    'src/Console/ConsoleChrome.php' => 6,
-    'src/Console/DelegatedActorProvider.php' => 4,
-    'src/Console/ServesConsoleChrome.php' => 3,
-    'src/Http/Controllers/ConsoleChromeScript.php' => 1,
-    'resources/views/chrome.blade.php' => 2,
-    'resources/views/layout.blade.php' => 2,
-    'resources/js/console-reentry.js' => 9,
-    'src/Http/Controllers/ConsoleEnter.php' => 24,
+    'src/Console/DelegatedActor.php' => 3,
     // The MCP surfaces added by PR5's rework, each classified in the
     // diff that added it to the walk.
     'src/Http/Middleware/AuthenticateMcp.php' => 1,
@@ -169,26 +150,24 @@ $exemptFromCitation = [
     'resources/views/credentials/installation.blade.php' => 'package form template; structural rendering and request-owned data are driven by InstallationCredentialUiTest',
     'resources/views/credentials/personal.blade.php' => 'package form template; structural rendering and request-owned data are driven by PersonalCredentialUiTest',
     'resources/views/home.blade.php' => 'package UI shell template; structural rendering, escaped test-created manifest values, and role navigation are driven by AuthenticatedUiTest',
+    'resources/views/layout.blade.php' => 'package layout shell; structural rendering is driven through the templates that extend it (AuthenticatedUiTest, LandingPageTest)',
     'resources/views/landing.blade.php' => 'package landing template; package-layout use, structural rendering, and escaped test-created manifest values are driven by LandingPageTest',
     'src/Audit/AppActionEventBuilder.php' => 'a two-line binding of the shared AppendOnlyBuilder to one model; it adds and overrides nothing, and every claim is on the base',
     'src/Audit/AppActionLedgerBuilder.php' => 'a two-line binding of the shared AppendOnlyBuilder to one model; it adds and overrides nothing, and every claim is on the base',
     'src/Audit/AppActionReason.php' => 'a bounded enum: the closed app-action reason vocabulary, whose doc-to-code check is HttpContractDocTest\'s',
-    'src/Audit/ConsoleAction.php' => 'a bounded enum: the package\'s own action vocabulary, whose one case is driven by ConsoleEnterAuditTest',
+    'src/Audit/ConsoleAction.php' => 'a bounded enum: the package\'s own action vocabulary, whose one historical case is retained for pre-v0.17.0 rows',
     'src/Console/ActingPrincipal.php' => 'a readonly value object: the resolved principal, carrying no rule of its own',
     'src/Console/ActingPrincipalResolver.php' => 'D14 precedence, whose guarantees are stated and cited on ConsoleGuard',
     'src/Console/Assertion.php' => 'the verified claim set; every property rule is the verifier\'s and is cited there',
     'src/Console/AssertionRefusalReason.php' => 'a bounded enum of audit reasons',
     'src/Console/AssertionPurpose.php' => 'the two-value assertion-purpose vocabulary',
     'src/Console/ConsoleEntryRefusalReason.php' => 'a bounded enum of audit reasons',
-    'src/Console/ConsoleGuardConfiguration.php' => 'guard/provider injection; its rules are driven by ConsoleGuardRegistrationTest and stated in the contract',
     'src/Console/ConsoleKey.php' => 'a keyring row; the custody claim lives on ConsoleKeyring and points elsewhere for its enforcement',
     'src/Console/ConsoleKeyDelivery.php' => 'parses the delivered pair; the authority rules are FileConsoleKey\'s',
     'src/Console/ConsoleKeyFiled.php' => 'a readonly result object',
     'src/Console/ConsoleKeyRefusal.php' => 'a bounded enum of refusal reasons',
     'src/Console/ConsoleKeyring.php' => 'make-before-break rotation; PR2 surface, whose claims are carried in the contract document',
-    'src/Console/ConsoleReentryReason.php' => 'a bounded enum the structured 401 carries',
     'src/Console/ConsoleRole.php' => 'the two-value contract vocabulary (D8)',
-    'src/Console/ConsoleSessionClock.php' => 'D7\'s cap constant and its fail-closed read; cited from ConsoleGuard, which is where the cap is enforced',
     'src/Console/DelegatedClaims.php' => 'a readonly value object carrying one handoff\'s request or session claims',
     'src/Mcp/Classification.php' => 'a bounded enum: the two-value D14 boundary vocabulary, like ConsoleRole\'s',
     'src/Mcp/ToolClassification.php' => 'an attribute and its reflection reader; the declaration rules are the conformance instrument\'s and are cited there',
@@ -219,13 +198,6 @@ $exemptFromCitation = [
  * at a time but which this one does not touch.
  */
 $strictlyCited = [
-    'src/Console/ConsoleChrome.php',
-    'src/Console/ServesConsoleChrome.php',
-    'src/Http/Controllers/ConsoleChromeScript.php',
-    'resources/views/layout.blade.php',
-    'resources/views/chrome.blade.php',
-    'resources/js/console-reentry.js',
-    'tests/ConsoleChromeRouteScan.php',
     // PR8's reservations note. Its citations are written under this rule
     // rather than retrofitted to it, so it can join the strict list on
     // the day it arrives — which is the whole argument for the list:

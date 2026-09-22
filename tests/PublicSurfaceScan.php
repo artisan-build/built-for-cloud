@@ -24,15 +24,15 @@ use SplFileInfo;
  * somebody saying so in the diff.**
  *
  * WHY THIS EXISTS, and it is the third form the same claim has taken.
- * "Only `redeem()` mints a delegated session" was first cited by tests
- * naming a FIXED LIST of absent methods — a differently named writer
- * escaped it. It was then pinned by
- * {@see DelegatedSessionWriterScan}, a FILE enumeration — and a
- * differently named PUBLIC METHOD on the one permitted file escapes
- * that, because it can simply call the existing private
- * `ConsoleGuard::beginSession()` while every file assertion stays green.
- * The scan enumerated files; the guarantee is about reachable
- * operations.
+ * The delegated-session writer guarantee it was built for ("only
+ * `redeem()` mints one") was first cited by tests naming a FIXED LIST of
+ * absent methods — a differently named writer escaped it — and then by
+ * a FILE enumeration, which a differently named PUBLIC METHOD on the one
+ * permitted file escaped, because it could call the existing private
+ * writer while every file assertion stayed green. The scans enumerated
+ * files; the guarantee was about reachable operations. (The delegated
+ * session and its guard were retired in v0.17.0; the instrument
+ * remains, pinning public surfaces such as `AppActionRecorder`'s.)
  *
  * So this enumerates the reachable operations. Adding a public method to
  * `ConsoleGuard` reds the suite, and whoever adds it has to extend the

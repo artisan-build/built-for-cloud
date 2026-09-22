@@ -8,29 +8,29 @@ use Carbon\CarbonImmutable;
 
 /**
  * The claims of a console assertion that {@see AssertionVerifier} has
- * checked (Console PRD D12/D8/D4): the delegated identity one operator
- * carries into one deployment for one entry.
+ * checked: the delegated identity one operator carries into one
+ * deployment for one MCP request.
  *
  * The constructor is private and the only way in is
  * {@see fromVerifiedClaims()}, whose name is the warning: PHP cannot
  * restrict a static factory to one caller, so this type is NOT proof of
  * provenance. It carries claims the verifier checked when the verifier
  * built it, and building one anywhere else is a bug — the delegated
- * session PR3 opens and the ADMIN standing PR4 grants both read this
- * object, so an instance conjured without a token is an unauthenticated
- * admin. If you are reaching for the factory outside a verifier, stop.
+ * principal the MCP middleware publishes and the audit stream attribute
+ * both read this object, so an instance conjured without a token is an
+ * unauthenticated actor. If you are reaching for the factory outside a
+ * verifier, stop.
  *
  * The claim set is deliberately the SMALLEST that makes a delegated
- * session useful: who is acting, under what standing, on whose behalf,
+ * request useful: who is acting, under what standing, on whose behalf,
  * where, and for how long. There is deliberately no email, no vendor
  * account id, no entitlement payload, no roster — an app receiving this
  * learns exactly enough to attribute an action and gate a policy, and
  * the vendor learns nothing at all about the app's own users (there is
  * no "Scalpels user x = app user y" mapping anywhere in this design).
  *
- * `$id` is the token's `jti`: the unique mint identifier the
- * redeeming door BURNS atomically — the enter endpoint inside its
- * session-minting transaction, `AuthenticateMcp` inside its own —
+ * `$id` is the token's `jti`: the unique mint identifier the redeeming
+ * door BURNS atomically — `AuthenticateMcp` inside its own transaction —
  * which is what makes an assertion single-use. Verification
  * deliberately does not burn it — the verifier is the crypto/claims
  * choke point, and the burn is a storage decision that belongs to the
@@ -43,11 +43,11 @@ use Carbon\CarbonImmutable;
 final readonly class Assertion
 {
     private function __construct(
-        /** The one issuer this fleet trusts (D18) — the value that matched config. */
+        /** The one issuer this fleet trusts — the value that matched config. */
         public string $issuer,
         /** The issuer's opaque, stable identifier for the acting human. */
         public string $subject,
-        /** The name the chrome renders for that human — length- and control-character-bounded, nothing more. */
+        /** The name a rendering surface shows for that human — length- and control-character-bounded, nothing more. */
         public string $displayName,
         /** The two-value contract standing (D8). */
         public ConsoleRole $role,
@@ -62,28 +62,24 @@ final readonly class Assertion
         /** The `jti` the redeeming door burns — one redemption per mint, ever. */
         public string $id,
         /**
-         * The sha256 hex digest of the SIGNED HANDOFF STATE (D13), or
+         * The sha256 hex digest of a SIGNED HANDOFF STATE (D13), or
          * null when the mint carried none.
          *
-         * This is what makes the return path a signed state rather than
-         * a request field: the state travels beside the token, its
-         * digest travels INSIDE it, and the enter endpoint accepts a
-         * state only when the two agree. The app holds nothing but
+         * Historically this bound the retired delegated-entry door's
+         * return path to the mint: the state travelled beside the
+         * token, its digest travelled INSIDE it, and the door accepted
+         * a state only when the two agreed. The app holds nothing but
          * PUBLIC keys, so an Ed25519 signature over this digest is the
-         * only thing it can verify the issuer produced — and an
-         * OAuth-style state the APP planted is impossible here, because
-         * the handoff POST is cross-site and `SameSite=Lax` means the
-         * browser sends no cookie with it. See
-         * {@see ConsoleEntryState}, which states what that does and does
-         * not buy.
+         * only thing it can verify the issuer produced.
          *
-         * Null is a well-formed mint that named no state. The VERIFIER
-         * does not require one — its job is that claims are well-formed
-         * — and the ENTER ENDPOINT does, because entry is the flow the
-         * decision governs.
+         * The VERIFIER still shape-checks the claim when a mint carries
+         * one — present means exactly a sha256 hex digest, and a
+         * malformed one is a refusal rather than a silent absence —
+         * and nothing in this package reads its meaning since the
+         * door's retirement.
          */
         public ?string $stateDigest = null,
-        /** The door this mint is for, or null for a legacy console-entry mint during the compatibility window. */
+        /** The door this mint is for, or null for a legacy mint during the compatibility window. */
         public ?AssertionPurpose $purpose = null,
     ) {}
 
@@ -140,7 +136,7 @@ final readonly class Assertion
     }
 
     /**
-     * The attribution line the audit stream and the chrome both want:
+     * The attribution line the audit stream wants:
      * "Jane (Acme Agency)" or plain "Jane".
      *
      * **ESCAPE THIS AT EVERY SINK.** Both halves are bounded in length
@@ -149,13 +145,11 @@ final readonly class Assertion
      * legitimately contain apostrophes, accents, `&` and `<`, and this
      * string carries them through verbatim: bounding a string is not
      * sanitizing it, and `<img src=x onerror=…>` passes every check the
-     * verifier makes. The chrome that renders this (PR5) is a
-     * PRIVILEGED admin surface, so it must escape for its context —
-     * HTML text, attribute, JS, or URL — exactly as it would for any
-     * other user-supplied string. D11's escape-by-construction promise
-     * is about that rendering layer; the bounds here are the verify-side
-     * half that keeps the string a single line of finite length, not a
-     * licence to interpolate it raw.
+     * verifier makes. Any surface that renders this must escape for its
+     * context — HTML text, attribute, JS, or URL — exactly as it would
+     * for any other user-supplied string; the bounds here are the
+     * verify-side half that keeps the string a single line of finite
+     * length, not a licence to interpolate it raw.
      */
     public function attribution(): string
     {

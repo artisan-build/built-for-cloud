@@ -13,7 +13,6 @@ use ArtisanBuild\BuiltForCloud\Audit\AppendOnlyBuilder;
 use ArtisanBuild\BuiltForCloud\Audit\ConsoleAction;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
-use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
@@ -26,6 +25,7 @@ use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ConsoleEventsReport;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ConsoleEventsSource;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\ConsoleEventsTally;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\CountedAppAction;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\PublishesDelegatedAssertion;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SinkAppAction;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnboundedAppAction;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
@@ -35,7 +35,6 @@ use Illuminate\Database\QueryException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Session\Middleware\StartSession;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
@@ -412,7 +411,7 @@ it('has exactly the public surface it is meant to have on the emission point', f
     // or `dedupKeyFor()` DOES, nothing about their signatures, and
     // nothing about a public method added to any other class. The
     // digest's stability under the name is pinned by the digest tests
-    // above and by `tests/ConsoleEnterAuditTest.php`.
+    // above.
     $expected = ['dedupKeyFor', 'record'];
 
     expect(PublicSurfaceScan::of(AppActionRecorder::class))->toBe($expected)
@@ -643,14 +642,14 @@ it('names a delegated actor by its type-qualified identity, where a user with th
 // ─── AC7: attribution comes from the ONE acting principal (D14) ─────────────
 
 it('keeps co-resident attribution precedence as defence in depth', function (): void {
-    // Successful authentication now evicts the other guard. This state is
-    // constructed manually so restored or bypassed sessions still fail safe.
-    // The route is guarded by the APP's own guard while a delegated
-    // session is also live, so the two sources genuinely disagree: the
-    // acting principal is the local user, and asking the console guard
-    // directly would have named the delegated actor. The event must name
-    // the first.
-    Route::middleware([StartSession::class])->get('/app-action-probe', function (): array {
+    // The route is guarded by the APP's own guard while a verified
+    // delegated assertion is ALSO published on the request — the two
+    // sources genuinely disagree: the request assertion outranks the
+    // local session for the acting principal, and the event must name
+    // exactly that delegated actor with THIS handoff's agency. There is
+    // no session source left to disagree with, so the precedence is
+    // driven the way the MCP middleware drives it.
+    Route::middleware([StartSession::class, PublishesDelegatedAssertion::class])->get('/app-action-probe', function (): array {
         $acting = app(ActingPrincipalResolver::class)->resolve();
 
         $event = DB::transaction(fn (): AppActionEvent => app(AppActionRecorder::class)->record(
@@ -661,30 +660,23 @@ it('keeps co-resident attribution precedence as defence in depth', function (): 
 
         return [
             'event' => $event->id,
-            // What the SECOND source would have said, observed on the
-            // same request rather than argued about.
-            'console_guard_says' => Auth::guard(ConsoleGuardConfiguration::GUARD)->id(),
         ];
     });
 
     $user = User::query()->create(['name' => 'Local', 'email' => 'local@example.test', 'password' => 'x']);
-    $actor = consoleActor(displayName: 'Jane Operator', onBehalfOf: 'Acme Agency');
 
-    $response = $this->actingAs($user)->withSession(consoleSessionState($actor))
+    $response = $this->actingAs($user)
         ->getJson('/app-action-probe')
         ->assertOk();
 
-    // The delegated session really was live on this request…
-    expect($response->json('console_guard_says'))
-        ->toBe(DelegatedActor::IDENTIFIER_PREFIX.$actor->getKey());
-
-    // …and the event names the acting principal, with no agency, because
-    // a local user acts for nobody.
+    // The event names the delegated principal the request carried, with
+    // this handoff's agency — never the co-resident local user.
     $stored = AppActionEvent::query()->findOrFail($response->json('event'));
 
-    expect($stored->actor_type)->toBe(AppActorType::LocalUser)
-        ->and($stored->actor_ref)->toBe((string) $user->getKey())
-        ->and($stored->on_behalf_of)->toBeNull();
+    expect($stored->actor_type)->toBe(AppActorType::DelegatedActor)
+        ->and($stored->actor_ref)->toStartWith(DelegatedActor::IDENTIFIER_PREFIX)
+        ->and($stored->actor_ref)->not->toBe((string) $user->getKey())
+        ->and($stored->on_behalf_of)->not->toBeNull();
 });
 
 it('refuses an app action nobody is acting for', function (): void {
@@ -911,18 +903,14 @@ it('finds no enumerated deletion spelling against the app-action stream anywhere
         'Audit/AppActionRecorder.php',
     ]);
 
-    // The one EMITTER is deliberately not in that list, and its absence
-    // is luck rather than enforcement — which is worth asserting so the
-    // day it changes, somebody reads why. `ConsoleEnter` prunes expired
-    // assertion burns and reaches this stream only through the recorder,
-    // so it names no model; a type hint added tomorrow would put it in
-    // the walk and report a deletion that has nothing to do with this
-    // stream. The answer to that is NOT a file exemption — an exemption
-    // on the sole emitter is the blind spot the walk exists to prevent —
-    // it is to keep the emitter off the models, or to accept the red and
-    // decide deliberately.
-    expect(AppActionRetentionScan::referencesIn($root))
-        ->not->toContain('Http/Controllers/ConsoleEnter.php');
+    // The delegated-entry door — historically this stream's one
+    // emitter, retired in v0.17.0 — pruned expired assertion burns and
+    // reached this stream only through the recorder, so it named no
+    // model. A future emitter that DOES name a model will appear in this
+    // walk, and the answer to that is NOT a file exemption — an
+    // exemption on the sole emitter is the blind spot the walk exists to
+    // prevent — it is to keep the emitter off the models, or to accept
+    // the red and decide deliberately.
 
     expect(AppActionRetentionScan::scan($root))->toBe([]);
 });
@@ -1037,16 +1025,13 @@ it('advertises the app-action emit capability without promising a way to read th
     // report an empty read-transport list too.
     $classified = AppActionReadTransportScan::classify(Route::getRoutes()->getRoutes());
 
-    expect(count($classified))->toBeGreaterThan(20)
-        ->and($classified)->toHaveKey('POST /bfc/console/enter');
+    expect(count($classified))->toBeGreaterThan(20);
 
-    // The one route that legitimately touches the stream is the door,
-    // and it is classified as writing rather than exempted by name: an
-    // exemption on the sole emitter is the blind spot the enumeration
-    // exists to prevent.
-    expect($classified['POST /bfc/console/enter'])->toBe(AppActionReadTransportScan::EMITS);
-
-    expect(AppActionReadTransportScan::readTransportsIn(Route::getRoutes()->getRoutes()))->toBe([]);
+    // The door that legitimately touched the stream is retired: no
+    // package route reaches the app-action stream any more, so nothing
+    // is classified EMITS, and nothing is a read transport either.
+    expect(array_filter($classified, static fn (string $bucket): bool => $bucket === AppActionReadTransportScan::EMITS))->toBe([])
+        ->and(AppActionReadTransportScan::readTransportsIn(Route::getRoutes()->getRoutes()))->toBe([]);
 });
 
 it('names a route that reads the app-action stream under a name that mentions neither', function (): void {
@@ -1117,9 +1102,9 @@ it('follows a read one class past the route, and stops at the emission door', fu
         ->and(AppActionReadTransportScan::bucketFor(ConsoleEventsReport::class, $classes))
         ->toBe(AppActionReadTransportScan::READS);
 
-    // And the door STOPS the walk. The recorder names both models, so a
-    // walk that passed through it would report `ConsoleEnter` — the one
-    // route that is supposed to touch this stream — as a read
+    // And the emission door STOPS the walk. The recorder names both
+    // models, so a walk that passed through it would report an emitter —
+    // a route that is supposed to touch this stream — as a read
     // transport, and the answer to that would have been an exemption on
     // exactly the wrong route.
     expect(AppActionReadTransportScan::reachableFrom(AppActionRecorder::class))

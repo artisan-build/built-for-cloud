@@ -95,9 +95,8 @@ use LogicException;
  * ACTION only when the caller performs both inside one transaction on the
  * default connection.** Sharing a physical database under different
  * connection names is not enough. Arranging this is the consumer's
- * responsibility. The package's own emitter does — `ConsoleEnter` writes
- * the entry and its event together on the default connection — and that
- * is a property of the caller, not of this class.
+ * responsibility, and it is a property of the caller, not of this
+ * class.
  *   Pinned by `tests/RecorderTransactionGuardTest.php` — "refuses to
  *   record an app action outside a database transaction" and "refuses a
  *   direct model write made outside a transaction". Both live there
@@ -129,11 +128,11 @@ use LogicException;
  * to, and a hook that called nothing would be a moving part pretending
  * to be a guarantee. The reasoning that would apply even once a consumer
  * exists is worth stating now, because the decision will be re-opened
- * then: the first emitter is `POST /bfc/console/enter`, a page-load path
- * an operator waits on, and a drain is O(claimable rows) and may send
- * mail — hanging one off the door's redirect buys nothing and costs the
- * operator's first paint. The refusal path on that same route already
- * declines a drain for the harder version of the same argument.
+ * then: the stream's historical first emitter was a page-load path an
+ * operator waited on, and a drain is O(claimable rows) and may send
+ * mail — hanging one off a route someone waits on buys nothing and
+ * costs the first paint. Any emitter this package ships in the future
+ * inherits the same argument.
  *
  * @see AppActionEvent for the append-only guarantee, its three layers and its residue
  */
@@ -262,15 +261,12 @@ final class AppActionRecorder
      * restated.** A test asserting only that the stored key is 64 hex
      * characters cannot tell a key derived from the caller's natural key
      * from the default derived from the event id — which is exactly the
-     * hole that opened when the door's mint-keying assertion was
-     * weakened: deleting `naturalKey:` from `ConsoleEnter` still yielded
-     * a 64-hex digest and the whole suite stayed green. A test that
-     * recomputes the expected key from the MINT, through this method,
-     * reds on that deletion. It is a pure function of its arguments and
-     * touches nothing.
-     *   Pinned by `tests/ConsoleEnterAuditTest.php` — "keys a successful
-     *   entry's ledger row to the mint, so dropping the key falls back
-     *   to the event id".
+     * hole that opened when a caller's mint-keying assertion was
+     * weakened: deleting the caller's `naturalKey:` argument still
+     * yielded a 64-hex digest and the whole suite stayed green. A test
+     * that recomputes the expected key from the caller's natural key,
+     * through this method, reds on that deletion. It is a pure function
+     * of its arguments and touches nothing.
      *
      * Length-delimited for the reason
      * {@see DelegatedActor::identityHash()}

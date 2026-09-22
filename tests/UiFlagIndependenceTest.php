@@ -11,6 +11,7 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\StandaloneRouteOwnership;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\PublishesDelegatedAssertion;
 use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -166,17 +167,25 @@ function p5fHumanOutcome(bool $enabled, string $middleware, string $vector): arr
     $beforeHttp = count(Http::recorded());
     $downstream = 0;
     $uri = '/_p5f/'.strtolower(class_basename($middleware)).'/'.$vector;
-    Route::get($uri, static function () use (&$downstream): string {
+
+    $downstreamRoute = static function () use (&$downstream): string {
         $downstream++;
 
         return 'p5f-downstream-secret';
-    })->middleware($middleware);
+    };
+
+    if ($vector === 'delegated') {
+        // The delegated vector publishes a verified request assertion on
+        // the dispatched request, ahead of the gate under test.
+        Route::get($uri, $downstreamRoute)
+            ->middleware([PublishesDelegatedAssertion::class, $middleware]);
+    } else {
+        Route::get($uri, $downstreamRoute)->middleware($middleware);
+    }
 
     $request = static function () use ($uri, $user, $vector) {
         if ($vector === 'delegated') {
-            $actor = consoleActor(subject: 'p5f-delegated-'.bin2hex(random_bytes(4)));
-
-            return test()->withSession(consoleSessionState($actor))->get($uri)->baseResponse;
+            return test()->get($uri)->baseResponse;
         }
 
         if ($user instanceof User) {

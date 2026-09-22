@@ -716,6 +716,27 @@ it('routes managed device starts to the frozen transient and terminal authority 
     expect(DB::table('credential_authorizations')->count())->toBe($beforeRows)
         ->and(DB::table('credential_audit_events')->count())->toBe($beforeAudits)
         ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request()))->toBe($beforeBindings);
+    // The delegated vector is structural now: the delegated-entry door
+    // is retired and these browser routes carry no delegated publisher,
+    // so no delegated principal can reach them at all. What stays
+    // pinned is that nothing REPLACED the door with a stub — INCLUDING
+    // under the pre-v0.17.0 enable switch a host may still carry.
+    // Nothing in the package reads `built-for-cloud.console.enabled`
+    // any more (the key is gone from the merged config too), so the
+    // honest form of the pin is the ENV VAR a host actually sets,
+    // applied before a FRESH boot: a re-add that restores the
+    // env()-backed key mounts the door and reds this assertion. Run
+    // LAST: refreshApplication() replaces the app, and the migrated
+    // in-memory database with it.
+    putenv('BUILT_FOR_CLOUD_CONSOLE_ENABLED=true');
+    $this->refreshApplication();
+
+    expect(array_filter(
+        Route::getRoutes()->getRoutes(),
+        static fn ($route): bool => is_object($route) && in_array($route->uri(), ['bfc/console/enter', 'bfc/console/chrome.js'], true),
+    ))->toBe([]);
+
+    putenv('BUILT_FOR_CLOUD_CONSOLE_ENABLED');
 });
 
 it('routes managed device decisions through retry, success, and terminal containment', function (): void {
@@ -882,15 +903,10 @@ it('keeps authorization route authority deferral local to authenticated non-dele
     $beforeRows = DB::table('credential_authorizations')->count();
     $beforeNonces = DB::table('bfc_submission_nonces')->count();
     $beforeBindings = app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request());
-    $actor = consoleActor(subject: 'http-delegated-actor');
-    $this->withSession(consoleSessionState($actor));
 
-    $this->postJson('/bfc/device-authorizations', ['app_purpose' => 'http.loopback'])->assertForbidden();
-    $this->post('/bfc/device', $deviceDecision)->assertForbidden();
-    $this->post('/bfc/loopback/authorize', $loopbackDecision)->assertForbidden();
+    // …and the authenticated local human's ceremonies, already driven
+    // above, changed nothing they did not themselves write.
     expect(DB::table('credential_authorizations')->count())->toBe($beforeRows)
-        ->and(DB::table('credential_authorizations')->where('user_code_hash', hash('sha256', (string) $device->json('user_code')))->value('status'))->toBe('pending')
-        ->and(DB::table('credential_authorizations')->where('redirect_uri', 'http://127.0.0.1:49155/managed')->value('status'))->toBe('pending')
         ->and(DB::table('bfc_submission_nonces')->count())->toBe($beforeNonces)
         ->and(DB::table('credentials')->count())->toBe(0)
         ->and(app(BrowserCredentialAuthorizationStore::class)->serializedCiphertexts(request()))->toBe($beforeBindings);

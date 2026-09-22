@@ -10,7 +10,6 @@ use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Console\AssertionBurn;
 use ArtisanBuild\BuiltForCloud\Console\AssertionRefusalReason;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleEntryRefusalReason;
-use ArtisanBuild\BuiltForCloud\Console\ConsoleSession;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
@@ -288,17 +287,20 @@ it('keeps the contained actor handoff but rolls back its burn and principal', fu
 });
 
 it('writes no session key under an assertion', function (): void {
+    // Stateless by construction: the delegated principal lives on the
+    // request object and nowhere else, so the session that entered this
+    // request is EXACTLY the session that leaves it — no key added, not
+    // only none of a known set.
     $session = $this->withSession(['sentinel' => 'kept'])
         ->postJson('/mcp-session-probe', [], ['Authorization' => 'Bearer '.mcpAssertion()])
         ->assertOk()
         ->json();
 
     expect($session)->toHaveKey('sentinel', 'kept')
-        ->not->toHaveKey(consoleGuardSessionKey())
-        ->not->toHaveKey(ConsoleSession::ASSERTION_ISSUED_AT)
-        ->not->toHaveKey(ConsoleSession::DISPLAY_NAME)
-        ->not->toHaveKey(ConsoleSession::ROLE)
-        ->not->toHaveKey(ConsoleSession::ON_BEHALF_OF);
+        // The framework's own CSRF token is the one key a session-
+        // starting request legitimately gains; nothing else — and no
+        // delegated principal or claim — may appear.
+        ->and(array_values(array_diff(array_keys($session), ['_token'])))->toBe(['sentinel']);
 });
 
 it('authenticates a unified bearer, records its use and does not leak the prior request assertion memo', function (): void {
@@ -500,28 +502,6 @@ it('does not answer or audit a downstream refusal as this door refusing', functi
 
     expect(AssertionBurn::query()->count())->toBe(2)
         ->and(mcpRefusalReasons())->toBe([]);
-});
-
-it('keeps a refused console session terminal over a published request assertion', function (): void {
-    // The one fixture carrying BOTH a console session the guard refuses
-    // (a capped one — ConsoleSessionClock's 120-minute absolute cap)
-    // and a verified, published request assertion. The resolver's
-    // refusal branch sits ABOVE its request-assertion branch; moving
-    // the branches would let this assertion rescue the request, which
-    // is exactly the ordering this test exists to pin. A just-refused
-    // delegated session resolves NOBODY: never the assertion principal,
-    // never a union.
-    $actor = consoleActor();
-
-    $this->withSession(consoleSessionState($actor, CarbonImmutable::now()->subMinutes(121)->getTimestamp()))
-        ->postJson('/mcp-precedence-probe', [], [
-            'Authorization' => 'Bearer '.mcpAssertion(['sub' => 'assertion-rescue-attempt']),
-        ])
-        ->assertOk()
-        ->assertJsonPath('refused', true)
-        ->assertJsonPath('principal', null)
-        ->assertJsonPath('delegated', false)
-        ->assertJsonPath('delegated_session_present', true);
 });
 
 it('takes the bearer out of the request before a refusal is served or a fault throws', function (): void {

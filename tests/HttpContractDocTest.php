@@ -1023,14 +1023,13 @@ final class HttpContractDocTest extends TestCase
      * half — an occurrence check over the file, so a capability named
      * only in a changelog line passes, and nothing here reads what the
      * document SAYS about one. Nor does it check the PREDICATE: that
-     * `console-enter` appears under a stricter condition than
-     * `console-guard` is driven behaviourally, in
-     * `tests/ConsoleEnterForeignGuardTest.php` and
-     * `tests/ConsoleDisabledTest.php`. This suite's app is a
-     * console-ENABLED deployment whose delegated guard is the package's
-     * own, so the response below carries the conditional capabilities
-     * too; on a console-disabled app it would carry eight, and the
-     * pinned set would red rather than quietly shrink.
+     * `mcp-delegated` appears only when the advertised endpoint is
+     * genuinely guarded is driven behaviourally, in
+     * `tests/McpMetadataTest.php`. The conditional capabilities the
+     * Console-entry release once carried (`console-guard`,
+     * `console-enter`, `console-chrome-assets`) were removed with the
+     * door in v0.17.0, so the set below is unconditional plus the two
+     * MCP predicates.
      *
      * The same list is pinned a second time, as a response SHAPE, by
      * `tests/OwnershipFoundationTest.php` — "returns unauthenticated bfc
@@ -1045,7 +1044,6 @@ final class HttpContractDocTest extends TestCase
             'tokens', 'ownership', 'onboarding', 'webhooks', 'credentials',
             'console-keys', 'console-key-retire', 'console-vitals', 'app-action-audit-emit',
             'managed-enrolment',
-            'console-guard', 'console-enter', 'console-chrome-assets',
         ];
 
         $reported = (array) $this->getJson('/bfc/meta')->assertOk()->json('capabilities');

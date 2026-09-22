@@ -55,10 +55,11 @@ use SplFileInfo;
  *  - **Precision, in the other direction.** The rule is FILE-LEVEL
  *    co-occurrence, so a file that names this stream while pruning
  *    something ELSE is a FALSE POSITIVE. That is not hypothetical: the
- *    one emitter, `ConsoleEnter`, prunes expired assertion burns, and it
- *    stays out of this walk only because it happens to reach the stream
- *    through {@see AppActionRecorder}
- *    and never names a model — a type hint added tomorrow would turn it
+ *    stream's historical sole emitter (the delegated-entry door,
+ *    retired in v0.17.0) pruned expired assertion burns and stayed out
+ *    of this walk only because it happened to reach the stream through
+ *    {@see AppActionRecorder} and never named a model — a type hint
+ *    added tomorrow would turn such a file
  *    red for a deletion that has nothing to do with this stream. That is
  *    a known cost of a textual walk, it is NOT enforced by anything, and
  *    it is deliberately not answered with a file exemption: an exemption

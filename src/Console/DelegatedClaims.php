@@ -7,24 +7,25 @@ namespace ArtisanBuild\BuiltForCloud\Console;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 
 /**
- * The claims ONE handoff carried, bound to ONE request or browser session
- * (Console PRD D8: role and display claims are per-mint and never read from
- * shared actor storage).
+ * The claims ONE handoff carried, bound to ONE request (Console PRD D8:
+ * role and display claims are per-mint and never read from shared actor
+ * storage).
  *
  * This type exists because the alternative — reading them off the shadow
- * actor row — is a privilege escalation. That row is shared by every live
- * session for the same subject, so a later handoff arriving as `admin`
- * would retroactively promote a session that entered as `member`, and
+ * actor row — is a privilege escalation. That row is shared by every
+ * request for the same subject, so a later handoff arriving as `admin`
+ * would retroactively promote a request that arrived as `member`, and
  * attribute it to whatever agency the newer handoff named. The claims a
- * browser request acts under therefore live in that session; an MCP request
+ * request acts under therefore live in the request; an MCP request
  * builds them from its just-verified assertion. The row keeps only a
- * `last_handoff_*` copy, named so reading it for authorization looks wrong.
+ * `last_handoff_*` copy, named so reading it for authorization looks
+ * wrong.
  *
- * The set is atomic: {@see ConsoleSession::claims()} returns an instance
- * or null, never a partially populated one, because a session carrying a
- * role but no display name is a session whose claims cannot be trusted.
+ * The set is atomic: a principal is published carrying every claim or
+ * none, never a partially populated set, because a request carrying a
+ * role but no display name is a request whose claims cannot be trusted.
  *
- * TWO CONVENIENCES WERE DELETED FROM HERE, for one reason.
+ * A CONVENIENCE WAS DELETED FROM HERE, for one reason.
  *
  * `isAdmin()` sat unreferenced while the single place that decides
  * administrative standing — {@see EnsureUserIsAdmin} — compared the enum
@@ -32,12 +33,6 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
  * invitation to a second, divergent notion of "is admin", and the two
  * would drift the first time one of them grew a condition. Read
  * {@see $role} and compare it where the decision is made.
- *
- * `fromAssertion()` sat unreferenced beside {@see ConsoleSession::begin()},
- * which is what actually turns an assertion into this session's claims.
- * Two ways to derive the same three fields from one assertion is the
- * same hazard wearing a different hat: there is one derivation, and it
- * is the one that writes the session.
  *
  * **THE DISPLAY CLAIMS ARE NOT SANITIZED.** `displayName` and
  * `onBehalfOf` are issuer-supplied free text that the verifier bounded in
@@ -48,17 +43,17 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 final readonly class DelegatedClaims
 {
     public function __construct(
-        /** The name the chrome renders — bounded, control-character-free, NOT escaped. */
+        /** The name a rendering surface shows — bounded, control-character-free, NOT escaped. */
         public string $displayName,
-        /** The two-value contract standing this session acts under (D8). */
+        /** The two-value contract standing this request acts under (D8). */
         public ConsoleRole $role,
         /** The agency the operator acts for (D4), or null for a direct operator. */
         public ?string $onBehalfOf,
     ) {}
 
     /**
-     * The attribution line the chrome (PR5) and the app-action audit
-     * stream (PR7) render: "Jane (Acme Agency)" or plain "Jane".
+     * The attribution line the app-action audit
+     * stream renders: "Jane (Acme Agency)" or plain "Jane".
      *
      * **ESCAPE THIS AT EVERY SINK.**
      */

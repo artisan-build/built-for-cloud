@@ -30,41 +30,33 @@ use Symfony\Component\HttpFoundation\Response;
  * `$request->user()` before this middleware runs, so the local session
  * guard is holding that user in memory, and a gate that asked the facade
  * would be reading a cache rather than a decision.
- * {@see ActingPrincipalResolver} is the decision, and reading it is also
- * what makes D7's absolute cap bite on this route — the resolver reads
- * the console guard, and the console guard is what destroys a capped
- * session.
+ * {@see ActingPrincipalResolver} is the decision.
  *
- * THREE OUTCOMES:
+ * TWO OUTCOMES:
  *
- * - A DELEGATED SESSION IS PRESENT on the request — live, and whichever
- *   guard the route itself names: REFUSED with a 403. A delegated actor
- *   has no personal identity in this application, so a surface that can
- *   only act as a local user says no rather than quietly acting as
- *   somebody else's identity. On the personal-credentials surface that
- *   fall-through would mean minting or revoking a local human's
- *   credentials while a delegated operator is the one at the keyboard
- *   (FLEET-C-02). The check is deliberately BROADER than "the delegated
- *   actor is the acting principal": refusing costs only convenience,
- *   while acting as the wrong human does not, so this direction is
- *   allowed to be blunt. A 403 rather than a 401 because the caller IS
- *   authenticated — as the wrong kind of principal for this surface —
- *   and logging in again would change nothing.
- * - A delegated session was REFUSED (capped, unreadable, contained):
- *   TERMINAL. The request is unauthenticated and does not fall back to
- *   the local user, whose session the guard has just invalidated
- *   anyway.
+ * - A DELEGATED ACTOR IS PRESENT on the request — a verified MCP
+ *   assertion published on it, whichever guard the route itself names:
+ *   REFUSED with a 403. A delegated actor has no personal identity in
+ *   this application, so a surface that can only act as a local user
+ *   says no rather than quietly acting as somebody else's identity. On
+ *   the personal-credentials surface that fall-through would mean
+ *   minting or revoking a local human's credentials while a delegated
+ *   operator is the one at the keyboard (FLEET-C-02). The check is
+ *   deliberately BROADER than "the delegated actor is the acting
+ *   principal": refusing costs only convenience, while acting as the
+ *   wrong human does not, so this direction is allowed to be blunt. A
+ *   403 rather than a 401 because the caller IS authenticated — as the
+ *   wrong kind of principal for this surface — and logging in again
+ *   would change nothing.
  * - Otherwise the local user, unchanged, offboarding containment check
  *   and all.
  *
  * Gates that CONSUME the resolved principal instead of refusing it are a
  * different case and are handled differently: see
- * {@see EnsureUserIsAdmin}, where a delegated `admin` legitimately
- * passes — and only when the route's own guard is the console guard, so
- * admission is exact where refusal may be broad. The surface itself
- * carries the same refusal ({@see PersonalCredentialSurface}), because
- * it is public API an app's own screen may call with no middleware in
- * front of it.
+ * {@see EnsureUserIsAdmin}, which refuses a delegated actor too, for the
+ * same reason stated exactly. The surface itself carries the same
+ * refusal ({@see PersonalCredentialSurface}), because it is public API
+ * an app's own screen may call with no middleware in front of it.
  */
 final class EnsureUserIsAuthenticated
 {
@@ -78,10 +70,6 @@ final class EnsureUserIsAuthenticated
     public function handle(Request $request, Closure $next, ?string $mode = null): Response
     {
         $acting = app(ActingPrincipalResolver::class)->resolve();
-
-        if ($acting->wasRefused()) {
-            return $this->unauthenticated($request);
-        }
 
         if ($acting->delegatedSessionPresent()) {
             abort(403, 'A delegated console actor has no personal identity in this application, so this surface refuses it rather than acting as the local session user.');
@@ -141,11 +129,8 @@ final class EnsureUserIsAuthenticated
     }
 
     /**
-     * The one unauthenticated answer, shared by "nobody is logged in"
-     * and "the delegated session was refused" — from the caller's side
-     * they are the same state, and a refused console session must not be
-     * distinguishable from an absent one by anything but the
-     * `bfc.console` gate's own structured 401.
+     * The one unauthenticated answer, shared by every state that is not
+     * an authenticated local human.
      */
     private function unauthenticated(Request $request): Response
     {
