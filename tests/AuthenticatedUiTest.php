@@ -378,10 +378,15 @@ final class AuthenticatedUiTest extends TestCase
         // browser surface at all, so the delegation vector is now held
         // by the route set itself rather than by a refusal at the gate.
         // What stays pinned here is that the route no longer exists and
-        // nothing replaced it with a disabled stub — EVEN IF a host
-        // still carries the pre-v0.17.0 enable switch in its config, so
-        // a flag-gated re-add cannot quietly bring the door back.
-        config(['built-for-cloud.console.enabled' => true]);
+        // nothing replaced it with a disabled stub — INCLUDING under the
+        // pre-v0.17.0 enable switch a host may still carry. Nothing in
+        // the package reads `built-for-cloud.console.enabled` any more
+        // (the key is gone from the merged config too), so the honest
+        // form of the pin is the ENV VAR a host actually sets, applied
+        // before a FRESH boot: a re-add that restores the env()-backed
+        // key mounts the door and reds this assertion.
+        putenv('BUILT_FOR_CLOUD_CONSOLE_ENABLED=true');
+        $this->refreshApplication();
 
         $this->assertSame(
             [],
@@ -390,6 +395,7 @@ final class AuthenticatedUiTest extends TestCase
                 static fn (RoutingRoute $route): bool => in_array($route->uri(), ['bfc/console/enter', 'bfc/console/chrome.js'], true),
             )),
         );
+        putenv('BUILT_FOR_CLOUD_CONSOLE_ENABLED');
     }
 
     public function test_invalid_authority_has_one_404_gate_and_never_invokes_the_page_action(): void
