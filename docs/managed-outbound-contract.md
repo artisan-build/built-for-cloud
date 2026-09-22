@@ -486,7 +486,7 @@ Every element has exactly these six required keys:
 | `local_kind` | `string` | `nullable` | `enum=user,invitation` |
 | `local_id` | `string` | `nullable` | `non-empty;max-bytes=64` |
 | `role` | `string` | `nullable` | `enum=owner,admin,member` |
-| `disposition` | `string` | `required` | `enum=link,create,retain_local,exclude,defer_to_managed_jit` |
+| `disposition` | `string` | `required` | `enum=link,create,retain_local,retain_deactivated,exclude,defer_to_managed_jit` |
 | `final_email` | `string` | `nullable` | `non-empty;max-bytes=255;valid-email` |
 
 `required` means a non-empty string and `null` means JSON null. These rows are the complete shape
@@ -500,6 +500,7 @@ matrix, not examples:
 | `link-invitation` | `link` | `invitation` | `required` | `required` | `required` | `required` | `allowed` | `allowed` |
 | `create` | `create` | `null` | `required` | `null` | `required` | `required` | `allowed` | `forbidden` |
 | `retain-user` | `retain_local` | `user` | `null` | `required` | `required` | `required` | `forbidden` | `allowed` |
+| `retain-deactivated-user` | `retain_deactivated` | `user` | `null` | `required` | `null` | `null` | `forbidden` | `allowed` |
 | `retain-invitation` | `retain_local` | `invitation` | `null` | `required` | `null` | `null` | `forbidden` | `allowed` |
 | `exclude-user` | `exclude` | `user` | `null` | `required` | `null` | `null` | `allowed` | `allowed` |
 | `exclude-invitation` | `exclude` | `invitation` | `null` | `required` | `null` | `null` | `allowed` | `allowed` |
@@ -515,6 +516,7 @@ The complete-list constraints are also normative:
 | `unique-subject` | A non-null `scalpels_id` appears at most once. |
 | `known-local` | Every non-null (`local_kind`, `local_id`) identifies a current local user or pending invitation. |
 | `managed-user-binding` | An existing managed local user's issuer and connection equal this transition's issuer and connection; when `scalpels_id` is non-null, it also equals the user's existing subject. |
+| `retain-deactivated-eligibility` | `retain_deactivated` requires an exit user with no roster subject whose freshness state is exactly `managed_membership_status=removed`, `status=inactive`, non-null `deactivated_at`, and null password. |
 | `unique-local` | A (`local_kind`, `local_id`) pair appears at most once. |
 | `all-locals` | Every current local user and pending invitation appears exactly once. |
 | `all-adopt-subjects` | In adopt, every frozen-roster subject appears exactly once. |
