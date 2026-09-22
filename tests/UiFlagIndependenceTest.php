@@ -165,7 +165,7 @@ function p5fHumanOutcome(bool $enabled, string $middleware, string $vector): arr
     $beforeEffects = p5fEffectCounts();
     $beforeHttp = count(Http::recorded());
     $downstream = 0;
-    $uri = '/_p5f/'.strtolower(class_basename($middleware)).'/'.$vector.'/'.$profile;
+    $uri = '/_p5f/'.strtolower(class_basename($middleware)).'/'.$vector;
     Route::get($uri, static function () use (&$downstream): string {
         $downstream++;
 
