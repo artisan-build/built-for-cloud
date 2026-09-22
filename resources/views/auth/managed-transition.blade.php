@@ -168,11 +168,16 @@
                                     <div class="bfc-transition-controls">
                                         <label>Match and disposition
                                             <select name="locals[user-{{ $index }}][choice]" data-testid="transition-match-control">
-                                                <option value="retain_local" @selected($mapping?->disposition === 'retain_local')>Retain locally</option>
-                                                <option value="exclude" @selected($mapping?->disposition === 'exclude')>Deactivate</option>
-                                                @foreach ($roster as $member)
-                                                    <option value="link:{{ $member->scalpels_id }}" @selected($mapping?->scalpels_id === $member->scalpels_id)>Link {{ $member->display_name }} — {{ $member->scalpels_id }}</option>
-                                                @endforeach
+                                                @if ($user->managed_membership_status === 'removed')
+                                                    <option value="retain_deactivated" @selected($mapping?->disposition === 'retain_deactivated')>Keep deactivated</option>
+                                                    <option value="exclude" @selected($mapping?->disposition === 'exclude')>Deactivate</option>
+                                                @else
+                                                    <option value="retain_local" @selected($mapping?->disposition === 'retain_local')>Retain locally</option>
+                                                    <option value="exclude" @selected($mapping?->disposition === 'exclude')>Deactivate</option>
+                                                    @foreach ($roster as $member)
+                                                        <option value="link:{{ $member->scalpels_id }}" @selected($mapping?->scalpels_id === $member->scalpels_id)>Link {{ $member->display_name }} — {{ $member->scalpels_id }}</option>
+                                                    @endforeach
+                                                @endif
                                             </select>
                                         </label>
                                         @if (in_array($mapping?->disposition, ['link', 'retain_local'], true))
@@ -197,6 +202,8 @@
                                         keeps local user {{ $user->getKey() }} and its product attribution for the matched subject.
                                     @elseif ($mapping?->disposition === 'retain_local')
                                         keeps local user {{ $user->getKey() }} active under standalone authority.
+                                    @elseif ($mapping?->disposition === 'retain_deactivated')
+                                        keeps local user {{ $user->getKey() }} deactivated until an Owner explicitly reactivates it after exit.
                                     @else
                                         deactivates this user without deleting local ID {{ $user->getKey() }} or its attribution.
                                     @endif

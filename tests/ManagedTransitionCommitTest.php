@@ -827,6 +827,157 @@ it('establishes an accessible standalone Owner and applies every exit dispositio
     $this->get(route('bfc.members.index', absolute: false))->assertOk();
 });
 
+it('keeps an authority-removed member deactivated on exit while activating a never-listed local user', function (): void {
+    $roster = [[
+        'scalpels_id' => 'owner-subject', 'membership_status' => 'active', 'role' => 'owner',
+        'display_name' => 'Exit Owner', 'contact_email' => 'standalone-owner@example.test', 'contact_email_verified' => true,
+    ]];
+    [$owner] = p4dConfigure(ManagedTransitionDirection::Exit, $roster);
+    $removed = User::query()->create([
+        'name' => 'Authority Removed',
+        'email' => 'authority-removed@example.test',
+    ]);
+    $removed->forceFill([
+        'role' => 'member',
+        'status' => 'active',
+        'password' => null,
+        'scalpels_issuer' => 'https://issuer.example.test',
+        'scalpels_connection_id' => 'transition-connection',
+        'scalpels_id' => 'removed-subject',
+        'managed_membership_status' => 'active',
+        'managed_membership_role' => 'member',
+        'managed_membership_generation' => 7,
+        'managed_membership_roster_version' => 40,
+        'managed_membership_response_sequence' => 70,
+        'managed_membership_responded_at' => now()->toRfc3339String(),
+    ])->save();
+    $neverListed = User::query()->create([
+        'name' => 'Never Listed Local',
+        'email' => 'never-listed-local@example.test',
+        'password' => Hash::make('local-password'),
+    ]);
+    $neverListed->forceFill([
+        'role' => 'member',
+        'status' => 'inactive',
+        'deactivated_at' => now()->subDay(),
+    ])->save();
+    $connection = new ManagedAuthConnection(
+        'https://issuer.example.test',
+        'transition-connection',
+        'transition-organization',
+        'transition-installation',
+        7,
+        'https://transition-authority.example.test',
+        'transition-secret',
+        null,
+    );
+
+    expect(app(ManagedMembershipResponses::class)->applyConfirmation(
+        $connection,
+        $removed,
+        new ManagedAuthConfirmation(
+            'removed-subject',
+            'removed',
+            'active',
+            'member',
+            41,
+            71,
+            new DateTimeImmutable('2026-09-22T12:00:00+00:00'),
+        ),
+    ))->toBeFalse();
+    $removed = $removed->refresh();
+    $removedAt = $removed->getRawOriginal('deactivated_at');
+    expect($removed->status)->toBe('inactive')
+        ->and($removed->managed_membership_status)->toBe('removed')
+        ->and($removedAt)->not->toBeNull()
+        ->and($removed->password)->toBeNull();
+
+    $service = app(ManagedTransitions::class);
+    $transition = $service->prepare($owner, ManagedTransitionDirection::Exit);
+    $transition = $service->fetchRoster($transition);
+    $transition = $service->proposeDefault($transition);
+    $mappings = DB::table('bfc_managed_transition_mappings')
+        ->where('managed_transition_id', $transition->id)
+        ->get()
+        ->keyBy('local_id');
+
+    expect($mappings->get((string) $removed->getKey())?->disposition)->toBe('retain_deactivated')
+        ->and($mappings->get((string) $removed->getKey())?->scalpels_id)->toBeNull()
+        ->and($mappings->get((string) $removed->getKey())?->role)->toBeNull()
+        ->and($mappings->get((string) $removed->getKey())?->final_email)->toBeNull()
+        ->and($mappings->get((string) $neverListed->getKey())?->disposition)->toBe('retain_local');
+
+    $completed = $service->complete($owner, $transition);
+    $removed = $removed->refresh();
+    $neverListed = $neverListed->refresh();
+
+    expect($completed->status)->toBe(ManagedTransitionStatus::Acknowledged)
+        ->and($removed->status)->toBe('inactive')
+        ->and($removed->getRawOriginal('deactivated_at'))->toBe($removedAt)
+        ->and($removed->password)->toBeNull()
+        ->and($neverListed->status)->toBe('active')
+        ->and($neverListed->deactivated_at)->toBeNull()
+        ->and(Hash::check('local-password', (string) $neverListed->password))->toBeTrue();
+});
+
+it('accepts retain_deactivated only for an authority-removed exit user with no roster subject role or email', function (
+    ManagedTransitionDirection $direction,
+    string $invalidShape,
+): void {
+    $roster = [[
+        'scalpels_id' => 'owner-subject', 'membership_status' => 'active', 'role' => 'owner',
+        'display_name' => 'Shape Owner', 'contact_email' => 'shape-owner@example.test', 'contact_email_verified' => true,
+    ]];
+    if ($invalidShape === 'subject') {
+        $roster[] = [
+            'scalpels_id' => 'shape-subject', 'membership_status' => 'active', 'role' => 'member',
+            'display_name' => 'Shape Subject', 'contact_email' => 'shape-subject@example.test', 'contact_email_verified' => true,
+        ];
+    }
+    [$owner] = p4dConfigure($direction, $roster);
+    $target = $invalidShape === 'invitation'
+        ? p4dInvitation('shape-invitation@example.test')
+        : User::query()->create(['name' => 'Shape Local', 'email' => 'shape-local@example.test']);
+    if ($target instanceof User && $invalidShape !== 'state') {
+        $target->forceFill([
+            'status' => 'inactive',
+            'password' => null,
+            'deactivated_at' => now()->subDay(),
+            'managed_membership_status' => 'removed',
+        ])->save();
+    }
+    $targetElement = [
+        'scalpels_id' => $invalidShape === 'subject' ? 'shape-subject' : null,
+        'local_kind' => $invalidShape === 'invitation' ? 'invitation' : 'user',
+        'local_id' => (string) $target->getKey(),
+        'role' => in_array($invalidShape, ['role', 'reactivate'], true) ? 'member' : null,
+        'disposition' => $invalidShape === 'reactivate' ? 'retain_local' : 'retain_deactivated',
+        'final_email' => in_array($invalidShape, ['email', 'reactivate'], true) ? 'shape-local@example.test' : null,
+    ];
+    $transition = app(ManagedTransitions::class)->prepare($owner, $direction);
+    $transition = app(ManagedTransitions::class)->fetchRoster($transition);
+
+    expect(fn () => app(ManagedTransitions::class)->propose($transition, [
+        [
+            'scalpels_id' => 'owner-subject',
+            'local_kind' => 'user',
+            'local_id' => (string) $owner->getKey(),
+            'role' => 'owner',
+            'disposition' => 'link',
+            'final_email' => $owner->email,
+        ],
+        $targetElement,
+    ]))->toThrow(ManagedAuthRefused::class);
+})->with([
+    'adopt direction' => [ManagedTransitionDirection::Adopt, 'direction'],
+    'invitation local kind' => [ManagedTransitionDirection::Exit, 'invitation'],
+    'non-removed user state' => [ManagedTransitionDirection::Exit, 'state'],
+    'non-null roster subject' => [ManagedTransitionDirection::Exit, 'subject'],
+    'non-null role' => [ManagedTransitionDirection::Exit, 'role'],
+    'non-null final email' => [ManagedTransitionDirection::Exit, 'email'],
+    'removed user reactivation' => [ManagedTransitionDirection::Exit, 'reactivate'],
+]);
+
 it('rejects a pre-commit session re-persisted after exit commit on its next authenticated request', function (): void {
     $roster = [[
         'scalpels_id' => 'owner-subject', 'membership_status' => 'active', 'role' => 'owner',

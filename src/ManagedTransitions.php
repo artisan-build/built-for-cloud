@@ -207,6 +207,7 @@ final class ManagedTransitions
             ->get(['scalpels_id', 'role', 'contact_email']);
         $users = User::query()->orderBy('id')->get([
             'id', 'email', 'normalized_email', 'role', 'scalpels_issuer', 'scalpels_connection_id', 'scalpels_id',
+            'managed_membership_status',
         ]);
         $invitations = Invitation::query()
             ->pending()
@@ -278,14 +279,21 @@ final class ManagedTransitions
                         'disposition' => 'link',
                         'final_email' => $user->email,
                     ]
-                    : [
+                    : ($user->managed_membership_status === 'removed' ? [
+                        'scalpels_id' => null,
+                        'local_kind' => 'user',
+                        'local_id' => (string) $user->getKey(),
+                        'role' => null,
+                        'disposition' => 'retain_deactivated',
+                        'final_email' => null,
+                    ] : [
                         'scalpels_id' => null,
                         'local_kind' => 'user',
                         'local_id' => (string) $user->getKey(),
                         'role' => $user->role,
                         'disposition' => 'retain_local',
                         'final_email' => $user->email,
-                    ];
+                    ]);
             }
 
             foreach ($invitations as $invitation) {
@@ -828,6 +836,10 @@ final class ManagedTransitions
                     continue;
                 }
 
+                if ($disposition === 'retain_deactivated') {
+                    continue;
+                }
+
                 $member = $element['scalpels_id'] === null ? null : $roster->get($element['scalpels_id']);
                 $sameEmail = StandaloneAccess::normalizeEmail($user->getOriginal('email'))
                     === StandaloneAccess::normalizeEmail((string) $element['final_email']);
@@ -1184,7 +1196,10 @@ final class ManagedTransitions
         }
         $roster = $rosterQuery->get(['scalpels_id', 'role'])
             ->keyBy('scalpels_id');
-        $users = $usersQuery->get(['id', 'email', 'scalpels_issuer', 'scalpels_connection_id', 'scalpels_id'])->keyBy(
+        $users = $usersQuery->get([
+            'id', 'email', 'status', 'password', 'deactivated_at', 'managed_membership_status',
+            'scalpels_issuer', 'scalpels_connection_id', 'scalpels_id',
+        ])->keyBy(
             static fn (User $user): string => (string) $user->getKey(),
         );
         $invitations = $invitationsQuery->get(['id', 'email'])
@@ -1209,7 +1224,7 @@ final class ManagedTransitions
             $localId = $this->nullableInputString($element['local_id'], 64);
             $role = $this->nullableInputEnum($element['role'], ['owner', 'admin', 'member']);
             $disposition = $this->requiredInputEnum($element['disposition'], [
-                'link', 'create', 'retain_local', 'exclude', 'defer_to_managed_jit',
+                'link', 'create', 'retain_local', 'retain_deactivated', 'exclude', 'defer_to_managed_jit',
             ]);
             $email = $this->nullableInputString($element['final_email'], 255);
             $shape = [$kind, $subject !== null, $localId !== null, $role !== null, $email !== null];
@@ -1223,6 +1238,7 @@ final class ManagedTransitions
                     ['user', false, true, true, true],
                     ['invitation', false, true, false, false],
                 ], true),
+                'retain_deactivated' => $shape === ['user', false, true, false, false],
                 'exclude' => in_array($shape, [
                     ['user', false, true, false, false],
                     ['invitation', false, true, false, false],
@@ -1234,7 +1250,7 @@ final class ManagedTransitions
             if (! $legal
                 || ($email !== null && filter_var($email, FILTER_VALIDATE_EMAIL) === false)
                 || ($transition->direction === ManagedTransitionDirection::Adopt
-                    && in_array($disposition, ['retain_local'], true))
+                    && in_array($disposition, ['retain_local', 'retain_deactivated'], true))
                 || ($transition->direction === ManagedTransitionDirection::Exit
                     && in_array($disposition, ['create', 'defer_to_managed_jit'], true))) {
                 throw new ManagedAuthRefused;
@@ -1273,6 +1289,17 @@ final class ManagedTransitions
                             && ($user->scalpels_issuer !== $transition->issuer
                                 || $user->scalpels_connection_id !== $transition->connection_id
                                 || ($subject !== null && $user->scalpels_id !== $subject)))) {
+                        throw new ManagedAuthRefused;
+                    }
+
+                    $authorityRemoved = $user->managed_membership_status === 'removed'
+                        && $user->status === 'inactive'
+                        && $user->deactivated_at !== null
+                        && $user->password === null;
+                    if (($disposition === 'retain_deactivated' && ! $authorityRemoved)
+                        || ($transition->direction === ManagedTransitionDirection::Exit
+                            && $authorityRemoved
+                            && ! in_array($disposition, ['retain_deactivated', 'exclude'], true))) {
                         throw new ManagedAuthRefused;
                     }
                 }
