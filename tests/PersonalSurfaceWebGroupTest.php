@@ -149,8 +149,6 @@ final class PersonalSurfaceWebGroupTest extends TestCase
         ], $sessioned);
     }
 
-
-
     public function test_the_personal_controller_is_the_only_action_behind_that_stack(): void
     {
         $personal = collect(Route::getRoutes()->getRoutes())

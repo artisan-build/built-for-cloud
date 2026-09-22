@@ -3,8 +3,8 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Console\AssertionBurn;
-use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleEntryRefused;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleEntryRefusalReason;
+use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleEntryRefused;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;

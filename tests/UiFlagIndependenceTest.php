@@ -13,7 +13,6 @@ use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\StandaloneRouteOwnership;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\PublishesDelegatedAssertion;
 use ArtisanBuild\BuiltForCloud\User;
-use Closure;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;

@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipal;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
+use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
 use ArtisanBuild\BuiltForCloud\Tests\NoGlobalAuthMutationScan;
-
+use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Route;
@@ -45,7 +47,7 @@ function actingUser(bool $admin = false): User
     ]);
 
     if ($admin) {
-        $user->forceFill(['role' => \ArtisanBuild\BuiltForCloud\UserRole::Admin->value])->save();
+        $user->forceFill(['role' => UserRole::Admin->value])->save();
     }
 
     return $user;
@@ -58,7 +60,7 @@ function actingUser(bool $admin = false): User
  * The middleware's `$next` must answer with a Response, so the reader's
  * value rides inside one and is decoded back out here.
  *
- * @param  Closure(Illuminate\Http\Request): mixed  $read
+ * @param  Closure(Request): mixed  $read
  */
 function resolveUnderMcpAssertion(string $token, Closure $read): mixed
 {
@@ -71,7 +73,7 @@ function resolveUnderMcpAssertion(string $token, Closure $read): mixed
 
     $response = app(AuthenticateMcp::class)->handle(
         $request,
-        fn (Request $handled): \Illuminate\Http\JsonResponse => response()->json([
+        fn (Request $handled): JsonResponse => response()->json([
             'payload' => $read($handled),
         ]),
     );
@@ -131,7 +133,7 @@ it('makes a verified request assertion the acting principal, ahead of the local 
         ];
     });
 
-    $actor = \ArtisanBuild\BuiltForCloud\Console\DelegatedActor::query()->sole();
+    $actor = DelegatedActor::query()->sole();
     $qualified = 'bfc-console:'.$actor->getKey();
 
     expect($read['identifier'])->toBe($qualified)

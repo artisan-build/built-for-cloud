@@ -12,6 +12,7 @@ use ArtisanBuild\BuiltForCloud\Tests\PublicSurfaceScan;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
 
 uses(RefreshDatabase::class);
@@ -147,7 +148,6 @@ it('recognises the whole reserved namespace, canonical or not, so nothing inside
         ->and(DelegatedActor::isReservedIdentifier((string) $actor->getKey()))->toBeFalse();
 });
 
-
 // ─── AC3: a delegated actor is not a user ───────────────────────────────────
 
 it('has no password or remember-token column', function (): void {
@@ -201,7 +201,7 @@ it('carries password and remember-token values nothing can turn into a match', f
     // Inert rather than throwing: no caller asks, and every value here
     // is one a hasher or a provider already treats as "never matches".
     expect($actor->getAuthPassword())->toBe('')
-        ->and(\Illuminate\Support\Facades\Hash::check('anything', $actor->getAuthPassword()))->toBeFalse()
+        ->and(Hash::check('anything', $actor->getAuthPassword()))->toBeFalse()
         ->and($actor->getAuthPasswordName())->toBe('')
         ->and($actor->getRememberToken())->toBeNull()
         ->and($actor->getRememberTokenName())->toBe('');

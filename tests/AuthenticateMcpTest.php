@@ -504,8 +504,6 @@ it('does not answer or audit a downstream refusal as this door refusing', functi
         ->and(mcpRefusalReasons())->toBe([]);
 });
 
-
-
 it('takes the bearer out of the request before a refusal is served or a fault throws', function (): void {
     // The scrub's promise is ORDERING, not just occurrence: the
     // credential leaves the request object BEFORE verification or

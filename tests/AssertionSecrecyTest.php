@@ -103,4 +103,3 @@ it('names an unmarked assertion frame when the walk meets one', function (): voi
             'UnmarkedAssertionFrame::verify($token)',
         ]);
 });
-
