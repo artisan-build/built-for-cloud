@@ -46,7 +46,7 @@ use Throwable;
  * is resolved only by CredentialResolver. Neither failure falls through to the
  * other path.
  *
- * Assertion handling mirrors the console entry door: verify, require the MCP
+ * Assertion handling is the delegated door itself: verify, require the MCP
  * purpose, commit the handoff record independently, then burn and lock-check
  * the actor in this middleware's transaction before publishing a principal on
  * this request object. Assertion refusals are audited and fail closed if that

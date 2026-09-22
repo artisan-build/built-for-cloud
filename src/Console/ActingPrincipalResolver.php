@@ -4,49 +4,27 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Console;
 
-use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureConsoleSession;
 use Illuminate\Auth\AuthManager;
-use Illuminate\Auth\Middleware\Authenticate;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Http\Request;
 
 /**
- * D14's single acting principal: ONE value, read by the principal, the
- * chrome and the audit stream alike.
+ * The single acting principal: ONE value, read by the principal and the
+ * audit stream alike.
  *
  * THIS CLASS MUTATES NOTHING — and that is a claim about this class, not
- * about the request. An earlier revision repointed the application's
- * DEFAULT GUARD (`AuthManager::shouldUse()`, undone from a container
- * `terminating` callback) so that `Auth::user()` would agree with it.
- * That was the wrong answer to a real problem: once the delegated actor
- * is the process-global default, every code path assuming default-guard
- * semantics is pointed at it, and the restore is an ordering hazard on
- * every long-lived runtime. The framework already has the mechanism —
- * `auth:bfc-console` ({@see Authenticate}) makes the console guard the
- * guard OF THE ROUTE for the request it runs in — so this class only
- * ever READS.
- *
- * That middleware DOES write `config('auth.defaults.guard')`, exactly as
- * `auth:web` does; what keeps the write from outliving the request is
- * the runtime's config sandboxing, not anything here. {@see ConsoleGuard}
- * carries the full statement and the runtime assumption it depends on,
- * and `tests/ConsoleGuardScopingTest.php` asserts both halves.
+ * about the request. It only ever READS.
  *
  * WHAT IT READS. The route's applicable guard is
- * `AuthManager::getDefaultDriver()`: on a console route that is
- * `bfc-console`, because Laravel's own auth middleware just made it so;
- * everywhere else it is whatever the app configured. The delegated
- * session is read from {@see ConsoleGuard} directly, because that guard
- * is where D7's clocks are enforced and a request must not be able to
- * carry a live-looking delegated session past them by being routed
- * somewhere the guard was never consulted.
+ * `AuthManager::getDefaultDriver()`: whatever the app configured, or
+ * whatever an `auth:<guard>` middleware just set for the request it runs
+ * in. A verified MCP request assertion is read from
+ * {@see RequestAssertion}, which the MCP middleware published before
+ * anything behind it ran.
  *
- * PRECEDENCE — delegated wins, and there is no union. A REFUSAL wins
- * over everything, on every route: a request whose delegated session has
- * just been invalidated resolves nobody, and never falls back to a request
- * assertion or co-resident local user. A verified request assertion then
- * wins over a local principal; without one, guard resolution is unchanged.
+ * PRECEDENCE — delegated wins, and there is no union. A verified
+ * request assertion wins over a local principal; without one, guard
+ * resolution is unchanged.
  *
  * ONE VALUE, not two equal answers. {@see resolve()} memoizes and hands
  * back the identical object to every caller. The memo is keyed on the
@@ -58,18 +36,12 @@ use Illuminate\Http\Request;
  * A route's guard is established mid-request, by `auth:<guard>`, so a
  * caller running before that middleware and a caller running after it
  * are asking about two different states and must not be handed one
- * cached answer. In practice every consumer that matters — the acting
- * principal and the chrome's attribution branch — runs behind the
- * route's auth middleware and therefore shares one instance, which is
- * what D14 requires. The one deliberate exception is
- * {@see EnsureConsoleSession}, which runs IN FRONT of it and asks only
- * whether a delegated session exists, a question the applicable guard
- * cannot change the answer to.
+ * cached answer.
  *
- * CLAIMS COME FROM THIS HANDOFF. A browser entry reads the session copy;
- * an MCP request reads the assertion that middleware just verified. Neither
- * reads the shadow row's shared `last_handoff_*` copy, which a later handoff
- * for the same subject overwrites.
+ * CLAIMS COME FROM THIS HANDOFF. An MCP request reads the assertion that
+ * middleware just verified, never the shadow row's shared
+ * `last_handoff_*` copy, which a later handoff for the same subject
+ * overwrites.
  */
 final class ActingPrincipalResolver
 {
@@ -107,70 +79,29 @@ final class ActingPrincipalResolver
 
     private function resolveNow(?ActingPrincipal $requestAssertion): ActingPrincipal
     {
-        $console = $this->consoleGuard();
-
-        // Reading the guard is what ENFORCES D7's cap, so it happens on
-        // every resolution rather than only on console routes — that is
-        // how a capped session dies on a route that mounts no console
-        // middleware at all.
-        $actor = $console?->actor();
-        $claims = $console?->claims();
-        $refusal = $console?->refusalReason();
-
-        if ($refusal instanceof ConsoleReentryReason) {
-            return ActingPrincipal::refused($refusal);
-        }
-
         // A verified assertion is the delegated principal for this request,
-        // ahead of any local session and never unioned with it. The console
-        // refusal above remains terminal and therefore wins over this source.
+        // ahead of any local session and never unioned with it.
         if ($requestAssertion instanceof ActingPrincipal) {
             return $requestAssertion;
-        }
-
-        if ($this->applicableGuardName() === ConsoleGuardConfiguration::GUARD) {
-            // The route's own guard is the console guard, so the
-            // delegated actor is what everything behind it acts as.
-            return $actor instanceof DelegatedActor && $claims instanceof DelegatedClaims
-                ? ActingPrincipal::delegated($actor, $claims)
-                : ActingPrincipal::none($actor);
         }
 
         $guard = $this->localGuardName();
 
         if ($guard === null) {
-            return ActingPrincipal::none($actor);
+            return ActingPrincipal::none();
         }
 
         $user = $this->auth()->guard($guard)->user();
 
-        // A delegated actor reached through a guard that is NOT this
-        // package's carries no verified session claims — nothing could
-        // attribute or authorize from it — so it is not a local
-        // principal either. The typed branch fails towards nobody.
+        // A delegated actor reached through a guard that is not this
+        // package's carries no verified claims — nothing could attribute
+        // or authorize from it — so it is not a local principal either.
+        // The typed branch fails towards nobody.
         if ($user === null || $user instanceof DelegatedActor) {
-            return ActingPrincipal::none($actor);
+            return ActingPrincipal::none();
         }
 
-        return ActingPrincipal::local($guard, $user, $actor);
-    }
-
-    /**
-     * The package's own delegated guard, or null when this app has not
-     * enabled the Console, has no `bfc-console` guard configured, or has
-     * replaced it with one of its own. Asking the guard rather than the
-     * session is what keeps the cap, the claim check and this resolution
-     * reading one decision.
-     */
-    private function consoleGuard(): ?ConsoleGuard
-    {
-        if (! is_array(config('auth.guards.'.ConsoleGuardConfiguration::GUARD))) {
-            return null;
-        }
-
-        $guard = $this->auth()->guard(ConsoleGuardConfiguration::GUARD);
-
-        return $guard instanceof ConsoleGuard ? $guard : null;
+        return ActingPrincipal::local($guard, $user);
     }
 
     /**
@@ -199,11 +130,7 @@ final class ActingPrincipalResolver
     {
         $guard = $this->applicableGuardName();
 
-        if ($guard === null || $guard === ConsoleGuardConfiguration::GUARD) {
-            return null;
-        }
-
-        return is_array(config('auth.guards.'.$guard)) ? $guard : null;
+        return $guard === null ? null : (is_array(config('auth.guards.'.$guard)) ? $guard : null);
     }
 
     private function auth(): AuthManager

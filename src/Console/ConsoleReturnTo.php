@@ -5,15 +5,15 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Console;
 
 /**
- * The relative-path check the structured re-entry 401 puts in front of
- * its `return_to` field.
+ * The relative-path check every package redirect target goes through —
+ * the `intended`/return values the standalone and managed handoff
+ * surfaces echo back to a browser.
  *
- * The 401 hands a value back to a browser that will use it to come back
- * here after re-entry, so it is a REDIRECT TARGET in everything but
- * name — and it is the open-redirect boundary for the whole Console
- * until PR4's enter endpoint brings its own allowlist and signed state
- * (D13). An absolute or scheme-bearing candidate is dropped, never
- * echoed, and the payload falls back to a value the SERVER chose.
+ * A value handed to a browser that will use it to come back here is a
+ * REDIRECT TARGET in everything but name, and this class is the
+ * open-redirect boundary for it. An absolute or scheme-bearing
+ * candidate is dropped, never echoed, and the caller falls back to a
+ * value the SERVER chose.
  *
  * THE CHECK RUNS ON EVERY DECODED FORM, not just the string as it
  * arrived. Percent-encoding is the whole attack here: `/%2f%2fevil.example`
@@ -25,19 +25,22 @@ namespace ArtisanBuild\BuiltForCloud\Console;
  * along the way — the raw one included — must independently be a safe
  * relative path. A candidate that will not settle within a small number
  * of rounds is refused rather than decoded further.
+ *   Pinned by `tests/ConsoleReturnToTest.php` — "refuses a return path
+ *   carrying a traversal segment in any decoded form" and "reads the
+ *   canonical, fully decoded path".
  *
  * DOT SEGMENTS ARE REFUSED TOO, and that one is about WHO normalizes.
  * `/admin/../billing` is a legitimately relative path, so every rule
  * above lets it through — and the BROWSER resolves it to `/billing`
  * before it ever reaches this app. Any decision made on the string as
- * written (an allowlist of landing paths, above all) is therefore
- * deciding about a different path from the one that gets requested.
- * Rather than normalize — which would mean this class returning a value
- * the caller did not supply, and every caller having to know that — a
- * candidate carrying a `.` or `..` SEGMENT is refused outright, in every
- * decoded form: `/admin/../billing`, `/admin/%2e%2e/billing` and
- * `/admin/%252e%252e/billing` alike. A dot inside a segment is
- * untouched: `/reports..csv` and `/o..ders` are ordinary paths.
+ * it written is therefore deciding about a different path from the one
+ * that gets requested. Rather than normalize — which would mean this
+ * class returning a value the caller did not supply, and every caller
+ * having to know that — a candidate carrying a `.` or `..` SEGMENT is
+ * refused outright, in every decoded form: `/admin/../billing`,
+ * `/admin/%2e%2e/billing` and `/admin/%252e%252e/billing` alike. A dot
+ * inside a segment is untouched: `/reports..csv` and `/o..ders` are
+ * ordinary paths.
  *
  * **THE PATH IS ESTABLISHED ONCE, BEFORE ANY DECODING, AND EVERY CHECK
  * SHARES IT.** That ordering is the whole of the second round of this
@@ -56,10 +59,8 @@ namespace ArtisanBuild\BuiltForCloud\Console;
  *   decoding round and every check runs against that. A `?` that
  *   appears only after decoding is an ordinary path character, which is
  *   exactly what the browser thinks it is.
- *   Pinned by `tests/ConsoleEnterTest.php` — "refuses a return path
- *   carrying a traversal segment in any decoded form, allowlist or no
- *   allowlist" and "matches the allowlist against the fully decoded
- *   path, not the raw one".
+ *   Pinned by `tests/ConsoleReturnToTest.php` — "refuses a return path
+ *   carrying a traversal segment in any decoded form".
  *
  * ACCEPTED: a single-slash-rooted path made only of printable ASCII with
  * no backslash and no dot segment, which stays one after every decoding

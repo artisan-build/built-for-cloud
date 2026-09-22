@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Testing;
 
-use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\User;
 use FilesystemIterator;
 use RecursiveDirectoryIterator;
@@ -71,7 +70,7 @@ final class ThinHostConformance
             $artifacts[] = 'human-guard';
         }
 
-        $allowedGuards = ['web', 'bfc', ConsoleGuardConfiguration::GUARD];
+        $allowedGuards = ['web', 'bfc'];
 
         foreach (array_keys(is_array($auth['guards'] ?? null) ? $auth['guards'] : []) as $name) {
             if (is_string($name) && ! in_array($name, $allowedGuards, true)) {

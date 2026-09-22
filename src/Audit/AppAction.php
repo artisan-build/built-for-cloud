@@ -45,8 +45,8 @@ use BackedEnum;
  *   names".
  *
  * THE PACKAGE SHIPS NO APP VOCABULARY. {@see ConsoleAction} is the
- * package's OWN actions — the things this package itself does, of which
- * there is exactly one today — and it is not a starter set for an app to
+ * package's OWN actions — the things this package itself does — and it
+ * is not a starter set for an app to
  * extend or reuse. D17 puts the app's vocabulary in the app's repo at
  * conversion time, and inventing a fleet-wide one here would make every
  * app's audit vocabulary a package concern.

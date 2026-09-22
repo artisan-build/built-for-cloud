@@ -6,24 +6,28 @@ namespace ArtisanBuild\BuiltForCloud\Audit;
 
 /**
  * The actions THIS PACKAGE performs and records on the app-action stream
- * (Console PRD D17). One case today, and it is the one D4's promise
- * rests on: a delegated operator was admitted through the door.
+ * (Console PRD D17).
  *
  * It is NOT an app vocabulary and is deliberately not a starter set. An
  * app's actions live in the app's repo ({@see AppAction}); this enum
- * exists because the package itself is an actor here — `POST
- * /bfc/console/enter` is package code performing a package action — and
- * an emission point that could not name its own action would have had to
- * take a string.
+ * exists because the package itself is an actor here, and an emission
+ * point that could not name its own action would have had to take a
+ * string.
+ *
+ * The one case names an action the package no longer performs: the
+ * delegated-entry door that emitted it was retired in v0.17.0. The case
+ * remains the vocabulary for rows recorded before that retirement, so
+ * the historical stream still resolves, and it keeps the enum available
+ * to tests of the recorder API as package-owned sample vocabulary.
  */
 enum ConsoleAction: string implements AppAction
 {
     /**
      * A delegated session was opened at this deployment's door: the
      * assertion verified, the mint was spent, and the operator was
-     * logged in. Emitted inside the SAME transaction as the burn and the
-     * redemption; all three use the default database connection, so an
-     * entry that rolled back records nothing.
+     * logged in. Historical: the door was retired in v0.17.0, so no new
+     * row carries this action; rows recorded before that retirement
+     * keep it as their action.
      */
     case ConsoleEntered = 'console-entered';
 }

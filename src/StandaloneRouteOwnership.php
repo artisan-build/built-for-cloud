@@ -81,7 +81,6 @@ final class StandaloneRouteOwnership
             ManageConsoleKeys::class.'@reKey',
             ManageConsoleKeys::class.'@retire' => EnsureCredentialAdmin::class.':'.OperatorAbility::ConsoleKeyWrite->value,
             ManageSubjects::class.'@offboard' => EnsureCredentialAdmin::class.':'.OperatorAbility::SubjectOffboard->value,
-            ConsoleChromeScript::class => EnsureConsoleSession::class,
             ConsoleVitals::class => EnsureDashboardCredential::class,
             default => throw new RuntimeException("The package controller action [{$action}] is missing from the operator route inventory."),
         };

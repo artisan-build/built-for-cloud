@@ -6,15 +6,10 @@ use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
 use ArtisanBuild\BuiltForCloud\Console\Assertion;
 use ArtisanBuild\BuiltForCloud\Console\AssertionPurpose;
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
-use ArtisanBuild\BuiltForCloud\Console\ConsoleEntryState;
-use ArtisanBuild\BuiltForCloud\Console\ConsoleGuard;
-use ArtisanBuild\BuiltForCloud\Console\ConsoleGuardConfiguration;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKey;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyring;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleRole;
-use ArtisanBuild\BuiltForCloud\Console\ConsoleSession;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
-use ArtisanBuild\BuiltForCloud\Console\DelegatedClaims;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
@@ -324,17 +319,14 @@ function consoleRefusal(string $token): AssertionRefused
 }
 
 /**
- * Console delegated-session helpers (PR3). The enter endpoint that
- * starts one of these sessions is PR4's; `consoleRedeem()` drives the
- * package operation that endpoint will call — with REAL signed bytes,
- * because the guard verifies inside it — and `consoleSessionState()`
- * seeds the same state directly for the cases a real redemption cannot
- * produce (a capped clock, a broken marker, a role that has since
- * changed).
+ * Delegated-actor helpers. The package NEVER mints an assertion — the
+ * vendor holds every private key — so the mint side lives here in the
+ * tests, standing in for Scalpels, and every knob a refusal test needs
+ * to break is exposed deliberately.
  *
- * `consoleAssertionFor()` builds an assertion OBJECT, which is now good
- * for exactly one thing: recording a handoff row. Nothing accepts one as
- * a way into a session.
+ * `consoleAssertionFor()` builds an assertion OBJECT, which is good for
+ * exactly one thing: recording a handoff row. Nothing accepts one as a
+ * way into a principal.
  */
 function consoleAssertionFor(
     string $issuer = 'https://scalpels.test',
@@ -363,9 +355,9 @@ function consoleAssertionFor(
 
 /**
  * The actor a handoff would leave on file. Storage only — it does NOT
- * start a session and does NOT refuse a deactivated actor; that is
- * {@see consoleRedeem()}'s job — and writing a row here grants nothing,
- * because no session can be created from one.
+ * start a session and does NOT refuse a deactivated actor — and writing
+ * a row here grants nothing, because no principal can be created from
+ * one.
  */
 function consoleActor(
     string $issuer = 'https://scalpels.test',
@@ -377,16 +369,6 @@ function consoleActor(
     return DelegatedActor::recordHandoff(
         consoleAssertionFor($issuer, $subject, $displayName, $role, $onBehalfOf),
     );
-}
-
-/**
- * The console guard, typed. Every helper below goes through it because
- * it is the only thing that can create a delegated session.
- */
-function consoleGuard(): ConsoleGuard
-{
-    /** @var ConsoleGuard */
-    return auth(ConsoleGuardConfiguration::GUARD);
 }
 
 /**
@@ -415,13 +397,14 @@ function consoleTestSigningKey(): AsymmetricSecretKey
 }
 
 /**
- * A REAL signed assertion — the bytes the vendor would mint and PR4's
- * enter endpoint would receive.
+ * A REAL signed assertion — the bytes the vendor would mint and a
+ * delegated door would receive.
  *
  * The verifier's two required config keys are set here rather than in
  * every caller, because a token that cannot be verified is not a stand-in
- * for one that can: since the guard verifies inside `redeem()`, these
- * helpers have to produce something that genuinely passes.
+ * for one that can: the door that consumes it verifies inside its own
+ * transaction, so these helpers have to produce something that genuinely
+ * passes.
  */
 function consoleSignedAssertion(
     string $issuer = 'https://scalpels.test',
@@ -442,110 +425,4 @@ function consoleSignedAssertion(
         'role' => $role->value,
         'on_behalf_of' => $onBehalfOf ?? consoleAbsent(),
     ]));
-}
-
-/**
- * A full redemption through the ONE operation PR4's enter endpoint will
- * call: signed bytes in, verified inside the guard, a live delegated
- * session out.
- *
- * There is deliberately no helper that redeems an {@see Assertion}
- * object — no such operation exists any more, which is the point.
- */
-function consoleRedeem(
-    string $issuer = 'https://scalpels.test',
-    string $subject = 'operator_42',
-    string $displayName = 'Jane Operator',
-    ConsoleRole $role = ConsoleRole::Admin,
-    ?string $onBehalfOf = null,
-): DelegatedActor {
-    return consoleGuard()->redeem(
-        consoleSignedAssertion($issuer, $subject, $displayName, $role, $onBehalfOf),
-    );
-}
-
-/**
- * The session key Laravel's session guard stores the delegated
- * principal under. Read off the guard rather than reconstructed, so the
- * tests cannot drift from the framework's own naming.
- */
-function consoleGuardSessionKey(): string
-{
-    /** @var ConsoleGuard $guard */
-    $guard = auth(ConsoleGuardConfiguration::GUARD);
-
-    return $guard->getName();
-}
-
-/**
- * The session state a completed handoff leaves behind: the guard's login
- * key, the assertion's issued-at, and THIS session's own claims.
- *
- * `$issuedAt` takes the marker VERBATIM — including the absent, garbage
- * and future values the fail-closed tests need — and defaults to "just
- * entered". `$claims` defaults to the actor's last recorded handoff,
- * and is overridable so a test can hold a session at the role it
- * entered with while a later handoff rewrites the row.
- *
- * @return array<string, mixed>
- */
-function consoleSessionState(DelegatedActor $actor, mixed $issuedAt = null, ?DelegatedClaims $claims = null): array
-{
-    $claims ??= new DelegatedClaims(
-        $actor->last_handoff_display_name,
-        $actor->last_handoff_role,
-        $actor->last_handoff_on_behalf_of,
-    );
-
-    $state = [consoleGuardSessionKey() => $actor->getAuthIdentifier()];
-
-    if ($issuedAt !== consoleAbsent()) {
-        $state[ConsoleSession::ASSERTION_ISSUED_AT] = $issuedAt ?? CarbonImmutable::now()->getTimestamp();
-    }
-
-    $state[ConsoleSession::DISPLAY_NAME] = $claims->displayName;
-    $state[ConsoleSession::ROLE] = $claims->role->value;
-    $state[ConsoleSession::ON_BEHALF_OF] = $claims->onBehalfOf;
-
-    return $state;
-}
-
-/**
- * Console ENTRY helpers (PR4). The vendor posts two fields to
- * `/bfc/console/enter`: the signed assertion, and the signed handoff
- * state whose sha256 the assertion's `state` claim carries. These build
- * that pair the way Scalpels would.
- */
-function consoleStatePayload(string $returnTo = '/orders'): string
-{
-    return Base64UrlSafe::encodeUnpadded(
-        (string) json_encode([ConsoleEntryState::RETURN_TO => $returnTo], JSON_THROW_ON_ERROR),
-    );
-}
-
-/**
- * A complete handoff: the exact form body the vendor auto-submits.
- *
- * `$claims` overrides ride over the state binding, so a test can break
- * exactly one thing — including the binding itself.
- *
- * @param  array<string, mixed>  $claims
- * @return array{assertion: string, state: string}
- */
-function consoleHandoff(string $returnTo = '/orders', array $claims = [], ?string $state = null): array
-{
-    config([
-        'built-for-cloud.console.issuer' => 'https://scalpels.test',
-        'built-for-cloud.console.audience' => 'https://sink.test',
-    ]);
-
-    $state ??= consoleStatePayload($returnTo);
-
-    return [
-        'assertion' => consoleMint(consoleTestSigningKey(), consoleClaims(array_merge(
-            ['state' => hash('sha256', $state)],
-            $claims,
-        ))),
-        'state' => $state,
-    ];
 }

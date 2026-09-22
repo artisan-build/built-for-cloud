@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Console;
 
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleEntryRefused;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleEnter;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Model;
@@ -20,20 +19,18 @@ use Illuminate\Database\UniqueConstraintViolationException;
  * write — it INSERTS, and lets the unique index decide. A check-then-
  * insert would leave the window this exists to close: two presentations
  * of the same assertion arriving together would both read "not spent",
- * both proceed, and both mint a session. The index is evaluated by the
- * database inside the transaction, so exactly one insert survives and
+ * both proceed, and both publish a principal. The index is evaluated by
+ * the database inside the transaction, so exactly one insert survives and
  * every other one raises a uniqueness violation. **A replay is refused
  * because the jti is spent, not because something later noticed.**
  *
- * The insert lives in the CALLER'S redeeming transaction — the same
- * transaction that mints the session at {@see ConsoleEnter}, and the
- * one that burns, lock-checks and publishes at
- * {@see AuthenticateMcp} — so the burn and the principal it pays for
- * commit together or not at all. That direction matters both ways: a
- * redemption that fails after the burn does not spend the mint (the
- * row rolls back with it), and a burn that loses the race takes the
- * redemption down with it.
- *   Pinned by `tests/ConsoleEnterTest.php` — "refuses a genuine second
+ * The insert lives in the CALLER'S redeeming transaction — the one that
+ * burns, lock-checks and publishes at {@see AuthenticateMcp} — so the
+ * burn and the principal it pays for commit together or not at all.
+ * That direction matters both ways: an authentication that fails after
+ * the burn does not spend the mint (the row rolls back with it), and a
+ * burn that loses the race takes the authentication down with it.
+ *   Pinned by `tests/AssertionBurnTest.php` — "refuses a genuine second
  *   presentation of the same assertion, because the mint id is spent",
  *   "rolls the burn back with the redemption, so the two commit or fail
  *   together", "keys the burn on a unique index, which is what makes it
@@ -58,8 +55,8 @@ use Illuminate\Database\UniqueConstraintViolationException;
  *
  * RESIDUE — NOT ESTABLISHED HERE: these tests do not demonstrate that a
  * check-then-insert rewrite of {@see burn()} is detected, and they do not
- * exercise concurrent presentation through the complete Console-entry
- * transaction.
+ * exercise concurrent presentation through the complete MCP
+ * authentication transaction.
  *
  * IDENTITY IS A DIGEST, for the reason {@see DelegatedActor} states at
  * length: `jti` is only meaningful inside the issuer that minted it, and
@@ -74,31 +71,27 @@ use Illuminate\Database\UniqueConstraintViolationException;
  * A burn row is useful exactly until the assertion it names expires:
  * past `exp` the verifier refuses the token before the burn is ever
  * consulted, so an older row can never change an answer. {@see prune()}
- * deletes them after a margin, and the doors that write burns are the
- * doors that call it — the enter endpoint after a successful entry,
- * `AuthenticateMcp` after a successful authentication — each on its
- * SUCCESS path only, which is also the only path that writes one, so
- * the table's growth and its pruning are driven by the same events and
- * an attacker can force neither. The margin points one way on purpose:
- * a row dropped while its assertion could still be presented would
- * UN-SPEND a mint, so the boundary is driven from BOTH sides rather
- * than from comfortably inside it.
- *   Pinned by `tests/ConsoleEnterTest.php` — "sits exactly on the prune boundary: one second inside keeps a burn row, one second past drops it".
+ * deletes them after a margin, and the door that writes burns is the
+ * door that calls it — `AuthenticateMcp` after a successful
+ * authentication — on its SUCCESS path only, which is also the only
+ * path that writes one, so the table's growth and its pruning are
+ * driven by the same events and an attacker can force neither. The
+ * margin points one way on purpose: a row dropped while its assertion
+ * could still be presented would UN-SPEND a mint, so the boundary is
+ * driven from BOTH sides rather than from comfortably inside it.
+ *   Pinned by `tests/AssertionBurnTest.php` — "sits exactly on the prune boundary: one second inside keeps a burn row, one second past drops it".
  *
  * ONE REFUSAL DELIBERATELY DOES NOT SPEND A MINT. A contained actor's
- * presentation throws inside the redeeming transaction — at either
- * door, the enter endpoint's or the MCP middleware's — so the burn
- * rolls back with it and that assertion stays presentable until its
- * TTL runs out — every presentation refused, every one audited as
- * `actor_deactivated` (rendered 403 at the enter door, 401 at the MCP
- * door; the reason code is the same at both). Spending it instead
- * would make the second attempt audit as `replayed`, which asserts
- * the token was already REDEEMED. It was not, and an operator reading
- * an offboarded human's attempts to get back in would draw exactly
- * the wrong conclusion. This table records mints this deployment
- * redeemed; the audit stream records presentations, and it records
- * all of them.
- *   Pinned by `tests/ConsoleEnterTest.php` — "leaves a contained actor's mint unspent, so every attempt audits as containment".
+ * presentation throws inside the redeeming transaction — the MCP
+ * middleware's — so the burn rolls back with it and that assertion
+ * stays presentable until its TTL runs out — every presentation
+ * refused, every one audited as `actor_deactivated`. Spending it
+ * instead would make the second attempt audit as `replayed`, which
+ * asserts the token was already REDEEMED. It was not, and an operator
+ * reading an offboarded human's attempts to get back in would draw
+ * exactly the wrong conclusion. This table records mints this
+ * deployment redeemed; the audit stream records presentations, and it
+ * records all of them.
  *   Pinned by `tests/AuthenticateMcpTest.php` — "keeps the contained
  *   actor handoff but rolls back its burn and principal".
  */

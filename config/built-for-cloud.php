@@ -115,37 +115,35 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | The Console (delegated operator entry, Console PRD D12/D18)
+    | Console Assertions (delegated MCP authentication)
     |--------------------------------------------------------------------------
     |
     | The verification bounds for a delegated console assertion — a PASETO
     | v4.public token, signed by the vendor with the PRIVATE half of a
-    | per-deployment keypair, carrying the operator who is entering this
-    | app. This app holds only the PUBLIC halves (the `bfc_console_keys`
-    | ring): stealing this whole database yields no ability to mint one.
+    | per-deployment keypair, carrying the operator a delegated MCP
+    | request acts as. This app holds only the PUBLIC halves (the
+    | `bfc_console_keys` ring): stealing this whole database yields no
+    | ability to mint one.
     |
-    | `issuer` — the single issuer this fleet trusts (D18: exactly one
-    | issuer in v1, which is also what bounds per-issuer authority). An
-    | assertion naming any other issuer is refused. There is deliberately
-    | no list here: a second trusted issuer is a decision, not a config
-    | change.
+    | `issuer` — the single issuer this fleet trusts: an assertion naming
+    | any other issuer is refused. There is deliberately no list here: a
+    | second trusted issuer is a decision, not a config change.
     |
     | `audience` — THIS deployment's identity, verified against the
-    | token's `aud`, and REQUIRED: unlike `hmac.audience` above it does
-    | not fall back to `app.url` or to any literal. This is the value
-    | that makes a stolen assertion worthless at any other deployment,
-    | and that containment has to hold on its own, independently of key
-    | custody. `app.url` is not reliably per-deployment — `http://localhost`,
-    | a cloned .env, or a shared load-balancer hostname would file
-    | several deployments under one audience — so an unset audience
-    | refuses to verify at all rather than quietly share one.
+    | token's `aud`, and REQUIRED: it does not fall back to `app.url` or
+    | to any literal. This is the value that makes a stolen assertion
+    | worthless at any other deployment, and that containment has to hold
+    | on its own, independently of key custody. `app.url` is not reliably
+    | per-deployment — `http://localhost`, a cloned .env, or a shared
+    | load-balancer hostname would file several deployments under one
+    | audience — so an unset audience refuses to verify at all rather
+    | than quietly sharing one.
     |
     | `assertion_max_ttl_seconds` — the upper bound this app enforces on
-    | an assertion's own `iat`-to-`exp` span (D12 mints at 60-120s). A
-    | token claiming a longer life is refused WHILE STILL UNEXPIRED: the
-    | app enforces the bound itself rather than trusting the issuer to
-    | have been honest about it. The 60-second LOWER bound is a mint-side
-    | concern and is deliberately not enforced here.
+    | an assertion's own `iat`-to-`exp` span. A token claiming a longer
+    | life is refused WHILE STILL UNEXPIRED: the app enforces the bound
+    | itself rather than trusting the issuer to have been honest about
+    | it.
     |
     | `clock_skew_seconds` — how far the issuer's clock may run AHEAD of
     | this one before a freshly minted assertion is refused as not yet
@@ -153,79 +151,13 @@ return [
     | that extended expiry would quietly stretch every assertion past the
     | TTL bound the previous key just enforced.
     |
-    | `clock_skew_seconds` is spent TWICE, for the same reason and in
-    | the same direction: once on the assertion's not-yet-valid rule,
-    | and once on the delegated session's issued-at marker, which is
-    | that same `iat` and may therefore sit a few seconds ahead of this
-    | server's clock without anything being wrong.
-    |
-    | `reentry_url` — where the chrome sends an operator whose delegated
-    | session has been invalidated, emitted in the structured re-entry
-    | 401 (D7). NULLABLE AND UNSET BY DEFAULT, and when it is unset the
-    | 401 carries NO `reentry_url` key at all rather than an invented or
-    | empty one: an app that cannot reach its issuer degrades honestly
-    | (the operator is logged out and told why) instead of being pointed
-    | somewhere nobody chose. A value that is not an absolute http(s)
-    | URL is treated as unset for the same reason.
-    |
-    | `return_path_allowlist` — the paths `POST /bfc/console/enter` will
-    | land an entering operator on (D13's "relative and allowlisted").
-    |
-    | EMPTY BY DEFAULT, and empty means "any path in this app", which is
-    | said plainly rather than dressed up as a security control: the
-    | bound that actually closes open redirect is that the return path
-    | must be a same-origin RELATIVE path in every percent-decoded form
-    | (ConsoleReturnTo), and that it rides inside the vendor's SIGNATURE
-    | rather than in a request field. This list is opt-in NARROWING for
-    | a deployment that wants entry confined to the handful of paths its
-    | console actually links to.
-    |
-    | Each entry is a path prefix beginning with `/`. Matching ignores
-    | the query string and fragment and happens at a SEGMENT BOUNDARY,
-    | so `/admin` covers `/admin` and `/admin/users` and never
-    | `/admin-secrets`. An entry that is not an in-app path matches
-    | nothing rather than acting as a wildcard — a typo must never widen
-    | an allowlist. `/` covers everything, which is the same as
-    | configuring nothing.
-    |
-    | `enabled` — whether this deployment runs the Console AT ALL. It
-    | gates the `bfc-console` guard and provider entries the package
-    | injects, and it is OFF by default for two reasons. Delegated entry
-    | is a subscription feature (D18), so most installs never want it;
-    | and the injection carries a HARD FAILURE when the reserved provider
-    | name `bfc-console-actors` is already taken by the app, which — run
-    | unconditionally at boot — would turn a package upgrade into a boot
-    | failure for every HTTP request and every artisan command,
-    | including in apps that have the package's routes and migrations
-    | switched off. A deployment that has not asked for the Console must
-    | not be able to fail booting because of it. When the Console IS
-    | enabled, the collision still fails loudly: at that point the guard
-    | is load-bearing and there is no safe way to proceed.
-    |
-    | Turning it on also turns on the delegated-principal behaviour of
-    | the package's session gates (`bfc.admin` accepts a delegated admin
-    | on a route the console guard actually governs; `bfc.auth` refuses a
-    | delegated session outright) — see
-    | release-notes/unified-store-guard.md.
-    |
-    | The SESSION clocks are deliberately NOT config keys. The sliding
-    | idle window is Laravel's own `session.lifetime` (120 minutes by
-    | default) and this package does not touch it; the absolute
-    | assertion-age cap is a constant on ConsoleSessionClock, because it
-    | is the worst-case revocation window the fleet promises for a
-    | delegated operator and not a per-app knob. An app that wants a
-    | tighter delegated session shortens `session.lifetime`.
-    |
     */
 
     'console' => [
-        'enabled' => env('BUILT_FOR_CLOUD_CONSOLE_ENABLED', false),
         'issuer' => env('BUILT_FOR_CLOUD_CONSOLE_ISSUER'),
         'audience' => env('BUILT_FOR_CLOUD_CONSOLE_AUDIENCE'),
         'assertion_max_ttl_seconds' => env('BUILT_FOR_CLOUD_CONSOLE_ASSERTION_MAX_TTL', 120),
         'clock_skew_seconds' => env('BUILT_FOR_CLOUD_CONSOLE_CLOCK_SKEW', 5),
-        'reentry_url' => env('BUILT_FOR_CLOUD_CONSOLE_REENTRY_URL'),
-        'return_path_allowlist' => [],
     ],
 
     /*

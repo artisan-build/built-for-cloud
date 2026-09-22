@@ -38,10 +38,10 @@ use Throwable;
  *  3. **signature** — everything after this line is claims the vendor
  *     actually signed, so no later check reasons about attacker text;
  *  4. **claim shape and charset** — bounded lengths, no control
- *     characters (the verify-side half of D11's escape-by-construction
- *     promise: the chrome must never be the only thing between a hostile
- *     display name and a rendered page). The optional `state` claim —
- *     D13's binding between a mint and its signed handoff state — is
+ *     characters (the verify-side half of the escape-by-construction
+ *     promise: a rendering surface must never be the only thing
+ *     between a hostile display name and a rendered page). The optional
+ *     `state` claim is
  *     shape-checked here too: present means exactly a sha256 hex
  *     digest, and a malformed one is a refusal rather than a silent
  *     absence;
@@ -68,14 +68,13 @@ use Throwable;
  *
  * Every refusal leaves as {@see AssertionRefused} with one uniform,
  * reason-free message; the {@see AssertionRefusalReason} is for the
- * audit record the refusing door writes — the enter endpoint or the
- * MCP middleware — never for the presenter.
+ * audit record the refusing door writes — the MCP middleware — never
+ * for the presenter.
  *
  * Verification is PURE: it reads the keyring and the clock and writes
  * nothing. The single-use burn of `jti` (D12) belongs to the door that
- * owns the redeeming transaction — the enter endpoint for a browser
- * entry, `AuthenticateMcp` for a stateless call — not to the crypto
- * choke point.
+ * owns the redeeming transaction — `AuthenticateMcp` for a stateless
+ * call — not to the crypto choke point.
  *
  * THE TOKEN IS A LIVE CREDENTIAL AND IS MARKED AS ONE. Every frame in
  * this class that holds the presented bytes carries
@@ -105,9 +104,9 @@ final class AssertionVerifier
     public const string HEADER = 'v4.public.';
 
     /**
-     * The bound on the display claims (D11). Long enough for a real
-     * human name or an agency's name, short enough that the chrome's
-     * badge is a badge; anything longer is refused at the door rather
+     * The bound on the display claims. Long enough for a real
+     * human name or an agency's name, short enough that a badge stays
+     * a badge; anything longer is refused at the door rather
      * than truncated later by whoever renders it.
      */
     public const int MAX_DISPLAY_LENGTH = 120;
@@ -116,15 +115,13 @@ final class AssertionVerifier
     public const int MAX_IDENTITY_LENGTH = 255;
 
     /**
-     * The verifier's bound on the `jti` that Console entry or MCP
-     * authentication may pass to the shared burn ledger.
+     * The verifier's bound on the `jti` that MCP authentication may
+     * pass to the shared burn ledger.
      *
      * Pinned by `tests/ConsoleAssertionTest.php` — "refuses claims that
-     * are absent, mistyped, or unparseable"; the consuming paths are
-     * pinned by `tests/ConsoleEnterTest.php` — "refuses a genuine second
-     * presentation of the same assertion, because the mint id is spent"
-     * and `tests/AuthenticateMcpTest.php` — "refuses a replay because its
-     * mint is spent and audits the bounded reason".
+     * are absent, mistyped, or unparseable"; the consuming path is
+     * pinned by `tests/AuthenticateMcpTest.php` — "refuses a replay
+     * because its mint is spent and audits the bounded reason".
      *
      * RESIDUE — NOT ESTABLISHED HERE: this length bound does not establish
      * that an issuer assigns a distinct `jti` to each mint.
@@ -257,8 +254,8 @@ final class AssertionVerifier
 
     /**
      * The purpose claim is optional for one compatibility window. If it is
-     * present, it must name one of the two doors exactly; malformed values do
-     * not degrade into the legacy absent shape.
+     * present, it must name one of the known doors exactly; malformed
+     * values do not degrade into the legacy absent shape.
      *
      * @param  array<string, mixed>  $claims
      */
@@ -285,15 +282,13 @@ final class AssertionVerifier
      * Absent is a legitimate, well-formed mint — one that named no
      * state. PRESENT-BUT-MALFORMED is a refusal, never a silent null,
      * exactly like `on_behalf_of`: a state binding that cannot be read
-     * is not the same as one that was never claimed, and treating it as
-     * absent would let a mangled digest degrade into "no state" at the
-     * one door where a state is what stops the return path being a
-     * request field.
+     * is not the same as one that was never claimed.
      *
-     * The verifier does not decide whether a state is REQUIRED. That is
-     * the enter endpoint's rule, because entry is the flow D13 governs;
-     * this method's whole job is that a claim which is present is
-     * exactly 64 lower-case hex characters.
+     * The verifier does not decide whether a state is REQUIRED, and
+     * nothing in this package reads its meaning since the delegated
+     * entry door that consumed it was retired; this method's whole job
+     * is that a claim which is present is exactly 64 lower-case hex
+     * characters.
      *
      * @param  array<string, mixed>  $claims
      */

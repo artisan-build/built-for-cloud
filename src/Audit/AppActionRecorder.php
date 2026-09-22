@@ -95,9 +95,8 @@ use LogicException;
  * ACTION only when the caller performs both inside one transaction on the
  * default connection.** Sharing a physical database under different
  * connection names is not enough. Arranging this is the consumer's
- * responsibility. The package's own emitter does — `ConsoleEnter` writes
- * the entry and its event together on the default connection — and that
- * is a property of the caller, not of this class.
+ * responsibility, and it is a property of the caller, not of this
+ * class.
  *   Pinned by `tests/RecorderTransactionGuardTest.php` — "refuses to
  *   record an app action outside a database transaction" and "refuses a
  *   direct model write made outside a transaction". Both live there
@@ -262,15 +261,12 @@ final class AppActionRecorder
      * restated.** A test asserting only that the stored key is 64 hex
      * characters cannot tell a key derived from the caller's natural key
      * from the default derived from the event id — which is exactly the
-     * hole that opened when the door's mint-keying assertion was
-     * weakened: deleting `naturalKey:` from `ConsoleEnter` still yielded
-     * a 64-hex digest and the whole suite stayed green. A test that
-     * recomputes the expected key from the MINT, through this method,
-     * reds on that deletion. It is a pure function of its arguments and
-     * touches nothing.
-     *   Pinned by `tests/ConsoleEnterAuditTest.php` — "keys a successful
-     *   entry's ledger row to the mint, so dropping the key falls back
-     *   to the event id".
+     * hole that opened when a caller's mint-keying assertion was
+     * weakened: deleting the caller's `naturalKey:` argument still
+     * yielded a 64-hex digest and the whole suite stayed green. A test
+     * that recomputes the expected key from the caller's natural key,
+     * through this method, reds on that deletion. It is a pure function
+     * of its arguments and touches nothing.
      *
      * Length-delimited for the reason
      * {@see DelegatedActor::identityHash()}
