@@ -153,8 +153,10 @@ final class EnsureUserIsAuthenticated
             abort(401);
         }
 
-        if ($request->is('bfc/ui', 'bfc/ui/*')) {
-            $authority = InstallationAuthority::current();
+        $authority = InstallationAuthority::current();
+
+        if ($request->is('bfc/ui', 'bfc/ui/*')
+            || ($authority->isValid() && $authority->mode === AuthorityMode::Managed)) {
 
             if (! $authority->isValid()) {
                 abort(404);
