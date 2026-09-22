@@ -114,11 +114,11 @@ secret, and disconnect it through the existing exit-transition machinery. `GET /
 and never returned. `api_version` remains 2 because these are new routes and one new open-set
 capability member.
 
-**api_version 2** (bfc **0.16.0**, this release). All changes since version 1, in one inventory.
+**api_version 2** (bfc **0.16.1**, this release). All changes since version 1, in one inventory.
 Additive unless marked otherwise.
 
-**Everything the Console adds through 0.16.0 is additive, so `api_version` stays 2. What carries the
-signal is `bfc_version` 0.16.0 plus the `capabilities` entries** — `console-keys`,
+**Everything the Console adds through 0.16.1 is additive, so `api_version` stays 2. What carries the
+signal is `bfc_version` 0.16.1 plus the `capabilities` entries** — `console-keys`,
 `console-key-retire`, `console-vitals`, `console-guard`, `console-enter`, `console-chrome-assets`,
 `app-action-audit-emit`, `mcp-serve` and `mcp-delegated`.
 
@@ -595,7 +595,7 @@ Public (`bfc-public` throttle). Identifies the instance.
 ```json
 {
   "product": "Sink",
-  "bfc_version": "0.16.0",
+  "bfc_version": "0.16.1",
   "api_version": 2,
   "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials", "console-keys", "console-key-retire", "console-vitals", "app-action-audit-emit", "mcp-serve", "mcp-delegated"],
   "claimed": true,
@@ -2786,7 +2786,7 @@ field.
 {
   "version": 1,
   "api_version": 2,
-  "bfc_version": "0.16.0",
+  "bfc_version": "0.16.1",
   "app_version": "1.4.2",
   "health": "ok",
   "deployed_at": "2026-08-29T09:14:00+00:00",
