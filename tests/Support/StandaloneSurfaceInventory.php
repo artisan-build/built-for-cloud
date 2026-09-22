@@ -7,7 +7,6 @@ namespace ArtisanBuild\BuiltForCloud\Tests\Support;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\AsymmetricEnrollments;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\BoundHmacCutovers;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleEnter;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\DeviceAuthorizations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\InstallationCredentials;
@@ -55,7 +54,6 @@ final class StandaloneSurfaceInventory
             AsymmetricEnrollments::class => false,
             BoundHmacCutovers::class => false,
             ClientObservations::class => false,
-            ConsoleEnter::class => false,
             ConsoleVitals::class => false,
             DeviceAuthorizations::class => false,
             InstallationCredentials::class => false,

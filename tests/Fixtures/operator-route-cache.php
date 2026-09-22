@@ -102,7 +102,6 @@ if ($mode === 'generate') {
                     'contains' => is_string($contents)
                         && str_contains($contents, 'bfc/ownership/release')
                         && str_contains($contents, 'bfc/console/vitals')
-                        && str_contains($contents, 'bfc/console/chrome.js')
                         && str_contains($contents, 'bfc/credentials'),
                 ];
             } finally {
@@ -156,9 +155,7 @@ $case = new class('testProbe') extends TestCase
     {
         $app['config']->set('auth.defaults.guard', 'web');
         $app['config']->set('auth.guards.web', ['driver' => 'session', 'provider' => 'users']);
-        $app['config']->set('auth.guards.bfc-console', ['driver' => 'bfc-console-session']);
         $app['config']->set('auth.providers.users', ['driver' => 'eloquent', 'model' => User::class]);
-        $app['config']->set('built-for-cloud.console.enabled', true);
         $app['config']->set('built-for-cloud.surfaces.data_migrations', false);
         $app['config']->set('cache.default', 'array');
         $app['config']->set('app.debug', false);
@@ -216,7 +213,6 @@ $case = new class('testProbe') extends TestCase
             ['POST', '/bfc/console/re-key'],
             ['POST', '/bfc/console/keys/missing/retire'],
             ['GET', '/bfc/console/vitals'],
-            ['GET', '/bfc/console/chrome.js'],
             ['POST', '/bfc/subjects/offboard'],
             ['GET', '/bfc/client-observations'],
         ];

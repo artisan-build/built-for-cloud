@@ -18,7 +18,6 @@ trait EnablesEveryPackageRoute
         parent::getEnvironmentSetUp($app);
 
         $app['config']->set('built-for-cloud.surfaces.routes', true);
-        $app['config']->set('built-for-cloud.console.enabled', true);
     }
 }
 

@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleEnter;
 use FilesystemIterator;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
@@ -34,13 +33,14 @@ use Symfony\Component\HttpFoundation\Request as SymfonyRequest;
  *
  * AND THEN IT MISSED THE FRAME THE FIX ITSELF MADE REACHABLE. The first
  * revision of this scan matched only STRING parameters named for a
- * token, which is a name rule wearing an enumeration's clothes:
- * `ConsoleEnter::__invoke(Request $request)` holds the submitted
- * assertion just as completely, `input('assertion')` returns it, and
- * the fail-closed audit added in the same round made that frame an
- * exception path. A rule that cannot say "this frame can hold the
- * credential" without being told the parameter's name is the same
- * fixed-list-versus-enumeration mistake PR3 spent rounds on.
+ * token, which is a name rule wearing an enumeration's clothes: a
+ * controller frame holding the submitted
+ * assertion held it just as completely, and the fail-closed audit added
+ * in the same round made that frame an exception path. (That door was
+ * retired in v0.17.0; the lesson stands.) A rule that cannot say "this
+ * frame can hold the credential" without being told the parameter's
+ * name is the same fixed-list-versus-enumeration mistake PR3 spent
+ * rounds on.
  *
  * THE RULE, exactly. Within the scanned roots, a parameter must carry
  * `#[SensitiveParameter]` when it is either:
@@ -82,9 +82,8 @@ use Symfony\Component\HttpFoundation\Request as SymfonyRequest;
  *  - **VENDOR frames**, which are the large residue and cannot be
  *    closed from here at all: `ParagonIE\Paseto\Parser::parse()`
  *    receives the token, and the whole framework pipeline holds the
- *    `Request`. See {@see AssertionVerifier} and
- *    {@see ConsoleEnter},
- *    which state that residue and what is done about it instead.
+ *    `Request`. See {@see AssertionVerifier},
+ *    which states that residue and what is done about it instead.
  *  - **Local variables and closure `use` bindings**, which PHP does not
  *    put in a stack trace in the first place.
  */
