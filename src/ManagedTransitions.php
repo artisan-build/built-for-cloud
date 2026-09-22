@@ -33,10 +33,19 @@ final class ManagedTransitions
      * round 2 — a stale abandoned retry must not snapshot and drive an
      * exit for a later binding/generation it never named).
      *
+     * The optional by-reference out-parameter receives the row THIS
+     * call created the moment it is durable — before the first
+     * authority leg — so a caller whose T1 leg fails can link exactly
+     * that row instead of guessing which active row is theirs
+     * (acceptance J1/J-A2). It is reset to null on every call and
+     * stays null when creation never happened, including on any throw
+     * before the durable row exists.
+     *
      * @param  array{issuer: string, connection_id: string, installation_id: string, generation: int}|null  $expected
      */
-    public function prepare(User $actor, ManagedTransitionDirection $direction, ?array $expected = null): ManagedTransition
+    public function prepare(User $actor, ManagedTransitionDirection $direction, ?array $expected = null, ?ManagedTransition &$created = null): ManagedTransition /** @phpstan-ignore parameterByRef.unusedType (the null arm of &$created is observable exactly when prepare() throws before the durable row exists — the state the disconnect catch branches on; the rule models by-ref out-types on normal returns only) */
     {
+        $created = null;
         $snapshot = $this->connectionSnapshot();
         $transitionRequestId = $this->randomKey();
         $body = $this->serialize([
@@ -92,6 +101,13 @@ final class ManagedTransitions
                 'prepare_body_digest' => hash('sha256', $body),
             ]);
         });
+
+        // The row is durable from here: surface its identity to the
+        // caller BEFORE the first authority leg, so an authority-side
+        // T1 failure (wrapped as ManagedAuthRefused with
+        // recordsFailedAttempt) can still be linked to exactly this
+        // request's transition by the disconnect endpoint.
+        $created = $transition;
 
         return $this->applyPrepared($transition, $this->client($transition)->prepare());
     }

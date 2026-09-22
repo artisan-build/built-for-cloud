@@ -866,3 +866,83 @@ it('refuses transition creation when the recorded binding expectation disagrees 
     ]))->toThrow(ManagedAuthRefused::class)
         ->and(ManagedTransition::query()->count())->toBe(0);
 });
+
+it('answers durable pending state for a first-leg authority failure and resumes the exact transition on retry', function (): void {
+    [$ownerToken, $enrolment, , $fixture] = p1PendingDisconnectFixture();
+    $disconnect = p1DisconnectPayload($enrolment);
+
+    // The authority executed T1 but the outcome was lost — exactly the
+    // transport/refused-response shape the client wraps with
+    // recordsFailedAttempt. The request's transition row is durable.
+    $fixture->crashAfterExecution = 'T1';
+
+    $pending = $this->postJson('/bfc/managed/enrolment/disconnect', $disconnect, p1OwnerHeaders($ownerToken));
+
+    $pending->assertAccepted()
+        ->assertJsonPath('disconnect_id', $disconnect['disconnect_id'])
+        ->assertJsonPath('status', 'pending');
+    $transitionId = (string) $pending->json('transition_id');
+    expect($transitionId)->not->toBeEmpty()
+        ->and(ManagedTransition::query()->whereKey($transitionId)->value('status'))->toBe(ManagedTransitionStatus::Preparing)
+        // The ledger links EXACTLY the row this request created — never
+        // an installation-wide "whatever is active" selection.
+        ->and(ManagedTransition::query()->count())->toBe(1)
+        ->and((array) DB::table('bfc_managed_enrolment_requests')->where('id', $disconnect['disconnect_id'])->sole())->toMatchArray([
+            'committed_response' => null,
+            'managed_transition_id' => $transitionId,
+        ]);
+
+    // The exact UUID retry resumes the linked Preparing row through
+    // recover() and completes the disconnect.
+    $fixture->crashAfterExecution = null;
+
+    $this->postJson('/bfc/managed/enrolment/disconnect', $disconnect, p1OwnerHeaders($ownerToken))
+        ->assertOk()
+        ->assertJsonPath('disconnect_id', $disconnect['disconnect_id'])
+        ->assertJsonPath('status', 'completed')
+        ->assertJsonPath('mode', 'standalone')
+        ->assertJsonPath('generation', 3);
+    expect(ManagedTransition::query()->whereKey($transitionId)->value('status'))->toBe(ManagedTransitionStatus::Acknowledged);
+
+    // The security control the wedge lost: after recovery the
+    // installation can enrol and rotate its managed client secret
+    // again — one authority blip no longer freezes custody.
+    User::query()->delete();
+    $reenrolment = p1EnrollmentPayload([
+        'expected_generation' => 3,
+        'managed_client_secret' => 'post-recovery-enrolment-secret',
+    ]);
+    p1Enroll($ownerToken, $reenrolment)->assertCreated()->assertJsonPath('generation', 4);
+
+    $this->postJson(
+        '/bfc/managed/enrolment/client-secret',
+        p1RotationPayload($reenrolment, ['expected_generation' => 4]),
+        p1OwnerHeaders($ownerToken),
+    )->assertOk()
+        ->assertJsonPath('generation', 4)
+        ->assertJsonPath('client_secret_generation', 2);
+});
+
+it('carries the bounded reason when disconnect refuses because another transition is active', function (): void {
+    [$ownerToken, $enrolment] = p1PendingDisconnectFixture();
+    p1ActiveTransition();
+    $before = p1AuthorityRow();
+
+    $this->postJson('/bfc/managed/enrolment/disconnect', p1DisconnectPayload($enrolment), p1OwnerHeaders($ownerToken))
+        ->assertStatus(409)
+        ->assertJsonPath('error', 'transition_in_progress')
+        ->assertJsonPath('reason', 'transition_in_progress');
+
+    expect(p1AuthorityRow())->toBe($before);
+});
+
+it('carries the bounded reason when disconnect refuses on a standalone installation', function (): void {
+    $ownerToken = p1ClaimOwner();
+    $owner = User::query()->create(['name' => 'Standalone Owner', 'email' => 'standalone-owner@example.test']);
+    $owner->forceFill(['role' => 'owner', 'status' => 'active'])->save();
+
+    $this->postJson('/bfc/managed/enrolment/disconnect', p1DisconnectPayload(p1EnrollmentPayload()), p1OwnerHeaders($ownerToken))
+        ->assertStatus(409)
+        ->assertJsonPath('error', 'not_managed')
+        ->assertJsonPath('reason', 'not_managed');
+});

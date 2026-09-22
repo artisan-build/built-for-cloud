@@ -328,7 +328,7 @@ final class ManagedEnrolments extends OperatorRouteController
             // resume is deliberately exempt — its transition already
             // carries the locked snapshot it drives on.
             if ($existing === null || $transition === null) {
-                $authority = $this->lockedManagedAuthority();
+                $authority = $this->lockedManagedAuthority(withReason: true);
 
                 if ($this->bindingTriple($authority) !== [$validated['issuer'], $validated['connection_id'], $validated['installation_id']]) {
                     throw $this->refuse(ManagedEnrolmentConflict::BindingConflict, withReason: true);
@@ -338,10 +338,12 @@ final class ManagedEnrolments extends OperatorRouteController
                     throw $this->refuse(ManagedEnrolmentConflict::StaleGeneration, withReason: true);
                 }
 
-                $this->assertNoActiveTransition();
+                $this->assertNoActiveTransition(withReason: true);
             }
 
             if ($transition === null) {
+                $created = null;
+
                 try {
                     // The ledger/request binding rides INTO transition
                     // creation: prepare() compares it against the locked
@@ -349,39 +351,41 @@ final class ManagedEnrolments extends OperatorRouteController
                     // persists the snapshot, so a lifecycle change
                     // cannot interleave between the revalidation above
                     // and the transition row (quality-review round 2).
+                    // $created receives THIS request's row the moment
+                    // it is durable, before the first authority leg.
                     $transition = $this->transitions->prepare($actor, ManagedTransitionDirection::Exit, [
                         'issuer' => $validated['issuer'],
                         'connection_id' => $validated['connection_id'],
                         'installation_id' => $validated['installation_id'],
                         'generation' => $validated['expected_generation'],
-                    ]);
+                    ], $created);
                 } catch (ManagedAuthRefused $refused) {
+                    // An AUTHORITY-side T1 failure (transport or a
+                    // refused/malformed response, wrapped with
+                    // recordsFailedAttempt) after this request's row is
+                    // durable is durably-in-flight state, not a
+                    // refusal: link exactly the row this request
+                    // created — never an installation-wide query, which
+                    // could adopt another request's transition
+                    // (acceptance J1/J-A2) — and answer bounded 202;
+                    // the exact retry resumes it through recover().
+                    if ($refused->recordsFailedAttempt && $created !== null) {
+                        return $this->pendCreatedTransition($validated, $existing, $created);
+                    }
+
                     throw $this->fromTransitionRefusal($refused);
                 } catch (Throwable) {
-                    // A crash between the transition's creation and its
-                    // first authority leg leaves a resumable row this
-                    // request can no longer name — link it into the ledger
-                    // and answer pending, so the exact retry drives it on
-                    // instead of discovering a transition it cannot reach.
-                    $stuck = $this->activeTransition();
-
-                    if ($stuck === null) {
-                        throw new ManagedEnrolmentRefused(ManagedEnrolmentConflict::TransitionInProgress, withReason: true);
+                    // A non-refusal crash after this request's row is
+                    // durable takes the same exact-identity pending
+                    // path. When NOTHING was created by this request,
+                    // whatever transition is active belongs to another
+                    // request and must NOT be adopted into this ledger
+                    // id (J-A2): answer the honest bounded 409 instead.
+                    if ($created !== null) {
+                        return $this->pendCreatedTransition($validated, $existing, $created);
                     }
 
-                    if ($existing === null) {
-                        ManagedEnrolmentRequest::query()->create([
-                            'id' => $validated['disconnect_id'],
-                            'kind' => ManagedEnrolmentRequestKind::Disconnect,
-                            'issuer' => $validated['issuer'],
-                            'connection_id' => $validated['connection_id'],
-                            'installation_id' => $validated['installation_id'],
-                            'expected_generation' => $validated['expected_generation'],
-                            'managed_transition_id' => $stuck->id,
-                        ]);
-                    }
-
-                    return $this->json($this->pendingDisconnect($validated['disconnect_id'], $stuck), 202);
+                    throw new ManagedEnrolmentRefused(ManagedEnrolmentConflict::TransitionInProgress, withReason: true);
                 }
             }
 
@@ -660,10 +664,38 @@ final class ManagedEnrolments extends OperatorRouteController
         $this->assertNoActiveTransition();
     }
 
-    private function assertNoActiveTransition(): void
+    /**
+     * Link the transition THIS request created (by the exact identity
+     * prepare() surfaced) into the disconnect ledger and answer the
+     * bounded durable-pending state: 202 with that transition's id, so
+     * the exact UUID retry resumes it through driveExit()/recover()
+     * instead of wedging (acceptance J1).
+     *
+     * @param  array{disconnect_id: string, issuer: string, connection_id: string, installation_id: string, expected_generation: int}  $validated
+     */
+    private function pendCreatedTransition(array $validated, ?ManagedEnrolmentRequest $existing, ManagedTransition $created): JsonResponse
+    {
+        if ($existing === null) {
+            ManagedEnrolmentRequest::query()->create([
+                'id' => $validated['disconnect_id'],
+                'kind' => ManagedEnrolmentRequestKind::Disconnect,
+                'issuer' => $validated['issuer'],
+                'connection_id' => $validated['connection_id'],
+                'installation_id' => $validated['installation_id'],
+                'expected_generation' => $validated['expected_generation'],
+                'managed_transition_id' => $created->id,
+            ]);
+        } elseif ($existing->managed_transition_id !== $created->id) {
+            $existing->forceFill(['managed_transition_id' => $created->id])->save();
+        }
+
+        return $this->json($this->pendingDisconnect($validated['disconnect_id'], $created), 202);
+    }
+
+    private function assertNoActiveTransition(bool $withReason = false): void
     {
         if ($this->activeTransition() !== null) {
-            throw $this->refuse(ManagedEnrolmentConflict::TransitionInProgress);
+            throw $this->refuse(ManagedEnrolmentConflict::TransitionInProgress, withReason: $withReason);
         }
     }
 
@@ -679,7 +711,7 @@ final class ManagedEnrolments extends OperatorRouteController
         return $transition;
     }
 
-    private function lockedManagedAuthority(): object
+    private function lockedManagedAuthority(bool $withReason = false): object
     {
         $authority = DB::table('bfc_authority')
             ->where('key', InstallationAuthority::KEY)
@@ -687,7 +719,7 @@ final class ManagedEnrolments extends OperatorRouteController
             ->first();
 
         if (! is_object($authority) || $authority->mode !== AuthorityMode::Managed->value) {
-            throw $this->refuse(ManagedEnrolmentConflict::NotManaged);
+            throw $this->refuse(ManagedEnrolmentConflict::NotManaged, withReason: $withReason);
         }
 
         return $authority;
