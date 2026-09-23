@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\AuditActorType;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Console\AssertionBurn;
 use ArtisanBuild\BuiltForCloud\Console\AssertionRefusalReason;
+use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleEntryRefusalReason;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Credential;
@@ -485,6 +486,18 @@ it('never falls through between store bearer and assertion authentication paths'
 
     expect($credential->refresh()->last_used_at)->toBeNull()
         ->and(CredentialAuditEvent::query()->where('credential_id', $credential->id)->count())->toBe(0)
+        ->and(mcpRefusalReasons())->toBe([AssertionRefusalReason::UnknownKey->value]);
+
+    // The discriminator is the PREFIX, not the substring: a resolvable
+    // credential whose bytes merely CONTAIN the assertion header somewhere
+    // after position zero belongs to the registry path alone.
+    $embedded = 'registry-secret-with-'.AssertionVerifier::HEADER.'-buried-inside';
+    $embeddedCredential = mcpStoreCredential($embedded, abilities: [OperatorAbility::McpRead->value]);
+
+    $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$embedded])
+        ->assertOk();
+
+    expect($embeddedCredential->refresh()->last_used_at)->not->toBeNull()
         ->and(mcpRefusalReasons())->toBe([AssertionRefusalReason::UnknownKey->value]);
 });
 
