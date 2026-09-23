@@ -6,6 +6,7 @@ use ArtisanBuild\BuiltForCloud\Audit\AppActionActor;
 use ArtisanBuild\BuiltForCloud\Audit\AppActorType;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
+use ArtisanBuild\BuiltForCloud\Console\ActingPrincipal;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Console\AssertionBurn;
 use ArtisanBuild\BuiltForCloud\Console\AssertionRefusalReason;
@@ -410,6 +411,41 @@ it('keeps local and browser-session consumers closed to a request assertion', fu
         ->assertOk()
         ->assertJsonPath('refused', true);
 });
+
+it('re-resolves when an assertion is published after an earlier resolve on the same request', function (): void {
+    // A consumer middleware ahead of the MCP door resolves the acting
+    // principal before any assertion exists. The singleton memo taken at
+    // that moment must not be served after AuthenticateMcp publishes the
+    // assertion on the SAME request object: the publication invalidates it.
+    ResolveBeforeMcp::$saw = null;
+
+    Route::post('/mcp-memo-probe', fn (): array => [
+        'check' => app(ActingPrincipalResolver::class)->resolve()->check(),
+    ])->middleware([ResolveBeforeMcp::class, 'bfc.mcp']);
+
+    $this->postJson('/mcp-memo-probe', [], ['Authorization' => 'Bearer '.mcpAssertion()])
+        ->assertOk()
+        ->assertJsonPath('check', true);
+
+    expect(ResolveBeforeMcp::$saw?->check())->toBeFalse();
+});
+
+/**
+ * Resolves the acting principal BEFORE the MCP middleware runs, which is
+ * exactly the shape a layout composer or gate that sits in front of the
+ * door takes.
+ */
+class ResolveBeforeMcp
+{
+    public static ?ActingPrincipal $saw = null;
+
+    public function handle(\Illuminate\Http\Request $request, \Closure $next): mixed
+    {
+        self::$saw = app(ActingPrincipalResolver::class)->resolve();
+
+        return $next($request);
+    }
+}
 
 it('gives a non-admin unified bearer no admin attribution', function (): void {
     $plaintext = 'non-admin-'.bin2hex(random_bytes(16));
