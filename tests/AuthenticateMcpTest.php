@@ -30,6 +30,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Testing\TestResponse;
@@ -440,7 +441,7 @@ class ResolveBeforeMcp
 {
     public static ?ActingPrincipal $saw = null;
 
-    public function handle(\Illuminate\Http\Request $request, \Closure $next): mixed
+    public function handle(Request $request, Closure $next): mixed
     {
         self::$saw = app(ActingPrincipalResolver::class)->resolve();
 
@@ -456,7 +457,7 @@ it('keeps a request assertion ahead of a co-resident local principal, with no un
     $local = User::query()->create([
         'name' => 'Co-resident Local',
         'email' => 'co-resident-'.bin2hex(random_bytes(4)).'@example.com',
-        'password' => \Illuminate\Support\Facades\Hash::make('secret'),
+        'password' => Hash::make('secret'),
     ]);
 
     Route::post('/mcp-precedence-probe', function (Request $request) use ($local): array {
