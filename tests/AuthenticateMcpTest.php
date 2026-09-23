@@ -470,6 +470,26 @@ it('gives a non-operator with credential admin ability no admin attribution', fu
         ->count())->toBe(1);
 });
 
+it('gives an operator without the admin ability no compound admission', function (): void {
+    // The ability leg of the compound is what keeps a mundane operator
+    // management credential from riding the admin attribution: without
+    // credential:admin it is neither a compound admin NOR an MCP bearer,
+    // so the door refuses it outright.
+    $plaintext = 'operator-mundane-'.bin2hex(random_bytes(16));
+    $credential = mcpStoreCredential(
+        $plaintext,
+        SubjectType::Operator,
+        [OperatorAbility::McpRead->value],
+        CredentialPurpose::OperatorManagement,
+    );
+
+    $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$plaintext])
+        ->assertUnauthorized()
+        ->assertExactJson(['message' => 'Unauthenticated.']);
+
+    expect($credential->refresh()->last_used_at)->toBeNull();
+});
+
 it('never falls through between store bearer and assertion authentication paths', function (): void {
     // An ordinary invalid bearer is never parsed or assertion-audited.
     $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer not-an-assertion'])
