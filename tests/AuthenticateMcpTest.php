@@ -537,6 +537,22 @@ it('does not answer or audit a downstream refusal as this door refusing', functi
         ->and(mcpRefusalReasons())->toBe([]);
 });
 
+it('lets a downstream assertion refusal propagate as the tool refusal it is', function (): void {
+    // Laravel's routing pipeline converts a route exception into a
+    // rendered 500 BEFORE it flows back through middleware, which is
+    // why the previous test sees a 500 rather than a throw. On a stack
+    // that lets exceptions propagate instead, the boundary this door
+    // promises is exactly that the tool's AssertionRefused leaves this
+    // frame untouched: no 401 answer, no refused-here audit row.
+    $this->withoutExceptionHandling();
+
+    mcpRequest()->assertOk();
+
+    $this->postJson('/mcp-downstream-refusal', [], [
+        'Authorization' => 'Bearer '.mcpAssertion(['sub' => 'downstream-subject']),
+    ]);
+})->throws(AssertionRefused::class);
+
 it('takes the bearer out of the request before a refusal is served or a fault throws', function (): void {
     // The scrub's promise is ORDERING, not just occurrence: the
     // credential leaves the request object BEFORE verification or
