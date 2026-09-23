@@ -25,6 +25,7 @@ use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\SystemAuthorityContext;
+use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
@@ -446,6 +447,34 @@ class ResolveBeforeMcp
         return $next($request);
     }
 }
+
+it('keeps a request assertion ahead of a co-resident local principal, with no union', function (): void {
+    // The resolver's ordering is only observable when BOTH principals are
+    // live on one request: an authenticated local session AND a published
+    // assertion. The assertion wins outright — the local principal must
+    // not appear, not even as a fallback.
+    $local = User::query()->create([
+        'name' => 'Co-resident Local',
+        'email' => 'co-resident-'.bin2hex(random_bytes(4)).'@example.com',
+        'password' => \Illuminate\Support\Facades\Hash::make('secret'),
+    ]);
+
+    Route::post('/mcp-precedence-probe', function (Request $request) use ($local): array {
+        $acting = app(ActingPrincipalResolver::class)->resolve();
+
+        return [
+            'delegated' => $acting->delegatedSessionPresent(),
+            'acting_id' => $acting->identifier(),
+            'local_id' => $local->getKey(),
+        ];
+    })->middleware('bfc.mcp');
+
+    $this->actingAs($local)
+        ->postJson('/mcp-precedence-probe', [], ['Authorization' => 'Bearer '.mcpAssertion()])
+        ->assertOk()
+        ->assertJsonPath('delegated', true)
+        ->assertJsonPath('acting_id', 'bfc-console:'.DelegatedActor::query()->sole()->getKey());
+});
 
 it('gives a non-admin unified bearer no admin attribution', function (): void {
     $plaintext = 'non-admin-'.bin2hex(random_bytes(16));
