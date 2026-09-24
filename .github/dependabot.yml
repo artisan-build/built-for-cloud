@@ -1,0 +1,48 @@
+version: 2
+
+updates:
+  # PHP dependencies.
+  #
+  # This is a library and deliberately commits no composer.lock. In-range releases need no manifest
+  # change; consumers and CI resolve the newest compatible version. Dependabot raises composer.json
+  # only when a patch or minor release falls outside the current constraint.
+  - package-ecosystem: composer
+    directory: "/"
+    schedule:
+      interval: weekly
+    versioning-strategy: increase-if-necessary
+    groups:
+      # Batch patch + minor constraint updates into one weekly PR so routine maintenance stays
+      # reviewable without narrowing constraints for every in-range release.
+      composer:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+      composer-security:
+        applies-to: security-updates
+        update-types:
+          - minor
+          - patch
+    # Majors are deliberately absent from both groups. Dependabot opens them individually, and they
+    # are never auto-merged (see dependabot-auto-merge.yml) — a human decides.
+
+  # GitHub Actions.
+  #
+  # Actions pinned by full commit SHA age silently without Dependabot updating the SHA and its
+  # trailing version comment together.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+      github-actions-security:
+        applies-to: security-updates
+        update-types:
+          - minor
+          - patch
