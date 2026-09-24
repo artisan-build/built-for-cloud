@@ -6,9 +6,11 @@ use ArtisanBuild\BuiltForCloud\Audit\AppActionActor;
 use ArtisanBuild\BuiltForCloud\Audit\AppActorType;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditActorType;
+use ArtisanBuild\BuiltForCloud\Console\ActingPrincipal;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Console\AssertionBurn;
 use ArtisanBuild\BuiltForCloud\Console\AssertionRefusalReason;
+use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleEntryRefusalReason;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Credential;
@@ -23,10 +25,12 @@ use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\PersonalCredentialSurface;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\SystemAuthorityContext;
+use ArtisanBuild\BuiltForCloud\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Testing\TestResponse;
@@ -410,6 +414,69 @@ it('keeps local and browser-session consumers closed to a request assertion', fu
         ->assertJsonPath('refused', true);
 });
 
+it('re-resolves when an assertion is published after an earlier resolve on the same request', function (): void {
+    // A consumer middleware ahead of the MCP door resolves the acting
+    // principal before any assertion exists. The singleton memo taken at
+    // that moment must not be served after AuthenticateMcp publishes the
+    // assertion on the SAME request object: the publication invalidates it.
+    ResolveBeforeMcp::$saw = null;
+
+    Route::post('/mcp-memo-probe', fn (): array => [
+        'check' => app(ActingPrincipalResolver::class)->resolve()->check(),
+    ])->middleware([ResolveBeforeMcp::class, 'bfc.mcp']);
+
+    $this->postJson('/mcp-memo-probe', [], ['Authorization' => 'Bearer '.mcpAssertion()])
+        ->assertOk()
+        ->assertJsonPath('check', true);
+
+    expect(ResolveBeforeMcp::$saw?->check())->toBeFalse();
+});
+
+/**
+ * Resolves the acting principal BEFORE the MCP middleware runs, which is
+ * exactly the shape a layout composer or gate that sits in front of the
+ * door takes.
+ */
+class ResolveBeforeMcp
+{
+    public static ?ActingPrincipal $saw = null;
+
+    public function handle(Request $request, Closure $next): mixed
+    {
+        self::$saw = app(ActingPrincipalResolver::class)->resolve();
+
+        return $next($request);
+    }
+}
+
+it('keeps a request assertion ahead of a co-resident local principal, with no union', function (): void {
+    // The resolver's ordering is only observable when BOTH principals are
+    // live on one request: an authenticated local session AND a published
+    // assertion. The assertion wins outright — the local principal must
+    // not appear, not even as a fallback.
+    $local = User::query()->create([
+        'name' => 'Co-resident Local',
+        'email' => 'co-resident-'.bin2hex(random_bytes(4)).'@example.com',
+        'password' => Hash::make('secret'),
+    ]);
+
+    Route::post('/mcp-precedence-probe', function (Request $request) use ($local): array {
+        $acting = app(ActingPrincipalResolver::class)->resolve();
+
+        return [
+            'delegated' => $acting->delegatedSessionPresent(),
+            'acting_id' => $acting->identifier(),
+            'local_id' => $local->getKey(),
+        ];
+    })->middleware('bfc.mcp');
+
+    $this->actingAs($local)
+        ->postJson('/mcp-precedence-probe', [], ['Authorization' => 'Bearer '.mcpAssertion()])
+        ->assertOk()
+        ->assertJsonPath('delegated', true)
+        ->assertJsonPath('acting_id', 'bfc-console:'.DelegatedActor::query()->sole()->getKey());
+});
+
 it('gives a non-admin unified bearer no admin attribution', function (): void {
     $plaintext = 'non-admin-'.bin2hex(random_bytes(16));
     $credential = mcpStoreCredential($plaintext, SubjectType::ExternalConsumer, [OperatorAbility::McpRead->value]);
@@ -469,6 +536,26 @@ it('gives a non-operator with credential admin ability no admin attribution', fu
         ->count())->toBe(1);
 });
 
+it('gives an operator without the admin ability no compound admission', function (): void {
+    // The ability leg of the compound is what keeps a mundane operator
+    // management credential from riding the admin attribution: without
+    // credential:admin it is neither a compound admin NOR an MCP bearer,
+    // so the door refuses it outright.
+    $plaintext = 'operator-mundane-'.bin2hex(random_bytes(16));
+    $credential = mcpStoreCredential(
+        $plaintext,
+        SubjectType::Operator,
+        [OperatorAbility::McpRead->value],
+        CredentialPurpose::OperatorManagement,
+    );
+
+    $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$plaintext])
+        ->assertUnauthorized()
+        ->assertExactJson(['message' => 'Unauthenticated.']);
+
+    expect($credential->refresh()->last_used_at)->toBeNull();
+});
+
 it('never falls through between store bearer and assertion authentication paths', function (): void {
     // An ordinary invalid bearer is never parsed or assertion-audited.
     $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer not-an-assertion'])
@@ -485,6 +572,18 @@ it('never falls through between store bearer and assertion authentication paths'
 
     expect($credential->refresh()->last_used_at)->toBeNull()
         ->and(CredentialAuditEvent::query()->where('credential_id', $credential->id)->count())->toBe(0)
+        ->and(mcpRefusalReasons())->toBe([AssertionRefusalReason::UnknownKey->value]);
+
+    // The discriminator is the PREFIX, not the substring: a resolvable
+    // credential whose bytes merely CONTAIN the assertion header somewhere
+    // after position zero belongs to the registry path alone.
+    $embedded = 'registry-secret-with-'.AssertionVerifier::HEADER.'-buried-inside';
+    $embeddedCredential = mcpStoreCredential($embedded, abilities: [OperatorAbility::McpRead->value]);
+
+    $this->postJson('/mcp-probe', [], ['Authorization' => 'Bearer '.$embedded])
+        ->assertOk();
+
+    expect($embeddedCredential->refresh()->last_used_at)->not->toBeNull()
         ->and(mcpRefusalReasons())->toBe([AssertionRefusalReason::UnknownKey->value]);
 });
 
@@ -503,6 +602,22 @@ it('does not answer or audit a downstream refusal as this door refusing', functi
     expect(AssertionBurn::query()->count())->toBe(2)
         ->and(mcpRefusalReasons())->toBe([]);
 });
+
+it('lets a downstream assertion refusal propagate as the tool refusal it is', function (): void {
+    // Laravel's routing pipeline converts a route exception into a
+    // rendered 500 BEFORE it flows back through middleware, which is
+    // why the previous test sees a 500 rather than a throw. On a stack
+    // that lets exceptions propagate instead, the boundary this door
+    // promises is exactly that the tool's AssertionRefused leaves this
+    // frame untouched: no 401 answer, no refused-here audit row.
+    $this->withoutExceptionHandling();
+
+    mcpRequest()->assertOk();
+
+    $this->postJson('/mcp-downstream-refusal', [], [
+        'Authorization' => 'Bearer '.mcpAssertion(['sub' => 'downstream-subject']),
+    ]);
+})->throws(AssertionRefused::class);
 
 it('takes the bearer out of the request before a refusal is served or a fault throws', function (): void {
     // The scrub's promise is ORDERING, not just occurrence: the
