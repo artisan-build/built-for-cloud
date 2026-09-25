@@ -452,6 +452,9 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     // The layout became a class component: every package view dropped the
     // blank-line-separated @extends/@section/@push preamble for one
     // <x-bfc-layout> tag, 28 blocks fewer, no claim changed.
+    // The Scalpels theme then restyled the views and documented the
+    // package asset route, one block more; the route's absolute claim is
+    // pinned to PackageAssetsTest, so paired rose by one and unpaired fell.
     $gateSurfaces = [
         'src/Console', 'src/Audit', 'resources/views',
         'docs/http-contract.md',
@@ -461,10 +464,10 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 999,
+        'blocks' => 1000,
         'absolute' => 328,
-        'paired' => 62,
-        'unpaired' => 266,
+        'paired' => 63,
+        'unpaired' => 265,
     ]);
 
     // The surfaces the restatement map runs over are wider than the

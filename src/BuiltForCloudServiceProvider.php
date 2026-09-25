@@ -47,6 +47,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTransitions;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\PackageAssets;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\PersonalCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneAuthentication;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneInvitations;
@@ -356,6 +357,10 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
 
         $router->get('/bfc/meta', MetaController::class)
             ->middleware('throttle:bfc-public');
+
+        $router->get('/bfc/assets/{path}', PackageAssets::class)
+            ->where('path', PackageAssets::PATTERN)
+            ->name('bfc.assets');
 
         $router->post('/bfc/ownership/claim', [ManageOwnership::class, 'claim'])
             ->middleware('throttle:bfc-claim');

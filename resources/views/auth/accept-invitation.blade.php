@@ -1,8 +1,4 @@
 <x-bfc-layout title="Accept invitation">
-@push('head')
-    @include('bfc::auth.styles')
-@endpush
-
 <section class="bfc-auth" data-testid="invitation-accept-form">
     <div class="bfc-panel">
         <div class="bfc-kicker">Membership</div>

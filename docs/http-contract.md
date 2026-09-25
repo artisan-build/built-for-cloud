@@ -487,6 +487,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/managed/enrolment/disconnect` | `metadata` | bounded mode, resulting generation, request id and server timestamp |
 | `GET /bfc/managed/login` | `content` | redirect carrying an opaque one-time browser state, plus the initiating session cookie |
 | `GET /bfc/managed/callback` | `content` | redirect plus a newly established authenticated session cookie |
+| `GET /bfc/assets/{path}` | `content` | static package-shipped stylesheet, font and image bytes rather than a bounded-scalar JSON shape, so conservatively not offered as vendor-safe metadata |
 | `GET /bfc/ui` | `content` | package-owned HTML containing configured manifest identity and local account navigation |
 | `GET /bfc/login` | `content` | package-owned HTML login form |
 | `POST /bfc/login` | `content` | redirect plus a newly established session cookie |
@@ -975,6 +976,23 @@ this one**, exactly as reserved — additively, without an `api_version` bump:
 
 An envelope carrying no `console_key` behaves in every respect as it did before, response keys
 included, which is what makes both slots additive rather than a version bump.
+
+---
+
+## Package assets
+
+### GET /bfc/assets/{path}
+
+Serves the default layout's compiled stylesheet (`bfc.css`), its bundled fonts
+(`fonts/{name}.woff2`) and images (`img/{name}.webp`) from the installed package, so an application renders the current release's
+styles without rebuilding or publishing anything. `{path}` admits only those names; anything else,
+including any path that leaves the package's `resources/dist` directory, is a 404. Unauthenticated
+and unthrottled: the response is static, and `Cache-Control: public, max-age=31536000, immutable`
+lets the browser keep it, with the layout's `?v=` content hash changing whenever the file does.
+Mounted with the rest of the package routes under the `routes` surface; with routes off the default
+layout renders without its stylesheet.
+*Pinned by* `PackageAssetsTest` (the stylesheet, every bundled font and the wordmark are served
+with an immutable cache; missing names, other extensions and traversal attempts are 404s).
 
 ---
 

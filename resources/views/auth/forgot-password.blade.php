@@ -1,8 +1,4 @@
 <x-bfc-layout title="Reset password">
-@push('head')
-    @include('bfc::auth.styles')
-@endpush
-
 <section class="bfc-auth" data-testid="password-request-form">
     <div class="bfc-panel">
         <div class="bfc-kicker">Account recovery</div>

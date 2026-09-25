@@ -1,8 +1,4 @@
 <x-bfc-layout title="Sign in">
-@push('head')
-    @include('bfc::auth.styles')
-@endpush
-
 <section class="bfc-auth" data-testid="login-form">
     <div class="bfc-panel">
         <div class="bfc-kicker">Built for Cloud</div>

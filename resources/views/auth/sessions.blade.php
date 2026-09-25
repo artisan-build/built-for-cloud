@@ -1,8 +1,4 @@
 <x-bfc-layout title="Sessions">
-@push('head')
-    @include('bfc::auth.styles')
-@endpush
-
 <section class="bfc-auth" data-testid="sessions-management">
     <div class="bfc-panel">
         <div class="bfc-kicker">Account security</div>
