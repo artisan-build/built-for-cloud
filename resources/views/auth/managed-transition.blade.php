@@ -1,7 +1,4 @@
-@extends('bfc::layout')
-
-@section('title', ucfirst($direction->value).' authority')
-
+<x-bfc-layout :title="ucfirst($direction->value).' authority'">
 @push('head')
     @include('bfc::auth.styles')
     <style>
@@ -14,7 +11,6 @@
     </style>
 @endpush
 
-@section('content')
 <section class="bfc-auth bfc-transition" data-testid="transition-proposal">
     <div class="bfc-panel">
         <div class="bfc-kicker">Authority transition</div>
@@ -280,4 +276,4 @@
         @endif
     </div>
 </section>
-@endsection
+</x-bfc-layout>

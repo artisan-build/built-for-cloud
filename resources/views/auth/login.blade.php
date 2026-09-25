@@ -1,12 +1,8 @@
-@extends('bfc::layout')
-
-@section('title', 'Sign in')
-
+<x-bfc-layout title="Sign in">
 @push('head')
     @include('bfc::auth.styles')
 @endpush
 
-@section('content')
 <section class="bfc-auth" data-testid="login-form">
     <div class="bfc-panel">
         <div class="bfc-kicker">Built for Cloud</div>
@@ -26,4 +22,4 @@
         <p><a class="bfc-link" href="{{ route('bfc.password.request') }}">Forgot your password?</a></p>
     </div>
 </section>
-@endsection
+</x-bfc-layout>

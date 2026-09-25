@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\View\Layout;
+
 return [
 
     /*
@@ -35,6 +37,27 @@ return [
         'icon' => null,
         'product_url' => null,
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Layout
+    |--------------------------------------------------------------------------
+    |
+    | The Blade component class every package page renders inside, available
+    | to the app as `<x-bfc-layout>`. To restyle the app without editing a
+    | file upstream owns, write your own class extending
+    | Illuminate\View\Component (or this package's Layout) and name it in
+    | BUILT_FOR_CLOUD_LAYOUT.
+    |
+    | `livewire_layout` makes that same class Livewire's full-page layout
+    | (`livewire.component_layout`), so full-page Livewire components match
+    | the package pages. Set it false to keep the app's own Livewire layout.
+    |
+    */
+
+    'layout' => env('BUILT_FOR_CLOUD_LAYOUT', Layout::class),
+
+    'livewire_layout' => env('BUILT_FOR_CLOUD_LIVEWIRE_LAYOUT', true),
 
     /*
     |--------------------------------------------------------------------------

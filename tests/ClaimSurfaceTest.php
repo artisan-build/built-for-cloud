@@ -449,6 +449,9 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     // numbers fell with them.
     // The v0.17.0 bump then removed the changelog's RELEASE WINDOW
     // declaration paragraph: one block fewer, no claim changed.
+    // The layout became a class component: every package view dropped the
+    // blank-line-separated @extends/@section/@push preamble for one
+    // <x-bfc-layout> tag, 28 blocks fewer, no claim changed.
     $gateSurfaces = [
         'src/Console', 'src/Audit', 'resources/views',
         'docs/http-contract.md',
@@ -458,7 +461,7 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1027,
+        'blocks' => 999,
         'absolute' => 328,
         'paired' => 62,
         'unpaired' => 266,

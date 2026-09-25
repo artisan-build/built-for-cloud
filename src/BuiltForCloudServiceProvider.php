@@ -73,6 +73,7 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\VerifyHmacSignature;
 use ArtisanBuild\BuiltForCloud\Listeners\QueueOwnershipWebhook;
 use ArtisanBuild\BuiltForCloud\Listeners\RefuseSystemAuthorityAuthentication;
 use ArtisanBuild\BuiltForCloud\Listeners\SystemAuthorityQueueScope;
+use ArtisanBuild\BuiltForCloud\View\Layout;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Auth\Events\Authenticated;
 use Illuminate\Auth\Events\Login;
@@ -93,6 +94,8 @@ use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Blade;
+use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
@@ -167,6 +170,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // ours — so there is no behaviour here for a flag to switch
         // off.
         $this->loadViewsFrom(__DIR__.'/../resources/views', 'bfc');
+        $this->registerLayout();
 
         if ($this->surfaceEnabled('listeners')) {
             Event::listen(OwnershipReleasePending::class, QueueOwnershipWebhook::class);
@@ -223,12 +227,11 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             ], 'built-for-cloud-config');
 
             // The package view namespace, publishable the ordinary
-            // Laravel way so an app can restyle it without forking the
-            // package. Publishing does NOT create a second layout:
-            // Laravel's namespaced view finder prefers the published
-            // copy over the package's for the SAME view name, so
-            // `bfc::layout` still names one template — the app's, once
-            // it has taken ownership of it.
+            // Laravel way. To replace the page shell, prefer naming a
+            // layout class in BUILT_FOR_CLOUD_LAYOUT: a published copy
+            // shadows the package view by name and stops receiving
+            // upstream changes, while a configured class lives in a file
+            // the package never ships.
             $this->publishes([
                 __DIR__.'/../resources/views' => $this->app->resourcePath('views/vendor/bfc'),
             ], 'built-for-cloud-views');
@@ -902,6 +905,16 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             SubjectOffboardCommand::class,
             WarnExpiringCredentialsCommand::class,
         ]);
+    }
+
+    /** Register `<x-bfc-layout>`, and point Livewire's full-page layout at the configured class unless the app opts out. */
+    private function registerLayout(): void
+    {
+        Blade::component(Layout::class, 'layout', 'bfc');
+
+        if (Config::boolean('built-for-cloud.livewire_layout', true)) {
+            Config::set('livewire.component_layout', Config::string('built-for-cloud.layout', Layout::class));
+        }
     }
 
     /**

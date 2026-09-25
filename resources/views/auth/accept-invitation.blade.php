@@ -1,12 +1,8 @@
-@extends('bfc::layout')
-
-@section('title', 'Accept invitation')
-
+<x-bfc-layout title="Accept invitation">
 @push('head')
     @include('bfc::auth.styles')
 @endpush
 
-@section('content')
 <section class="bfc-auth" data-testid="invitation-accept-form">
     <div class="bfc-panel">
         <div class="bfc-kicker">Membership</div>
@@ -28,4 +24,4 @@
         </form>
     </div>
 </section>
-@endsection
+</x-bfc-layout>

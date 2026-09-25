@@ -1,10 +1,4 @@
-@extends('bfc::layout')
-
-@section('title')
-@if ($manifest !== null){{ $manifest->name }}@endif
-@endsection
-
-@section('content')
+<x-bfc-layout :title="$manifest?->name ?? ''">
 <section data-testid="ui-shell"@if ($manifest !== null) data-app-slug="{{ $manifest->slug }}"@endif>
     @if ($manifest !== null)
     <header data-testid="ui-manifest">
@@ -53,4 +47,4 @@
         </section>
     @endif
 </section>
-@endsection
+</x-bfc-layout>
