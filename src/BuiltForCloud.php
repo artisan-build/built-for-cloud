@@ -8,7 +8,7 @@ use ArtisanBuild\BuiltForCloudContracts\BuiltForCloud as ContractsBuiltForCloud;
 
 final class BuiltForCloud
 {
-    public const VERSION = '0.18.0';
+    public const VERSION = '0.18.1';
 
     /**
      * The public HTTP contract's major version (docs/http-contract.md, PRD
