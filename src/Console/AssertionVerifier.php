@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Console;
 
 use ArtisanBuild\BuiltForCloud\Exceptions\AssertionRefused;
+use ArtisanBuild\BuiltForCloudContracts\Console\AssertionVerifier as ContractsAssertionVerifier;
 use Carbon\CarbonImmutable;
 use ParagonIE\Paseto\Parser;
 use ParagonIE\Paseto\ProtocolCollection;
@@ -101,7 +102,7 @@ use Throwable;
 final class AssertionVerifier
 {
     /** The only header this verifier will look at. */
-    public const string HEADER = 'v4.public.';
+    public const string HEADER = ContractsAssertionVerifier::HEADER;
 
     /**
      * The bound on the display claims. Long enough for a real
@@ -109,10 +110,10 @@ final class AssertionVerifier
      * a badge; anything longer is refused at the door rather
      * than truncated later by whoever renders it.
      */
-    public const int MAX_DISPLAY_LENGTH = 120;
+    public const int MAX_DISPLAY_LENGTH = ContractsAssertionVerifier::MAX_DISPLAY_LENGTH;
 
     /** The bound on the identity claims — issuer, subject, audience. */
-    public const int MAX_IDENTITY_LENGTH = 255;
+    public const int MAX_IDENTITY_LENGTH = ContractsAssertionVerifier::MAX_IDENTITY_LENGTH;
 
     /**
      * The verifier's bound on the `jti` that MCP authentication may
@@ -126,7 +127,7 @@ final class AssertionVerifier
      * RESIDUE — NOT ESTABLISHED HERE: this length bound does not establish
      * that an issuer assigns a distinct `jti` to each mint.
      */
-    public const int MAX_ID_LENGTH = 64;
+    public const int MAX_ID_LENGTH = ContractsAssertionVerifier::MAX_ID_LENGTH;
 
     /**
      * The shape of the optional `state` claim: the lower-case hex
@@ -134,14 +135,14 @@ final class AssertionVerifier
      * Anchored with `\z` rather than `$`, which also matches before a
      * trailing newline.
      */
-    public const string STATE_DIGEST_PATTERN = '/^[0-9a-f]{64}\z/';
+    public const string STATE_DIGEST_PATTERN = ContractsAssertionVerifier::STATE_DIGEST_PATTERN;
 
     /**
      * A whole-token size bound, applied before any parsing: a delegated
      * assertion is a few hundred bytes, and an endpoint that will parse
      * a megabyte of base64 has been handed a cheap way to spend CPU.
      */
-    public const int MAX_TOKEN_LENGTH = 4096;
+    public const int MAX_TOKEN_LENGTH = ContractsAssertionVerifier::MAX_TOKEN_LENGTH;
 
     public function __construct(private readonly ConsoleKeyring $keyring) {}
 

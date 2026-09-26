@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyring;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
 use ArtisanBuild\BuiltForCloud\Vitals\CollectVitals;
+use ArtisanBuild\BuiltForCloudContracts\MetadataShape as ContractsMetadataShape;
 
 /**
  * The three bounded string forms the SHARED metadata vocabulary defines
@@ -53,7 +54,7 @@ final class MetadataShape
      * capability names (`console-vitals`) and uuids all take this shape;
      * a sentence, a display name, a path and an email address do not.
      */
-    public const string TOKEN = '/^(?=.{1,64}$)[a-z0-9]+(?:[._:-][a-z0-9]+)*$/D';
+    public const string TOKEN = ContractsMetadataShape::TOKEN;
 
     /**
      * Semver, 1..32 characters, with LOWERCASE pre-release and build
@@ -67,10 +68,10 @@ final class MetadataShape
      * that cannot be spelled in lowercase is not one this contract will
      * forward to the vendor.
      */
-    public const string SEMVER = '/^(?=.{1,32}$)\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9a-z]+(?:[.-][0-9a-z]+)*)?(?:\+[0-9a-z]+(?:[.-][0-9a-z]+)*)?$/D';
+    public const string SEMVER = ContractsMetadataShape::SEMVER;
 
     /** An ISO-8601 instant with an explicit offset or `Z`, 1..40 characters. */
-    public const string TIMESTAMP = '/^(?=.{1,40}$)\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/D';
+    public const string TIMESTAMP = ContractsMetadataShape::TIMESTAMP;
 
     /**
      * A console countersigning-key id — the ONE field in the contract
@@ -81,25 +82,25 @@ final class MetadataShape
      * second regex here would be the drift that class's docblock already
      * warns about.
      */
-    public const string CONSOLE_KEY_ID = ConsoleKeyring::KEY_ID_PATTERN;
+    public const string CONSOLE_KEY_ID = ContractsMetadataShape::CONSOLE_KEY_ID;
 
     public static function isToken(string $value): bool
     {
-        return preg_match(self::TOKEN, $value) === 1;
+        return ContractsMetadataShape::isToken($value);
     }
 
     public static function isSemver(string $value): bool
     {
-        return preg_match(self::SEMVER, $value) === 1;
+        return ContractsMetadataShape::isSemver($value);
     }
 
     public static function isTimestamp(string $value): bool
     {
-        return preg_match(self::TIMESTAMP, $value) === 1;
+        return ContractsMetadataShape::isTimestamp($value);
     }
 
     public static function isConsoleKeyId(string $value): bool
     {
-        return preg_match(self::CONSOLE_KEY_ID, $value) === 1;
+        return ContractsMetadataShape::isConsoleKeyId($value);
     }
 }

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Console;
 
+use ArtisanBuild\BuiltForCloudContracts\Console\ConsoleRole as ContractsConsoleRole;
+
 /**
  * The Console's two-value role contract (Console PRD D8). A delegated
  * operator arrives as EXACTLY ONE of these and nothing else is a role,
@@ -36,9 +38,6 @@ enum ConsoleRole: string
      */
     public static function values(): array
     {
-        return array_map(
-            static fn (self $role): string => $role->value,
-            self::cases(),
-        );
+        return ContractsConsoleRole::values();
     }
 }
