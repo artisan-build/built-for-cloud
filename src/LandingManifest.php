@@ -16,6 +16,12 @@ final readonly class LandingManifest
         public string $productUrl,
     ) {}
 
+    /** The transparent app artwork Scalpels publishes for every product, found by slug alone. */
+    public function imageUrl(): string
+    {
+        return "https://scalpels.app/img/products/transparent/{$this->slug}.png";
+    }
+
     public static function fromConfiguration(): self
     {
         return self::fromManifest(self::configuredManifest());

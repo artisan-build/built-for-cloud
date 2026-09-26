@@ -89,11 +89,12 @@ final class AuthenticatedUiTest extends TestCase
         foreach ([
             'Test <Shell> Application',
             'A test-created <strong>shell</strong> description.',
-            'https://assets.example.test/test-shell.svg?variant=ui&source=test',
             'https://scalpels.app/products/test-shell-application?source=test&kind=ui',
         ] as $value) {
             $response->assertSee($value)->assertDontSee($value, false);
         }
+
+        $response->assertSeeHtml('src="https://scalpels.app/img/products/transparent/test-shell-application.png"');
 
         $this->assertMarker($content, 'ui-nav-member-management', in_array($role, [UserRole::Owner, UserRole::Admin], true));
         $this->assertMarker($content, 'ui-nav-session-management', $mode === AuthorityMode::Standalone);

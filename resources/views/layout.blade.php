@@ -25,7 +25,7 @@
     <meta name="theme-color" content="#faf3e8">
     <title>{{ $title }}</title>
     @if ($manifest)
-        <link rel="icon" href="{{ $manifest->icon }}">
+        <link rel="icon" href="{{ $manifest->imageUrl() }}">
     @endif
     @if ($stylesheetUrl)
         <link rel="stylesheet" href="{{ $stylesheetUrl }}">
@@ -59,7 +59,7 @@
                    class="inline-flex min-h-11 min-w-0 items-center gap-2.5 rounded-xl text-clay-ink
                           hover:text-clay-brown
                           focus-visible:outline-3 focus-visible:outline-offset-4 focus-visible:outline-clay-iron">
-                    <img src="{{ $manifest->icon }}"
+                    <img src="{{ $manifest->imageUrl() }}"
                          alt=""
                          class="size-8 shrink-0 object-contain">
                     <span class="truncate font-display text-lg tracking-tight">

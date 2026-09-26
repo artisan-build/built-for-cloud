@@ -3,7 +3,7 @@
     @if ($manifest !== null)
     <header data-testid="ui-manifest" class="grid gap-4">
         <div class="flex flex-wrap items-center gap-x-6 gap-y-3">
-            <img data-testid="ui-manifest-icon" src="{{ $manifest->icon }}" alt="{{ $manifest->name }}" class="size-16 shrink-0 object-contain sm:size-20">
+            <img data-testid="ui-manifest-icon" src="{{ $manifest->imageUrl() }}" alt="{{ $manifest->name }}" class="size-16 shrink-0 object-contain sm:size-20">
             <h1 data-testid="ui-manifest-name" class="font-display text-4xl font-normal tracking-tight text-clay-ink sm:text-5xl">{{ $manifest->name }}</h1>
         </div>
         <p data-testid="ui-manifest-description" class="max-w-2xl text-lg leading-8 text-clay-soft">{{ $manifest->description }}</p>

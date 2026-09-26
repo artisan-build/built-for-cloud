@@ -5,7 +5,7 @@
                 lg:py-10">
     <div class="flex flex-wrap items-center gap-x-8 gap-y-5">
         <img data-testid="landing-manifest-icon"
-             src="{{ $manifest->icon }}"
+             src="{{ $manifest->imageUrl() }}"
              alt="{{ $manifest->name }}"
              width="128"
              height="128"
