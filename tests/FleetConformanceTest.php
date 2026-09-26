@@ -84,6 +84,7 @@ function packageConformanceExpected(): array
             'ArtisanBuild\BuiltForCloud\Commands\CredentialMintCommand',
             'ArtisanBuild\BuiltForCloud\Commands\CredentialRevokeCommand',
             'ArtisanBuild\BuiltForCloud\Commands\CredentialRotateCommand',
+            'ArtisanBuild\BuiltForCloud\Commands\FreshCommand',
             'ArtisanBuild\BuiltForCloud\Commands\HmacRewrapCommand',
             'ArtisanBuild\BuiltForCloud\Commands\InstallOperatorCredentialCommand',
             'ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand',
