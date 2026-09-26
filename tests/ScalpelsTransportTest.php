@@ -4,12 +4,20 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
+use ArtisanBuild\BuiltForCloud\Mail\QueuedMailIdentity;
 use ArtisanBuild\BuiltForCloud\Mail\ScalpelsTransport;
 use ArtisanBuild\BuiltForCloudContracts\Mail\ManagedMail;
+use Illuminate\Contracts\Mail\Factory as MailFactory;
+use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Mail\MailManager;
+use Illuminate\Mail\Mailable;
+use Illuminate\Mail\SendQueuedMailable;
+use Illuminate\Queue\Events\JobAttempted;
+use Illuminate\Queue\Events\JobProcessing;
+use Illuminate\Queue\Jobs\SyncJob;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Http;
@@ -25,6 +33,17 @@ use Symfony\Component\Mime\RawMessage;
 uses(RefreshDatabase::class);
 
 const SCALPELS_MESSAGE_ID = '01999f54-8e7d-7110-8c1b-9f261919f68f';
+
+final class QueuedScalpelsTestMailable extends Mailable implements ShouldQueue
+{
+    public function build(): static
+    {
+        return $this
+            ->to('queued-recipient@example.test')
+            ->subject('Queued managed mail')
+            ->html('<p>Queued body</p>');
+    }
+}
 
 /** @return array{base_url: string, bearer: string, connection_id: string, installation_id: string, ca_bundle: string} */
 function configureManagedMailConnection(): array
@@ -74,8 +93,14 @@ function resolvedScalpelsTransport(?Closure $sleep = null): ScalpelsTransport
         app(Factory::class),
         app(),
         static fn (): TransportInterface => Mail::mailer('log')->getSymfonyTransport(),
+        app(QueuedMailIdentity::class),
         $sleep,
     );
+}
+
+function queuedMailTestJob(string $payload): SyncJob
+{
+    return new SyncJob(app(), $payload, 'sync', 'mail');
 }
 
 it('registers through Laravel without replacing host mailers or the explicit default', function (): void {
@@ -179,6 +204,85 @@ it('replays a network failure once with the same idempotency key', function (): 
     expect($sent?->getMessageId())->toBe(SCALPELS_MESSAGE_ID)
         ->and($requests)->toHaveCount(2)
         ->and($requests[0]->header('Idempotency-Key'))->toBe($requests[1]->header('Idempotency-Key'));
+});
+
+it('keeps the idempotency key across a serialized queued mailable retry', function (): void {
+    configureManagedMailConnection();
+    config(['mail.default' => 'scalpels']);
+    $keys = [];
+    $httpAttempt = 0;
+    Http::fake(function (ClientRequest $request) use (&$keys, &$httpAttempt) {
+        $httpAttempt++;
+        $keys[] = $request->header('Idempotency-Key')[0];
+
+        if ($httpAttempt <= 2) {
+            throw new RuntimeException('ambiguous-network-failure');
+        }
+
+        return Http::response(['message_id' => SCALPELS_MESSAGE_ID], 202);
+    });
+    $payload = json_encode([
+        'uuid' => '01999f54-4444-7110-8c1b-9f261919f68f',
+        'data' => [
+            'commandName' => SendQueuedMailable::class,
+            'command' => serialize(new SendQueuedMailable(new QueuedScalpelsTestMailable)),
+        ],
+    ], JSON_THROW_ON_ERROR);
+
+    foreach ([1, 2] as $attempt) {
+        $job = queuedMailTestJob($payload);
+        event(new JobProcessing('sync', $job));
+        $command = unserialize($job->payload()['data']['command']);
+        expect($command)->toBeInstanceOf(SendQueuedMailable::class);
+        $failure = null;
+
+        try {
+            $command->handle(app(MailFactory::class));
+        } catch (Throwable $caught) {
+            $failure = $caught;
+        } finally {
+            event(new JobAttempted('sync', $job, $failure));
+        }
+
+        if ($attempt === 1) {
+            expect($failure)->toBeInstanceOf(TransportException::class);
+        } else {
+            expect($failure)->toBeNull();
+        }
+    }
+
+    expect($keys)->toHaveCount(3)
+        ->and(array_unique($keys))->toHaveCount(1);
+});
+
+it('gives distinct implicit message identities to two sends in one queued job', function (): void {
+    configureManagedMailConnection();
+    $keys = [];
+    Http::fake(function (ClientRequest $request) use (&$keys) {
+        $keys[] = $request->header('Idempotency-Key')[0];
+
+        return Http::response(['message_id' => SCALPELS_MESSAGE_ID], 202);
+    });
+    $payload = json_encode(['uuid' => '01999f54-5555-7110-8c1b-9f261919f68f'], JSON_THROW_ON_ERROR);
+    $job = queuedMailTestJob($payload);
+    event(new JobProcessing('sync', $job));
+
+    try {
+        foreach (['first', 'second'] as $subject) {
+            resolvedScalpelsTransport()->send(
+                (new Email)
+                    ->from('sender@example.test')
+                    ->to('recipient@example.test')
+                    ->subject($subject)
+                    ->text('same body'),
+            );
+        }
+    } finally {
+        event(new JobAttempted('sync', $job));
+    }
+
+    expect($keys)->toHaveCount(2)
+        ->and($keys[0])->not->toBe($keys[1]);
 });
 
 it('attempts permanent client failures once and rejects malformed success generically', function (mixed $response, int $status): void {

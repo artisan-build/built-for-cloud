@@ -43,6 +43,7 @@ final class ScalpelsTransport extends AbstractTransport
         private readonly Factory $http,
         private readonly Application $app,
         private readonly Closure $logTransport,
+        private readonly QueuedMailIdentity $queuedMailIdentity,
         ?Closure $sleep = null,
     ) {
         parent::__construct();
@@ -61,6 +62,10 @@ final class ScalpelsTransport extends AbstractTransport
         #[SensitiveParameter] ?Envelope $envelope = null,
     ): ?SentMessage {
         try {
+            if ($message instanceof Email) {
+                $this->queuedMailIdentity->apply($message);
+            }
+
             return parent::send($message, $envelope);
         } catch (TransportException $failure) {
             throw new TransportException($failure->getMessage(), $failure->getCode());

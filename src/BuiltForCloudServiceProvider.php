@@ -45,6 +45,7 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\VerifyHmacSignature;
 use ArtisanBuild\BuiltForCloud\Listeners\QueueOwnershipWebhook;
 use ArtisanBuild\BuiltForCloud\Listeners\RefuseSystemAuthorityAuthentication;
 use ArtisanBuild\BuiltForCloud\Listeners\SystemAuthorityQueueScope;
+use ArtisanBuild\BuiltForCloud\Mail\QueuedMailIdentity;
 use ArtisanBuild\BuiltForCloud\Mail\ScalpelsTransport;
 use ArtisanBuild\BuiltForCloud\View\Layout;
 use Illuminate\Auth\AuthManager;
@@ -92,6 +93,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 $app->make(HttpFactory::class),
                 $app,
                 static fn () => $manager->mailer('log')->getSymfonyTransport(),
+                $app->make(QueuedMailIdentity::class),
             ));
         });
 
@@ -102,6 +104,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $this->app->singleton(UsageReporter::class, NullUsageReporter::class);
         $this->app->singleton(SystemAuthorityContext::class);
         $this->app->singleton(SystemAuthorityQueueScope::class);
+        $this->app->singleton(QueuedMailIdentity::class);
         $this->app->singleton(LandingManifest::class, static fn (): LandingManifest => LandingManifest::fromConfiguration());
 
         // P5b's forward-only carry: exchange has one durable destination.
@@ -132,6 +135,8 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $this->frameQueueEntriesByInvocation();
         Event::listen(JobProcessing::class, [SystemAuthorityQueueScope::class, 'processing']);
         Event::listen(JobAttempted::class, [SystemAuthorityQueueScope::class, 'finished']);
+        Event::listen(JobProcessing::class, [QueuedMailIdentity::class, 'processing']);
+        Event::listen(JobAttempted::class, [QueuedMailIdentity::class, 'finished']);
 
         if ($this->app->resolved('auth')) {
             HumanAuthConfiguration::assertEffectiveProvider($this->app->make('auth'));
