@@ -28,7 +28,7 @@ use Illuminate\Database\Eloquent\Model;
 
 it('installs compatible contracts and keeps the release and protocol versions distinct', function (): void {
     expect(InstalledVersions::satisfies(new VersionParser, 'artisan-build/built-for-cloud-contracts', '^0.1'))->toBeTrue()
-        ->and(BuiltForCloud::VERSION)->toBe('0.17.0')
+        ->and(BuiltForCloud::VERSION)->toBe('0.18.0')
         ->and(BuiltForCloud::API_VERSION)->toBe(ContractsBuiltForCloud::API_VERSION)
         ->and(BuiltForCloud::API_VERSION)->toBe(2);
 });
