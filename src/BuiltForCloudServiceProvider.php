@@ -45,6 +45,7 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\VerifyHmacSignature;
 use ArtisanBuild\BuiltForCloud\Listeners\QueueOwnershipWebhook;
 use ArtisanBuild\BuiltForCloud\Listeners\RefuseSystemAuthorityAuthentication;
 use ArtisanBuild\BuiltForCloud\Listeners\SystemAuthorityQueueScope;
+use ArtisanBuild\BuiltForCloud\Mail\ScalpelsTransport;
 use ArtisanBuild\BuiltForCloud\View\Layout;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Auth\Events\Authenticated;
@@ -56,6 +57,8 @@ use Illuminate\Contracts\Bus\Dispatcher as BusDispatcherContract;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Request;
+use Illuminate\Http\Client\Factory as HttpFactory;
+use Illuminate\Mail\MailManager;
 use Illuminate\Queue\Events\JobAttempted;
 use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Routing\Events\RouteMatched;
@@ -76,6 +79,22 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__.'/../config/built-for-cloud.php', 'built-for-cloud');
+        $config = $this->app->make(Repository::class);
+        $mailers = $config->get('mail.mailers', []);
+        $mailers = is_array($mailers) ? $mailers : [];
+        $mailers['scalpels'] = ['transport' => 'scalpels'];
+        $config->set('mail.mailers', $mailers);
+
+        $this->callAfterResolving('mail.manager', function (MailManager $manager): void {
+            $app = $this->app;
+
+            $manager->extend('scalpels', static fn (array $configuration): ScalpelsTransport => new ScalpelsTransport(
+                $app->make(HttpFactory::class),
+                $app,
+                static fn () => $manager->mailer('log')->getSymfonyTransport(),
+            ));
+        });
+
         $this->app->booting(
             static fn (Application $app) => HumanAuthConfiguration::apply($app->make(Repository::class)),
         );
