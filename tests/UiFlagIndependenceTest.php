@@ -33,7 +33,6 @@ afterEach(function (): void {
 function p5fConfigureUi(bool $enabled): void
 {
     config([
-        'built-for-cloud.ui.landing_page' => $enabled,
         'built-for-cloud.ui.member_management' => $enabled,
         'built-for-cloud.ui.personal_credentials' => $enabled,
         'built-for-cloud.ui.installation_credentials' => $enabled,

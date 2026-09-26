@@ -18,7 +18,6 @@ it('publishes the exact conservative manifest credential and ui schema', functio
         'product_url' => null,
     ])->and($published['credentials']['app_purposes'])->toBe([])
         ->and($published['ui'])->toBe([
-            'landing_page' => false,
             'member_management' => false,
             'personal_credentials' => false,
             'installation_credentials' => false,

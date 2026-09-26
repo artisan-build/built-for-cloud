@@ -83,7 +83,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $this->app->singleton(UsageReporter::class, NullUsageReporter::class);
         $this->app->singleton(SystemAuthorityContext::class);
         $this->app->singleton(SystemAuthorityQueueScope::class);
-        $this->app->singleton(LandingManifest::class, static fn (): ?LandingManifest => LandingManifest::fromOptionalConfiguration());
+        $this->app->singleton(LandingManifest::class, static fn (): LandingManifest => LandingManifest::fromConfiguration());
 
         // P5b's forward-only carry: exchange has one durable destination.
         $this->app->bind(DurableCredentialMinter::class, UnifiedStoreCredentialMinter::class);

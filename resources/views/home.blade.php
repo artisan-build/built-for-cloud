@@ -1,6 +1,5 @@
-<x-bfc-layout :title="$manifest?->name ?? ''">
-<section data-testid="ui-shell"@if ($manifest !== null) data-app-slug="{{ $manifest->slug }}"@endif class="grid gap-8">
-    @if ($manifest !== null)
+<x-bfc-layout :title="$manifest->name">
+<section data-testid="ui-shell" data-app-slug="{{ $manifest->slug }}" class="grid gap-8">
     <header data-testid="ui-manifest" class="grid gap-4">
         <div class="flex flex-wrap items-center gap-x-6 gap-y-3">
             <img data-testid="ui-manifest-icon" src="{{ $manifest->imageUrl() }}" alt="{{ $manifest->name }}" class="size-16 shrink-0 object-contain sm:size-20">
@@ -9,7 +8,6 @@
         <p data-testid="ui-manifest-description" class="max-w-2xl text-lg leading-8 text-clay-soft">{{ $manifest->description }}</p>
         <a data-testid="ui-manifest-product-link" href="{{ $manifest->productUrl }}" class="bfc-link w-fit">{{ $manifest->productUrl }}</a>
     </header>
-    @endif
 
     <nav data-testid="ui-navigation" class="bfc-nav">
         @if ($memberManagement)

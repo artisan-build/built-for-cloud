@@ -8,7 +8,6 @@ use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUiAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
-use ArtisanBuild\BuiltForCloud\LandingManifest;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Foundation\Application;
@@ -35,7 +34,6 @@ final class AuthenticatedUiTest extends TestCase
         parent::getEnvironmentSetUp($app);
 
         $app['config']->set('built-for-cloud.ui', [
-            'landing_page' => true,
             'member_management' => true,
             'personal_credentials' => true,
             'installation_credentials' => true,
@@ -107,57 +105,6 @@ final class AuthenticatedUiTest extends TestCase
         $this->assertMarker($content, 'ui-nav-installation-credentials', true);
     }
 
-    /** @return iterable<string, array{AuthorityMode}> */
-    public static function authorityModeProvider(): iterable
-    {
-        foreach (AuthorityMode::cases() as $mode) {
-            yield $mode->value => [$mode];
-        }
-    }
-
-    #[DataProvider('authorityModeProvider')]
-    public function test_default_null_manifest_renders_the_same_unbranded_shell_for_every_role(AuthorityMode $mode): void
-    {
-        $published = require __DIR__.'/../config/built-for-cloud.php';
-        config([
-            'built-for-cloud.manifest' => $published['manifest'],
-            'built-for-cloud.ui' => $published['ui'],
-        ]);
-        $this->setAuthority($mode);
-        $this->assertNull(app()->make(LandingManifest::class));
-        $layoutRenders = 0;
-        View::composer('bfc::layout', static function () use (&$layoutRenders): void {
-            $layoutRenders++;
-        });
-        $shells = [];
-
-        foreach (UserRole::cases() as $role) {
-            $rendersBeforeRequest = $layoutRenders;
-            $response = $this->actingAsVersioned($this->user(
-                $role,
-                managed: $mode === AuthorityMode::Managed,
-            ))->get('/bfc/ui');
-            $content = (string) $response->getContent();
-
-            $response->assertOk()
-                ->assertSeeHtml('data-testid="ui-shell"')
-                ->assertSeeHtml('data-testid="ui-navigation"')
-                ->assertSeeHtml('<title></title>');
-            $this->assertSame($rendersBeforeRequest + 1, $layoutRenders);
-            $this->assertSame(1, substr_count($content, '<main>'));
-            $this->assertSame(1, substr_count($content, 'data-testid="ui-shell"'));
-            $this->assertStringNotContainsString('data-testid="ui-manifest', $content);
-            $this->assertStringNotContainsString('data-app-slug=', $content);
-            $this->assertStringNotContainsString('data-testid="ui-nav-', $content);
-            $this->assertStringNotContainsString('<header', $content);
-            $this->assertStringNotContainsString('<img', $content);
-            $this->assertStringNotContainsString('<a ', $content);
-            $shells[] = $content;
-        }
-
-        $this->assertCount(1, array_unique($shells));
-    }
-
     /** @return iterable<string, array{array<string, mixed>, string}> */
     public static function invalidShellManifestProvider(): iterable
     {
@@ -184,7 +131,6 @@ final class AuthenticatedUiTest extends TestCase
     {
         config([
             'built-for-cloud.manifest' => $manifest,
-            'built-for-cloud.ui.landing_page' => false,
         ]);
         $pageRenders = 0;
         View::composer('bfc::home', static function () use (&$pageRenders): void {

@@ -486,6 +486,7 @@ server-generated operational text and — per the single-reveal rule above — n
 | `POST /bfc/managed/enrolment/disconnect` | `metadata` | bounded mode, resulting generation, request id and server timestamp |
 | `GET /bfc/managed/login` | `content` | redirect carrying an opaque one-time browser state, plus the initiating session cookie |
 | `GET /bfc/managed/callback` | `content` | redirect plus a newly established authenticated session cookie |
+| `GET /` | `content` | package-owned HTML showing the configured manifest identity |
 | `GET /bfc/assets/{path}` | `content` | static package-shipped stylesheet, font and image bytes rather than a bounded-scalar JSON shape, so conservatively not offered as vendor-safe metadata |
 | `GET /bfc/ui` | `content` | package-owned HTML containing configured manifest identity and local account navigation |
 | `GET /bfc/login` | `content` | package-owned HTML login form |
@@ -975,6 +976,19 @@ this one**, exactly as reserved — additively, without an `api_version` bump:
 
 An envelope carrying no `console_key` behaves in every respect as it did before, response keys
 included, which is what makes both slots additive rather than a version bump.
+
+---
+
+## Landing page
+
+### GET /
+
+Renders the package landing page from the app's manifest: its artwork, name and description, an
+"Open application" link to `/bfc/ui`, and a link to its Scalpels product page. Mounted in every app,
+which reserves the root: an app that registers its own `GET /` fails at boot, as does an app whose
+manifest is missing or incomplete.
+*Pinned by* `LandingRouteOwnershipTest` (mounted at the root of every app; a host root refused in
+either registration order; no manifest refused).
 
 ---
 

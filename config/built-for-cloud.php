@@ -30,6 +30,20 @@ return [
 
     'token_prefix' => env('BUILT_FOR_CLOUD_TOKEN_PREFIX', 'tok_'),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Manifest
+    |--------------------------------------------------------------------------
+    |
+    | How the app identifies itself as a Scalpels product. Required: every
+    | field must be set, and the app does not boot without them. `slug` is
+    | the product's Scalpels catalog slug (the app's artwork is loaded from
+    | https://scalpels.app/img/products/transparent/{slug}.png), `icon` is
+    | that artwork URL, and `product_url` is the product's page on
+    | scalpels.app.
+    |
+    */
+
     'manifest' => [
         'name' => null,
         'slug' => null,
@@ -459,7 +473,6 @@ return [
     */
 
     'ui' => [
-        'landing_page' => false,
         'member_management' => false,
         'personal_credentials' => false,
         'installation_credentials' => false,

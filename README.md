@@ -244,15 +244,18 @@ compare-and-set update and returns the exact state it wrote, so stale writers ca
 ### Package web UI adoption
 
 Publish `config/built-for-cloud.php`, then replace the package defaults with the consumer's canonical
-Scalpels catalog values. A complete adoption supplies all five `manifest` fields, fixed app-purpose
-mappings, and the affordances that product supports:
+Scalpels catalog values. Every Built for Cloud app must supply all five `manifest` fields: the app
+does not boot without them, because the landing page, header and signed-in home all show the app as
+its manifest declares it. `slug` must be the product's Scalpels catalog slug, since the app's artwork
+is loaded from `https://scalpels.app/img/products/transparent/{slug}.png`. Add the fixed app-purpose
+mappings and the affordances that product supports:
 
 ```php
 'manifest' => [
     'name' => 'Example Product',
     'slug' => 'example-product',
     'description' => 'The catalog description.',
-    'icon' => 'https://example.test/icon.svg',
+    'icon' => 'https://scalpels.app/img/products/transparent/example-product.png',
     'product_url' => 'https://scalpels.app/products/example-product',
 ],
 'credentials' => [
@@ -260,7 +263,6 @@ mappings, and the affordances that product supports:
     'app_purposes' => ['example-product.ingest' => 'consumption'],
 ],
 'ui' => [
-    'landing_page' => true,
     'member_management' => true,
     'personal_credentials' => true,
     'installation_credentials' => true,
@@ -275,8 +277,8 @@ mappings, and the affordances that product supports:
 only. They do not unmount `/bfc/ui*`, authorize direct requests, or change credential purpose,
 audience, lifecycle, authority-mode, membership, or route-ownership decisions.
 
-After adopting the package UI, remove the consumer's starter root page so it cannot shadow the
-optional package landing page. In the consumer's conformance test, call
+The package's landing page owns `GET /` in every app, and the app refuses to boot while it
+defines its own root route, so remove the consumer's starter root page. In the consumer's conformance test, call
 `$this->assertBuiltForCloudContract()` and
 `$this->assertBuiltForCloudManifestMatches($canonicalCatalogEntry)` with the canonical Scalpels entry;
 keep deliberate `bfc::` view overrides under the consumer's own test coverage.

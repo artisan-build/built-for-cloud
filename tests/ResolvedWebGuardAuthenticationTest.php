@@ -18,6 +18,7 @@ final class ResolvedWebGuardAuthenticationTest extends Orchestra
     /** @param Application $app */
     protected function getEnvironmentSetUp($app): void
     {
+        $app['config']->set('built-for-cloud.manifest', TestCase::manifestForTests());
         $app['config']->set('auth.defaults.guard', 'web');
         $app['config']->set('auth.guards.web', [
             'driver' => 'session',

@@ -710,7 +710,6 @@ final class PersonalCredentialUiTest extends TestCase
     private function allFlagsOff(): void
     {
         config([
-            'built-for-cloud.ui.landing_page' => false,
             'built-for-cloud.ui.member_management' => false,
             'built-for-cloud.ui.personal_credentials' => false,
             'built-for-cloud.ui.installation_credentials' => false,

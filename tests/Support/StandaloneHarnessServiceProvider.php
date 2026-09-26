@@ -27,6 +27,7 @@ use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\DeviceFlowDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SelfServicePolicyDeclaration;
+use ArtisanBuild\BuiltForCloud\Tests\TestCase;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Request;
@@ -43,6 +44,9 @@ final class StandaloneHarnessServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
+        // Every Built for Cloud app boots with a manifest; the harness (and
+        // Larastan, which boots through it) uses the test suite's.
+        $this->app['config']->set('built-for-cloud.manifest', TestCase::manifestForTests());
         $this->app['config']->set('auth.defaults.guard', 'web');
         $this->app['config']->set('auth.guards', [
             'bfc' => ['driver' => 'bfc', 'provider' => 'users'],

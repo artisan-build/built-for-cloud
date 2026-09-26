@@ -1117,7 +1117,7 @@ final class HttpContractDocTest extends TestCase
                     continue;
                 }
 
-                $routes[] = $method.' /'.$route->uri();
+                $routes[] = $method.' /'.ltrim($route->uri(), '/');
             }
         }
 

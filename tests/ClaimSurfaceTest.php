@@ -465,6 +465,8 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     // Routes then stopped being a selectable surface: the contract's
     // "one mounting switch exists, and only one" paragraph became a
     // statement that there is none, one unpaired absolute fewer.
+    // The landing page then became mandatory in every app and gained its
+    // own `GET /` contract section: four blocks more, no claim changed.
     $gateSurfaces = [
         'src/Console', 'src/Audit', 'resources/views',
         'docs/http-contract.md',
@@ -474,7 +476,7 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1010,
+        'blocks' => 1014,
         'absolute' => 327,
         'paired' => 63,
         'unpaired' => 264,

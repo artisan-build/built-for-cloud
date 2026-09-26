@@ -30,8 +30,8 @@ class Layout extends Component
     /** The Scalpels documentation the header links to, as Scalpels' own header does. */
     public const string SCALPELS_DOCS_URL = 'https://scalpels.app/docs';
 
-    /** The app this page belongs to, when it has declared a manifest. */
-    public ?LandingManifest $manifest;
+    /** The app this page belongs to, as its manifest declares it. */
+    public LandingManifest $manifest;
 
     /** The package stylesheet, versioned by content, or null when the package's routes are switched off. */
     public ?string $stylesheetUrl;

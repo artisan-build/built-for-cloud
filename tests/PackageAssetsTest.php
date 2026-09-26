@@ -20,6 +20,7 @@ final class PackageAssetsTest extends Orchestra
     /** @param Application $app */
     protected function getEnvironmentSetUp($app): void
     {
+        $app['config']->set('built-for-cloud.manifest', TestCase::manifestForTests());
         $app['config']->set('auth.guards', []);
         $app['config']->set('auth.providers', []);
         $app['config']->set('built-for-cloud.surfaces.data_migrations', false);

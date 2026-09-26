@@ -6,7 +6,6 @@ use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTransitions;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome;
 use ArtisanBuild\BuiltForCloud\LandingManifest;
-use ArtisanBuild\BuiltForCloud\LandingPageRegistrar;
 use ArtisanBuild\BuiltForCloud\Testing\UiConfigReadScan;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConditionedLifecycleRefusal;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConditionedPurposeGate;
@@ -35,7 +34,6 @@ it('derives exactly the named display and mount ui config consumers', function (
         UiHome::class.'|built-for-cloud.ui.member_management|1' => 'shell navigation display',
         UiHome::class.'|built-for-cloud.ui.personal_credentials|1' => 'shell navigation display',
         UiHome::class.'|built-for-cloud.ui.session_management|1' => 'shell navigation display',
-        LandingPageRegistrar::class.'|built-for-cloud.ui.landing_page|1' => 'optional public root mount',
         UiCredentialPurposes::class.'|built-for-cloud.ui.credential_purposes|1' => 'submitted app-purpose transport validator',
     ];
 
@@ -53,7 +51,6 @@ it('derives every published config read with a named disposition and detects rog
         UiHome::class.'|built-for-cloud.ui.personal_credentials|1' => 'display',
         UiHome::class.'|built-for-cloud.ui.session_management|1' => 'display',
         LandingManifest::class.'|built-for-cloud.manifest|1' => 'display',
-        LandingPageRegistrar::class.'|built-for-cloud.ui.landing_page|1' => 'mount',
         UiCredentialPurposes::class.'|built-for-cloud.ui.credential_purposes|1' => 'transport-validator',
     ];
 
@@ -72,7 +69,6 @@ it('allows only views view-models the root mount and submitted-purpose validatio
         UiHome::class.'|built-for-cloud.ui.member_management|1' => 'display',
         UiHome::class.'|built-for-cloud.ui.personal_credentials|1' => 'display',
         UiHome::class.'|built-for-cloud.ui.session_management|1' => 'display',
-        LandingPageRegistrar::class.'|built-for-cloud.ui.landing_page|1' => 'mount',
         UiCredentialPurposes::class.'|built-for-cloud.ui.credential_purposes|1' => 'transport-validator',
         'auth\\members.blade|built-for-cloud.ui.managed_transitions|1' => 'display',
     ];

@@ -11,12 +11,8 @@ use RuntimeException;
 
 final class LandingPageRegistrar
 {
-    public function mount(Router $router): ?Route
+    public function mount(Router $router): Route
     {
-        if (config('built-for-cloud.ui.landing_page') !== true) {
-            return null;
-        }
-
         $this->assertRootIsAvailable($router);
         LandingManifest::fromConfiguration();
 
@@ -31,7 +27,7 @@ final class LandingPageRegistrar
                 && array_intersect($route->methods(), ['GET', 'HEAD']) !== [];
 
             if ($rootCollision || $route->getName() === 'bfc.landing') {
-                throw new RuntimeException('The public root route [GET /] is reserved by the enabled built-for-cloud landing page; remove the host root route before enabling it.');
+                throw new RuntimeException('The public root route [GET /] is reserved by the built-for-cloud landing page; remove the host root route.');
             }
         }
     }

@@ -27,23 +27,6 @@ final readonly class LandingManifest
         return self::fromManifest(self::configuredManifest());
     }
 
-    public static function fromOptionalConfiguration(): ?self
-    {
-        $manifest = self::configuredManifest();
-
-        if (is_array($manifest)) {
-            foreach (['name', 'slug', 'description', 'icon', 'product_url'] as $key) {
-                if (! array_key_exists($key, $manifest) || $manifest[$key] !== null) {
-                    return self::fromManifest($manifest);
-                }
-            }
-
-            return null;
-        }
-
-        return self::fromManifest($manifest);
-    }
-
     private static function configuredManifest(): mixed
     {
         return config('built-for-cloud.manifest');

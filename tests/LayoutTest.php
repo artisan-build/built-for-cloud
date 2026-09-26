@@ -29,7 +29,6 @@ final class LayoutTest extends Orchestra
         $app['config']->set('auth.guards', []);
         $app['config']->set('auth.providers', []);
         $app['config']->set('built-for-cloud.surfaces.data_migrations', false);
-        $app['config']->set('built-for-cloud.ui.landing_page', true);
         $app['config']->set('built-for-cloud.manifest', [
             'name' => 'Layout Test App',
             'slug' => 'layout-test-app',
