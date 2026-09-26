@@ -514,7 +514,7 @@ final class CredentialPathInventory
             $imports = self::imports($code) + $providerImports;
 
             preg_match_all(
-                '/\$router->(get|post|put|patch|delete)\(\s*[\'\"]([^\'\"]+)[\'\"]\s*,\s*\[\s*([A-Z][A-Za-z0-9_]*)::class\s*,\s*[\'\"]([^\'\"]+)[\'\"]\s*\]/i',
+                '/(?:\$router->|Route::)(get|post|put|patch|delete)\(\s*[\'\"]([^\'\"]+)[\'\"]\s*,\s*\[\s*([A-Z][A-Za-z0-9_]*)::class\s*,\s*[\'\"]([^\'\"]+)[\'\"]\s*\]/i',
                 $code,
                 $routes,
                 PREG_SET_ORDER,
@@ -529,7 +529,7 @@ final class CredentialPathInventory
             }
 
             preg_match_all(
-                '/\$router->(get|post|put|patch|delete)\(\s*[\'"]([^\'"]+)[\'"]\s*,\s*([A-Z][A-Za-z0-9_]*)::class\s*\)/i',
+                '/(?:\$router->|Route::)(get|post|put|patch|delete)\(\s*[\'"]([^\'"]+)[\'"]\s*,\s*([A-Z][A-Za-z0-9_]*)::class\s*\)/i',
                 $code,
                 $invokableRoutes,
                 PREG_SET_ORDER,
@@ -982,7 +982,7 @@ final class CredentialPathInventory
         $class = preg_quote($short, '/').'::class';
 
         if (preg_match('/(?:aliasMiddleware|addPersistentMiddleware)\([^;]*'.$class.'/', $providerCode) === 1
-            || preg_match('/->middleware\(\s*(?:\[[^\]]*)?'.$class.'/', $providerCode) === 1) {
+            || preg_match('/(?:->|::)middleware\(\s*(?:\[[^\]]*)?'.$class.'/', $providerCode) === 1) {
             return true;
         }
 
@@ -1013,7 +1013,7 @@ final class CredentialPathInventory
             return false;
         }
 
-        if (preg_match('/->middleware\([^)]*(?:\.\.\.)?\$'.preg_quote($variable, '/').'\b/', $providerCode) === 1) {
+        if (preg_match('/(?:->|::)middleware\([^)]*(?:\.\.\.)?\$'.preg_quote($variable, '/').'\b/', $providerCode) === 1) {
             return true;
         }
 

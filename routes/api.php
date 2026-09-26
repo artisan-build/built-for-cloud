@@ -33,13 +33,12 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
-use Illuminate\Routing\Router;
+use Illuminate\Support\Facades\Route;
 
-/** @var Router $router */
-$router->get('/bfc/meta', MetaController::class)
+Route::get('/bfc/meta', MetaController::class)
     ->middleware('throttle:bfc-public');
 
-$router->post('/bfc/ownership/claim', [ManageOwnership::class, 'claim'])
+Route::post('/bfc/ownership/claim', [ManageOwnership::class, 'claim'])
     ->middleware('throttle:bfc-claim');
 
 // The hitch claim-contract route (PRD 1.12 / OSS-8): the wire
@@ -47,52 +46,52 @@ $router->post('/bfc/ownership/claim', [ManageOwnership::class, 'claim'])
 // primitive as the onboarding exchange. Unconditional at a
 // FIXED path like every /bfc/* surface — never behind a
 // configurable prefix, never behind its own env flag.
-$router->post('/bfc/claim', [ManageOnboarding::class, 'claim'])
+Route::post('/bfc/claim', [ManageOnboarding::class, 'claim'])
     ->middleware('throttle:bfc-claim');
 
-$router->post('/bfc/onboarding/exchange', [ManageOnboarding::class, 'exchange'])
+Route::post('/bfc/onboarding/exchange', [ManageOnboarding::class, 'exchange'])
     ->middleware('throttle:bfc-claim');
 
-$router->post('/bfc/asymmetric-enrollments/{application}', AsymmetricEnrollments::class)
+Route::post('/bfc/asymmetric-enrollments/{application}', AsymmetricEnrollments::class)
     ->middleware('throttle:bfc-claim');
 
-$router->post('/bfc/onboarding/verify', [ManageOnboarding::class, 'verify'])
+Route::post('/bfc/onboarding/verify', [ManageOnboarding::class, 'verify'])
     ->middleware('throttle:bfc-public');
 
 // The token halves of device and loopback authorization: the CLI
 // polls or exchanges here with no browser session. The browser halves
 // live in routes/web.php; both halves belong to the authorization family.
-$router->group(['bfc_family' => 'authorization'], function (Router $router): void {
-    $router->post('/bfc/device/token', [DeviceAuthorizations::class, 'token'])
+Route::group(['bfc_family' => 'authorization'], function (): void {
+    Route::post('/bfc/device/token', [DeviceAuthorizations::class, 'token'])
         ->middleware('throttle:bfc-authorization-token')
         ->name('bfc.device.token');
-    $router->post('/bfc/loopback/token', [LoopbackAuthorizations::class, 'token'])
+    Route::post('/bfc/loopback/token', [LoopbackAuthorizations::class, 'token'])
         ->middleware('throttle:bfc-authorization-token')
         ->name('bfc.loopback.token');
 });
 
-$router->group(['bfc_operator' => true], function (Router $router): void {
+Route::group(['bfc_operator' => true], function (): void {
     // The P1 managed-enrolment verbs: owner-credential-authenticated
     // (the CURRENT ownership-linked credential — not any admin
     // bearer), throttled before authentication like every operator
     // write, no-store, secret never returned. See
     // docs/http-contract.md "Authority-driven managed enrolment".
-    $router->post('/bfc/managed/enrolment', [ManagedEnrolments::class, 'enrol'])
+    Route::post('/bfc/managed/enrolment', [ManagedEnrolments::class, 'enrol'])
         ->middleware('throttle:bfc-operator-write');
 
-    $router->post('/bfc/managed/enrolment/client-secret', [ManagedEnrolments::class, 'rotateClientSecret'])
+    Route::post('/bfc/managed/enrolment/client-secret', [ManagedEnrolments::class, 'rotateClientSecret'])
         ->middleware('throttle:bfc-operator-write');
 
-    $router->post('/bfc/managed/enrolment/disconnect', [ManagedEnrolments::class, 'disconnect'])
+    Route::post('/bfc/managed/enrolment/disconnect', [ManagedEnrolments::class, 'disconnect'])
         ->middleware('throttle:bfc-operator-write');
 
-    $router->post('/bfc/ownership/release', [ManageOwnership::class, 'release']);
+    Route::post('/bfc/ownership/release', [ManageOwnership::class, 'release']);
 
-    $router->post('/bfc/ownership/cancel-transfer', [ManageOwnership::class, 'cancelTransfer']);
+    Route::post('/bfc/ownership/cancel-transfer', [ManageOwnership::class, 'cancelTransfer']);
 
-    $router->post('/bfc/onboarding/issue', [ManageOnboarding::class, 'issue']);
+    Route::post('/bfc/onboarding/issue', [ManageOnboarding::class, 'issue']);
 
-    $router->get('/bfc/client-observations', ClientObservations::class);
+    Route::get('/bfc/client-observations', ClientObservations::class);
 
     // The unified store's verb routes (PRD 1.0): the HTTP half of
     // the two-transport rule, at a FIXED /bfc/ path like every
@@ -107,15 +106,15 @@ $router->group(['bfc_operator' => true], function (Router $router): void {
     // expensive verbs additionally carry the per-operator-
     // credential + per-IP rate limiter (throttle FIRST, so even
     // failing auth attempts are bounded).
-    $router->get('/bfc/credentials', [ManageCredentials::class, 'index']);
+    Route::get('/bfc/credentials', [ManageCredentials::class, 'index']);
 
-    $router->post('/bfc/credentials', [ManageCredentials::class, 'store'])
+    Route::post('/bfc/credentials', [ManageCredentials::class, 'store'])
         ->middleware('throttle:bfc-operator-write');
 
-    $router->delete('/bfc/credentials/{id}', [ManageCredentials::class, 'destroy'])
+    Route::delete('/bfc/credentials/{id}', [ManageCredentials::class, 'destroy'])
         ->middleware('throttle:bfc-operator-write');
 
-    $router->post('/bfc/credentials/{id}/rotate', [ManageCredentials::class, 'rotate'])
+    Route::post('/bfc/credentials/{id}/rotate', [ManageCredentials::class, 'rotate'])
         ->middleware('throttle:bfc-operator-write');
 
     // The hmac signing cutover (PRD 1.21, SEC-V3-01): a separate
@@ -124,13 +123,13 @@ $router->group(['bfc_operator' => true], function (Router $router): void {
     // operator ability is the rotate FAMILY (activation completes
     // rotation's dance); the declaration matrix's own `activate`
     // verb stays the finer split.
-    $router->post('/bfc/credentials/{id}/activate', [ManageCredentials::class, 'activate'])
+    Route::post('/bfc/credentials/{id}/activate', [ManageCredentials::class, 'activate'])
         ->middleware('throttle:bfc-operator-write');
 
-    $router->post('/bfc/hmac-cutovers/activate', [BoundHmacCutovers::class, 'activate'])
+    Route::post('/bfc/hmac-cutovers/activate', [BoundHmacCutovers::class, 'activate'])
         ->middleware('throttle:bfc-operator-write');
 
-    $router->post('/bfc/hmac-cutovers/status', [BoundHmacCutovers::class, 'status'])
+    Route::post('/bfc/hmac-cutovers/status', [BoundHmacCutovers::class, 'status'])
         ->middleware('throttle:bfc-operator-write');
 
     // The console re-key verb (Console PRD D12): the retrofit path
@@ -154,7 +153,7 @@ $router->group(['bfc_operator' => true], function (Router $router): void {
     //     rotate-scoped credential already in the field, silently,
     //     on upgrade. `credential:admin` still satisfies it, because
     //     the break-glass is a marking someone chose.
-    $router->post('/bfc/console/re-key', [ManageConsoleKeys::class, 'reKey'])
+    Route::post('/bfc/console/re-key', [ManageConsoleKeys::class, 'reKey'])
         ->middleware([
             'throttle:bfc-operator-write',
             UniformConsoleKeyRefusal::class,
@@ -180,7 +179,7 @@ $router->group(['bfc_operator' => true], function (Router $router): void {
     // MCP surface, which is more than denying that. A separate
     // ability would have meant no credential already in the field
     // could finish a rotation without being reissued first.
-    $router->post('/bfc/console/keys/{key_id}/retire', [ManageConsoleKeys::class, 'retire'])
+    Route::post('/bfc/console/keys/{key_id}/retire', [ManageConsoleKeys::class, 'retire'])
         ->middleware([
             'throttle:bfc-operator-write',
             UniformConsoleKeyRefusal::class,
@@ -211,13 +210,13 @@ $router->group(['bfc_operator' => true], function (Router $router): void {
     // Rate-limited like every other credentialed surface, per
     // credential AND per IP, and the throttle sits OUTSIDE the gate
     // so refused attempts are bounded too.
-    $router->get('/bfc/console/vitals', ConsoleVitals::class)
+    Route::get('/bfc/console/vitals', ConsoleVitals::class)
         ->middleware('throttle:bfc-vitals');
 
     // The offboard verb (PRD 1.15, SEC-V3-04): full account
     // containment behind its OWN verb-family ability — the widest
     // verb, so a stolen mint- or revoke-scoped credential cannot
     // reach it.
-    $router->post('/bfc/subjects/offboard', [ManageSubjects::class, 'offboard'])
+    Route::post('/bfc/subjects/offboard', [ManageSubjects::class, 'offboard'])
         ->middleware('throttle:bfc-operator-write');
 });
