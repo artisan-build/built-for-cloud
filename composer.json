@@ -6,18 +6,22 @@
     "type": "library",
     "require": {
         "php": "^8.3",
-        "artisan-build/built-for-cloud-contracts": "^0.1",
+        "artisan-build/built-for-cloud-contracts": "^0.2",
         "composer/semver": "^3.4",
         "illuminate/auth": "^13.24",
         "illuminate/console": "^13.24",
         "illuminate/contracts": "^13.24",
         "illuminate/database": "^13.24",
+        "illuminate/http": "^13.24",
+        "illuminate/mail": "^13.24",
         "illuminate/notifications": "^13.24",
         "illuminate/process": "^13.24",
         "illuminate/routing": "^13.24",
         "illuminate/support": "^13.24",
         "paragonie/paseto": "^3.5",
-        "paragonie/sodium_compat": "^1|^2"
+        "paragonie/sodium_compat": "^1|^2",
+        "symfony/mailer": "^7.4|^8.0",
+        "symfony/mime": "^7.4|^8.0"
     },
     "require-dev": {
         "larastan/larastan": "^3.9",

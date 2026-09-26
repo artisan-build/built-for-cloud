@@ -45,6 +45,8 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\VerifyHmacSignature;
 use ArtisanBuild\BuiltForCloud\Listeners\QueueOwnershipWebhook;
 use ArtisanBuild\BuiltForCloud\Listeners\RefuseSystemAuthorityAuthentication;
 use ArtisanBuild\BuiltForCloud\Listeners\SystemAuthorityQueueScope;
+use ArtisanBuild\BuiltForCloud\Mail\QueuedMailIdentity;
+use ArtisanBuild\BuiltForCloud\Mail\ScalpelsTransport;
 use ArtisanBuild\BuiltForCloud\View\Layout;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Auth\Events\Authenticated;
@@ -55,7 +57,9 @@ use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Contracts\Bus\Dispatcher as BusDispatcherContract;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Http\Request;
+use Illuminate\Mail\MailManager;
 use Illuminate\Queue\Events\JobAttempted;
 use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Routing\Events\RouteMatched;
@@ -76,6 +80,23 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__.'/../config/built-for-cloud.php', 'built-for-cloud');
+        $config = $this->app->make(Repository::class);
+        $mailers = $config->get('mail.mailers', []);
+        $mailers = is_array($mailers) ? $mailers : [];
+        $mailers['scalpels'] = ['transport' => 'scalpels'];
+        $config->set('mail.mailers', $mailers);
+
+        $this->callAfterResolving('mail.manager', function (MailManager $manager): void {
+            $app = $this->app;
+
+            $manager->extend('scalpels', static fn (array $configuration): ScalpelsTransport => new ScalpelsTransport(
+                $app->make(HttpFactory::class),
+                $app,
+                static fn () => $manager->mailer('log')->getSymfonyTransport(),
+                $app->make(QueuedMailIdentity::class),
+            ));
+        });
+
         $this->app->booting(
             static fn (Application $app) => HumanAuthConfiguration::apply($app->make(Repository::class)),
         );
@@ -83,6 +104,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $this->app->singleton(UsageReporter::class, NullUsageReporter::class);
         $this->app->singleton(SystemAuthorityContext::class);
         $this->app->singleton(SystemAuthorityQueueScope::class);
+        $this->app->singleton(QueuedMailIdentity::class);
         $this->app->singleton(LandingManifest::class, static fn (): LandingManifest => LandingManifest::fromConfiguration());
 
         // P5b's forward-only carry: exchange has one durable destination.
@@ -113,6 +135,8 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $this->frameQueueEntriesByInvocation();
         Event::listen(JobProcessing::class, [SystemAuthorityQueueScope::class, 'processing']);
         Event::listen(JobAttempted::class, [SystemAuthorityQueueScope::class, 'finished']);
+        Event::listen(JobProcessing::class, [QueuedMailIdentity::class, 'processing']);
+        Event::listen(JobAttempted::class, [QueuedMailIdentity::class, 'finished']);
 
         if ($this->app->resolved('auth')) {
             HumanAuthConfiguration::assertEffectiveProvider($this->app->make('auth'));
