@@ -101,6 +101,8 @@ it('keeps all metadata validators compatible over positive boundaries and reject
         'isTimestamp' => [
             ['', false], ['2026-09-26T12:34:56Z', true], ['2026-09-26 12:34:56+0000', true],
             ['2026-09-26T12:34:56.123456+00:00', true], ['SATURDAY', false],
+            ['2026-09-26T12:34:56.'.str_repeat('1', 19).'Z', true],
+            ['2026-09-26T12:34:56.'.str_repeat('1', 20).'Z', false],
             ['2026/09/26T12:34:56Z', false], ['2026-09-26T12-34-56Z', false],
             ['2026-09-26T12:34:56', false], ["2026-09-26T12:34:56Z\n", false],
         ],
