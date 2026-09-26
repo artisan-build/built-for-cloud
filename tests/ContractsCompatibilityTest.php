@@ -23,10 +23,11 @@ use ArtisanBuild\BuiltForCloudContracts\MetadataShape as ContractsMetadataShape;
 use ArtisanBuild\BuiltForCloudContracts\OwnershipClaim as ContractsOwnershipClaim;
 use ArtisanBuild\BuiltForCloudContracts\Vitals\VitalsPayload as ContractsVitalsPayload;
 use Composer\InstalledVersions;
+use Composer\Semver\VersionParser;
 use Illuminate\Database\Eloquent\Model;
 
-it('installs contracts v0.1.0 and keeps the release and protocol versions distinct', function (): void {
-    expect(InstalledVersions::getPrettyVersion('artisan-build/built-for-cloud-contracts'))->toBe('v0.1.0')
+it('installs compatible contracts and keeps the release and protocol versions distinct', function (): void {
+    expect(InstalledVersions::satisfies(new VersionParser, 'artisan-build/built-for-cloud-contracts', '^0.1'))->toBeTrue()
         ->and(BuiltForCloud::VERSION)->toBe('0.17.0')
         ->and(BuiltForCloud::API_VERSION)->toBe(ContractsBuiltForCloud::API_VERSION)
         ->and(BuiltForCloud::API_VERSION)->toBe(2);
