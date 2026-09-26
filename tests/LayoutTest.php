@@ -86,6 +86,21 @@ final class LayoutTest extends Orchestra
         $this->assertStringContainsString('<title>Fallback Name</title>', $html);
     }
 
+    public function test_the_header_is_scalpels_own_navigation_with_the_current_app(): void
+    {
+        $html = Blade::render('<x-bfc-layout>Body</x-bfc-layout>');
+
+        $this->assertMatchesRegularExpression('/<a href="https:\/\/scalpels\.app\/dashboard"\s+data-testid="bfc-header-scalpels"/', $html);
+        $this->assertMatchesRegularExpression('/<a href="https:\/\/scalpels\.app\/docs"\s+data-testid="bfc-header-docs"/', $html);
+        $this->assertStringContainsString('data-testid="bfc-header-app"', $html);
+        $this->assertStringContainsString('src="https://scalpels.app/img/products/transparent/layout-test-app.png"', $html);
+    }
+
+    public function test_the_user_menu_appears_only_for_a_signed_in_person(): void
+    {
+        $this->assertStringNotContainsString('data-testid="bfc-user-menu"', Blade::render('<x-bfc-layout>Body</x-bfc-layout>'));
+    }
+
     public function test_pushed_head_and_script_stacks_reach_the_layout(): void
     {
         $html = Blade::render(<<<'BLADE'

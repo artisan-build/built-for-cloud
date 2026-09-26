@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\View;
 
+use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\LandingManifest;
+use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Contracts\View\View as ViewContract;
 use Illuminate\Support\Facades\App;
 use Illuminate\Support\Facades\Config;
@@ -25,6 +27,9 @@ class Layout extends Component
     /** Where the Scalpels wordmark in the header takes the user: the dashboard every app is launched from. */
     public const string SCALPELS_URL = 'https://scalpels.app/dashboard';
 
+    /** The Scalpels documentation the header links to, as Scalpels' own header does. */
+    public const string SCALPELS_DOCS_URL = 'https://scalpels.app/docs';
+
     /** The app this page belongs to, when it has declared a manifest. */
     public ?LandingManifest $manifest;
 
@@ -33,6 +38,12 @@ class Layout extends Component
 
     /** The Scalpels wordmark the header carries, or null when the package's routes are switched off. */
     public ?string $wordmarkUrl;
+
+    /** The person signed in to this app, whose name opens the header's user menu. */
+    public ?User $user;
+
+    /** Where the user menu's Log out posts, or null when the package's UI routes are not mounted. */
+    public ?string $logoutUrl;
 
     /** Default an untitled page to the app's name and gather what the header shows. */
     public function __construct(public ?string $title = null)
@@ -43,6 +54,9 @@ class Layout extends Component
             ? route('bfc.assets', 'bfc.css').'?v='.substr((string) md5_file(dirname(__DIR__, 2).'/resources/dist/bfc.css'), 0, 12)
             : null;
         $this->wordmarkUrl = Route::has('bfc.assets') ? route('bfc.assets', 'img/scalpels-wordmark.webp') : null;
+        $principal = App::make(ActingPrincipalResolver::class)->resolve()->principal;
+        $this->user = $principal instanceof User ? $principal : null;
+        $this->logoutUrl = Route::has('bfc.ui.logout') ? route('bfc.ui.logout') : null;
     }
 
     /**

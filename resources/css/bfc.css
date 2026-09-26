@@ -170,6 +170,48 @@
     @apply focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-clay-iron;
   }
 
+  /* Scalpels' header nav link and its clay bead, as its app shell draws them. */
+  .bfc-header-link {
+    @apply inline-flex min-h-11 items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors;
+    @apply hover:bg-clay-surface hover:text-clay-brown hover:shadow-clay-inset motion-reduce:transition-none;
+    @apply focus-visible:bg-clay-surface focus-visible:text-clay-brown focus-visible:shadow-clay-inset;
+  }
+
+  .bfc-bead {
+    @apply size-2 shrink-0 -rotate-12 rounded-clay-marker bg-radial-[at_30%_25%] from-[#d89f75] to-[#aa6846] shadow-clay-bead;
+  }
+
+  /* The user menu: a native popover laid out like Flux's dropdown menu on
+     the clay palette. Anchored under its button where the browser supports
+     anchor positioning, and pinned to the header's right edge where not. */
+  .bfc-user-menu {
+    @apply fixed m-0 min-w-56 rounded-lg border border-clay-sand bg-clay-surface p-1.5 text-clay-ink shadow-lg;
+    inset: auto;
+    top: 4.25rem;
+    right: max(1.25rem, calc((100vw - 72rem) / 2));
+  }
+
+  @supports (position-anchor: --bfc-user-menu) {
+    .bfc-user-menu {
+      position-anchor: --bfc-user-menu;
+      top: calc(anchor(bottom) + 0.5rem);
+      right: anchor(right);
+    }
+  }
+
+  .bfc-user-menu-separator {
+    @apply -mx-1.5 my-1.5 border-clay-sand;
+  }
+
+  .bfc-user-menu-item {
+    @apply flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm font-medium text-clay-ink;
+    @apply hover:bg-clay-slip focus-visible:bg-clay-slip focus-visible:outline-none;
+  }
+
+  .bfc-user-menu-item > svg {
+    @apply size-5 shrink-0 text-clay-dot;
+  }
+
   .bfc-link {
     @apply font-semibold text-clay-iron underline decoration-clay-edge underline-offset-4 hover:decoration-clay-iron;
   }

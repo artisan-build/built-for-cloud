@@ -95,6 +95,10 @@ final class AuthenticatedUiTest extends TestCase
         }
 
         $response->assertSeeHtml('src="https://scalpels.app/img/products/transparent/test-shell-application.png"');
+        $response->assertSeeHtml('data-testid="bfc-user-menu"')
+            ->assertSeeHtml('data-testid="bfc-user-menu-logout"')
+            ->assertSee($user->name)
+            ->assertSee($user->email);
 
         $this->assertMarker($content, 'ui-nav-member-management', in_array($role, [UserRole::Owner, UserRole::Admin], true));
         $this->assertMarker($content, 'ui-nav-session-management', $mode === AuthorityMode::Standalone);

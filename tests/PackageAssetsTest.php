@@ -81,14 +81,15 @@ final class PackageAssetsTest extends Orchestra
         $classes = [];
 
         foreach ($views as $view) {
-            preg_match_all('/\\bbfc-[a-z-]+\\b/', (string) file_get_contents($view), $matches);
+            preg_match_all('/\\sclass="([^"]*)"/', (string) file_get_contents($view), $attributes);
+            preg_match_all('/(?<![\\w-])bfc-[a-z-]+/', implode(' ', $attributes[1]), $matches);
             $classes = [...$classes, ...$matches[0]];
         }
 
         $this->assertContains('bfc-panel', $classes);
 
         $missing = array_values(array_filter(
-            array_unique(array_diff($classes, ['bfc-layout', 'bfc-header', 'bfc-header-scalpels', 'bfc-header-app'])),
+            array_unique($classes),
             static fn (string $class): bool => ! str_contains($css, ".{$class}"),
         ));
 
