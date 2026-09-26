@@ -106,7 +106,7 @@ and the following closed `error` vocabulary. Clients branch on `error`.
 
 ### Changelog
 
-**v0.18.0.** Console entry is retired: `POST /bfc/console/enter` and
+**v0.18.1.** Console entry is retired: `POST /bfc/console/enter` and
 `GET /bfc/console/chrome.js` are removed, along with the Console session guard and the
 `BUILT_FOR_CLOUD_CONSOLE_ENABLED` / `BUILT_FOR_CLOUD_CONSOLE_REENTRY_URL` configuration (and the
 `built-for-cloud.console.return_path_allowlist` config key, which existed only to narrow the
@@ -124,15 +124,15 @@ secret, and disconnect it through the existing exit-transition machinery. `GET /
 and never returned. `api_version` remains 2 because these are new routes and one new open-set
 capability member.
 
-**api_version 2** (bfc **0.18.0**, this release). All changes since version 1, in one inventory.
+**api_version 2** (bfc **0.18.1**, this release). All changes since version 1, in one inventory.
 Additive unless marked otherwise.
 
 **Everything the Console adds through this release is additive or a documented removal, so `api_version` stays 2. What carries the
-signal is `bfc_version` 0.18.0 plus the `capabilities` entries** — `console-keys`,
+signal is `bfc_version` 0.18.1 plus the `capabilities` entries** — `console-keys`,
 `console-key-retire`, `console-vitals`,
 `app-action-audit-emit`, `mcp-serve` and `mcp-delegated`. (The `console-guard`, `console-enter`
-and `console-chrome-assets` entries this list once named were RETIRED in v0.18.0 with the
-machinery they advertised — see [Retired in v0.18.0](#retired-in-v0180).)
+and `console-chrome-assets` entries this list once named were RETIRED in v0.18.1 with the
+machinery they advertised — see [Retired in v0.18.1](#retired-in-v0181).)
 
 **What "additive" covers here, stated as what actually shipped rather than as one paradigm case**,
 because a reader applying rule 1 to their own change needs the real list:
@@ -196,8 +196,8 @@ with the three things that WOULD have moved the major and none of which happened
   interceptor, plus the `bfc::` view namespace carrying the single package layout (Console PRD
   D11/D7). Additive: no existing request or response shape changes, and the capability names
   what this deployment SERVES, never that any page of the application renders it. (The chrome
-  and its route were retired in v0.18.0 — see
-  [Retired in v0.18.0](#retired-in-v0180).)
+  and its route were retired in v0.18.1 — see
+  [Retired in v0.18.1](#retired-in-v0181).)
 - New rotation route (PRD 1.7): `POST /bfc/credentials/{id}/rotate` — rotate-by-id on the unified
   store. Summary rows gained the nullable `rotated_at` field (rotation provenance). A row
   already superseded by rotation never mints again (the lineage never forks): with a live
@@ -607,7 +607,7 @@ Public (`bfc-public` throttle). Identifies the instance.
 ```json
 {
   "product": "Sink",
-  "bfc_version": "0.18.0",
+  "bfc_version": "0.18.1",
   "api_version": 2,
   "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials", "console-keys", "console-key-retire", "console-vitals", "app-action-audit-emit", "mcp-serve", "mcp-delegated"],
   "claimed": true,
@@ -631,7 +631,7 @@ below are the ones that do carry a predicate, and each states it.
 optional claim-time key exchange and `POST /bfc/console/re-key`. It deliberately does **not** say
 `console` — key custody is not the Console, and a control plane that read `console` as "this
 deployment can be entered" would be reading a promise this capability does not make (the
-delegated-entry door it might once have imagined was retired in v0.18.0). The delegated-actor
+delegated-entry door it might once have imagined was retired in v0.18.1). The delegated-actor
 table does exist, retained for delegated MCP authentication; `console-keys` says nothing about
 it, and an instance can report it while serving no delegated surface at all.
 
@@ -2815,7 +2815,7 @@ field.
 {
   "version": 1,
   "api_version": 2,
-  "bfc_version": "0.18.0",
+  "bfc_version": "0.18.1",
   "app_version": "1.4.2",
   "health": "ok",
   "deployed_at": "2026-08-29T09:14:00+00:00",
@@ -3146,7 +3146,7 @@ else.
 transaction it opened itself, on the default connection used by the audit models.** Do that and a
 rolled-back action takes both rows with it, so nothing is ever recorded about something that did
 not happen — the stream is transactional, or it is fiction. (Historically the package's own
-emitter was the delegated-entry door, retired in v0.18.0, which wrote the entry and its event on
+emitter was the delegated-entry door, retired in v0.18.1, which wrote the entry and its event on
 the default connection in one transaction and served no entry it could not record; the
 requirement on a consuming app is unchanged.)
 *Pinned by* `tests/RecorderTransactionGuardTest.php` ("refuses to record an app action outside a
@@ -3314,7 +3314,7 @@ instance, can tamper with its own history, and this package will neither prevent
 
 ## Console — what has landed, what has been RETIRED, and what is still RESERVED
 
-The vendor-side Console lands in stages, and in v0.18.0 one stage was removed again. This
+The vendor-side Console lands in stages, and in v0.18.1 one stage was removed again. This
 section says exactly which of its names are real, which were retired, and which are still only
 names, so a consumer never has to guess. This section deliberately contains no `### METHOD
 /path` route headings — the mechanical route-completeness check covers live routes only, and
@@ -3346,7 +3346,7 @@ the routes named here are documented in their own sections above.
 - **The app-action audit stream's schema and emission** —
   [above](#the-app-action-audit-stream).
 
-### Retired in v0.18.0
+### Retired in v0.18.1
 
 Console entry is retired. The following are REMOVED, not disabled: `POST /bfc/console/enter`,
 `GET /bfc/console/chrome.js` and the chrome/layout re-entry machinery, the `bfc-console`
