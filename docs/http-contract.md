@@ -10,11 +10,10 @@ Every route below is verified mechanically: a package test enumerates the regist
 asserts each appears here, and that every route this document names is real. A route heading has
 the form `### METHOD /path`.
 
-One mounting switch exists, and only one: the surface-selection key (PRD 1.14,
-`built-for-cloud.surfaces.routes`) can unmount this **entire HTTP surface as one family** —
-for apps that use the package's store and CLI without serving its HTTP contract. No single
-route is individually configurable, no route moves behind a configurable prefix, and an instance
-that serves any of this contract serves all of it.
+There is no mounting switch: every Built for Cloud app serves this **entire HTTP surface**, loaded
+from the package's `routes/web.php` (the browser pages) and `routes/api.php` (the bearer, claim and
+operator routes). No route is individually configurable and no route moves behind a configurable
+prefix.
 
 ## Platform requirements
 
@@ -989,8 +988,7 @@ styles without rebuilding or publishing anything. `{path}` admits only those nam
 including any path that leaves the package's `resources/dist` directory, is a 404. Unauthenticated
 and unthrottled: the response is static, and `Cache-Control: public, max-age=31536000, immutable`
 lets the browser keep it, with the layout's `?v=` content hash changing whenever the file does.
-Mounted with the rest of the package routes under the `routes` surface; with routes off the default
-layout renders without its stylesheet.
+Mounted in every app, like the rest of the package routes.
 *Pinned by* `PackageAssetsTest` (the stylesheet, every bundled font and the wordmark are served
 with an immutable cache; missing names, other extensions and traversal attempts are 404s).
 

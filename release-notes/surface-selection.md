@@ -1,5 +1,7 @@
 # Surface selection (PRD 1.14, fleet F2)
 
+> **Superseded for routes.** The `routes` family has been retired: every Built for Cloud app now loads the package's `routes/web.php` and `routes/api.php` unconditionally, and `BUILT_FOR_CLOUD_SURFACE_ROUTES` is ignored. The other families below still apply.
+
 The `built-for-cloud.surfaces` config key makes the package a true package-with-flags: five
 independently selectable surface families, all ON by default (exactly the pre-1.14 behavior),
 each verifiably absent when turned off.

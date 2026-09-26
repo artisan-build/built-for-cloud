@@ -1,0 +1,253 @@
+<?php
+
+declare(strict_types=1);
+
+/*
+|--------------------------------------------------------------------------
+| Built for Cloud web routes
+|--------------------------------------------------------------------------
+|
+| The browser half of the package: the landing page, sign-in and account
+| recovery, members and sessions, the package UI, and token management. They
+| are loaded in every app, because every Built for Cloud app has a UI.
+|
+| Groups carry a `bfc_family` attribute the service provider reads after
+| loading this file, to hold each family to the ownership rules its
+| controllers rely on (StandaloneRouteOwnership): `landing`, `ui` and
+| `standalone` routes keep their reserved names and shapes, and every family
+| but `landing` keeps its package middleware. The two `bfc_bearer` pages carry
+| a bearer token in the path and never start a session.
+|
+| Browser routes ride the full session stack: the app's `web` group when it
+| has one, the equivalent session middleware when it does not, so cookie
+| sessions actually start and the MUTATING verbs are CSRF-protected. Without
+| it a session-riding forgery on a logged-in user's browser could mint,
+| rotate or revoke credentials.
+|
+*/
+
+use ArtisanBuild\BuiltForCloud\Http\Controllers\DeviceAuthorizations;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\InstallationCredentials;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\LoopbackAuthorizations;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManagedAuthentication;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTransitions;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\PackageAssets;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\PersonalCredentials;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneAuthentication;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneInvitations;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneMemberships;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\StandalonePasswordRecovery;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneSessions;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\UiInstallationCredentials;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\UiLogout;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\UiPersonalCredentials;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureManagedAuthority;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUiAuthority;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\ExpireStandaloneHandoffOnRefusal;
+use ArtisanBuild\BuiltForCloud\LandingPageRegistrar;
+use ArtisanBuild\BuiltForCloud\ManagedTransitionDirection;
+use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
+use Illuminate\Cookie\Middleware\EncryptCookies;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
+use Illuminate\Routing\Router;
+use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Support\Facades\App;
+use Illuminate\View\Middleware\ShareErrorsFromSession;
+
+/** @var Router $router */
+$browser = $router->hasMiddlewareGroup('web') ? ['web'] : [
+    EncryptCookies::class,
+    AddQueuedCookiesToResponse::class,
+    StartSession::class,
+    ShareErrorsFromSession::class,
+    PreventRequestForgery::class,
+];
+$authorizationUser = EnsureUserIsAuthenticated::class.':'.EnsureUserIsAuthenticated::DEFER_MANAGED_AUTHORITY;
+
+$router->group(['bfc_family' => 'landing'], function (Router $router): void {
+    App::make(LandingPageRegistrar::class)->mount($router);
+});
+
+$router->get('/bfc/assets/{path}', PackageAssets::class)
+    ->where('path', PackageAssets::PATTERN)
+    ->name('bfc.assets');
+
+// Device and loopback authorization: the browser halves, where a signed-in
+// person approves a CLI's request. The token halves are in routes/api.php.
+$router->group(['bfc_family' => 'authorization'], function (Router $router) use ($browser, $authorizationUser): void {
+    $router->post('/bfc/device-authorizations', [DeviceAuthorizations::class, 'store'])
+        ->middleware([...$browser, $authorizationUser, 'throttle:bfc-authorization-start'])
+        ->name('bfc.device.start');
+    $router->get('/bfc/device', [DeviceAuthorizations::class, 'show'])
+        ->middleware([...$browser, $authorizationUser])
+        ->name('bfc.device.show');
+    $router->post('/bfc/device', [DeviceAuthorizations::class, 'decide'])
+        ->middleware([...$browser, $authorizationUser, 'throttle:bfc-authorization-decision'])
+        ->name('bfc.device.decide');
+    $router->get('/bfc/loopback/authorize', [LoopbackAuthorizations::class, 'show'])
+        ->middleware([...$browser, $authorizationUser, 'throttle:bfc-authorization-start'])
+        ->name('bfc.loopback.authorize');
+    $router->post('/bfc/loopback/authorize', [LoopbackAuthorizations::class, 'decide'])
+        ->middleware([...$browser, $authorizationUser, 'throttle:bfc-authorization-decision'])
+        ->name('bfc.loopback.decide');
+});
+
+$router->group(['bfc_family' => 'ui'], function (Router $router) use ($browser): void {
+    $router->get('/bfc/ui', UiHome::class)
+        ->middleware([...$browser, EnsureUiAuthority::class, EnsureUserIsAuthenticated::class])
+        ->name('bfc.ui.home');
+    $router->post('/bfc/ui/logout', UiLogout::class)
+        ->middleware([...$browser, EnsureUiAuthority::class, EnsureUserIsAuthenticated::class])
+        ->name('bfc.ui.logout');
+
+    $credentialScreens = ['throttle:bfc-personal', ...$browser, EnsureUiAuthority::class, EnsureUserIsAuthenticated::class];
+    $router->get('/bfc/ui/credentials/personal', [UiPersonalCredentials::class, 'index'])
+        ->middleware($credentialScreens)
+        ->name('bfc.ui.personal-credentials.index');
+    $router->post('/bfc/ui/credentials/personal', [UiPersonalCredentials::class, 'store'])
+        ->middleware($credentialScreens)
+        ->name('bfc.ui.personal-credentials.store');
+    $router->post('/bfc/ui/credentials/personal/{id}/rotate', [UiPersonalCredentials::class, 'rotate'])
+        ->middleware($credentialScreens)
+        ->name('bfc.ui.personal-credentials.rotate');
+    $router->delete('/bfc/ui/credentials/personal/{id}', [UiPersonalCredentials::class, 'destroy'])
+        ->middleware($credentialScreens)
+        ->name('bfc.ui.personal-credentials.destroy');
+    $router->get('/bfc/ui/credentials/installation', [UiInstallationCredentials::class, 'index'])
+        ->middleware($credentialScreens)
+        ->name('bfc.ui.installation-credentials.index');
+    $router->post('/bfc/ui/credentials/installation', [UiInstallationCredentials::class, 'store'])
+        ->middleware($credentialScreens)
+        ->name('bfc.ui.installation-credentials.store');
+    $router->post('/bfc/ui/credentials/installation/{id}/rotate', [UiInstallationCredentials::class, 'rotate'])
+        ->middleware($credentialScreens)
+        ->name('bfc.ui.installation-credentials.rotate');
+    $router->delete('/bfc/ui/credentials/installation/{id}', [UiInstallationCredentials::class, 'destroy'])
+        ->middleware($credentialScreens)
+        ->name('bfc.ui.installation-credentials.destroy');
+});
+
+$router->get('/bfc/managed/login', [ManagedAuthentication::class, 'create'])
+    ->middleware([EnsureManagedAuthority::class, ...$browser])
+    ->name('bfc.managed.login');
+$router->get('/bfc/managed/callback', [ManagedAuthentication::class, 'callback'])
+    ->middleware([EnsureManagedAuthority::class, ...$browser])
+    ->name('bfc.managed.callback');
+
+$router->middleware([...$browser, EnsureUserIsAuthenticated::class])->group(function (Router $router): void {
+    $router->get('/bfc/transitions/{direction}/prepare', [ManageTransitions::class, 'index'])
+        ->whereIn('direction', ManagedTransitionDirection::values())
+        ->name('bfc.transitions.index');
+    $router->post('/bfc/transitions/{direction}/prepare', [ManageTransitions::class, 'store'])
+        ->whereIn('direction', ManagedTransitionDirection::values())
+        ->name('bfc.transitions.store');
+    $router->get('/bfc/transitions/proposals/{transition}', [ManageTransitions::class, 'edit'])
+        ->name('bfc.transitions.edit');
+    $router->put('/bfc/transitions/proposals/{transition}', [ManageTransitions::class, 'update'])
+        ->name('bfc.transitions.update');
+    $router->post('/bfc/transitions/proposals/{transition}/complete', [ManageTransitions::class, 'complete'])
+        ->name('bfc.transitions.complete');
+    $router->post('/bfc/transitions/proposals/{transition}/abandon', [ManageTransitions::class, 'abandon'])
+        ->name('bfc.transitions.abandon');
+});
+
+$router->group(['bfc_family' => 'standalone'], function (Router $router) use ($browser, $authorizationUser): void {
+    $handoff = [
+        EncryptCookies::class,
+        AddQueuedCookiesToResponse::class,
+        ExpireStandaloneHandoffOnRefusal::class,
+    ];
+    $handoffSession = [...$handoff, EnsureStandaloneAuthority::class, ...$browser];
+
+    $router->get('/bfc/reset-password', [StandalonePasswordRecovery::class, 'edit'])
+        ->middleware($handoffSession)
+        ->name('bfc.password.reset.form');
+    $router->post('/bfc/reset-password', [StandalonePasswordRecovery::class, 'update'])
+        ->middleware([...$handoffSession, 'throttle:bfc-password-reset'])
+        ->name('bfc.password.update');
+    $router->get('/bfc/invitations/accept', [StandaloneInvitations::class, 'show'])
+        ->middleware($handoffSession)
+        ->name('bfc.invitations.accept.form');
+    $router->post('/bfc/invitations/accept', [StandaloneInvitations::class, 'store'])
+        ->middleware([...$handoffSession, 'throttle:bfc-invitation-accept'])
+        ->name('bfc.invitations.accept.store');
+
+    $router->group(['bfc_bearer' => true], function (Router $router) use ($handoff): void {
+        $bearerPage = [...$handoff, 'throttle:bfc-bearer-handoff', EnsureStandaloneAuthority::class];
+
+        $router->get('/bfc/reset-password/{token}', [StandalonePasswordRecovery::class, 'handoff'])
+            ->middleware($bearerPage)
+            ->withoutMiddleware([StartSession::class])
+            ->name('bfc.password.reset');
+        $router->get('/bfc/invitations/{token}', [StandaloneInvitations::class, 'handoff'])
+            ->middleware($bearerPage)
+            ->withoutMiddleware([StartSession::class])
+            ->name('bfc.invitations.accept');
+    });
+
+    $router->middleware([EnsureStandaloneAuthority::class, ...$browser])->group(function (Router $router): void {
+        $router->get('/bfc/login', [StandaloneAuthentication::class, 'create'])
+            ->name('bfc.login');
+        $router->post('/bfc/login', [StandaloneAuthentication::class, 'store'])
+            ->middleware('throttle:bfc-login')
+            ->name('bfc.login.store');
+        $router->get('/bfc/forgot-password', [StandalonePasswordRecovery::class, 'create'])
+            ->name('bfc.password.request');
+        $router->post('/bfc/forgot-password', [StandalonePasswordRecovery::class, 'store'])
+            ->middleware('throttle:bfc-password-reset')
+            ->name('bfc.password.email');
+    });
+
+    $router->middleware([EnsureUiAuthority::class, ...$browser, $authorizationUser, EnsureStandaloneAuthority::class])->group(function (Router $router): void {
+        $router->get('/bfc/members', [StandaloneMemberships::class, 'index'])
+            ->name('bfc.members.index');
+        $router->post('/bfc/members/invitations', [StandaloneMemberships::class, 'invite'])
+            ->middleware('throttle:bfc-invitation-issue')
+            ->name('bfc.members.invitations.store');
+        $router->put('/bfc/members/{user}/role', [StandaloneMemberships::class, 'role'])
+            ->name('bfc.members.role.update');
+        $router->delete('/bfc/members/{user}', [StandaloneMemberships::class, 'deactivate'])
+            ->name('bfc.members.destroy');
+
+        $router->get('/bfc/me/sessions', [StandaloneSessions::class, 'index'])
+            ->name('bfc.sessions.index');
+        $router->delete('/bfc/me/sessions/others', [StandaloneSessions::class, 'destroyOthers'])
+            ->middleware('throttle:bfc-session-confirm')
+            ->name('bfc.sessions.destroy-others');
+        $router->delete('/bfc/me/sessions/{session}', [StandaloneSessions::class, 'destroy'])
+            ->middleware('throttle:bfc-session-confirm')
+            ->name('bfc.sessions.destroy');
+        $router->post('/bfc/logout', [StandaloneAuthentication::class, 'destroy'])
+            ->name('bfc.logout');
+    });
+});
+
+// The personal-credentials surface (PRD 1.17): the SAME verbs as the
+// operator credential API, session-authenticated and scoped to the caller's
+// OWN credentials. Its gate is the session, not an operator ability — the app
+// supplies the authenticated human — and the subject is derived SERVER-SIDE
+// from that session by the app's declaration (SEC-V3-07), never from anything
+// in the request. `bfc.auth` runs the offboarding kill too, so an offboarded
+// user's surviving session cannot reach the screen (PRD 1.15).
+$router->group(['bfc_family' => 'personal-credentials'], function (Router $router) use ($browser): void {
+    $router->get('/bfc/me/credentials', [PersonalCredentials::class, 'index'])
+        ->middleware(['throttle:bfc-personal', ...$browser, EnsureUserIsAuthenticated::class]);
+    $router->post('/bfc/me/credentials', [PersonalCredentials::class, 'store'])
+        ->middleware(['throttle:bfc-personal', ...$browser, EnsureUserIsAuthenticated::class]);
+    $router->delete('/bfc/me/credentials/{id}', [PersonalCredentials::class, 'destroy'])
+        ->middleware(['throttle:bfc-personal', ...$browser, EnsureUserIsAuthenticated::class]);
+});
+
+$router->group(['bfc_family' => 'installation-credentials'], function (Router $router) use ($browser): void {
+    $router->get('/bfc/installation/credentials', [InstallationCredentials::class, 'index'])
+        ->middleware(['throttle:bfc-personal', ...$browser, EnsureUserIsAuthenticated::class]);
+    $router->post('/bfc/installation/credentials', [InstallationCredentials::class, 'store'])
+        ->middleware(['throttle:bfc-personal', ...$browser, EnsureUserIsAuthenticated::class]);
+    $router->post('/bfc/installation/credentials/{id}/rotate', [InstallationCredentials::class, 'rotate'])
+        ->middleware(['throttle:bfc-personal', ...$browser, EnsureUserIsAuthenticated::class]);
+    $router->delete('/bfc/installation/credentials/{id}', [InstallationCredentials::class, 'destroy'])
+        ->middleware(['throttle:bfc-personal', ...$browser, EnsureUserIsAuthenticated::class]);
+});

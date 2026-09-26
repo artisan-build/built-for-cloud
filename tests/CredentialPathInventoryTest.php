@@ -82,6 +82,7 @@ function frozenCredentialClassification(): array
         'command:ArtisanBuild\BuiltForCloud\Commands\CredentialMintCommand=bfc:credential:mint',
         'command:ArtisanBuild\BuiltForCloud\Commands\CredentialRevokeCommand=bfc:credential:revoke',
         'command:ArtisanBuild\BuiltForCloud\Commands\CredentialRotateCommand=bfc:credential:rotate',
+        'command:ArtisanBuild\BuiltForCloud\Commands\FreshCommand=fresh',
         'command:ArtisanBuild\BuiltForCloud\Commands\HmacRewrapCommand=bfc:hmac:rewrap',
         'command:ArtisanBuild\BuiltForCloud\Commands\InstallOperatorCredentialCommand=bfc:install:operator-credential',
         'command:ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand=bfc:outbox:drain',

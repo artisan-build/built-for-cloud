@@ -51,6 +51,11 @@ $claimSurfaces = [
     // nothing else is: `config/` is where this package explains what
     // each knob does, and explaining a knob is making a claim about it.
     'config/built-for-cloud.php',
+    // The package's route files. Their comments are the claims the route
+    // declarations used to carry inside the service provider (the fixed
+    // /bfc/ path, the gate stacks), so moving them out of src/ must not
+    // move them out of the map.
+    'routes',
 ];
 
 /**
@@ -124,7 +129,7 @@ $restatedClaims = [
     ],
     'never behind a configurable prefix never behind its own env flag' => [
         'docs/http-contract.md',
-        'src/BuiltForCloudServiceProvider.php',
+        'routes/api.php',
         'src/Http/Controllers/ManageOnboarding.php',
     ],
     'never produce a credential a mint of that shape could' => [
@@ -457,6 +462,9 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     // pinned to PackageAssetsTest, so paired rose by one and unpaired fell.
     // The header then became Scalpels' own app header with a user menu:
     // ten blocks more of layout markup, no claim changed.
+    // Routes then stopped being a selectable surface: the contract's
+    // "one mounting switch exists, and only one" paragraph became a
+    // statement that there is none, one unpaired absolute fewer.
     $gateSurfaces = [
         'src/Console', 'src/Audit', 'resources/views',
         'docs/http-contract.md',
@@ -467,9 +475,9 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
         'blocks' => 1010,
-        'absolute' => 328,
+        'absolute' => 327,
         'paired' => 63,
-        'unpaired' => 265,
+        'unpaired' => 264,
     ]);
 
     // The surfaces the restatement map runs over are wider than the
