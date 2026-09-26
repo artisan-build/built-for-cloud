@@ -91,16 +91,16 @@ final class MemberSessionUiTest extends TestCase
             ->values();
 
         $this->assertSame([
-            ['bfc.ui.home', 'GET', 'bfc/ui', UiHome::class],
-            ['bfc.ui.logout', 'POST', 'bfc/ui/logout', UiLogout::class],
-            ['bfc.ui.personal-credentials.index', 'GET', 'bfc/ui/credentials/personal', UiPersonalCredentials::class.'@index'],
-            ['bfc.ui.personal-credentials.store', 'POST', 'bfc/ui/credentials/personal', UiPersonalCredentials::class.'@store'],
-            ['bfc.ui.personal-credentials.rotate', 'POST', 'bfc/ui/credentials/personal/{id}/rotate', UiPersonalCredentials::class.'@rotate'],
-            ['bfc.ui.personal-credentials.destroy', 'DELETE', 'bfc/ui/credentials/personal/{id}', UiPersonalCredentials::class.'@destroy'],
-            ['bfc.ui.installation-credentials.index', 'GET', 'bfc/ui/credentials/installation', UiInstallationCredentials::class.'@index'],
-            ['bfc.ui.installation-credentials.store', 'POST', 'bfc/ui/credentials/installation', UiInstallationCredentials::class.'@store'],
-            ['bfc.ui.installation-credentials.rotate', 'POST', 'bfc/ui/credentials/installation/{id}/rotate', UiInstallationCredentials::class.'@rotate'],
-            ['bfc.ui.installation-credentials.destroy', 'DELETE', 'bfc/ui/credentials/installation/{id}', UiInstallationCredentials::class.'@destroy'],
+            ['bfc.ui.home', 'GET', 'settings', UiHome::class],
+            ['bfc.ui.logout', 'POST', 'settings/logout', UiLogout::class],
+            ['bfc.ui.personal-credentials.index', 'GET', 'settings/credentials/personal', UiPersonalCredentials::class.'@index'],
+            ['bfc.ui.personal-credentials.store', 'POST', 'settings/credentials/personal', UiPersonalCredentials::class.'@store'],
+            ['bfc.ui.personal-credentials.rotate', 'POST', 'settings/credentials/personal/{id}/rotate', UiPersonalCredentials::class.'@rotate'],
+            ['bfc.ui.personal-credentials.destroy', 'DELETE', 'settings/credentials/personal/{id}', UiPersonalCredentials::class.'@destroy'],
+            ['bfc.ui.installation-credentials.index', 'GET', 'settings/credentials/installation', UiInstallationCredentials::class.'@index'],
+            ['bfc.ui.installation-credentials.store', 'POST', 'settings/credentials/installation', UiInstallationCredentials::class.'@store'],
+            ['bfc.ui.installation-credentials.rotate', 'POST', 'settings/credentials/installation/{id}/rotate', UiInstallationCredentials::class.'@rotate'],
+            ['bfc.ui.installation-credentials.destroy', 'DELETE', 'settings/credentials/installation/{id}', UiInstallationCredentials::class.'@destroy'],
         ], $routes->map(static fn (RoutingRoute $route): array => [
             $route->getName(),
             $route->methods()[0],
@@ -126,7 +126,7 @@ final class MemberSessionUiTest extends TestCase
             }
         }
 
-        $response = $this->actingAsVersioned($this->user(UserRole::Owner))->get('/bfc/ui');
+        $response = $this->actingAsVersioned($this->user(UserRole::Owner))->get('/settings');
         $response->assertOk()
             ->assertSeeHtml('data-testid="ui-logout-form"')
             ->assertSee('action="'.route('bfc.ui.logout').'"', false)
@@ -145,7 +145,7 @@ final class MemberSessionUiTest extends TestCase
         $targetMember = $this->user(UserRole::Member);
         $targetAdmin = $this->user(UserRole::Admin);
 
-        $home = $this->actingAsVersioned($actor)->get('/bfc/ui')->assertOk();
+        $home = $this->actingAsVersioned($actor)->get('/settings')->assertOk();
         $this->assertMarker(
             (string) $home->getContent(),
             'ui-nav-member-management',
@@ -228,7 +228,7 @@ final class MemberSessionUiTest extends TestCase
         $this->seedSession($actor, 'test-created-session-one');
         $this->seedSession($actor, 'test-created-session-two');
 
-        $home = $this->actingAsVersioned($actor)->get('/bfc/ui')->assertOk();
+        $home = $this->actingAsVersioned($actor)->get('/settings')->assertOk();
         $this->assertMarker((string) $home->getContent(), 'ui-nav-session-management', $enabled);
         if ($enabled) {
             $home->assertSee('href="'.route('bfc.sessions.index').'"', false);
@@ -271,7 +271,7 @@ final class MemberSessionUiTest extends TestCase
         $localOnly = $this->user(UserRole::Member);
         $this->seedSession($actor, 'test-created-managed-session');
 
-        $home = $this->actingAsVersioned($actor)->get('/bfc/ui')->assertOk();
+        $home = $this->actingAsVersioned($actor)->get('/settings')->assertOk();
         $content = (string) $home->getContent();
         $showsMembers = $enabled && $role !== UserRole::Member;
         $this->assertMarker($content, 'ui-nav-member-management', $showsMembers);
@@ -341,7 +341,7 @@ final class MemberSessionUiTest extends TestCase
 
         $this->actingAsVersioned($user)->withSession($session);
         app()->instance('env', 'local');
-        $response = $this->post('/bfc/ui/logout', $payload);
+        $response = $this->post('/settings/logout', $payload);
 
         if ($tokenState === 'valid') {
             $response->assertRedirect('/')
@@ -351,14 +351,14 @@ final class MemberSessionUiTest extends TestCase
                     && $token !== $csrf);
             $this->assertGuest();
             $login = $mode === AuthorityMode::Managed ? 'bfc.managed.login' : 'bfc.login';
-            $this->get('/bfc/ui')->assertRedirect(route($login, ['intended' => '/bfc/ui']));
+            $this->get('/settings')->assertRedirect(route($login, ['intended' => '/settings']));
 
             return;
         }
 
         $response->assertStatus(419)->assertSessionHas('logout-proof', 'test-created-live-session');
         $this->assertAuthenticatedAs($user);
-        $this->get('/bfc/ui')->assertOk()->assertSeeHtml('data-testid="ui-shell"');
+        $this->get('/settings')->assertOk()->assertSeeHtml('data-testid="ui-shell"');
     }
 
     private function setAuthority(AuthorityMode $mode): void

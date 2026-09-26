@@ -488,11 +488,12 @@ server-generated operational text and — per the single-reveal rule above — n
 | `GET /bfc/managed/callback` | `content` | redirect plus a newly established authenticated session cookie |
 | `GET /` | `content` | package-owned HTML showing the configured manifest identity |
 | `GET /bfc/assets/{path}` | `content` | static package-shipped stylesheet, font and image bytes rather than a bounded-scalar JSON shape, so conservatively not offered as vendor-safe metadata |
-| `GET /bfc/ui` | `content` | package-owned HTML containing configured manifest identity and local account navigation |
+| `GET /dashboard` | `content` | HTML the app's configured dashboard renders for the signed-in person |
+| `GET /settings` | `content` | package-owned HTML containing configured manifest identity and local account navigation |
 | `GET /bfc/login` | `content` | package-owned HTML login form |
 | `POST /bfc/login` | `content` | redirect plus a newly established session cookie |
 | `POST /bfc/logout` | `metadata` | redirect after session invalidation |
-| `POST /bfc/ui/logout` | `metadata` | mode-neutral redirect after local session invalidation |
+| `POST /settings/logout` | `metadata` | mode-neutral redirect after local session invalidation |
 | `GET /bfc/forgot-password` | `content` | package-owned HTML recovery form |
 | `POST /bfc/forgot-password` | `metadata` | redirect with a fixed non-enumerating status |
 | `GET /bfc/reset-password/{token}` | `content` | stateless encrypted-cookie handoff carrying the one-time request token |
@@ -523,18 +524,18 @@ server-generated operational text and — per the single-reveal rule above — n
 | `GET /bfc/me/credentials` | `content` | the caller's own summary rows carry free-text names and subject refs, plus the declaration's field lists |
 | `POST /bfc/me/credentials` | `content` | the `delivery` single reveal, plus free-text name/subject fields |
 | `DELETE /bfc/me/credentials/{id}` | `metadata` | empty `204` body |
-| `GET /bfc/ui/credentials/personal` | `content` | package-owned HTML containing the caller's own credential summaries and declared fields |
-| `POST /bfc/ui/credentials/personal` | `content` | package-owned HTML containing the `delivery` single reveal and free-text credential fields |
-| `POST /bfc/ui/credentials/personal/{id}/rotate` | `content` | package-owned HTML containing the `delivery` single reveal and credential summaries |
-| `DELETE /bfc/ui/credentials/personal/{id}` | `content` | redirect after caller-owned credential revocation |
+| `GET /settings/credentials/personal` | `content` | package-owned HTML containing the caller's own credential summaries and declared fields |
+| `POST /settings/credentials/personal` | `content` | package-owned HTML containing the `delivery` single reveal and free-text credential fields |
+| `POST /settings/credentials/personal/{id}/rotate` | `content` | package-owned HTML containing the `delivery` single reveal and credential summaries |
+| `DELETE /settings/credentials/personal/{id}` | `content` | redirect after caller-owned credential revocation |
 | `GET /bfc/installation/credentials` | `content` | installation-owned summary rows carry free-text names and subject refs |
 | `POST /bfc/installation/credentials` | `content` | the `delivery` single reveal, plus free-text name/subject fields |
 | `POST /bfc/installation/credentials/{id}/rotate` | `content` | the `delivery` single reveal, plus a summary row carrying free-text names and subject refs |
 | `DELETE /bfc/installation/credentials/{id}` | `metadata` | empty `204` body |
-| `GET /bfc/ui/credentials/installation` | `content` | package-owned HTML containing installation-owned credential summaries and declared fields |
-| `POST /bfc/ui/credentials/installation` | `content` | package-owned HTML containing the `delivery` single reveal and free-text credential fields |
-| `POST /bfc/ui/credentials/installation/{id}/rotate` | `content` | package-owned HTML containing the `delivery` single reveal and credential summaries |
-| `DELETE /bfc/ui/credentials/installation/{id}` | `content` | redirect after installation-owned credential revocation |
+| `GET /settings/credentials/installation` | `content` | package-owned HTML containing installation-owned credential summaries and declared fields |
+| `POST /settings/credentials/installation` | `content` | package-owned HTML containing the `delivery` single reveal and free-text credential fields |
+| `POST /settings/credentials/installation/{id}/rotate` | `content` | package-owned HTML containing the `delivery` single reveal and credential summaries |
+| `DELETE /settings/credentials/installation/{id}` | `content` | redirect after installation-owned credential revocation |
 | `POST /bfc/console/re-key` | `metadata` | key ids from a bounded charset, a fixed status enum and a timestamp — no free text, and never any key material |
 | `POST /bfc/console/keys/{key_id}/retire` | `metadata` | a key id from a bounded charset, a fixed status enum, a boolean and a timestamp — no free text, and never any key material |
 | `GET /bfc/console/vitals` | `metadata` | bounded integers, a fixed health enum, a semver-validated `app_version`, a timestamp, and a headline label drawn from the app's declared vocabulary — no free text anywhere, and deliberately no `product` |
@@ -984,7 +985,7 @@ included, which is what makes both slots additive rather than a version bump.
 ### GET /
 
 Renders the package landing page from the app's manifest: its artwork, name and description, an
-"Open application" link to `/bfc/ui`, and a link to its Scalpels product page. Mounted in every app,
+"Open application" link to `/settings`, and a link to its Scalpels product page. Mounted in every app,
 which reserves the root: an app that registers its own `GET /` fails at boot, as does an app whose
 manifest is missing or incomplete.
 *Pinned by* `LandingRouteOwnershipTest` (mounted at the root of every app; a host root refused in
@@ -1010,16 +1011,24 @@ with an immutable cache; missing names, other extensions and traversal attempts 
 
 ## Authenticated package UI
 
-### GET /bfc/ui
+### GET /dashboard
 
-Renders the package-owned authenticated home through `bfc::layout` for an active local Owner,
+The page every signed-in person lands on: signing in without a requested destination, the managed
+callback's fallback, and the landing page's "Open application" link all go here. It carries the
+same sign-in middleware as `GET /settings` and the same unauthenticated answer. What renders is the
+class `built-for-cloud.dashboard` names, an invokable controller or a full-page Livewire component;
+the package default links to `GET /settings`.
+
+### GET /settings
+
+Renders the package settings page (the account and credential navigation) for an active local Owner,
 Admin, or Member under either valid authority mode. An unauthenticated request is redirected to
 the authority mode's real login route with a validated same-origin relative intended path.
 Invalid authority and delegated console principals refuse. Manifest identity and structural
 navigation come from published package configuration; affordance flags affect presentation,
 not route mounting or action authority.
 
-### POST /bfc/ui/logout
+### POST /settings/logout
 
 Invalidates the current local browser session and regenerates its CSRF token under either
 authority mode. The next protected request refuses through the current mode's login path;
@@ -2249,18 +2258,18 @@ server-minted, single-use submission nonce. The server stores only its hash, bou
 authenticated local user, verb and target, and consumes it atomically with the credential mutation.
 Responses are `private, no-store`.
 
-### GET /bfc/ui/credentials/personal
+### GET /settings/credentials/personal
 
 Render the caller's credential summaries, declared fields and admitted purpose/kind choices.
 
-### POST /bfc/ui/credentials/personal
+### POST /settings/credentials/personal
 
 Mint for the submitted application purpose and render the single reveal in the response. Success
 is **201**; declaration refusals are **403**, invalid input is **422**, and hmac rewrap is **409**.
 A missing, expired, consumed, foreign-session, wrong-user, wrong-verb or wrong-target submission
 nonce is **409**, with no credential effects and no delivery.
 
-### POST /bfc/ui/credentials/personal/{id}/rotate
+### POST /settings/credentials/personal/{id}/rotate
 
 Rotate one caller-owned credential and render the single reveal in the response. Success is
 **201**, or **200** when completing an interrupted cutover; an id outside the caller's scope is
@@ -2268,7 +2277,7 @@ Rotate one caller-owned credential and render the single reveal in the response.
 otherwise rotation is refused with **403** and no effects. Submission nonce refusals are **409** as
 described above.
 
-### DELETE /bfc/ui/credentials/personal/{id}
+### DELETE /settings/credentials/personal/{id}
 
 Revoke one caller-owned credential, then redirect to the personal credential page with **303**.
 An id outside the caller's scope is **404**.
@@ -2338,19 +2347,19 @@ foreign-session, wrong-user, wrong-verb or wrong-target nonce is **409**, with n
 outbox, app-action or onboarding effect and no delivery. Responses are `private, no-store`; GET
 responses never reveal secret material.
 
-### GET /bfc/ui/credentials/installation
+### GET /settings/credentials/installation
 
 Render the installation credential summaries and mutation forms with **200**.
 
-### POST /bfc/ui/credentials/installation
+### POST /settings/credentials/installation
 
 Mint and render the single reveal in the immediate response with **201**.
 
-### POST /bfc/ui/credentials/installation/{id}/rotate
+### POST /settings/credentials/installation/{id}/rotate
 
 Rotate and render the single reveal with **201**, or complete cutover with **200** and no reveal.
 
-### DELETE /bfc/ui/credentials/installation/{id}
+### DELETE /settings/credentials/installation/{id}
 
 Revoke an installation credential, then redirect to the installation page with **303**.
 

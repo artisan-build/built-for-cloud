@@ -295,7 +295,7 @@ it('keeps invalid UI authority refusal identical with all UI affordances off and
         $downstream = 0;
         $outcomes[] = [
             ...p5fRefusal(static fn (): Response => app(EnsureUiAuthority::class)->handle(
-                Request::create('/bfc/ui', 'GET'),
+                Request::create('/settings', 'GET'),
                 static function (Request $request) use (&$downstream): Response {
                     $downstream++;
 
@@ -339,9 +339,9 @@ it('keeps the UI-specific intended-login branches identical with all affordances
         app('auth')->forgetGuards();
         session()->flush();
         $before = p5fEffectCounts();
-        $response = test()->get('/bfc/ui?test-created-section=credentials');
+        $response = test()->get('/settings?test-created-section=credentials');
         $response->assertRedirect(route($route, [
-            'intended' => '/bfc/ui?test-created-section=credentials',
+            'intended' => '/settings?test-created-section=credentials',
         ]));
         $locations[] = [
             'class' => $response->baseResponse::class,

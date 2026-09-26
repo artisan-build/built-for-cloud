@@ -467,6 +467,8 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     // statement that there is none, one unpaired absolute fewer.
     // The landing page then became mandatory in every app and gained its
     // own `GET /` contract section: four blocks more, no claim changed.
+    // The dashboard then arrived with its own view and `GET /dashboard`
+    // contract section: three blocks more, no claim changed.
     $gateSurfaces = [
         'src/Console', 'src/Audit', 'resources/views',
         'docs/http-contract.md',
@@ -476,7 +478,7 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1014,
+        'blocks' => 1017,
         'absolute' => 327,
         'paired' => 63,
         'unpaired' => 264,

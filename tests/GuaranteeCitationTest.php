@@ -148,6 +148,7 @@ $exemptFromCitation = [
     'resources/views/authorizations/loopback.blade.php' => 'package form template; structural rendering and test-created authorization data are driven by DeviceAuthorizationHttpTest',
     'resources/views/credentials/installation.blade.php' => 'package form template; structural rendering and request-owned data are driven by InstallationCredentialUiTest',
     'resources/views/credentials/personal.blade.php' => 'package form template; structural rendering and request-owned data are driven by PersonalCredentialUiTest',
+    'resources/views/dashboard.blade.php' => 'package default dashboard template; one link to settings, structural rendering driven by DashboardTest',
     'resources/views/home.blade.php' => 'package UI shell template; structural rendering, escaped test-created manifest values, and role navigation are driven by AuthenticatedUiTest',
     'resources/views/layout.blade.php' => 'package layout shell; structural rendering is driven by LayoutTest and through the templates that use it (AuthenticatedUiTest, LandingPageTest)',
     'resources/views/landing.blade.php' => 'package landing template; package-layout use, structural rendering, and escaped test-created manifest values are driven by LandingPageTest',

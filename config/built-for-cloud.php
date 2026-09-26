@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\Http\Controllers\Dashboard;
 use ArtisanBuild\BuiltForCloud\View\Layout;
 
 return [
@@ -72,6 +73,21 @@ return [
     'layout' => env('BUILT_FOR_CLOUD_LAYOUT', Layout::class),
 
     'livewire_layout' => env('BUILT_FOR_CLOUD_LIVEWIRE_LAYOUT', true),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Dashboard
+    |--------------------------------------------------------------------------
+    |
+    | What `GET /dashboard` (route `bfc.dashboard`), the page every signed-in
+    | person lands on, runs: an invokable controller or a full-page Livewire
+    | component. The package default points the way to settings. An app
+    | replaces it by naming its own class in BUILT_FOR_CLOUD_DASHBOARD; the
+    | route keeps the package's sign-in middleware whatever runs behind it.
+    |
+    */
+
+    'dashboard' => env('BUILT_FOR_CLOUD_DASHBOARD', Dashboard::class),
 
     /*
     |--------------------------------------------------------------------------

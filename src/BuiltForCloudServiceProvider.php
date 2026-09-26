@@ -336,7 +336,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         );
         $bearerRoutes = array_values(array_filter($routes, static fn (Route $route): bool => $route->getAction('bfc_bearer') === true));
         $packageMiddlewareRoutes = StandaloneRouteOwnership::packageMiddlewareInventory(
-            $family('ui', 'standalone', 'personal-credentials', 'installation-credentials', 'authorization'),
+            $family('dashboard', 'ui', 'standalone', 'personal-credentials', 'installation-credentials', 'authorization'),
         );
         $ownedNamedRoutes = $family('landing', 'ui', 'standalone');
 

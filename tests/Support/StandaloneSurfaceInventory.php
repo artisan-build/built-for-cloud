@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\Http\Controllers\AsymmetricEnrollments;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\BoundHmacCutovers;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
+use ArtisanBuild\BuiltForCloud\Http\Controllers\Dashboard;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\DeviceAuthorizations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\InstallationCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\LoopbackAuthorizations;
@@ -56,6 +57,7 @@ final class StandaloneSurfaceInventory
             BoundHmacCutovers::class => false,
             ClientObservations::class => false,
             ConsoleVitals::class => false,
+            Dashboard::class => false,
             DeviceAuthorizations::class => false,
             InstallationCredentials::class => false,
             LoopbackAuthorizations::class => false,
@@ -93,8 +95,9 @@ final class StandaloneSurfaceInventory
     {
         return self::sortedRoutes(array_values(array_filter(
             $router->getRoutes()->getRoutes(),
-            static fn (Route $route): bool => $route->uri() === 'bfc'
-                || str_starts_with($route->uri(), 'bfc/'),
+            static fn (Route $route): bool => in_array($route->uri(), ['bfc', 'dashboard', 'settings'], true)
+                || str_starts_with($route->uri(), 'bfc/')
+                || str_starts_with($route->uri(), 'settings/'),
         )));
     }
 

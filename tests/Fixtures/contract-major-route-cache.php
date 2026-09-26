@@ -42,6 +42,7 @@ if ($mode === 'generate') {
         /** @param Application $app */
         protected function getEnvironmentSetUp($app): void
         {
+            $app['config']->set('built-for-cloud.manifest', ArtisanBuild\BuiltForCloud\Tests\TestCase::manifestForTests());
             $app['config']->set('auth.guards', []);
             $app['config']->set('auth.providers', []);
             $app['config']->set('built-for-cloud.surfaces.data_migrations', false);
@@ -136,6 +137,7 @@ $case = new class('testProbe') extends TestCase
     /** @param Application $app */
     protected function getEnvironmentSetUp($app): void
     {
+        $app['config']->set('built-for-cloud.manifest', ArtisanBuild\BuiltForCloud\Tests\TestCase::manifestForTests());
         $app['config']->set('auth.defaults.guard', 'web');
         $app['config']->set('auth.guards', [
             'web' => ['driver' => 'session', 'provider' => 'users'],

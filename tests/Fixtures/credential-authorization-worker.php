@@ -53,6 +53,7 @@ $case = new class('testProbe') extends TestCase
     /** @param Application $app */
     protected function getEnvironmentSetUp($app): void
     {
+        $app['config']->set('built-for-cloud.manifest', TestCase::manifestForTests());
         parent::getEnvironmentSetUp($app);
         $environment = static fn (string $name, string $default): string => (($value = getenv($name)) === false ? $default : $value);
         $app['config']->set('database.connections.pgsql_testing', [

@@ -75,7 +75,7 @@ it('recognises a parameterized standalone authority alias during ownership check
 
 it('exempts only the finite shipped UI route names from standalone authority', function (): void {
     $method = new ReflectionMethod(StandaloneRouteOwnership::class, 'requiresStandaloneAuthority');
-    $future = (new RoutingRoute(['GET'], '/bfc/ui/future', static fn (): null => null))->name('bfc.ui.future');
+    $future = (new RoutingRoute(['GET'], '/settings/future', static fn (): null => null))->name('bfc.ui.future');
     $home = Route::getRoutes()->getByName('bfc.ui.home');
 
     expect($method->invoke(null, $future))->toBeTrue()

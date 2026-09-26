@@ -140,7 +140,7 @@ final class EnsureUserIsAuthenticated
 
         $authority = InstallationAuthority::current();
 
-        if ($request->is('bfc/ui', 'bfc/ui/*')
+        if ($request->is('dashboard', 'settings', 'settings/*')
             || ($authority->isValid() && $authority->mode === AuthorityMode::Managed)) {
 
             if (! $authority->isValid()) {
@@ -154,7 +154,7 @@ final class EnsureUserIsAuthenticated
             };
             $intended = ManagedReturnTo::firstRelative([
                 $request->getRequestUri(),
-                route('bfc.ui.home', absolute: false),
+                route('bfc.dashboard', absolute: false),
             ]);
 
             return redirect()->route($login, ['intended' => $intended]);

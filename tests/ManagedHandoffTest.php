@@ -202,7 +202,7 @@ it('binds callback to the initiating browser, claims once, exchanges server-side
         'code' => 'valid-exchange-code',
         'issuer' => 'ignored-callback-sentinel',
     ]));
-    $success->assertRedirect('/');
+    $success->assertRedirect('/dashboard');
 
     expect(DB::table('bfc_managed_handoffs')->value('consumed_at'))->not->toBeNull()
         ->and($fixture->calls)->toHaveCount(2)
@@ -248,30 +248,30 @@ it('carries only a safe UI destination through the managed handoff and callback'
     $callback->assertRedirect($expected);
     $this->get($expected)
         ->assertOk()
-        ->assertSeeHtml('data-testid="ui-shell"')
+        ->assertSeeHtml('data-testid="bfc-layout"')
         ->assertSee('Managed Test Application');
     expect(session(ManagedHandoff::SESSION_INTENDED_KEY))->toBeNull();
 })->with([
-    'owner relative' => ['owner', '/bfc/ui?test-created-section=credentials', '/bfc/ui?test-created-section=credentials'],
-    'owner encoded query space' => ['owner', '/bfc/ui?test-created-query=a%20b', '/bfc/ui?test-created-query=a%20b'],
-    'owner encoded query slash' => ['owner', '/bfc/ui?test-created-query=a%2Fb', '/bfc/ui?test-created-query=a%2Fb'],
-    'admin off-site' => ['admin', 'https://outside.example.test/bfc/ui', '/bfc/ui'],
-    'member scheme-relative' => ['member', '//outside.example.test/bfc/ui', '/bfc/ui'],
-    'member encoded protocol-relative' => ['member', '/%2f%2foutside.example.test/bfc/ui', '/bfc/ui'],
-    'member encoded backslash' => ['member', '/%5coutside.example.test/bfc/ui', '/bfc/ui'],
-    'member encoded traversal' => ['member', '/bfc/%2e%2e/ui', '/bfc/ui'],
-    'member encoded path delimiter traversal' => ['member', '/bfc%3F/%2e%2e/ui', '/bfc/ui'],
-    'member encoded path crlf' => ['member', '/bfc%0d%0a/ui', '/bfc/ui'],
-    'member raw query control' => ['member', "/bfc/ui?test-created-query=a\tb", '/bfc/ui'],
-    'member encoded query control' => ['member', '/bfc/ui?test-created-query=a%09b', '/bfc/ui'],
-    'member encoded query crlf' => ['member', '/bfc/ui?test-created-query=a%0d%0ab', '/bfc/ui'],
-    'member double-encoded query crlf' => ['member', '/bfc/ui?test-created-query=a%250d%250ab', '/bfc/ui'],
-    'member raw malformed query percent' => ['member', '/bfc/ui?test-created-query=%', '/bfc/ui'],
-    'member non-hex query percent' => ['member', '/bfc/ui?test-created-query=%GG', '/bfc/ui'],
-    'member half-hex query percent' => ['member', '/bfc/ui?test-created-query=%2', '/bfc/ui'],
-    'member non-hex path percent' => ['member', '/bfc/%GG/ui', '/bfc/ui'],
-    'member encoded malformed query percent' => ['member', '/bfc/ui?test-created-query=%25GG', '/bfc/ui'],
-    'member fragment' => ['member', '/bfc/ui#test-created-fragment', '/bfc/ui'],
+    'owner relative' => ['owner', '/settings?test-created-section=credentials', '/settings?test-created-section=credentials'],
+    'owner encoded query space' => ['owner', '/settings?test-created-query=a%20b', '/settings?test-created-query=a%20b'],
+    'owner encoded query slash' => ['owner', '/settings?test-created-query=a%2Fb', '/settings?test-created-query=a%2Fb'],
+    'admin off-site' => ['admin', 'https://outside.example.test/settings', '/dashboard'],
+    'member scheme-relative' => ['member', '//outside.example.test/settings', '/dashboard'],
+    'member encoded protocol-relative' => ['member', '/%2f%2foutside.example.test/settings', '/dashboard'],
+    'member encoded backslash' => ['member', '/%5coutside.example.test/settings', '/dashboard'],
+    'member encoded traversal' => ['member', '/bfc/%2e%2e/ui', '/dashboard'],
+    'member encoded path delimiter traversal' => ['member', '/bfc%3F/%2e%2e/ui', '/dashboard'],
+    'member encoded path crlf' => ['member', '/bfc%0d%0a/ui', '/dashboard'],
+    'member raw query control' => ['member', "/settings?test-created-query=a\tb", '/dashboard'],
+    'member encoded query control' => ['member', '/settings?test-created-query=a%09b', '/dashboard'],
+    'member encoded query crlf' => ['member', '/settings?test-created-query=a%0d%0ab', '/dashboard'],
+    'member double-encoded query crlf' => ['member', '/settings?test-created-query=a%250d%250ab', '/dashboard'],
+    'member raw malformed query percent' => ['member', '/settings?test-created-query=%', '/dashboard'],
+    'member non-hex query percent' => ['member', '/settings?test-created-query=%GG', '/dashboard'],
+    'member half-hex query percent' => ['member', '/settings?test-created-query=%2', '/dashboard'],
+    'member non-hex path percent' => ['member', '/bfc/%GG/ui', '/dashboard'],
+    'member encoded malformed query percent' => ['member', '/settings?test-created-query=%25GG', '/dashboard'],
+    'member fragment' => ['member', '/settings#test-created-fragment', '/dashboard'],
 ]);
 
 it('refuses foreign authorization origins, insecure bases, and missing client credentials without correlation writes', function (string $case): void {

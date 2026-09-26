@@ -8,7 +8,8 @@ declare(strict_types=1);
 |--------------------------------------------------------------------------
 |
 | The browser half of the package: the landing page, sign-in and account
-| recovery, members and sessions, the package UI, and token management. They
+| recovery, members and sessions, the dashboard, settings (the package UI),
+| and token management. They
 | are loaded in every app, because every Built for Cloud app has a UI.
 |
 | Groups carry a `bfc_family` attribute the service provider reads after
@@ -26,6 +27,7 @@ declare(strict_types=1);
 |
 */
 
+use ArtisanBuild\BuiltForCloud\Http\Controllers\Dashboard;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\DeviceAuthorizations;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\InstallationCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\LoopbackAuthorizations;
@@ -55,6 +57,7 @@ use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Routing\Router;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\App;
+use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Route;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 
@@ -95,37 +98,46 @@ Route::group(['bfc_family' => 'authorization'], function () use ($browser, $auth
         ->name('bfc.loopback.decide');
 });
 
+// The page every signed-in person lands on. What runs behind it is the app's
+// choice (built-for-cloud.dashboard); the route, its name and its sign-in
+// middleware are the package's.
+Route::group(['bfc_family' => 'dashboard'], function () use ($browser): void {
+    Route::get('/dashboard', Config::string('built-for-cloud.dashboard', Dashboard::class))
+        ->middleware([...$browser, EnsureUiAuthority::class, EnsureUserIsAuthenticated::class])
+        ->name('bfc.dashboard');
+});
+
 Route::group(['bfc_family' => 'ui'], function () use ($browser): void {
-    Route::get('/bfc/ui', UiHome::class)
+    Route::get('/settings', UiHome::class)
         ->middleware([...$browser, EnsureUiAuthority::class, EnsureUserIsAuthenticated::class])
         ->name('bfc.ui.home');
-    Route::post('/bfc/ui/logout', UiLogout::class)
+    Route::post('/settings/logout', UiLogout::class)
         ->middleware([...$browser, EnsureUiAuthority::class, EnsureUserIsAuthenticated::class])
         ->name('bfc.ui.logout');
 
     $credentialScreens = ['throttle:bfc-personal', ...$browser, EnsureUiAuthority::class, EnsureUserIsAuthenticated::class];
-    Route::get('/bfc/ui/credentials/personal', [UiPersonalCredentials::class, 'index'])
+    Route::get('/settings/credentials/personal', [UiPersonalCredentials::class, 'index'])
         ->middleware($credentialScreens)
         ->name('bfc.ui.personal-credentials.index');
-    Route::post('/bfc/ui/credentials/personal', [UiPersonalCredentials::class, 'store'])
+    Route::post('/settings/credentials/personal', [UiPersonalCredentials::class, 'store'])
         ->middleware($credentialScreens)
         ->name('bfc.ui.personal-credentials.store');
-    Route::post('/bfc/ui/credentials/personal/{id}/rotate', [UiPersonalCredentials::class, 'rotate'])
+    Route::post('/settings/credentials/personal/{id}/rotate', [UiPersonalCredentials::class, 'rotate'])
         ->middleware($credentialScreens)
         ->name('bfc.ui.personal-credentials.rotate');
-    Route::delete('/bfc/ui/credentials/personal/{id}', [UiPersonalCredentials::class, 'destroy'])
+    Route::delete('/settings/credentials/personal/{id}', [UiPersonalCredentials::class, 'destroy'])
         ->middleware($credentialScreens)
         ->name('bfc.ui.personal-credentials.destroy');
-    Route::get('/bfc/ui/credentials/installation', [UiInstallationCredentials::class, 'index'])
+    Route::get('/settings/credentials/installation', [UiInstallationCredentials::class, 'index'])
         ->middleware($credentialScreens)
         ->name('bfc.ui.installation-credentials.index');
-    Route::post('/bfc/ui/credentials/installation', [UiInstallationCredentials::class, 'store'])
+    Route::post('/settings/credentials/installation', [UiInstallationCredentials::class, 'store'])
         ->middleware($credentialScreens)
         ->name('bfc.ui.installation-credentials.store');
-    Route::post('/bfc/ui/credentials/installation/{id}/rotate', [UiInstallationCredentials::class, 'rotate'])
+    Route::post('/settings/credentials/installation/{id}/rotate', [UiInstallationCredentials::class, 'rotate'])
         ->middleware($credentialScreens)
         ->name('bfc.ui.installation-credentials.rotate');
-    Route::delete('/bfc/ui/credentials/installation/{id}', [UiInstallationCredentials::class, 'destroy'])
+    Route::delete('/settings/credentials/installation/{id}', [UiInstallationCredentials::class, 'destroy'])
         ->middleware($credentialScreens)
         ->name('bfc.ui.installation-credentials.destroy');
 });

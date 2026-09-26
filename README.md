@@ -274,7 +274,7 @@ mappings and the affordances that product supports:
 
 `ui.credential_purposes` is ordered display data; every entry must resolve through the fixed
 `credentials.app_purposes` enforcement map. Boolean UI values control links and rendered controls
-only. They do not unmount `/bfc/ui*`, authorize direct requests, or change credential purpose,
+only. They do not unmount `/settings*`, authorize direct requests, or change credential purpose,
 audience, lifecycle, authority-mode, membership, or route-ownership decisions.
 
 The package's landing page owns `GET /` in every app, and the app refuses to boot while it

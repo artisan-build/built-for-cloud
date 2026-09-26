@@ -26,7 +26,7 @@
 
     <div class="flex flex-wrap items-center gap-3">
         <a data-testid="landing-ui-entry"
-           href="{{ url('/bfc/ui') }}"
+           href="{{ route('bfc.dashboard') }}"
            class="bfc-button">
             Open application
         </a>
