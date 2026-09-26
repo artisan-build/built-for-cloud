@@ -255,7 +255,7 @@ it('keeps the idempotency key across a serialized queued mailable retry', functi
         ->and(array_unique($keys))->toHaveCount(1);
 });
 
-it('gives distinct implicit message identities to two sends in one queued job', function (): void {
+it('gives repeated sends of one implicit message distinct identities without mutating the caller', function (): void {
     configureManagedMailConnection();
     $keys = [];
     Http::fake(function (ClientRequest $request) use (&$keys) {
@@ -265,24 +265,46 @@ it('gives distinct implicit message identities to two sends in one queued job', 
     });
     $payload = json_encode(['uuid' => '01999f54-5555-7110-8c1b-9f261919f68f'], JSON_THROW_ON_ERROR);
     $job = queuedMailTestJob($payload);
+    $email = (new Email)
+        ->from('sender@example.test')
+        ->to('recipient@example.test')
+        ->subject('same subject')
+        ->text('same body');
     event(new JobProcessing('sync', $job));
 
     try {
-        foreach (['first', 'second'] as $subject) {
-            resolvedScalpelsTransport()->send(
-                (new Email)
-                    ->from('sender@example.test')
-                    ->to('recipient@example.test')
-                    ->subject($subject)
-                    ->text('same body'),
-            );
-        }
+        resolvedScalpelsTransport()->send($email);
+        resolvedScalpelsTransport()->send($email);
     } finally {
         event(new JobAttempted('sync', $job));
     }
 
     expect($keys)->toHaveCount(2)
-        ->and($keys[0])->not->toBe($keys[1]);
+        ->and($keys[0])->not->toBe($keys[1])
+        ->and($email->getHeaders()->has('Message-ID'))->toBeFalse();
+});
+
+it('keeps an explicit caller message id authoritative inside a queued job', function (): void {
+    configureManagedMailConnection();
+    $keys = [];
+    Http::fake(function (ClientRequest $request) use (&$keys) {
+        $keys[] = $request->header('Idempotency-Key')[0];
+
+        return Http::response(['message_id' => SCALPELS_MESSAGE_ID], 202);
+    });
+    $payload = json_encode(['uuid' => '01999f54-6666-7110-8c1b-9f261919f68f'], JSON_THROW_ON_ERROR);
+    $job = queuedMailTestJob($payload);
+    $email = managedMailEmail('caller-message-id@example.test');
+    event(new JobProcessing('sync', $job));
+
+    try {
+        resolvedScalpelsTransport()->send($email);
+    } finally {
+        event(new JobAttempted('sync', $job));
+    }
+
+    expect($keys)->toBe([hash('sha256', 'caller-message-id@example.test')])
+        ->and($email->getHeaders()->get('Message-ID')?->getBodyAsString())->toBe('<caller-message-id@example.test>');
 });
 
 it('attempts permanent client failures once and rejects malformed success generically', function (mixed $response, int $status): void {
@@ -355,6 +377,58 @@ it('refuses contract cap violations and unsupported raw or custom message parts 
 
     foreach ([$tooManyRecipients, $tooLarge, $customPart, new RawMessage('raw-message-sentinel')] as $message) {
         expect(fn () => $transport->send($message))->toThrow(TransportException::class, 'Managed mail delivery failed.');
+    }
+
+    Http::assertNothingSent();
+});
+
+it('refuses inline content and missing attachment filenames before egress', function (): void {
+    configureManagedMailConnection();
+    Http::fake();
+    $transport = resolvedScalpelsTransport();
+    $inline = managedMailEmail()->embed('inline-image-bytes', 'image.png', 'image/png');
+    $emptyFilename = managedMailEmail()->attach('attachment-bytes', '', 'application/octet-stream');
+
+    foreach ([$inline, $emptyFilename] as $message) {
+        $failure = null;
+
+        try {
+            $transport->send($message);
+        } catch (Throwable $caught) {
+            $failure = $caught;
+        }
+
+        expect($failure)->toBeInstanceOf(TransportException::class)
+            ->and($failure?->getMessage())->toBe('Managed mail delivery failed.')
+            ->and($failure?->getPrevious())->toBeNull();
+    }
+
+    Http::assertNothingSent();
+});
+
+it('refuses CRLF in structured header values before egress', function (): void {
+    configureManagedMailConnection();
+    Http::fake();
+    $transport = resolvedScalpelsTransport();
+    $subject = managedMailEmail()->subject("subject\r\ninjected");
+    $recipientAddress = new Address('recipient@example.test', 'Recipient');
+    // Address sanitizes constructor input, so inject malformed state to exercise the transport boundary.
+    (new ReflectionProperty(Address::class, 'name'))->setValue($recipientAddress, "Recipient\r\nInjected");
+    $recipient = managedMailEmail()->to($recipientAddress);
+    $filename = managedMailEmail()->attach('attachment-bytes', "file\r\ninjected.bin", 'application/octet-stream');
+
+    foreach ([$subject, $recipient, $filename] as $message) {
+        $failure = null;
+
+        try {
+            $transport->send($message);
+        } catch (Throwable $caught) {
+            $failure = $caught;
+        }
+
+        expect($failure)->toBeInstanceOf(TransportException::class)
+            ->and($failure?->getMessage())->toBe('Managed mail delivery failed.')
+            ->and($failure?->getPrevious())->toBeNull();
     }
 
     Http::assertNothingSent();

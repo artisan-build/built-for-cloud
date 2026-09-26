@@ -63,6 +63,7 @@ final class ScalpelsTransport extends AbstractTransport
     ): ?SentMessage {
         try {
             if ($message instanceof Email) {
+                $message = clone $message;
                 $this->queuedMailIdentity->apply($message);
             }
 
@@ -256,7 +257,9 @@ final class ScalpelsTransport extends AbstractTransport
         $filename = $attachment->getFilename();
         $contentType = $attachment->getContentType();
 
-        if ($filename === null
+        if ($attachment->getDisposition() !== 'attachment'
+            || $filename === null
+            || $filename === ''
             || preg_match('/[\r\n]/', $filename) === 1
             || preg_match('/\A[A-Za-z0-9!#$&^_.+\-]+\/[A-Za-z0-9!#$&^_.+\-]+\z/D', $contentType) !== 1) {
             throw new TransportException('Managed mail delivery failed.');
