@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Vitals;
 
 use ArtisanBuild\BuiltForCloud\MetadataShape;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
+use ArtisanBuild\BuiltForCloudContracts\Vitals\VitalsPayload as ContractsVitalsPayload;
 
 /**
  * The assembled `GET /bfc/console/vitals` body (Console PRD D9 + D15) —
@@ -37,7 +38,7 @@ final readonly class VitalsPayload
      * endpoint, so a dashboard can branch on the vitals shape without
      * waiting for a contract major.
      */
-    public const int VERSION = 1;
+    public const int VERSION = ContractsVitalsPayload::VERSION;
 
     /**
      * The largest magnitude a headline value may carry, and the widest
@@ -62,9 +63,9 @@ final readonly class VitalsPayload
      * with `degraded` health rather than clamped — a clamped number is a
      * wrong number presented as a right one.
      */
-    public const float MAX_HEADLINE_MAGNITUDE = 1.0e15;
+    public const float MAX_HEADLINE_MAGNITUDE = ContractsVitalsPayload::MAX_HEADLINE_MAGNITUDE;
 
-    public const int MAX_AGE_SECONDS = 3153600000;
+    public const int MAX_AGE_SECONDS = ContractsVitalsPayload::MAX_AGE_SECONDS;
 
     public function __construct(
         public int $apiVersion,

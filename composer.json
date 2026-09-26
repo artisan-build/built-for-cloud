@@ -5,8 +5,9 @@
     "license": "MIT",
     "type": "library",
     "require": {
-        "composer/semver": "^3.4",
         "php": "^8.3",
+        "artisan-build/built-for-cloud-contracts": "^0.1",
+        "composer/semver": "^3.4",
         "illuminate/auth": "^13.24",
         "illuminate/console": "^13.24",
         "illuminate/contracts": "^13.24",

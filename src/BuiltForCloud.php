@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloudContracts\BuiltForCloud as ContractsBuiltForCloud;
+
 final class BuiltForCloud
 {
     public const VERSION = '0.18.0';
@@ -22,5 +24,5 @@ final class BuiltForCloud
      * constant stagnate while shapes move (it sat at 1 across 0.3.3→0.4.0
      * while the listing grew; that is the failure this rule exists to end).
      */
-    public const API_VERSION = 2;
+    public const API_VERSION = ContractsBuiltForCloud::API_VERSION;
 }

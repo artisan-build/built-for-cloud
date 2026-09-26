@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BuiltForCloudContracts\OwnershipClaim as ContractsOwnershipClaim;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
@@ -45,7 +46,7 @@ final class OwnershipClaim extends Model
 
     public static function hashToken(string $token): string
     {
-        return hash('sha256', $token);
+        return ContractsOwnershipClaim::hashToken($token);
     }
 
     public static function resolve(string $plainTextToken): ?self

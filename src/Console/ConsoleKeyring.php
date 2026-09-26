@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud\Console;
 use ArtisanBuild\BuiltForCloud\Exceptions\AssertionRefused;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\MetadataShape;
+use ArtisanBuild\BuiltForCloudContracts\Console\ConsoleKeyring as ContractsConsoleKeyring;
 use Carbon\CarbonImmutable;
 use InvalidArgumentException;
 use ParagonIE\Paseto\Exception\PasetoException;
@@ -67,7 +68,7 @@ final class ConsoleKeyring
      * 32-byte seed, which is the same size as a public key. See the
      * custody paragraph in the class docblock.
      */
-    public const int PUBLIC_KEY_BYTES = 32;
+    public const int PUBLIC_KEY_BYTES = ContractsConsoleKeyring::PUBLIC_KEY_BYTES;
 
     /**
      * The `kid` charset: bounded, and free of anything that could ride
@@ -83,7 +84,7 @@ final class ConsoleKeyring
      * second copy that could drift from it" — a second copy in the
      * conformance instrument would have been exactly that.
      */
-    public const string KEY_ID_PATTERN = '/^[A-Za-z0-9._-]{1,64}\z/';
+    public const string KEY_ID_PATTERN = ContractsConsoleKeyring::KEY_ID_PATTERN;
 
     /**
      * File a key as PENDING. Two refusals, and both are uniqueness:
@@ -179,7 +180,7 @@ final class ConsoleKeyring
      */
     public static function isValidKeyId(string $keyId): bool
     {
-        return preg_match(self::KEY_ID_PATTERN, $keyId) === 1;
+        return ContractsConsoleKeyring::isValidKeyId($keyId);
     }
 
     /**

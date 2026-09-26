@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Console;
 
 use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleEntryRefused;
+use ArtisanBuild\BuiltForCloudContracts\Console\AssertionBurn as ContractsAssertionBurn;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Model;
@@ -103,7 +104,7 @@ final class AssertionBurn extends Model
      * since `exp` — and exists so that clock jitter between the row and
      * the pruning read can never delete a row still inside its window.
      */
-    public const int PRUNE_MARGIN_SECONDS = 60;
+    public const int PRUNE_MARGIN_SECONDS = ContractsAssertionBurn::PRUNE_MARGIN_SECONDS;
 
     protected $table = 'bfc_console_assertion_burns';
 
@@ -130,7 +131,7 @@ final class AssertionBurn extends Model
      */
     public static function mintHash(string $issuer, string $mintId): string
     {
-        return hash('sha256', strlen($issuer).':'.$issuer.':'.strlen($mintId).':'.$mintId);
+        return ContractsAssertionBurn::mintHash($issuer, $mintId);
     }
 
     /**
