@@ -119,7 +119,7 @@ it('moves the unknown-subject case to a distinct identity and never adopts the s
             'code' => 'unknown-subject-code',
         ]));
 
-    $response->assertRedirect('/');
+    $response->assertRedirect('/dashboard');
     $created = User::query()->where('scalpels_id', 'subject-fixture')->sole();
     expect(User::query()->count())->toBe(2)
         ->and($existing->fresh()->getAttributes())->toBe($before)

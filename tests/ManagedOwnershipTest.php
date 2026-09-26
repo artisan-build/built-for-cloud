@@ -348,7 +348,7 @@ it('acquires a fresh managed Owner through the browser exchange and serves Owner
             'state' => $query['state'],
             'code' => 'fresh-owner-code',
         ]))
-        ->assertRedirect('/');
+        ->assertRedirect('/dashboard');
 
     $owner = User::query()->where('scalpels_id', 'fresh-owner')->sole();
     expect($owner->role)->toBe('owner')
@@ -766,7 +766,7 @@ it('accepts inaccessible-owner O1 recovery after billing removal and a long froz
 
     $this->withSession([ManagedHandoff::SESSION_NONCE_KEY => $nonce])
         ->get('/bfc/managed/callback?'.http_build_query(['state' => $query['state'], 'code' => 'recovery-code']))
-        ->assertRedirect('/');
+        ->assertRedirect('/dashboard');
 
     expect(array_column($fixture->calls, 'path'))->toBe([
         '/managed-auth/v1/handoffs',

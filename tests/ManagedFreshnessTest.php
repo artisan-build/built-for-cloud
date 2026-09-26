@@ -226,13 +226,13 @@ it('authenticates two consecutive managed logins with one unchanged authority pa
         ]));
     };
 
-    $login('first-login-code')->assertRedirect('/');
+    $login('first-login-code')->assertRedirect('/dashboard');
     $user = User::query()->where('scalpels_id', 'subject-fixture')->sole();
     $firstConfirmation = $user->membership_confirmed_at?->toAtomString();
     auth('web')->logout();
 
     CarbonImmutable::setTestNow('2026-09-10T12:01:00+00:00');
-    $login('second-login-code')->assertRedirect('/');
+    $login('second-login-code')->assertRedirect('/dashboard');
 
     expect(auth('web')->id())->toBe($user->getKey())
         ->and(User::query()->where('scalpels_id', 'subject-fixture')->count())->toBe(1)

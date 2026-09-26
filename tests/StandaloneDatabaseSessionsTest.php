@@ -492,7 +492,7 @@ final class StandaloneDatabaseSessionsTest extends TestCase
         $this->post('/bfc/login', [
             'email' => $user->email,
             'password' => $password,
-        ])->assertRedirect(route('bfc.ui.home', absolute: false));
+        ])->assertRedirect(route('bfc.dashboard', absolute: false));
     }
 
     private function eligibleUser(string $email): User

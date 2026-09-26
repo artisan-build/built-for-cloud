@@ -87,7 +87,7 @@ it('makes both fixture legs conform to the frozen request and response tables', 
             'state' => $handoff['state'],
             'code' => 'fixture-code',
         ]));
-    $response->assertRedirect('/');
+    $response->assertRedirect('/dashboard');
 
     expect($fixture->calls)->toHaveCount(2)
         ->and($fixture->calls[0]['method'])->toBe('POST')
