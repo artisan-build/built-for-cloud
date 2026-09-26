@@ -221,7 +221,7 @@ trait ContractAssertions
         $this->post('/bfc/login', [
             'email' => $email,
             'password' => 'test-created-password',
-        ])->assertRedirect(route('bfc.ui.home', absolute: false));
+        ])->assertRedirect(route('bfc.dashboard', absolute: false));
 
         Assert::assertSame($user->getAuthIdentifier(), auth('web')->id());
     }

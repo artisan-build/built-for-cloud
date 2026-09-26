@@ -271,7 +271,7 @@ function deviceHarnessLogin(string $runDirectory, string $baseUrl, string $conte
         'application/x-www-form-urlencoded',
     );
     deviceHarnessAssert($response['status'] === 302, 'The disposable browser login failed.');
-    $home = deviceHarnessHttp($runDirectory, $context, 'GET', $baseUrl.'/bfc/ui');
+    $home = deviceHarnessHttp($runDirectory, $context, 'GET', $baseUrl.'/settings');
     deviceHarnessAssert($home['status'] === 200, 'The disposable authenticated browser did not reach the package UI.');
 
     return deviceHarnessCsrf($home['body']);

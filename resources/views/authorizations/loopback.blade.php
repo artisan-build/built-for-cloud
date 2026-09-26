@@ -1,8 +1,4 @@
-@extends('bfc::layout')
-
-@section('title', 'Loopback authorization')
-
-@section('content')
+<x-bfc-layout title="Loopback authorization">
 <section data-testid="device-authorization-loopback">
     @if ($outcome === 'unavailable')
         <div data-testid="device-authorization-unavailable">This authorization is unavailable.</div>
@@ -43,4 +39,4 @@
         </article>
     @endif
 </section>
-@endsection
+</x-bfc-layout>

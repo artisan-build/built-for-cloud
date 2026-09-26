@@ -1,12 +1,4 @@
-@extends('bfc::layout')
-
-@section('title', 'Choose password')
-
-@push('head')
-    @include('bfc::auth.styles')
-@endpush
-
-@section('content')
+<x-bfc-layout title="Choose password">
 <section class="bfc-auth" data-testid="password-reset-form">
     <div class="bfc-panel">
         <div class="bfc-kicker">Account recovery</div>
@@ -24,4 +16,4 @@
         </form>
     </div>
 </section>
-@endsection
+</x-bfc-layout>

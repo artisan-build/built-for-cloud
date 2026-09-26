@@ -19,6 +19,14 @@ use Illuminate\Support\Facades\Route;
 
 uses(RefreshDatabase::class);
 
+/** Whether a route URI is one of the package's own paths. */
+function p3IsPackagePath(string $uri): bool
+{
+    return str_starts_with($uri, 'bfc/')
+        || str_starts_with($uri, 'settings/')
+        || in_array($uri, ['settings', 'dashboard'], true);
+}
+
 /** @return array<string, string|null> */
 function p3GuardedPackageRouteInventory(): array
 {
@@ -27,7 +35,7 @@ function p3GuardedPackageRouteInventory(): array
     $inventory = [];
 
     foreach (Route::getRoutes() as $route) {
-        if (! str_starts_with($route->uri(), 'bfc/')
+        if (! p3IsPackagePath($route->uri())
             || RouteMiddleware::indexOfClass(
                 $router->gatherRouteMiddleware($route),
                 EnsureUserIsAuthenticated::class,
@@ -71,8 +79,8 @@ it('pins every package route guarded by the local human authentication gate', fu
         'DELETE bfc/me/sessions/others' => 'bfc.sessions.destroy-others',
         'DELETE bfc/me/sessions/{session}' => 'bfc.sessions.destroy',
         'DELETE bfc/members/{user}' => 'bfc.members.destroy',
-        'DELETE bfc/ui/credentials/installation/{id}' => 'bfc.ui.installation-credentials.destroy',
-        'DELETE bfc/ui/credentials/personal/{id}' => 'bfc.ui.personal-credentials.destroy',
+        'DELETE settings/credentials/installation/{id}' => 'bfc.ui.installation-credentials.destroy',
+        'DELETE settings/credentials/personal/{id}' => 'bfc.ui.personal-credentials.destroy',
         'GET bfc/device' => 'bfc.device.show',
         'GET bfc/installation/credentials' => null,
         'GET bfc/loopback/authorize' => 'bfc.loopback.authorize',
@@ -81,9 +89,10 @@ it('pins every package route guarded by the local human authentication gate', fu
         'GET bfc/members' => 'bfc.members.index',
         'GET bfc/transitions/proposals/{transition}' => 'bfc.transitions.edit',
         'GET bfc/transitions/{direction}/prepare' => 'bfc.transitions.index',
-        'GET bfc/ui' => 'bfc.ui.home',
-        'GET bfc/ui/credentials/installation' => 'bfc.ui.installation-credentials.index',
-        'GET bfc/ui/credentials/personal' => 'bfc.ui.personal-credentials.index',
+        'GET dashboard' => 'bfc.dashboard',
+        'GET settings' => 'bfc.ui.home',
+        'GET settings/credentials/installation' => 'bfc.ui.installation-credentials.index',
+        'GET settings/credentials/personal' => 'bfc.ui.personal-credentials.index',
         'POST bfc/device' => 'bfc.device.decide',
         'POST bfc/device-authorizations' => 'bfc.device.start',
         'POST bfc/installation/credentials' => null,
@@ -95,11 +104,11 @@ it('pins every package route guarded by the local human authentication gate', fu
         'POST bfc/transitions/proposals/{transition}/abandon' => 'bfc.transitions.abandon',
         'POST bfc/transitions/proposals/{transition}/complete' => 'bfc.transitions.complete',
         'POST bfc/transitions/{direction}/prepare' => 'bfc.transitions.store',
-        'POST bfc/ui/credentials/installation' => 'bfc.ui.installation-credentials.store',
-        'POST bfc/ui/credentials/installation/{id}/rotate' => 'bfc.ui.installation-credentials.rotate',
-        'POST bfc/ui/credentials/personal' => 'bfc.ui.personal-credentials.store',
-        'POST bfc/ui/credentials/personal/{id}/rotate' => 'bfc.ui.personal-credentials.rotate',
-        'POST bfc/ui/logout' => 'bfc.ui.logout',
+        'POST settings/credentials/installation' => 'bfc.ui.installation-credentials.store',
+        'POST settings/credentials/installation/{id}/rotate' => 'bfc.ui.installation-credentials.rotate',
+        'POST settings/credentials/personal' => 'bfc.ui.personal-credentials.store',
+        'POST settings/credentials/personal/{id}/rotate' => 'bfc.ui.personal-credentials.rotate',
+        'POST settings/logout' => 'bfc.ui.logout',
         'PUT bfc/members/{user}/role' => 'bfc.members.role.update',
         'PUT bfc/transitions/proposals/{transition}' => 'bfc.transitions.update',
     ]);
@@ -116,7 +125,7 @@ it('redirects every managed package route guarded by local human authentication 
     $tested = [];
 
     foreach (Route::getRoutes() as $route) {
-        if (! str_starts_with($route->uri(), 'bfc/')
+        if (! p3IsPackagePath($route->uri())
             || RouteMiddleware::indexOfClass(
                 $router->gatherRouteMiddleware($route),
                 EnsureUserIsAuthenticated::class,
@@ -133,7 +142,7 @@ it('redirects every managed package route guarded by local human authentication 
         $tested[] = $method.' '.$route->uri();
     }
 
-    expect($tested)->toHaveCount(36)
+    expect($tested)->toHaveCount(37)
         ->and($tested)->toContain('GET bfc/device')
         ->and($tested)->toContain('GET bfc/members')
         ->and($tested)->toContain('GET bfc/me/credentials')
@@ -209,7 +218,7 @@ it('keeps standalone redirects unchanged across every guarded package route', fu
     $tested = [];
 
     foreach (Route::getRoutes() as $route) {
-        if (! str_starts_with($route->uri(), 'bfc/')
+        if (! p3IsPackagePath($route->uri())
             || RouteMiddleware::indexOfClass(
                 $router->gatherRouteMiddleware($route),
                 EnsureUserIsAuthenticated::class,
@@ -219,7 +228,7 @@ it('keeps standalone redirects unchanged across every guarded package route', fu
 
         $method = array_values(array_diff($route->methods(), ['HEAD']))[0];
         $requestUri = p3RequestUri($route, count($tested));
-        $expected = str_starts_with($route->uri(), 'bfc/ui')
+        $expected = str_starts_with($route->uri(), 'settings') || $route->uri() === 'dashboard'
             ? route('bfc.login', ['intended' => $requestUri])
             : route('bfc.login');
 
@@ -227,7 +236,7 @@ it('keeps standalone redirects unchanged across every guarded package route', fu
         $tested[] = $method.' '.$route->uri();
     }
 
-    expect($tested)->toHaveCount(36)
+    expect($tested)->toHaveCount(37)
         ->and($tested)->toContain('GET bfc/device')
         ->and($tested)->toContain('POST bfc/logout');
 });

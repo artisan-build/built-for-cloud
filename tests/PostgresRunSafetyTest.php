@@ -7,7 +7,6 @@ use ArtisanBuild\BuiltForCloud\Testing\PostgresAdministrator;
 use ArtisanBuild\BuiltForCloud\Testing\PostgresDatabaseProvisioner;
 use ArtisanBuild\BuiltForCloud\Testing\PostgresRunIdentity;
 use ArtisanBuild\BuiltForCloud\Tests\Support\PostgresLaneState;
-use PDO;
 use Symfony\Component\Process\Process;
 
 function p6SafetyAdministrator(): PostgresAdministrator

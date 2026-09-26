@@ -3,7 +3,6 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Console\ConsoleReturnTo;
-use ReflectionClass;
 
 // The relative-path boundary every package redirect target goes through.
 // These are direct assertions on the check itself; the standalone and

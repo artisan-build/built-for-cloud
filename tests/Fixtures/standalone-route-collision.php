@@ -51,6 +51,7 @@ $case = new class('testProbe') extends TestCase
     /** @param Application $app */
     protected function getEnvironmentSetUp($app): void
     {
+        $app['config']->set('built-for-cloud.manifest', ArtisanBuild\BuiltForCloud\Tests\TestCase::manifestForTests());
         $app['config']->set('auth.defaults.guard', 'web');
         $app['config']->set('auth.guards', []);
         $app['config']->set('auth.providers', []);

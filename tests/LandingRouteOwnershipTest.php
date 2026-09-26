@@ -7,17 +7,13 @@ use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Route;
 use Symfony\Component\Process\Process;
 
-it('mounts no package root and requires no manifest while landing is disabled', function (): void {
-    expect(config('built-for-cloud.manifest'))->toBe([
-        'name' => null,
-        'slug' => null,
-        'description' => null,
-        'icon' => null,
-        'product_url' => null,
-    ])->and(Route::getRoutes()->getByName('bfc.landing'))->toBeNull();
+it('mounts the landing page at the root of every app', function (): void {
+    $landing = Route::getRoutes()->getByName('bfc.landing');
 
-    Route::get('/', static fn (): string => 'test-created-host-root')->name('test.host-root');
-    $this->get('/')->assertOk()->assertSee('test-created-host-root');
+    expect($landing)->not->toBeNull()
+        ->and($landing?->uri())->toBe('/');
+
+    $this->get('/')->assertOk()->assertSeeHtml('data-testid="landing"')->assertSee('Test App');
 });
 
 it('refuses a thin host starter root regardless of registration order', function (string $mode, string $message): void {
@@ -27,13 +23,19 @@ it('refuses a thin host starter root regardless of registration order', function
     expect($process->getExitCode())->toBe(0, $process->getOutput().$process->getErrorOutput())
         ->and($process->getOutput())->toContain($message);
 })->with([
-    'host first' => ['early', 'remove the host root route before enabling it'],
+    'host first' => ['early', 'remove the host root route'],
     'package first' => ['late', 'reserved by the built-for-cloud landing page'],
 ]);
 
-it('validates the manifest when landing is enabled', function (): void {
-    config(['built-for-cloud.ui.landing_page' => true]);
+it('refuses to mount the landing page without a manifest', function (): void {
+    config(['built-for-cloud.manifest' => [
+        'name' => null,
+        'slug' => null,
+        'description' => null,
+        'icon' => null,
+        'product_url' => null,
+    ]]);
 
-    expect(fn () => app(LandingPageRegistrar::class)->mount(app(Router::class)))
+    expect(fn () => app(LandingPageRegistrar::class)->mount(new Router(app('events'), app())))
         ->toThrow(RuntimeException::class, 'landing manifest');
 });

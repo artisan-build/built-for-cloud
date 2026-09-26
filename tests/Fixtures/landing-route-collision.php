@@ -43,7 +43,6 @@ $case = new class('testProbe') extends TestCase
         $app['config']->set('auth.guards', []);
         $app['config']->set('auth.providers', []);
         $app['config']->set('built-for-cloud.surfaces.data_migrations', false);
-        $app['config']->set('built-for-cloud.ui.landing_page', true);
         $app['config']->set('built-for-cloud.manifest', [
             'name' => 'Collision Test App',
             'slug' => 'collision-test-app',
@@ -66,7 +65,7 @@ try {
     $case->bootProbe();
 } catch (RuntimeException $exception) {
     $expected = $mode === 'early'
-        ? 'remove the host root route before enabling it'
+        ? 'remove the host root route'
         : 'reserved by the built-for-cloud landing page';
 
     if (str_contains($exception->getMessage(), $expected)) {

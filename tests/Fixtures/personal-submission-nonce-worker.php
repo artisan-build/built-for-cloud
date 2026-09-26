@@ -38,6 +38,7 @@ $case = new class('testProbe') extends TestCase
     /** @param Application $app */
     protected function getEnvironmentSetUp($app): void
     {
+        $app['config']->set('built-for-cloud.manifest', TestCase::manifestForTests());
         parent::getEnvironmentSetUp($app);
 
         $environment = static fn (string $name, string $default): string => (($value = getenv($name)) === false ? $default : $value);
@@ -88,7 +89,7 @@ $case = new class('testProbe') extends TestCase
         $user = User::query()->findOrFail($input['user_id']);
         $response = $this->actingAsVersioned($user, 'web')
             ->withSession(['_token' => $input['session_token']])
-            ->post('/bfc/ui/credentials/personal', [
+            ->post('/settings/credentials/personal', [
                 SubmissionNonce::FIELD => $input['submission_nonce'],
                 'app_purpose' => 'test.consume',
                 'kind' => CredentialKind::Bearer->value,

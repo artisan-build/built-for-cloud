@@ -1,0 +1,262 @@
+/* The Built for Cloud default theme: Scalpels' clay palette, type and
+   components, compiled into resources/dist/bfc.css with `composer css`.
+
+   The package serves the compiled file itself, so an app never has to
+   rebuild its own bundle to pick up a package update. Light only, like
+   Scalpels: there is no dark variant anywhere in the default layout. */
+@import "tailwindcss" source(none);
+
+@source "../views";
+
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/instrument-sans-400-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/instrument-sans-400-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/instrument-sans-500-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/instrument-sans-500-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("fonts/instrument-sans-600-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("fonts/instrument-sans-600-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Young Serif";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/young-serif-400-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+
+@theme {
+  --font-sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --font-display: "Young Serif", ui-serif, Georgia, serif;
+
+  --color-clay-paper: #faf3e8;
+  --color-clay-surface: #fdf8f0;
+  --color-clay-ink: #33241a;
+  --color-clay-slip: #f6efe3;
+  --color-clay-iron: #8a4b2f;
+  --color-clay-soft: #4f4136;
+  --color-clay-muted: #7c6e5e;
+  --color-clay-raw: #e8d9c3;
+  --color-clay-edge: #d5bea0;
+  --color-clay-sand: #eee2cf;
+  --color-clay-brown: #70472f;
+  --color-clay-dot: #a66c46;
+
+  --radius-clay-card: 1.8rem 1.5rem 1.7rem 1.3rem / 1.3rem 1.8rem 1.2rem 1.6rem;
+  --radius-clay-marker: 45% 55% 48% 52% / 56% 43% 57% 44%;
+
+  --shadow-clay-card: inset 1px 2px 1px #fff9, inset -1px -2px 2px #ceb79f66, 0 5px 0 #cbb69b, 0 12px 18px -12px #60463066;
+  --shadow-clay-inset: inset 1px 2px 3px #8a4b2f26, inset -1px -1px 1px #fff9;
+  --shadow-clay-bead: inset 1px 1px 1px #f4c8a3, 0 2px 0 #805038;
+  --shadow-clay-button: inset 0 1.5px 0 #ffffff21, 0 5px 0 #50311f, 0 8px 14px -6px #4a341e59;
+  --shadow-clay-button-hover: inset 0 1.5px 0 #ffffff29, 0 9px 0 #50311f, 0 18px 26px -8px #4a341e6b;
+  --shadow-clay-button-pressed: inset 0 1.5px 0 #ffffff1a, 0 1px 0 #50311f, 0 2px 6px -3px #4a341e4d;
+}
+
+/* The shared page furniture every package screen is built from. Pages keep
+   their `bfc-*` class names; this is the one place those names get a look. */
+@layer components {
+  /* Tests pin a bare <main> as the page's content root, so the shell's
+     content column is styled from here rather than by a class on it. */
+  .bfc-body > main {
+    @apply mx-auto w-full max-w-6xl px-5 py-8 sm:px-8 lg:py-10;
+  }
+
+  .bfc-auth {
+    @apply mx-auto w-full max-w-2xl;
+  }
+
+  .bfc-transition {
+    @apply max-w-6xl;
+  }
+
+  .bfc-panel {
+    @apply rounded-clay-card bg-clay-surface p-6 shadow-clay-card sm:p-10;
+  }
+
+  .bfc-kicker {
+    @apply text-xs font-semibold tracking-[0.14em] text-clay-iron uppercase;
+  }
+
+  .bfc-auth h1 {
+    @apply mt-2 mb-6 font-display text-4xl font-normal tracking-tight text-balance text-clay-ink sm:text-5xl;
+  }
+
+  .bfc-auth h2 {
+    @apply mt-8 mb-3 font-display text-2xl font-normal tracking-tight text-clay-ink;
+  }
+
+  .bfc-auth p {
+    @apply my-3 leading-relaxed text-clay-soft;
+  }
+
+  .bfc-auth label {
+    @apply my-4 grid gap-1.5 text-sm font-semibold text-clay-ink;
+  }
+
+  .bfc-auth input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]),
+  .bfc-auth select,
+  .bfc-auth textarea {
+    @apply min-h-12 w-full rounded-2xl border border-clay-edge bg-clay-slip px-4 py-3 text-base font-normal text-clay-ink shadow-clay-inset;
+    @apply focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-clay-iron;
+  }
+
+  .bfc-auth button,
+  .bfc-button {
+    @apply inline-flex min-h-12 cursor-pointer items-center justify-center rounded-full bg-linear-155 from-[#986444] to-[#75472f] px-6 py-3 font-semibold text-[#fff6ea] no-underline shadow-clay-button transition;
+    @apply hover:shadow-clay-button-hover active:shadow-clay-button-pressed motion-safe:hover:-translate-y-0.5 motion-safe:active:translate-y-0.5 motion-reduce:transition-none;
+    @apply focus-visible:outline-3 focus-visible:outline-offset-4 focus-visible:outline-clay-iron;
+  }
+
+  .bfc-button-soft {
+    @apply inline-flex min-h-12 items-center justify-center rounded-full border border-clay-edge bg-clay-slip px-6 py-3 font-semibold text-clay-ink no-underline shadow-clay-inset transition;
+    @apply hover:bg-clay-surface motion-reduce:transition-none;
+    @apply focus-visible:outline-3 focus-visible:outline-offset-4 focus-visible:outline-clay-iron;
+  }
+
+  .bfc-nav {
+    @apply flex flex-wrap items-center gap-2 rounded-clay-card bg-clay-surface p-3 shadow-clay-card;
+  }
+
+  .bfc-nav > a {
+    @apply inline-flex min-h-11 items-center rounded-full px-4 py-2 text-sm font-semibold text-clay-soft transition-colors;
+    @apply hover:bg-clay-slip hover:text-clay-brown hover:shadow-clay-inset motion-reduce:transition-none;
+    @apply focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-clay-iron;
+  }
+
+  /* Scalpels' header nav link and its clay bead, as its app shell draws them. */
+  .bfc-header-link {
+    @apply inline-flex min-h-11 items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors;
+    @apply hover:bg-clay-surface hover:text-clay-brown hover:shadow-clay-inset motion-reduce:transition-none;
+    @apply focus-visible:bg-clay-surface focus-visible:text-clay-brown focus-visible:shadow-clay-inset;
+  }
+
+  .bfc-bead {
+    @apply size-2 shrink-0 -rotate-12 rounded-clay-marker bg-radial-[at_30%_25%] from-[#d89f75] to-[#aa6846] shadow-clay-bead;
+  }
+
+  /* The user menu: a native popover laid out like Flux's dropdown menu on
+     the clay palette. Anchored under its button where the browser supports
+     anchor positioning, and pinned to the header's right edge where not. */
+  .bfc-user-menu {
+    @apply fixed m-0 min-w-56 rounded-lg border border-clay-sand bg-clay-surface p-1.5 text-clay-ink shadow-lg;
+    inset: auto;
+    top: 4.25rem;
+    right: max(1.25rem, calc((100vw - 72rem) / 2));
+  }
+
+  @supports (position-anchor: --bfc-user-menu) {
+    .bfc-user-menu {
+      position-anchor: --bfc-user-menu;
+      top: calc(anchor(bottom) + 0.5rem);
+      right: anchor(right);
+    }
+  }
+
+  .bfc-user-menu-separator {
+    @apply -mx-1.5 my-1.5 border-clay-sand;
+  }
+
+  .bfc-user-menu-item {
+    @apply flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm font-medium text-clay-ink;
+    @apply hover:bg-clay-slip focus-visible:bg-clay-slip focus-visible:outline-none;
+  }
+
+  .bfc-user-menu-item > svg {
+    @apply size-5 shrink-0 text-clay-dot;
+  }
+
+  .bfc-link {
+    @apply font-semibold text-clay-iron underline decoration-clay-edge underline-offset-4 hover:decoration-clay-iron;
+  }
+
+  .bfc-error {
+    @apply rounded-2xl bg-[#a8432a]/10 px-4 py-3 font-semibold text-[#8f3520];
+  }
+
+  .bfc-status {
+    @apply rounded-2xl bg-clay-raw px-4 py-3 text-clay-ink shadow-clay-inset;
+  }
+
+  .bfc-list {
+    @apply grid list-none gap-3 p-0;
+  }
+
+  .bfc-row {
+    @apply border-t border-clay-sand pt-4;
+  }
+
+  .bfc-actions {
+    @apply flex flex-wrap items-end gap-3;
+  }
+
+  .bfc-actions form {
+    @apply flex-[1_1_12rem];
+  }
+
+  .bfc-transition-grid {
+    @apply grid grid-cols-[repeat(auto-fit,minmax(min(100%,25rem),1fr))] gap-4;
+  }
+
+  .bfc-transition-card {
+    @apply rounded-3xl bg-clay-slip p-5 shadow-clay-inset;
+  }
+
+  .bfc-transition-meta {
+    @apply text-sm wrap-anywhere text-clay-muted;
+  }
+
+  .bfc-transition-fixed {
+    @apply rounded-2xl bg-clay-iron/10 px-4 py-3 text-clay-ink;
+  }
+
+  .bfc-transition-controls {
+    @apply mt-4 grid gap-2;
+  }
+}

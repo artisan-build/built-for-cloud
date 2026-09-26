@@ -1,8 +1,4 @@
-@extends('bfc::layout')
-
-@section('title', 'Device authorization')
-
-@section('content')
+<x-bfc-layout title="Device authorization">
 <section data-testid="device-authorization-page">
     @if ($outcome === 'unavailable')
         <div data-testid="device-authorization-unavailable">This authorization is unavailable.</div>
@@ -51,4 +47,4 @@
         </div>
     @endif
 </section>
-@endsection
+</x-bfc-layout>

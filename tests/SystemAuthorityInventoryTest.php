@@ -10,6 +10,7 @@ use ArtisanBuild\BuiltForCloud\Commands\CredentialListCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialMintCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialRevokeCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialRotateCommand;
+use ArtisanBuild\BuiltForCloud\Commands\FreshCommand;
 use ArtisanBuild\BuiltForCloud\Commands\HmacRewrapCommand;
 use ArtisanBuild\BuiltForCloud\Commands\InstallOperatorCredentialCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand;
@@ -84,6 +85,7 @@ function p5eCommandDisposition(): array
             PruneCredentialAuthorizationsCommand::class,
         ],
         'in-environment-maintenance' => [
+            FreshCommand::class,
             HmacRewrapCommand::class,
             OutboxDrainCommand::class,
             WarnExpiringCredentialsCommand::class,
@@ -118,7 +120,7 @@ it('derives commands, queued work, and the exact package schedule without human 
     $expectedCommands = p5eSorted(array_merge(...array_values(p5eCommandDisposition())));
 
     expect($inventory['commands'])->toBe($expectedCommands)
-        ->and($inventory['commands'])->toHaveCount(17)
+        ->and($inventory['commands'])->toHaveCount(18)
         ->and($inventory['queued'])->toBe([DeliverOwnershipWebhook::class])
         ->and($inventory['scheduled'])->toBe([p5eProductionSchedule()])
         ->and($inventory['violations'])->toBe([
@@ -356,8 +358,8 @@ it('classifies every derived command exactly once across the five frozen disposi
         'in-environment-maintenance',
         'install-scaffold',
         'read-only',
-    ])->and($members)->toHaveCount(17)
-        ->and(array_unique($members))->toHaveCount(17)
+    ])->and($members)->toHaveCount(18)
+        ->and(array_unique($members))->toHaveCount(18)
         ->and(p5eSorted($members))->toBe($inventory['commands']);
 
     $controlled = SystemAuthorityInventory::discover(

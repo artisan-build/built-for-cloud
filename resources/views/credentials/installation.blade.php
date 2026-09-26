@@ -1,8 +1,4 @@
-@extends('bfc::layout')
-
-@section('title', 'Installation credentials')
-
-@section('content')
+<x-bfc-layout title="Installation credentials">
 <section data-testid="installation-credentials">
     <h1>Installation credentials</h1>
 
@@ -79,4 +75,4 @@
         </ul>
     </section>
 </section>
-@endsection
+</x-bfc-layout>

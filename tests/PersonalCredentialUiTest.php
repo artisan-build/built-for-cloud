@@ -533,7 +533,7 @@ final class PersonalCredentialUiTest extends TestCase
 
         $this->allFlagsOff();
         UiPersonalCredentialDeclaration::$deniedVerbs = [];
-        $request = Request::create('/bfc/ui/credentials/personal', 'POST');
+        $request = Request::create('/settings/credentials/personal', 'POST');
         $request->setUserResolver(static fn (): User => $user);
         $surface = app(PersonalCredentialSurface::class);
 
@@ -676,10 +676,10 @@ final class PersonalCredentialUiTest extends TestCase
     {
         $this->allFlagsOff();
         $expected = [
-            'bfc.ui.personal-credentials.index' => ['GET', 'bfc/ui/credentials/personal'],
-            'bfc.ui.personal-credentials.store' => ['POST', 'bfc/ui/credentials/personal'],
-            'bfc.ui.personal-credentials.rotate' => ['POST', 'bfc/ui/credentials/personal/{id}/rotate'],
-            'bfc.ui.personal-credentials.destroy' => ['DELETE', 'bfc/ui/credentials/personal/{id}'],
+            'bfc.ui.personal-credentials.index' => ['GET', 'settings/credentials/personal'],
+            'bfc.ui.personal-credentials.store' => ['POST', 'settings/credentials/personal'],
+            'bfc.ui.personal-credentials.rotate' => ['POST', 'settings/credentials/personal/{id}/rotate'],
+            'bfc.ui.personal-credentials.destroy' => ['DELETE', 'settings/credentials/personal/{id}'],
         ];
         /** @var Router $router */
         $router = app('router');
@@ -710,7 +710,6 @@ final class PersonalCredentialUiTest extends TestCase
     private function allFlagsOff(): void
     {
         config([
-            'built-for-cloud.ui.landing_page' => false,
             'built-for-cloud.ui.member_management' => false,
             'built-for-cloud.ui.personal_credentials' => false,
             'built-for-cloud.ui.installation_credentials' => false,

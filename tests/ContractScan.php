@@ -174,7 +174,7 @@ final class ContractScan
      */
     private static function routeHeadingMatches(string $doc): array
     {
-        preg_match_all('/^###\s+(GET|POST|PUT|PATCH|DELETE)\s+(\/\S+)\s*$/mi', $doc, $matches, PREG_SET_ORDER);
+        preg_match_all('/^###\s+(GET|POST|PUT|PATCH|DELETE)\s+(\/\S*)\s*$/mi', $doc, $matches, PREG_SET_ORDER);
 
         return $matches;
     }
@@ -194,7 +194,7 @@ final class ContractScan
     public static function classifiedRoutes(string $doc): array
     {
         preg_match_all(
-            '/^\|\s*`(GET|POST|PUT|PATCH|DELETE)\s+(\/[^`]+)`\s*\|\s*`(metadata|content)`\s*\|/mi',
+            '/^\|\s*`(GET|POST|PUT|PATCH|DELETE)\s+(\/[^`]*)`\s*\|\s*`(metadata|content)`\s*\|/mi',
             $doc,
             $matches,
             PREG_SET_ORDER,

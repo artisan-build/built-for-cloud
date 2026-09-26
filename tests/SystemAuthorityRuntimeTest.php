@@ -60,8 +60,6 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Queue;
-use ReflectionMethod;
-use ReflectionProperty;
 
 uses(RefreshDatabase::class);
 

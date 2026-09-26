@@ -11,18 +11,6 @@ use Illuminate\Support\Facades\Route as RouteFacade;
 
 require_once __DIR__.'/Fixtures/FutureLocalAuthenticationController.php';
 
-trait EnablesEveryPackageRoute
-{
-    protected function getEnvironmentSetUp($app): void
-    {
-        parent::getEnvironmentSetUp($app);
-
-        $app['config']->set('built-for-cloud.surfaces.routes', true);
-    }
-}
-
-uses(EnablesEveryPackageRoute::class);
-
 it('derives the standalone surface structurally and detects closure and foreign-controller routes without their authority gate', function (): void {
     /** @var Router $router */
     $router = app('router');

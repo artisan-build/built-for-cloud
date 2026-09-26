@@ -17,7 +17,7 @@ use Illuminate\Contracts\View\View;
 
 final readonly class UiHome
 {
-    public function __invoke(ActingPrincipalResolver $principals, ?LandingManifest $manifest): View
+    public function __invoke(ActingPrincipalResolver $principals, LandingManifest $manifest): View
     {
         /** @var User $user */
         $user = $principals->resolve()->principal;

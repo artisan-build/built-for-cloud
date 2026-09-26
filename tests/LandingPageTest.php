@@ -26,7 +26,6 @@ final class LandingPageTest extends Orchestra
         $app['config']->set('auth.guards', []);
         $app['config']->set('auth.providers', []);
         $app['config']->set('built-for-cloud.surfaces.data_migrations', false);
-        $app['config']->set('built-for-cloud.ui.landing_page', true);
         $app['config']->set('built-for-cloud.manifest', [
             'name' => 'Test <App> & Company',
             'slug' => 'test-app',
@@ -75,7 +74,6 @@ final class LandingPageTest extends Orchestra
         foreach ([
             'Test <App> & Company',
             'A "quoted" <strong>test</strong> & description.',
-            'https://assets.example.test/icon.svg?size=2&kind=test',
             'https://scalpels.app/products/test-app?ref=test&kind=app',
         ] as $value) {
             $response->assertSee($value);
@@ -83,6 +81,7 @@ final class LandingPageTest extends Orchestra
         }
 
         $response->assertSee('test-app');
+        $response->assertSeeHtml('src="https://scalpels.app/img/products/transparent/test-app.png"');
     }
 
     public function test_match_time_ownership_refuses_a_late_root_takeover_before_the_host_handler(): void

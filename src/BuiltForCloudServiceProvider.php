@@ -15,6 +15,7 @@ use ArtisanBuild\BuiltForCloud\Commands\CredentialListCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialMintCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialRevokeCommand;
 use ArtisanBuild\BuiltForCloud\Commands\CredentialRotateCommand;
+use ArtisanBuild\BuiltForCloud\Commands\FreshCommand;
 use ArtisanBuild\BuiltForCloud\Commands\HmacRewrapCommand;
 use ArtisanBuild\BuiltForCloud\Commands\InstallOperatorCredentialCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand;
@@ -31,32 +32,6 @@ use ArtisanBuild\BuiltForCloud\Contracts\ResolvesAsymmetricEnrollmentScope;
 use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\AsymmetricEnrollments;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\BoundHmacCutovers;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ClientObservations;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ConsoleVitals;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\DeviceAuthorizations;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\InstallationCredentials;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\LoopbackAuthorizations;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageConsoleKeys;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageCredentials;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ManagedAuthentication;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ManagedEnrolments;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOnboarding;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageOwnership;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageSubjects;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTransitions;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\MetaController;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\PersonalCredentials;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneAuthentication;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneInvitations;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneMemberships;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\StandalonePasswordRecovery;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\StandaloneSessions;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\UiInstallationCredentials;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\UiLogout;
-use ArtisanBuild\BuiltForCloud\Http\Controllers\UiPersonalCredentials;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureContractMajor;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
@@ -64,15 +39,13 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureDashboardCredential;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureManagedAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureStandaloneAuthority;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUiAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAdmin;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\ExpireStandaloneHandoffOnRefusal;
-use ArtisanBuild\BuiltForCloud\Http\Middleware\UniformConsoleKeyRefusal;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\VerifyHmacSignature;
 use ArtisanBuild\BuiltForCloud\Listeners\QueueOwnershipWebhook;
 use ArtisanBuild\BuiltForCloud\Listeners\RefuseSystemAuthorityAuthentication;
 use ArtisanBuild\BuiltForCloud\Listeners\SystemAuthorityQueueScope;
+use ArtisanBuild\BuiltForCloud\View\Layout;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Auth\Events\Authenticated;
 use Illuminate\Auth\Events\Login;
@@ -82,21 +55,18 @@ use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Contracts\Bus\Dispatcher as BusDispatcherContract;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Foundation\Application;
-use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
-use Illuminate\Cookie\Middleware\EncryptCookies;
-use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Http\Request;
 use Illuminate\Queue\Events\JobAttempted;
 use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Routing\Events\RouteMatched;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
-use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Blade;
+use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
-use Illuminate\View\Middleware\ShareErrorsFromSession;
 use ReflectionProperty;
 use RuntimeException;
 use Throwable;
@@ -113,7 +83,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $this->app->singleton(UsageReporter::class, NullUsageReporter::class);
         $this->app->singleton(SystemAuthorityContext::class);
         $this->app->singleton(SystemAuthorityQueueScope::class);
-        $this->app->singleton(LandingManifest::class, static fn (): ?LandingManifest => LandingManifest::fromOptionalConfiguration());
+        $this->app->singleton(LandingManifest::class, static fn (): LandingManifest => LandingManifest::fromConfiguration());
 
         // P5b's forward-only carry: exchange has one durable destination.
         $this->app->bind(DurableCredentialMinter::class, UnifiedStoreCredentialMinter::class);
@@ -167,6 +137,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // ours — so there is no behaviour here for a flag to switch
         // off.
         $this->loadViewsFrom(__DIR__.'/../resources/views', 'bfc');
+        $this->registerLayout();
 
         if ($this->surfaceEnabled('listeners')) {
             Event::listen(OwnershipReleasePending::class, QueueOwnershipWebhook::class);
@@ -208,9 +179,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             // controller derives its required gate from the action it is about
             // to execute and requires that gate's receipt before invocation.
 
-            if ($this->surfaceEnabled('routes')) {
-                $this->mountRoutes($router);
-            }
+            $this->loadRoutes($router);
         }
 
         if ($this->app->runningInConsole()) {
@@ -223,12 +192,11 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             ], 'built-for-cloud-config');
 
             // The package view namespace, publishable the ordinary
-            // Laravel way so an app can restyle it without forking the
-            // package. Publishing does NOT create a second layout:
-            // Laravel's namespaced view finder prefers the published
-            // copy over the package's for the SAME view name, so
-            // `bfc::layout` still names one template — the app's, once
-            // it has taken ownership of it.
+            // Laravel way. To replace the page shell, prefer naming a
+            // layout class in BUILT_FOR_CLOUD_LAYOUT: a published copy
+            // shadows the package view by name and stops receiving
+            // upstream changes, while a configured class lives in a file
+            // the package never ships.
             $this->publishes([
                 __DIR__.'/../resources/views' => $this->app->resourcePath('views/vendor/bfc'),
             ], 'built-for-cloud-views');
@@ -342,351 +310,35 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     }
 
     /**
-     * The HTTP surface family (PRD 1.14): mounted whole, or not at all.
+     * Load routes/web.php and routes/api.php in every app, then hold each
+     * route family the files mark to the ownership rules its controllers
+     * rely on: reserved names and shapes for the landing, UI and standalone
+     * pages, package middleware for every browser family, and the declared
+     * gate for every operator route, checked at boot and again on each match.
      */
-    private function mountRoutes(Router $router): void
+    private function loadRoutes(Router $router): void
     {
-        /** @var list<array{route: Route, gate: string}> $operatorRoutes */
-        $operatorRoutes = [];
-        $landingRoute = $this->app->make(LandingPageRegistrar::class)->mount($router);
-        $landingRoutes = $landingRoute instanceof Route ? [$landingRoute] : [];
+        $existing = $router->getRoutes()->getRoutes();
+        $router->group([], __DIR__.'/../routes/web.php');
+        $router->group([], __DIR__.'/../routes/api.php');
+        $routes = array_values(array_filter(
+            $router->getRoutes()->getRoutes(),
+            static fn (Route $route): bool => ! in_array($route, $existing, true),
+        ));
+        $family = static fn (string ...$families): array => array_values(array_filter(
+            $routes,
+            static fn (Route $route): bool => in_array($route->getAction('bfc_family'), $families, true),
+        ));
 
-        $router->get('/bfc/meta', MetaController::class)
-            ->middleware('throttle:bfc-public');
-
-        $router->post('/bfc/ownership/claim', [ManageOwnership::class, 'claim'])
-            ->middleware('throttle:bfc-claim');
-
-        // The P1 managed-enrolment verbs: owner-credential-authenticated
-        // (the CURRENT ownership-linked credential — not any admin
-        // bearer), throttled before authentication like every operator
-        // write, no-store, secret never returned. See
-        // docs/http-contract.md "Authority-driven managed enrolment".
-        $this->protectOperatorRoute(
-            $router->post('/bfc/managed/enrolment', [ManagedEnrolments::class, 'enrol'])
-                ->middleware('throttle:bfc-operator-write'),
-            $operatorRoutes,
+        $operatorRoutes = array_map(
+            $this->protectOperatorRoute(...),
+            array_values(array_filter($routes, static fn (Route $route): bool => $route->getAction('bfc_operator') === true)),
         );
-
-        $this->protectOperatorRoute(
-            $router->post('/bfc/managed/enrolment/client-secret', [ManagedEnrolments::class, 'rotateClientSecret'])
-                ->middleware('throttle:bfc-operator-write'),
-            $operatorRoutes,
+        $bearerRoutes = array_values(array_filter($routes, static fn (Route $route): bool => $route->getAction('bfc_bearer') === true));
+        $packageMiddlewareRoutes = StandaloneRouteOwnership::packageMiddlewareInventory(
+            $family('dashboard', 'ui', 'standalone', 'personal-credentials', 'installation-credentials', 'authorization'),
         );
-
-        $this->protectOperatorRoute(
-            $router->post('/bfc/managed/enrolment/disconnect', [ManagedEnrolments::class, 'disconnect'])
-                ->middleware('throttle:bfc-operator-write'),
-            $operatorRoutes,
-        );
-
-        $this->protectOperatorRoute(
-            $router->post('/bfc/ownership/release', [ManageOwnership::class, 'release']),
-            $operatorRoutes,
-        );
-
-        $this->protectOperatorRoute(
-            $router->post('/bfc/ownership/cancel-transfer', [ManageOwnership::class, 'cancelTransfer']),
-            $operatorRoutes,
-        );
-
-        // The hitch claim-contract route (PRD 1.12 / OSS-8): the wire
-        // face of hitch/docs/claim-contract.md over the same claim
-        // primitive as the onboarding exchange. Unconditional at a
-        // FIXED path like every /bfc/* surface — never behind a
-        // configurable prefix, never behind its own env flag.
-        $router->post('/bfc/claim', [ManageOnboarding::class, 'claim'])
-            ->middleware('throttle:bfc-claim');
-
-        $this->protectOperatorRoute(
-            $router->post('/bfc/onboarding/issue', [ManageOnboarding::class, 'issue']),
-            $operatorRoutes,
-        );
-
-        $router->post('/bfc/onboarding/exchange', [ManageOnboarding::class, 'exchange'])
-            ->middleware('throttle:bfc-claim');
-
-        $router->post('/bfc/asymmetric-enrollments/{application}', AsymmetricEnrollments::class)
-            ->middleware('throttle:bfc-claim');
-
-        $router->post('/bfc/onboarding/verify', [ManageOnboarding::class, 'verify'])
-            ->middleware('throttle:bfc-public');
-
-        $this->protectOperatorRoute(
-            $router->get('/bfc/client-observations', ClientObservations::class),
-            $operatorRoutes,
-        );
-
-        // The unified store's verb routes (PRD 1.0): the HTTP half of
-        // the two-transport rule, at a FIXED /bfc/ path like every
-        // other package surface (PRD 1.12's precedent) — part of the
-        // versioned public contract (docs/http-contract.md). Their gate
-        // accepts a legacy admin token OR the installer-minted operator
-        // credential (PRD 1.20 — the credential must work on the
-        // surface it exists to manage), and each route names its
-        // verb-family ability (GATE-3.7 least privilege): the
-        // admin-equivalent `credential:admin` satisfies every one, a
-        // narrower operator credential only its own family. Write and
-        // expensive verbs additionally carry the per-operator-
-        // credential + per-IP rate limiter (throttle FIRST, so even
-        // failing auth attempts are bounded).
-        $this->protectOperatorRoute(
-            $router->get('/bfc/credentials', [ManageCredentials::class, 'index']),
-            $operatorRoutes,
-        );
-
-        $this->protectOperatorRoute(
-            $router->post('/bfc/credentials', [ManageCredentials::class, 'store'])
-                ->middleware('throttle:bfc-operator-write'),
-            $operatorRoutes,
-        );
-
-        $this->protectOperatorRoute(
-            $router->delete('/bfc/credentials/{id}', [ManageCredentials::class, 'destroy'])
-                ->middleware('throttle:bfc-operator-write'),
-            $operatorRoutes,
-        );
-
-        $this->protectOperatorRoute(
-            $router->post('/bfc/credentials/{id}/rotate', [ManageCredentials::class, 'rotate'])
-                ->middleware('throttle:bfc-operator-write'),
-            $operatorRoutes,
-        );
-
-        // The hmac signing cutover (PRD 1.21, SEC-V3-01): a separate
-        // operator-authorized verb — the claim exchange delivers and
-        // never activates, so the flip needs its own route. Its
-        // operator ability is the rotate FAMILY (activation completes
-        // rotation's dance); the declaration matrix's own `activate`
-        // verb stays the finer split.
-        $this->protectOperatorRoute(
-            $router->post('/bfc/credentials/{id}/activate', [ManageCredentials::class, 'activate'])
-                ->middleware('throttle:bfc-operator-write'),
-            $operatorRoutes,
-        );
-
-        $this->protectOperatorRoute(
-            $router->post('/bfc/hmac-cutovers/activate', [BoundHmacCutovers::class, 'activate'])
-                ->middleware('throttle:bfc-operator-write'),
-            $operatorRoutes,
-        );
-
-        $this->protectOperatorRoute(
-            $router->post('/bfc/hmac-cutovers/status', [BoundHmacCutovers::class, 'status'])
-                ->middleware('throttle:bfc-operator-write'),
-            $operatorRoutes,
-        );
-
-        // The personal-credentials surface (PRD 1.17): the SAME verbs
-        // above, session-authenticated and scoped to the caller's OWN
-        // credentials. Its gate is the session, not an operator ability
-        // — the app supplies the authenticated human — and the subject
-        // is derived SERVER-SIDE from that session by the app's
-        // declaration (SEC-V3-07), never from anything in the request.
-        // `bfc.auth` runs the offboarding kill too, so an offboarded
-        // user's surviving session cannot reach the screen (PRD 1.15).
-        // Fixed `/bfc/` path, part of the routes family, like every
-        // other package surface.
-        //
-        // Personal and installation credential management are BROWSER
-        // routes. They ride the full session stack — see
-        // browserSessionMiddleware() — so cookie sessions actually start,
-        // and so the MUTATING verbs are CSRF-protected. Without it a
-        // session-riding forgery on a logged-in user's browser could mint,
-        // rotate or revoke credentials.
-        $personal = $this->browserSessionMiddleware($router);
-        $authorizationUser = EnsureUserIsAuthenticated::class.':'.EnsureUserIsAuthenticated::DEFER_MANAGED_AUTHORITY;
-
-        $authorizationRoutes = [];
-        $authorizationRoutes[] = $router->post('/bfc/device-authorizations', [DeviceAuthorizations::class, 'store'])
-            ->middleware([...$personal, $authorizationUser, 'throttle:bfc-authorization-start'])
-            ->name('bfc.device.start');
-        $authorizationRoutes[] = $router->get('/bfc/device', [DeviceAuthorizations::class, 'show'])
-            ->middleware([...$personal, $authorizationUser])
-            ->name('bfc.device.show');
-        $authorizationRoutes[] = $router->post('/bfc/device', [DeviceAuthorizations::class, 'decide'])
-            ->middleware([...$personal, $authorizationUser, 'throttle:bfc-authorization-decision'])
-            ->name('bfc.device.decide');
-        $authorizationRoutes[] = $router->post('/bfc/device/token', [DeviceAuthorizations::class, 'token'])
-            ->middleware('throttle:bfc-authorization-token')
-            ->name('bfc.device.token');
-        $authorizationRoutes[] = $router->get('/bfc/loopback/authorize', [LoopbackAuthorizations::class, 'show'])
-            ->middleware([...$personal, $authorizationUser, 'throttle:bfc-authorization-start'])
-            ->name('bfc.loopback.authorize');
-        $authorizationRoutes[] = $router->post('/bfc/loopback/authorize', [LoopbackAuthorizations::class, 'decide'])
-            ->middleware([...$personal, $authorizationUser, 'throttle:bfc-authorization-decision'])
-            ->name('bfc.loopback.decide');
-        $authorizationRoutes[] = $router->post('/bfc/loopback/token', [LoopbackAuthorizations::class, 'token'])
-            ->middleware('throttle:bfc-authorization-token')
-            ->name('bfc.loopback.token');
-
-        $uiRoutes = [];
-        $uiRoutes[] = $router->get('/bfc/ui', UiHome::class)
-            ->middleware([...$personal, EnsureUiAuthority::class, EnsureUserIsAuthenticated::class])
-            ->name('bfc.ui.home');
-        $uiRoutes[] = $router->post('/bfc/ui/logout', UiLogout::class)
-            ->middleware([...$personal, EnsureUiAuthority::class, EnsureUserIsAuthenticated::class])
-            ->name('bfc.ui.logout');
-        $personalUiMiddleware = ['throttle:bfc-personal', ...$personal, EnsureUiAuthority::class, EnsureUserIsAuthenticated::class];
-        $uiRoutes[] = $router->get('/bfc/ui/credentials/personal', [UiPersonalCredentials::class, 'index'])
-            ->middleware($personalUiMiddleware)
-            ->name('bfc.ui.personal-credentials.index');
-        $uiRoutes[] = $router->post('/bfc/ui/credentials/personal', [UiPersonalCredentials::class, 'store'])
-            ->middleware($personalUiMiddleware)
-            ->name('bfc.ui.personal-credentials.store');
-        $uiRoutes[] = $router->post('/bfc/ui/credentials/personal/{id}/rotate', [UiPersonalCredentials::class, 'rotate'])
-            ->middleware($personalUiMiddleware)
-            ->name('bfc.ui.personal-credentials.rotate');
-        $uiRoutes[] = $router->delete('/bfc/ui/credentials/personal/{id}', [UiPersonalCredentials::class, 'destroy'])
-            ->middleware($personalUiMiddleware)
-            ->name('bfc.ui.personal-credentials.destroy');
-        $installationUiMiddleware = ['throttle:bfc-personal', ...$personal, EnsureUiAuthority::class, EnsureUserIsAuthenticated::class];
-        $uiRoutes[] = $router->get('/bfc/ui/credentials/installation', [UiInstallationCredentials::class, 'index'])
-            ->middleware($installationUiMiddleware)
-            ->name('bfc.ui.installation-credentials.index');
-        $uiRoutes[] = $router->post('/bfc/ui/credentials/installation', [UiInstallationCredentials::class, 'store'])
-            ->middleware($installationUiMiddleware)
-            ->name('bfc.ui.installation-credentials.store');
-        $uiRoutes[] = $router->post('/bfc/ui/credentials/installation/{id}/rotate', [UiInstallationCredentials::class, 'rotate'])
-            ->middleware($installationUiMiddleware)
-            ->name('bfc.ui.installation-credentials.rotate');
-        $uiRoutes[] = $router->delete('/bfc/ui/credentials/installation/{id}', [UiInstallationCredentials::class, 'destroy'])
-            ->middleware($installationUiMiddleware)
-            ->name('bfc.ui.installation-credentials.destroy');
-
-        $router->get('/bfc/managed/login', [ManagedAuthentication::class, 'create'])
-            ->middleware([EnsureManagedAuthority::class, ...$personal])
-            ->name('bfc.managed.login');
-        $router->get('/bfc/managed/callback', [ManagedAuthentication::class, 'callback'])
-            ->middleware([EnsureManagedAuthority::class, ...$personal])
-            ->name('bfc.managed.callback');
-
-        $router->middleware([...$personal, EnsureUserIsAuthenticated::class])->group(function (Router $router): void {
-            $router->get('/bfc/transitions/{direction}/prepare', [ManageTransitions::class, 'index'])
-                ->whereIn('direction', ManagedTransitionDirection::values())
-                ->name('bfc.transitions.index');
-            $router->post('/bfc/transitions/{direction}/prepare', [ManageTransitions::class, 'store'])
-                ->whereIn('direction', ManagedTransitionDirection::values())
-                ->name('bfc.transitions.store');
-            $router->get('/bfc/transitions/proposals/{transition}', [ManageTransitions::class, 'edit'])
-                ->name('bfc.transitions.edit');
-            $router->put('/bfc/transitions/proposals/{transition}', [ManageTransitions::class, 'update'])
-                ->name('bfc.transitions.update');
-            $router->post('/bfc/transitions/proposals/{transition}/complete', [ManageTransitions::class, 'complete'])
-                ->name('bfc.transitions.complete');
-            $router->post('/bfc/transitions/proposals/{transition}/abandon', [ManageTransitions::class, 'abandon'])
-                ->name('bfc.transitions.abandon');
-        });
-
-        $handoffMiddleware = [
-            EncryptCookies::class,
-            AddQueuedCookiesToResponse::class,
-            ExpireStandaloneHandoffOnRefusal::class,
-        ];
-        $handoffSessionMiddleware = [
-            ...$handoffMiddleware,
-            EnsureStandaloneAuthority::class,
-            ...$personal,
-        ];
-        $standaloneRoutes = [];
-        $standaloneRoutes[] = $router->get('/bfc/reset-password', [StandalonePasswordRecovery::class, 'edit'])
-            ->middleware($handoffSessionMiddleware)
-            ->name('bfc.password.reset.form');
-        $standaloneRoutes[] = $router->post('/bfc/reset-password', [StandalonePasswordRecovery::class, 'update'])
-            ->middleware([...$handoffSessionMiddleware, 'throttle:bfc-password-reset'])
-            ->name('bfc.password.update');
-        $standaloneRoutes[] = $router->get('/bfc/invitations/accept', [StandaloneInvitations::class, 'show'])
-            ->middleware($handoffSessionMiddleware)
-            ->name('bfc.invitations.accept.form');
-        $standaloneRoutes[] = $router->post('/bfc/invitations/accept', [StandaloneInvitations::class, 'store'])
-            ->middleware([...$handoffSessionMiddleware, 'throttle:bfc-invitation-accept'])
-            ->name('bfc.invitations.accept.store');
-
-        $bearerPageMiddleware = [
-            ...$handoffMiddleware,
-            'throttle:bfc-bearer-handoff',
-            EnsureStandaloneAuthority::class,
-        ];
-        $bearerRoutes = [];
-        $bearerRoutes[] = $standaloneRoutes[] = $router->get('/bfc/reset-password/{token}', [StandalonePasswordRecovery::class, 'handoff'])
-            ->middleware($bearerPageMiddleware)
-            ->withoutMiddleware([StartSession::class])
-            ->name('bfc.password.reset');
-        $bearerRoutes[] = $standaloneRoutes[] = $router->get('/bfc/invitations/{token}', [StandaloneInvitations::class, 'handoff'])
-            ->middleware($bearerPageMiddleware)
-            ->withoutMiddleware([StartSession::class])
-            ->name('bfc.invitations.accept');
-
-        $router->middleware([EnsureStandaloneAuthority::class, ...$personal])->group(function (Router $router) use (&$standaloneRoutes): void {
-            $standaloneRoutes[] = $router->get('/bfc/login', [StandaloneAuthentication::class, 'create'])
-                ->name('bfc.login');
-            $standaloneRoutes[] = $router->post('/bfc/login', [StandaloneAuthentication::class, 'store'])
-                ->middleware('throttle:bfc-login')
-                ->name('bfc.login.store');
-            $standaloneRoutes[] = $router->get('/bfc/forgot-password', [StandalonePasswordRecovery::class, 'create'])
-                ->name('bfc.password.request');
-            $standaloneRoutes[] = $router->post('/bfc/forgot-password', [StandalonePasswordRecovery::class, 'store'])
-                ->middleware('throttle:bfc-password-reset')
-                ->name('bfc.password.email');
-        });
-
-        $protectedStandaloneMiddleware = [
-            EnsureUiAuthority::class,
-            ...$personal,
-            $authorizationUser,
-            EnsureStandaloneAuthority::class,
-        ];
-        $router->middleware($protectedStandaloneMiddleware)->group(function (Router $router) use (&$standaloneRoutes): void {
-            $standaloneRoutes[] = $router->get('/bfc/members', [StandaloneMemberships::class, 'index'])
-                ->name('bfc.members.index');
-            $standaloneRoutes[] = $router->post('/bfc/members/invitations', [StandaloneMemberships::class, 'invite'])
-                ->middleware('throttle:bfc-invitation-issue')
-                ->name('bfc.members.invitations.store');
-            $standaloneRoutes[] = $router->put('/bfc/members/{user}/role', [StandaloneMemberships::class, 'role'])
-                ->name('bfc.members.role.update');
-            $standaloneRoutes[] = $router->delete('/bfc/members/{user}', [StandaloneMemberships::class, 'deactivate'])
-                ->name('bfc.members.destroy');
-
-            $standaloneRoutes[] = $router->get('/bfc/me/sessions', [StandaloneSessions::class, 'index'])
-                ->name('bfc.sessions.index');
-            $standaloneRoutes[] = $router->delete('/bfc/me/sessions/others', [StandaloneSessions::class, 'destroyOthers'])
-                ->middleware('throttle:bfc-session-confirm')
-                ->name('bfc.sessions.destroy-others');
-            $standaloneRoutes[] = $router->delete('/bfc/me/sessions/{session}', [StandaloneSessions::class, 'destroy'])
-                ->middleware('throttle:bfc-session-confirm')
-                ->name('bfc.sessions.destroy');
-            $standaloneRoutes[] = $router->post('/bfc/logout', [StandaloneAuthentication::class, 'destroy'])
-                ->name('bfc.logout');
-        });
-        $personalCredentialRoutes = [];
-        $personalCredentialRoutes[] = $router->get('/bfc/me/credentials', [PersonalCredentials::class, 'index'])
-            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
-
-        $personalCredentialRoutes[] = $router->post('/bfc/me/credentials', [PersonalCredentials::class, 'store'])
-            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
-
-        $personalCredentialRoutes[] = $router->delete('/bfc/me/credentials/{id}', [PersonalCredentials::class, 'destroy'])
-            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
-
-        $installationCredentialRoutes = [];
-        $installationCredentialRoutes[] = $router->get('/bfc/installation/credentials', [InstallationCredentials::class, 'index'])
-            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
-        $installationCredentialRoutes[] = $router->post('/bfc/installation/credentials', [InstallationCredentials::class, 'store'])
-            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
-        $installationCredentialRoutes[] = $router->post('/bfc/installation/credentials/{id}/rotate', [InstallationCredentials::class, 'rotate'])
-            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
-        $installationCredentialRoutes[] = $router->delete('/bfc/installation/credentials/{id}', [InstallationCredentials::class, 'destroy'])
-            ->middleware(['throttle:bfc-personal', ...$personal, EnsureUserIsAuthenticated::class]);
-
-        $packageMiddlewareRoutes = StandaloneRouteOwnership::packageMiddlewareInventory([
-            ...$uiRoutes,
-            ...$standaloneRoutes,
-            ...$personalCredentialRoutes,
-            ...$installationCredentialRoutes,
-            ...$authorizationRoutes,
-        ]);
-
-        $ownedNamedRoutes = [...$landingRoutes, ...$uiRoutes, ...$standaloneRoutes];
+        $ownedNamedRoutes = $family('landing', 'ui', 'standalone');
 
         $this->app->booted(function () use ($ownedNamedRoutes, $packageMiddlewareRoutes, $router): void {
             StandaloneRouteOwnership::assertOwned($router, $ownedNamedRoutes);
@@ -709,106 +361,6 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             }
         });
 
-        // The console re-key verb (Console PRD D12): the retrofit path
-        // that files a countersigning key onto an ALREADY-CLAIMED
-        // deployment without re-onboarding it. Fixed path under the
-        // `/bfc/console/*` namespace the contract reserved for exactly
-        // this, in the routes family like every other package surface.
-        //
-        // Its stack, outermost first, and each layer is load-bearing:
-        //
-        //  1. `throttle:bfc-operator-write` — bounded before anything
-        //     else runs, so refused attempts cost budget too;
-        //  2. `UniformConsoleKeyRefusal` — collapses the gate's 401/403
-        //     split into ONE external answer (rework A5). It sits INSIDE
-        //     the throttle so a 429 still says 429, and OUTSIDE the gate
-        //     so it can catch what the gate aborts with;
-        //  3. the gate itself, on `console:key:write` — its OWN ability,
-        //     NOT the `credential:rotate` family (rework B2). A re-key
-        //     is a rotation in shape, but folding it into that family
-        //     would have handed Console-admin takeover to every
-        //     rotate-scoped credential already in the field, silently,
-        //     on upgrade. `credential:admin` still satisfies it, because
-        //     the break-glass is a marking someone chose.
-        $this->protectOperatorRoute(
-            $router->post('/bfc/console/re-key', [ManageConsoleKeys::class, 'reKey'])
-                ->middleware([
-                    'throttle:bfc-operator-write',
-                    UniformConsoleKeyRefusal::class,
-                ]),
-            $operatorRoutes,
-        );
-
-        // The retirement verb (Console PRD D12): the other half of
-        // make-before-break, and until this release the half with no
-        // operator path at all — the keyring primitive it drives took a
-        // PHP caller and nothing else, so a rotation driven over the
-        // wire could only ever be started, never finished.
-        //
-        // The `kid` rides the PATH because the verb acts on a row that
-        // already exists — the shape `/bfc/credentials/{id}/rotate`
-        // uses — where the re-key's flat body carries a key that does
-        // not exist yet.
-        //
-        // The SAME stack as the re-key, layer for layer, and the same
-        // ability. Retirement ends a signing authority where filing
-        // begins one, which sounds like the more consequential half and
-        // is not: a credential holding `console:key:write` can already
-        // file and activate a key of its own, and assertions minted
-        // under it authenticate as delegated admins on this deployment's
-        // MCP surface, which is more than denying that. A separate
-        // ability would have meant no credential already in the field
-        // could finish a rotation without being reissued first.
-        $this->protectOperatorRoute(
-            $router->post('/bfc/console/keys/{key_id}/retire', [ManageConsoleKeys::class, 'retire'])
-                ->middleware([
-                    'throttle:bfc-operator-write',
-                    UniformConsoleKeyRefusal::class,
-                ]),
-            $operatorRoutes,
-        );
-
-        // The Console's ops-vitals read (Console PRD D9/D15/D16): a
-        // `metadata`-classified surface at a fixed `/bfc/console/*`
-        // path, an ordinary member of the routes family.
-        //
-        // ONE gate, not the operator gate every verb route above uses
-        // and not a composition either. {@see EnsureDashboardCredential}
-        // is the whole of D16 — authentication, the app declaration's
-        // authorization hook, an operator subject, and an ability set
-        // EXACTLY equal to `{metadata:read}`.
-        //
-        // `bfc.credential.admin` could never have gated this: it grants
-        // `credential:admin` whatever ability a route names, and D16
-        // forbids the ownership/admin credential on any dashboard read
-        // path. `bfc.ability:metadata:read` was in front of this gate
-        // for one revision and has been removed: it enforces a strict
-        // SUBSET of what the gate below enforces, so it never changed an
-        // answer, while its own denial audit drained the delivery outbox
-        // — putting the amplification lever this route was hardened
-        // against back in front of the hardening. A redundant gate is a
-        // second code path with its own side effects on the
-        // attacker-reachable branch.
-        //
-        // Rate-limited like every other credentialed surface, per
-        // credential AND per IP, and the throttle sits OUTSIDE the gate
-        // so refused attempts are bounded too.
-        $this->protectOperatorRoute(
-            $router->get('/bfc/console/vitals', ConsoleVitals::class)
-                ->middleware('throttle:bfc-vitals'),
-            $operatorRoutes,
-        );
-
-        // The offboard verb (PRD 1.15, SEC-V3-04): full account
-        // containment behind its OWN verb-family ability — the widest
-        // verb, so a stolen mint- or revoke-scoped credential cannot
-        // reach it.
-        $this->protectOperatorRoute(
-            $router->post('/bfc/subjects/offboard', [ManageSubjects::class, 'offboard'])
-                ->middleware('throttle:bfc-operator-write'),
-            $operatorRoutes,
-        );
-
         $this->app->booted(function () use ($operatorRoutes, $router): void {
             StandaloneRouteOwnership::assertOperatorOwned($router, $operatorRoutes);
         });
@@ -825,9 +377,12 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     }
 
     /**
-     * @param  list<array{route: Route, gate: string}>  $operatorRoutes
+     * Append the gate the operator route inventory names for this route's
+     * action, refusing a route whose action declares none.
+     *
+     * @return array{route: Route, gate: string}
      */
-    private function protectOperatorRoute(Route $route, array &$operatorRoutes): Route
+    private function protectOperatorRoute(Route $route): array
     {
         $gate = StandaloneRouteOwnership::operatorGateForAction($route->getActionName());
 
@@ -836,46 +391,8 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         }
 
         $route->middleware($gate);
-        $operatorRoutes[] = ['route' => $route, 'gate' => $gate];
 
-        return $route;
-    }
-
-    /**
-     * The browser-session stack the package's BROWSER routes ride — the
-     * personal-credentials surface (PRD 1.17, rework Fix 1), the CSRF
-     * protection on its mutating verbs included.
-     *
-     * PREFERRED: the host's own `web` group. It is the right answer in a
-     * standard Laravel app for two reasons — it is the stack that app's
-     * OWN settings screens run on (its cookie encryption, its session
-     * driver, and whatever it added: locale, tenancy, impersonation), and
-     * an app that customized CSRF handling gets its customization here
-     * rather than a second, divergent copy.
-     *
-     * FALLBACK, when no such group is registered (a package test harness,
-     * an API-only skeleton that never defined one): the concrete stack,
-     * so these routes are never mounted WITHOUT session start and CSRF
-     * validation. `PreventRequestForgery` exempts read verbs itself, so
-     * the listing is not CSRF-checked while POST and DELETE are — and the
-     * listing is where a front end picks up the XSRF-TOKEN cookie it will
-     * send back.
-     *
-     * @return list<string>
-     */
-    private function browserSessionMiddleware(Router $router): array
-    {
-        if ($router->hasMiddlewareGroup('web')) {
-            return ['web'];
-        }
-
-        return [
-            EncryptCookies::class,
-            AddQueuedCookiesToResponse::class,
-            StartSession::class,
-            ShareErrorsFromSession::class,
-            PreventRequestForgery::class,
-        ];
+        return ['route' => $route, 'gate' => $gate];
     }
 
     /**
@@ -892,6 +409,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             CredentialMintCommand::class,
             CredentialRevokeCommand::class,
             CredentialRotateCommand::class,
+            FreshCommand::class,
             HmacRewrapCommand::class,
             InstallOperatorCredentialCommand::class,
             OutboxDrainCommand::class,
@@ -902,6 +420,16 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             SubjectOffboardCommand::class,
             WarnExpiringCredentialsCommand::class,
         ]);
+    }
+
+    /** Register `<x-bfc-layout>`, and point Livewire's full-page layout at the configured class unless the app opts out. */
+    private function registerLayout(): void
+    {
+        Blade::component(Layout::class, 'layout', 'bfc');
+
+        if (Config::boolean('built-for-cloud.livewire_layout', true)) {
+            Config::set('livewire.component_layout', Config::string('built-for-cloud.layout', Layout::class));
+        }
     }
 
     /**

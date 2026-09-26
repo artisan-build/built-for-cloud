@@ -18,7 +18,6 @@ it('publishes the exact conservative manifest credential and ui schema', functio
         'product_url' => null,
     ])->and($published['credentials']['app_purposes'])->toBe([])
         ->and($published['ui'])->toBe([
-            'landing_page' => false,
             'member_management' => false,
             'personal_credentials' => false,
             'installation_credentials' => false,
@@ -84,6 +83,18 @@ it('accepts a complete valid landing manifest', function (): void {
         icon: 'https://assets.example.test/icon.svg',
         productUrl: 'https://scalpels.app/products/test-app',
     ));
+});
+
+it('derives the app image Scalpels publishes from the manifest slug', function (): void {
+    $manifest = new LandingManifest(
+        name: 'Test App',
+        slug: 'test-app',
+        description: 'A test-created app.',
+        icon: 'https://assets.example.test/icon.svg',
+        productUrl: 'https://scalpels.app/products/test-app',
+    );
+
+    expect($manifest->imageUrl())->toBe('https://scalpels.app/img/products/transparent/test-app.png');
 });
 
 it('refuses a missing empty or non-string landing manifest field', function (string $field, mixed $replacement, bool $remove): void {

@@ -1,12 +1,4 @@
-@extends('bfc::layout')
-
-@section('title', 'Members')
-
-@push('head')
-    @include('bfc::auth.styles')
-@endpush
-
-@section('content')
+<x-bfc-layout title="Members">
 <section class="bfc-auth" data-testid="members-management">
     <div class="bfc-panel">
         <div class="bfc-kicker">Installation access</div>
@@ -71,4 +63,4 @@
         @endif
     </div>
 </section>
-@endsection
+</x-bfc-layout>

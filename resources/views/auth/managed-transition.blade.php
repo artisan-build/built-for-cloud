@@ -1,20 +1,4 @@
-@extends('bfc::layout')
-
-@section('title', ucfirst($direction->value).' authority')
-
-@push('head')
-    @include('bfc::auth.styles')
-    <style>
-        .bfc-transition { width: min(72rem, calc(100% - 2rem)); }
-        .bfc-transition-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 25rem), 1fr)); gap: 1rem; }
-        .bfc-transition-card { border: 1px solid #d8d2c5; border-radius: .75rem; padding: 1rem; background: #fff; }
-        .bfc-transition-meta { color: #5d675f; font-size: .9rem; overflow-wrap: anywhere; }
-        .bfc-transition-fixed { border-left: .25rem solid #a54824; padding: .75rem 1rem; background: #fbefe8; }
-        .bfc-transition-controls { display: grid; gap: .5rem; margin-top: 1rem; }
-    </style>
-@endpush
-
-@section('content')
+<x-bfc-layout :title="ucfirst($direction->value).' authority'">
 <section class="bfc-auth bfc-transition" data-testid="transition-proposal">
     <div class="bfc-panel">
         <div class="bfc-kicker">Authority transition</div>
@@ -280,4 +264,4 @@
         @endif
     </div>
 </section>
-@endsection
+</x-bfc-layout>

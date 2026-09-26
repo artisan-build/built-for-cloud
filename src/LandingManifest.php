@@ -16,26 +16,15 @@ final readonly class LandingManifest
         public string $productUrl,
     ) {}
 
+    /** The transparent app artwork Scalpels publishes for every product, found by slug alone. */
+    public function imageUrl(): string
+    {
+        return "https://scalpels.app/img/products/transparent/{$this->slug}.png";
+    }
+
     public static function fromConfiguration(): self
     {
         return self::fromManifest(self::configuredManifest());
-    }
-
-    public static function fromOptionalConfiguration(): ?self
-    {
-        $manifest = self::configuredManifest();
-
-        if (is_array($manifest)) {
-            foreach (['name', 'slug', 'description', 'icon', 'product_url'] as $key) {
-                if (! array_key_exists($key, $manifest) || $manifest[$key] !== null) {
-                    return self::fromManifest($manifest);
-                }
-            }
-
-            return null;
-        }
-
-        return self::fromManifest($manifest);
     }
 
     private static function configuredManifest(): mixed

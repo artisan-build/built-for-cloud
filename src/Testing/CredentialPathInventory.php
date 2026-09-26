@@ -176,10 +176,12 @@ final class CredentialPathInventory
         $provider = self::requiredContents($sourceRoot.'/BuiltForCloudServiceProvider.php');
         $providerCode = self::withoutComments($provider);
         $providerImports = self::imports($provider);
+        $routeFiles = self::routeFiles($sourceRoot);
+        $routeDeclarations = implode("\n", [$providerCode, ...array_values($routeFiles)]);
 
         $authenticators = self::implementations($classes, 'CredentialAuthenticator');
         $minters = self::implementations($classes, 'DurableCredentialMinter');
-        $middleware = self::registeredMiddleware($classes, $providerCode, $providerImports);
+        $middleware = self::registeredMiddleware($classes, $providerCode, $providerImports, $routeFiles);
 
         preg_match_all(
             '/\$auth->extend\((?:(?!\$auth->extend).)*?return\s+new\s+([A-Z][A-Za-z0-9_]*)\s*\(/s',
@@ -246,7 +248,7 @@ final class CredentialPathInventory
         }
 
         $lifecycle = self::lifecycle($classes, $minters);
-        $enrollment = self::enrollment($files, $classes, $providerImports);
+        $enrollment = self::enrollment([...$files, ...$routeFiles], $classes, $providerImports);
         $enrollmentProperties = self::enrollmentProperties($classes);
         $classification = self::classification($classes, $providerCode, $providerImports);
         $keySelection = self::keySelection($classes);
@@ -291,6 +293,7 @@ final class CredentialPathInventory
 
         $paths = self::paths(
             $classes,
+            $routeDeclarations,
             $authenticators,
             $enrollment,
             $classification,
@@ -508,15 +511,17 @@ final class CredentialPathInventory
         $items = [];
 
         foreach ($files as $code) {
+            $imports = self::imports($code) + $providerImports;
+
             preg_match_all(
-                '/\$router->(get|post|put|patch|delete)\(\s*[\'\"]([^\'\"]+)[\'\"]\s*,\s*\[\s*([A-Z][A-Za-z0-9_]*)::class\s*,\s*[\'\"]([^\'\"]+)[\'\"]\s*\]/i',
+                '/(?:\$router->|Route::)(get|post|put|patch|delete)\(\s*[\'\"]([^\'\"]+)[\'\"]\s*,\s*\[\s*([A-Z][A-Za-z0-9_]*)::class\s*,\s*[\'\"]([^\'\"]+)[\'\"]\s*\]/i',
                 $code,
                 $routes,
                 PREG_SET_ORDER,
             );
 
             foreach ($routes as $route) {
-                $controller = $providerImports[$route[3]] ?? $route[3];
+                $controller = $imports[$route[3]] ?? $route[3];
 
                 if ($controller === 'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding') {
                     $items[] = 'route:'.strtoupper($route[1]).' '.$route[2].'=>'.$controller.'::'.$route[4];
@@ -524,14 +529,14 @@ final class CredentialPathInventory
             }
 
             preg_match_all(
-                '/\$router->(get|post|put|patch|delete)\(\s*[\'"]([^\'"]+)[\'"]\s*,\s*([A-Z][A-Za-z0-9_]*)::class\s*\)/i',
+                '/(?:\$router->|Route::)(get|post|put|patch|delete)\(\s*[\'"]([^\'"]+)[\'"]\s*,\s*([A-Z][A-Za-z0-9_]*)::class\s*\)/i',
                 $code,
                 $invokableRoutes,
                 PREG_SET_ORDER,
             );
 
             foreach ($invokableRoutes as $route) {
-                $controller = $providerImports[$route[3]] ?? $route[3];
+                $controller = $imports[$route[3]] ?? $route[3];
 
                 if ($controller === 'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\AsymmetricEnrollments') {
                     $items[] = 'route:'.strtoupper($route[1]).' '.$route[2].'=>'.$controller.'::__invoke';
@@ -667,6 +672,7 @@ final class CredentialPathInventory
 
     /**
      * @param  array<string, array{code: string, imports: array<string, string>}>  $classes
+     * @param  string  $routeDeclarations  the provider and the package route files, comments removed
      * @param  list<string>  $authenticators
      * @param  list<string>  $enrollment
      * @param  list<string>  $classification
@@ -676,6 +682,7 @@ final class CredentialPathInventory
      */
     private static function paths(
         array $classes,
+        string $routeDeclarations,
         array $authenticators,
         array $enrollment,
         array $classification,
@@ -751,7 +758,7 @@ final class CredentialPathInventory
             $paths[] = 'path:system|SubjectType::Operator/Application/Installation+AuditActorType::CliOperator';
         }
 
-        $provider = $classes['ArtisanBuild\\BuiltForCloud\\BuiltForCloudServiceProvider']['code'] ?? '';
+        $provider = $routeDeclarations;
         $deviceController = $classes['ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\DeviceAuthorizations']['code'] ?? '';
         $loopbackController = $classes['ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\LoopbackAuthorizations']['code'] ?? '';
         $bound = $classes['ArtisanBuild\\BuiltForCloud\\BoundBearerCredentialAuthenticator']['code'] ?? '';
@@ -897,16 +904,23 @@ final class CredentialPathInventory
     }
 
     /**
-     * Derive middleware from literal provider registrations and from a
+     * Derive middleware from literal registrations in the provider and in the
+     * package route files (each read against its own imports), and from a
      * class-valued mapping method whose result is attached to a route.
      *
      * @param  array<string, array{code: string, imports: array<string, string>}>  $classes
      * @param  array<string, string>  $providerImports
+     * @param  array<string, string>  $routeFiles
      * @return list<string>
      */
-    private static function registeredMiddleware(array $classes, string $providerCode, array $providerImports): array
+    private static function registeredMiddleware(array $classes, string $providerCode, array $providerImports, array $routeFiles = []): array
     {
         $middleware = [];
+        $sources = [[$providerCode, $providerImports]];
+
+        foreach ($routeFiles as $routeCode) {
+            $sources[] = [$routeCode, self::imports($routeCode)];
+        }
 
         foreach ($classes as $class => $record) {
             if (! str_starts_with($class, 'ArtisanBuild\\BuiltForCloud\\Http\\Middleware\\')
@@ -914,18 +928,20 @@ final class CredentialPathInventory
                 continue;
             }
 
-            $spellings = [$class, '\\'.$class];
+            foreach ($sources as [$code, $imports]) {
+                $spellings = [$class, '\\'.$class];
 
-            foreach ($providerImports as $alias => $importedClass) {
-                if ($importedClass === $class) {
-                    $spellings[] = $alias;
+                foreach ($imports as $alias => $importedClass) {
+                    if ($importedClass === $class) {
+                        $spellings[] = $alias;
+                    }
                 }
-            }
 
-            foreach ($spellings as $spelling) {
-                if (self::directlyRegistersMiddleware($providerCode, $spelling)) {
-                    $middleware[] = 'middleware:'.$class;
-                    break;
+                foreach ($spellings as $spelling) {
+                    if (self::directlyRegistersMiddleware($code, $spelling)) {
+                        $middleware[] = 'middleware:'.$class;
+                        break 2;
+                    }
                 }
             }
         }
@@ -966,7 +982,7 @@ final class CredentialPathInventory
         $class = preg_quote($short, '/').'::class';
 
         if (preg_match('/(?:aliasMiddleware|addPersistentMiddleware)\([^;]*'.$class.'/', $providerCode) === 1
-            || preg_match('/->middleware\(\s*(?:\[[^\]]*)?'.$class.'/', $providerCode) === 1) {
+            || preg_match('/(?:->|::)middleware\(\s*(?:\[[^\]]*)?'.$class.'/', $providerCode) === 1) {
             return true;
         }
 
@@ -997,7 +1013,7 @@ final class CredentialPathInventory
             return false;
         }
 
-        if (preg_match('/->middleware\([^)]*(?:\.\.\.)?\$'.preg_quote($variable, '/').'\b/', $providerCode) === 1) {
+        if (preg_match('/(?:->|::)middleware\([^)]*(?:\.\.\.)?\$'.preg_quote($variable, '/').'\b/', $providerCode) === 1) {
             return true;
         }
 
@@ -1216,6 +1232,24 @@ final class CredentialPathInventory
         }
 
         return $classes;
+    }
+
+    /**
+     * The package's route files beside the scanned source root (routes/*.php),
+     * comments removed, keyed so they never collide with a source file key.
+     * They hold the route declarations the provider used to carry.
+     *
+     * @return array<string, string>
+     */
+    private static function routeFiles(string $sourceRoot): array
+    {
+        $files = [];
+
+        foreach (glob(dirname($sourceRoot).'/routes/*.php') ?: [] as $path) {
+            $files['routes:'.basename($path)] = self::withoutComments(self::requiredContents($path));
+        }
+
+        return $files;
     }
 
     /**

@@ -8,7 +8,6 @@ use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUiAuthority;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
-use ArtisanBuild\BuiltForCloud\LandingManifest;
 use ArtisanBuild\BuiltForCloud\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
 use Illuminate\Foundation\Application;
@@ -35,7 +34,6 @@ final class AuthenticatedUiTest extends TestCase
         parent::getEnvironmentSetUp($app);
 
         $app['config']->set('built-for-cloud.ui', [
-            'landing_page' => true,
             'member_management' => true,
             'personal_credentials' => true,
             'installation_credentials' => true,
@@ -75,7 +73,7 @@ final class AuthenticatedUiTest extends TestCase
             $layoutRenders++;
         });
 
-        $response = $this->actingAsVersioned($user)->get('/bfc/ui');
+        $response = $this->actingAsVersioned($user)->get('/settings');
 
         $response->assertOk()
             ->assertSeeHtml('data-testid="ui-shell"')
@@ -89,68 +87,22 @@ final class AuthenticatedUiTest extends TestCase
         foreach ([
             'Test <Shell> Application',
             'A test-created <strong>shell</strong> description.',
-            'https://assets.example.test/test-shell.svg?variant=ui&source=test',
             'https://scalpels.app/products/test-shell-application?source=test&kind=ui',
         ] as $value) {
             $response->assertSee($value)->assertDontSee($value, false);
         }
+
+        $response->assertSeeHtml('src="https://scalpels.app/img/products/transparent/test-shell-application.png"');
+        $response->assertSeeHtml('data-testid="bfc-user-menu"')
+            ->assertSeeHtml('data-testid="bfc-user-menu-logout"')
+            ->assertSee($user->name)
+            ->assertSee($user->email);
 
         $this->assertMarker($content, 'ui-nav-member-management', in_array($role, [UserRole::Owner, UserRole::Admin], true));
         $this->assertMarker($content, 'ui-nav-session-management', $mode === AuthorityMode::Standalone);
         $this->assertMarker($content, 'ui-nav-managed-transitions', $role === UserRole::Owner);
         $this->assertMarker($content, 'ui-nav-personal-credentials', true);
         $this->assertMarker($content, 'ui-nav-installation-credentials', true);
-    }
-
-    /** @return iterable<string, array{AuthorityMode}> */
-    public static function authorityModeProvider(): iterable
-    {
-        foreach (AuthorityMode::cases() as $mode) {
-            yield $mode->value => [$mode];
-        }
-    }
-
-    #[DataProvider('authorityModeProvider')]
-    public function test_default_null_manifest_renders_the_same_unbranded_shell_for_every_role(AuthorityMode $mode): void
-    {
-        $published = require __DIR__.'/../config/built-for-cloud.php';
-        config([
-            'built-for-cloud.manifest' => $published['manifest'],
-            'built-for-cloud.ui' => $published['ui'],
-        ]);
-        $this->setAuthority($mode);
-        $this->assertNull(app()->make(LandingManifest::class));
-        $layoutRenders = 0;
-        View::composer('bfc::layout', static function () use (&$layoutRenders): void {
-            $layoutRenders++;
-        });
-        $shells = [];
-
-        foreach (UserRole::cases() as $role) {
-            $rendersBeforeRequest = $layoutRenders;
-            $response = $this->actingAsVersioned($this->user(
-                $role,
-                managed: $mode === AuthorityMode::Managed,
-            ))->get('/bfc/ui');
-            $content = (string) $response->getContent();
-
-            $response->assertOk()
-                ->assertSeeHtml('data-testid="ui-shell"')
-                ->assertSeeHtml('data-testid="ui-navigation"')
-                ->assertSeeHtml('<title></title>');
-            $this->assertSame($rendersBeforeRequest + 1, $layoutRenders);
-            $this->assertSame(1, substr_count($content, '<main>'));
-            $this->assertSame(1, substr_count($content, 'data-testid="ui-shell"'));
-            $this->assertStringNotContainsString('data-testid="ui-manifest', $content);
-            $this->assertStringNotContainsString('data-app-slug=', $content);
-            $this->assertStringNotContainsString('data-testid="ui-nav-', $content);
-            $this->assertStringNotContainsString('<header', $content);
-            $this->assertStringNotContainsString('<img', $content);
-            $this->assertStringNotContainsString('<a ', $content);
-            $shells[] = $content;
-        }
-
-        $this->assertCount(1, array_unique($shells));
     }
 
     /** @return iterable<string, array{array<string, mixed>, string}> */
@@ -179,7 +131,6 @@ final class AuthenticatedUiTest extends TestCase
     {
         config([
             'built-for-cloud.manifest' => $manifest,
-            'built-for-cloud.ui.landing_page' => false,
         ]);
         $pageRenders = 0;
         View::composer('bfc::home', static function () use (&$pageRenders): void {
@@ -189,7 +140,7 @@ final class AuthenticatedUiTest extends TestCase
         try {
             $this->withoutExceptionHandling()
                 ->actingAsVersioned($this->user(UserRole::Member))
-                ->get('/bfc/ui');
+                ->get('/settings');
             $this->fail('The invalid manifest was silently omitted.');
         } catch (RuntimeException $exception) {
             $this->assertStringContainsString($field, $exception->getMessage());
@@ -214,21 +165,21 @@ final class AuthenticatedUiTest extends TestCase
         $this->get('/')
             ->assertOk()
             ->assertSeeHtml('data-testid="landing-ui-entry"')
-            ->assertSee(url('/bfc/ui'));
+            ->assertSee(url('/dashboard'));
 
-        $login = $this->get('/bfc/ui');
-        $login->assertRedirect(route('bfc.login', ['intended' => '/bfc/ui']));
+        $login = $this->get('/settings');
+        $login->assertRedirect(route('bfc.login', ['intended' => '/settings']));
         $this->get((string) $login->headers->get('Location'))
             ->assertOk()
-            ->assertSeeHtml('name="intended" value="/bfc/ui"');
+            ->assertSeeHtml('name="intended" value="/settings"');
 
         $this->post('/bfc/login', [
             'email' => $user->email,
             'password' => 'test-created-password',
-            'intended' => '/bfc/ui',
+            'intended' => '/settings',
         ])->assertRedirect(route('bfc.ui.home', absolute: false));
 
-        $this->get('/bfc/ui')
+        $this->get('/settings')
             ->assertOk()
             ->assertSeeHtml('data-testid="ui-shell"')
             ->assertSee('Test <Shell> Application');
@@ -236,34 +187,34 @@ final class AuthenticatedUiTest extends TestCase
 
     public function test_unauthenticated_ui_entry_uses_current_mode_and_preserves_the_relative_request(): void
     {
-        $this->get('/bfc/ui?test-created-section=credentials')
+        $this->get('/settings?test-created-section=credentials')
             ->assertRedirect(route('bfc.login', [
-                'intended' => '/bfc/ui?test-created-section=credentials',
+                'intended' => '/settings?test-created-section=credentials',
             ]));
 
         $this->setAuthority(AuthorityMode::Managed);
-        $this->get('/bfc/ui?test-created-section=credentials')
+        $this->get('/settings?test-created-section=credentials')
             ->assertRedirect(route('bfc.managed.login', [
-                'intended' => '/bfc/ui?test-created-section=credentials',
+                'intended' => '/settings?test-created-section=credentials',
             ]));
     }
 
-    public function test_explicit_unsafe_standalone_destinations_fall_back_to_the_ui_home(): void
+    public function test_explicit_unsafe_standalone_destinations_fall_back_to_the_dashboard(): void
     {
         $user = $this->user(UserRole::Member, password: 'test-created-password');
 
         foreach ([
-            'https://outside.example.test/bfc/ui',
-            '//outside.example.test/bfc/ui',
-            '/%5coutside.example.test/bfc/ui',
-            '/bfc/ui/../outside',
+            'https://outside.example.test/settings',
+            '//outside.example.test/settings',
+            '/%5coutside.example.test/settings',
+            '/settings/../outside',
         ] as $index => $intended) {
             $this->withServerVariables(['REMOTE_ADDR' => '198.51.100.'.($index + 1)])
                 ->post('/bfc/login', [
                     'email' => $user->email,
                     'password' => 'test-created-password',
                     'intended' => $intended,
-                ])->assertRedirect(route('bfc.ui.home', absolute: false));
+                ])->assertRedirect(route('bfc.dashboard', absolute: false));
         }
     }
 
@@ -278,7 +229,7 @@ final class AuthenticatedUiTest extends TestCase
         ]);
         $route = Route::getRoutes()->getByName('bfc.ui.home');
         $this->assertNotNull($route);
-        $this->assertSame('bfc/ui', $route->uri());
+        $this->assertSame('settings', $route->uri());
         $this->assertSame(['GET', 'HEAD'], $route->methods());
 
         /** @var Router $router */
@@ -289,7 +240,7 @@ final class AuthenticatedUiTest extends TestCase
         $this->assertContains(EnsureUserIsAuthenticated::class, $middleware);
 
         $content = (string) $this->actingAsVersioned($this->user(UserRole::Owner))
-            ->get('/bfc/ui')
+            ->get('/settings')
             ->assertOk()
             ->getContent();
         $this->assertStringContainsString('data-testid="ui-navigation"', $content);
@@ -304,14 +255,14 @@ final class AuthenticatedUiTest extends TestCase
 
         /** @var Router $router */
         $router = app('router');
-        $router->get('/bfc/ui', static function () use (&$hostRuns): string {
+        $router->get('/settings', static function () use (&$hostRuns): string {
             $hostRuns++;
 
             return 'host-ui';
         })->name('host.ui');
 
         try {
-            $this->withoutExceptionHandling()->get('/bfc/ui');
+            $this->withoutExceptionHandling()->get('/settings');
             $this->fail('The late UI takeover was served.');
         } catch (RuntimeException $exception) {
             $this->assertStringContainsString('reserved by the built-for-cloud package user interface', $exception->getMessage());
@@ -353,11 +304,11 @@ final class AuthenticatedUiTest extends TestCase
             $pageRenders++;
         });
 
-        $response = $this->actingAsVersioned($user)->get('/bfc/ui');
+        $response = $this->actingAsVersioned($user)->get('/settings');
 
         $response->assertStatus($status);
         if ($status === 302) {
-            $response->assertRedirect(route('bfc.managed.login', ['intended' => '/bfc/ui']));
+            $response->assertRedirect(route('bfc.managed.login', ['intended' => '/settings']));
         }
         $this->assertSame(0, $pageRenders);
     }
@@ -369,8 +320,8 @@ final class AuthenticatedUiTest extends TestCase
             $pageRenders++;
         });
 
-        $this->get('/bfc/ui')
-            ->assertRedirect(route('bfc.login', ['intended' => '/bfc/ui']));
+        $this->get('/settings')
+            ->assertRedirect(route('bfc.login', ['intended' => '/settings']));
         $this->assertSame(0, $pageRenders);
 
         // The delegated-entry door is RETIRED: there is no package route
@@ -407,13 +358,13 @@ final class AuthenticatedUiTest extends TestCase
             $pageRenders++;
         });
 
-        $this->get('/bfc/ui')->assertNotFound();
+        $this->get('/settings')->assertNotFound();
         $this->assertSame(0, $pageRenders);
 
         $nextRuns = 0;
         try {
             app(EnsureUiAuthority::class)->handle(
-                Request::create('/bfc/ui'),
+                Request::create('/settings'),
                 static function () use (&$nextRuns) {
                     $nextRuns++;
 

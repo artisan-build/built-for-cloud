@@ -52,5 +52,25 @@ abstract class TestCase extends Orchestra
         // key-version fingerprints stable within a run.
         $app['config']->set('app.key', 'base64:'.base64_encode(str_repeat('bfc-test-key-32b', 2)));
         $app['config']->set('built-for-cloud.hmac.audience', 'https://bfc-test-installation.example');
+
+        // Every Built for Cloud app declares a manifest and does not boot
+        // without one; tests that need other values set their own.
+        $app['config']->set('built-for-cloud.manifest', self::manifestForTests());
+    }
+
+    /**
+     * A valid manifest for the test app.
+     *
+     * @return array{name: string, slug: string, description: string, icon: string, product_url: string}
+     */
+    public static function manifestForTests(): array
+    {
+        return [
+            'name' => 'Test App',
+            'slug' => 'test-app',
+            'description' => 'The app the package test suite boots.',
+            'icon' => 'https://scalpels.app/img/products/transparent/test-app.png',
+            'product_url' => 'https://scalpels.app/products/test-app',
+        ];
     }
 }

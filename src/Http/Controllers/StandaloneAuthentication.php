@@ -45,7 +45,7 @@ final class StandaloneAuthentication
 
         return redirect()->to(ConsoleReturnTo::firstRelative([
             $credentials['intended'] ?? null,
-            route('bfc.ui.home', absolute: false),
+            route('bfc.dashboard', absolute: false),
         ]));
     }
 

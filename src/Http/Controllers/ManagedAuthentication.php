@@ -26,7 +26,7 @@ final class ManagedAuthentication
             if ($request->query->has('intended')) {
                 $request->session()->put(ManagedHandoff::SESSION_INTENDED_KEY, ManagedReturnTo::firstRelative([
                     $request->query('intended'),
-                    route('bfc.ui.home', absolute: false),
+                    route('bfc.dashboard', absolute: false),
                 ]));
             } else {
                 $request->session()->forget(ManagedHandoff::SESSION_INTENDED_KEY);
@@ -61,7 +61,7 @@ final class ManagedAuthentication
 
             return redirect()->to(ManagedReturnTo::firstRelative([
                 $request->session()->pull(ManagedHandoff::SESSION_INTENDED_KEY),
-                '/',
+                route('bfc.dashboard', absolute: false),
             ]));
         } catch (ManagedAuthRefused) {
             return $this->refusal();

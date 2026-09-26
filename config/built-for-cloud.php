@@ -2,6 +2,9 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\Http\Controllers\Dashboard;
+use ArtisanBuild\BuiltForCloud\View\Layout;
+
 return [
 
     /*
@@ -28,6 +31,20 @@ return [
 
     'token_prefix' => env('BUILT_FOR_CLOUD_TOKEN_PREFIX', 'tok_'),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Manifest
+    |--------------------------------------------------------------------------
+    |
+    | How the app identifies itself as a Scalpels product. Required: every
+    | field must be set, and the app does not boot without them. `slug` is
+    | the product's Scalpels catalog slug (the app's artwork is loaded from
+    | https://scalpels.app/img/products/transparent/{slug}.png), `icon` is
+    | that artwork URL, and `product_url` is the product's page on
+    | scalpels.app.
+    |
+    */
+
     'manifest' => [
         'name' => null,
         'slug' => null,
@@ -35,6 +52,42 @@ return [
         'icon' => null,
         'product_url' => null,
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Layout
+    |--------------------------------------------------------------------------
+    |
+    | The Blade component class every package page renders inside, available
+    | to the app as `<x-bfc-layout>`. To restyle the app without editing a
+    | file upstream owns, write your own class extending
+    | Illuminate\View\Component (or this package's Layout) and name it in
+    | BUILT_FOR_CLOUD_LAYOUT.
+    |
+    | `livewire_layout` makes that same class Livewire's full-page layout
+    | (`livewire.component_layout`), so full-page Livewire components match
+    | the package pages. Set it false to keep the app's own Livewire layout.
+    |
+    */
+
+    'layout' => env('BUILT_FOR_CLOUD_LAYOUT', Layout::class),
+
+    'livewire_layout' => env('BUILT_FOR_CLOUD_LIVEWIRE_LAYOUT', true),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Dashboard
+    |--------------------------------------------------------------------------
+    |
+    | What `GET /dashboard` (route `bfc.dashboard`), the page every signed-in
+    | person lands on, runs: an invokable controller or a full-page Livewire
+    | component. The package default points the way to settings. An app
+    | replaces it by naming its own class in BUILT_FOR_CLOUD_DASHBOARD; the
+    | route keeps the package's sign-in middleware whatever runs behind it.
+    |
+    */
+
+    'dashboard' => env('BUILT_FOR_CLOUD_DASHBOARD', Dashboard::class),
 
     /*
     |--------------------------------------------------------------------------
@@ -378,18 +431,14 @@ return [
     | Surface Selection (PRD 1.14, fleet F2)
     |--------------------------------------------------------------------------
     |
-    | Which framework surfaces this app mounts. Five independently
-    | selectable families, ALL ON by default (exactly today's behavior);
-    | an app turns off what it does not use — this is what lets an app
-    | stop mounting `/bfc/*` entirely instead of leaving a live
-    | POST /bfc/ownership/claim minting admin rows into tables it never
-    | reads.
+    | Which framework surfaces this app mounts. Four independently
+    | selectable families, ALL ON by default; an app turns off what it
+    | does not use.
     |
-    | `routes`          — every HTTP route the package mounts (all of
-    |                     /bfc/* and the legacy credential API). The
-    |                     middleware ALIASES (bfc.ability, bfc.hmac, …)
-    |                     stay registered either way, so an app with
-    |                     routes off can still gate its own routes.
+    | Routes are not among them. Every Built for Cloud app has a UI and
+    | serves the whole HTTP contract, so the package's routes/web.php and
+    | routes/api.php load in every app, unconditionally.
+    |
     | `migrations`      — loadMigrationsFrom for the package's schema
     |                     migrations. Off means the app owns the schema
     |                     (vendor:publish or its own copies). CAVEAT:
@@ -409,14 +458,9 @@ return [
     |                     `migrations` because an app may want the schema
     |                     without the framework seeding state into it.
     |
-    | No single route is individually configurable — the claim surfaces
-    | in particular are never env-gated one by one (PRD 1.12); a family
-    | is mounted whole or not at all.
-    |
     */
 
     'surfaces' => [
-        'routes' => env('BUILT_FOR_CLOUD_SURFACE_ROUTES', true),
         'migrations' => env('BUILT_FOR_CLOUD_SURFACE_MIGRATIONS', true),
         'commands' => env('BUILT_FOR_CLOUD_SURFACE_COMMANDS', true),
         'listeners' => env('BUILT_FOR_CLOUD_SURFACE_LISTENERS', true),
@@ -445,7 +489,6 @@ return [
     */
 
     'ui' => [
-        'landing_page' => false,
         'member_management' => false,
         'personal_credentials' => false,
         'installation_credentials' => false,
