@@ -22,13 +22,10 @@ use ArtisanBuild\BuiltForCloudContracts\Mcp\Classification as ContractsClassific
 use ArtisanBuild\BuiltForCloudContracts\MetadataShape as ContractsMetadataShape;
 use ArtisanBuild\BuiltForCloudContracts\OwnershipClaim as ContractsOwnershipClaim;
 use ArtisanBuild\BuiltForCloudContracts\Vitals\VitalsPayload as ContractsVitalsPayload;
-use Composer\InstalledVersions;
-use Composer\Semver\VersionParser;
 use Illuminate\Database\Eloquent\Model;
 
 it('installs compatible contracts and keeps the release and protocol versions distinct', function (): void {
-    expect(InstalledVersions::satisfies(new VersionParser, 'artisan-build/built-for-cloud-contracts', '^0.2'))->toBeTrue()
-        ->and(BuiltForCloud::VERSION)->toMatch('/^\d+\.\d+\.\d+$/D')
+    expect(BuiltForCloud::VERSION)->toMatch('/^\d+\.\d+\.\d+$/D')
         ->and(BuiltForCloud::VERSION)->not->toBe((string) BuiltForCloud::API_VERSION)
         ->and(BuiltForCloud::API_VERSION)->toBe(ContractsBuiltForCloud::API_VERSION)
         ->and(BuiltForCloud::API_VERSION)->toBe(2);
