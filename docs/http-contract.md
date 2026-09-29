@@ -106,7 +106,13 @@ and the following closed `error` vocabulary. Clients branch on `error`.
 
 ### Changelog
 
-**v0.19.1.** Console entry is retired: `POST /bfc/console/enter` and
+**v0.19.2.** Effect-scoped MCP dispatch ships additively. A deployment can advertise an exact
+read ceiling, optionally advertise a separately verified write door, and refuse an otherwise
+eligible above-ceiling tool call with a stable bounded JSON-RPC error. The delegated-tool
+conformance assertion now requires each tool to enforce that ceiling. `api_version` remains 2:
+the capability, optional endpoint member, middleware parameter and refusal are additive.
+
+Console entry is retired: `POST /bfc/console/enter` and
 `GET /bfc/console/chrome.js` are removed, along with the Console session guard and the
 `BUILT_FOR_CLOUD_CONSOLE_ENABLED` / `BUILT_FOR_CLOUD_CONSOLE_REENTRY_URL` configuration (and the
 `built-for-cloud.console.return_path_allowlist` config key, which existed only to narrow the
@@ -124,15 +130,16 @@ secret, and disconnect it through the existing exit-transition machinery. `GET /
 and never returned. `api_version` remains 2 because these are new routes and one new open-set
 capability member.
 
-**api_version 2** (bfc **0.19.1**, this release). All changes since version 1, in one inventory.
+**api_version 2** (bfc **0.19.2**, this release). All changes since version 1, in one inventory.
 Additive unless marked otherwise.
 
 **Everything the Console adds through this release is additive or a documented removal, so `api_version` stays 2. What carries the
-signal is `bfc_version` 0.19.1 plus the `capabilities` entries** — `console-keys`,
+signal is `bfc_version` 0.19.2 plus the `capabilities` entries** — `console-keys`,
 `console-key-retire`, `console-vitals`,
-`app-action-audit-emit`, `mcp-serve` and `mcp-delegated`. (The `console-guard`, `console-enter`
-and `console-chrome-assets` entries this list once named were RETIRED in v0.19.1 with the
-machinery they advertised — see [Retired in v0.19.1](#retired-in-v0191).)
+`app-action-audit-emit`, `mcp-serve`, `mcp-delegated` and `mcp-effect-scoped`. (The
+`console-guard`, `console-enter` and `console-chrome-assets` entries this list once named were
+RETIRED in v0.19.2 with the machinery they advertised — see
+[Retired in v0.19.2](#retired-in-v0192).)
 
 **What "additive" covers here, stated as what actually shipped rather than as one paradigm case**,
 because a reader applying rule 1 to their own change needs the real list:
@@ -159,6 +166,14 @@ because a reader applying rule 1 to their own change needs the real list:
   conformance assertion. The assertion verifier gains the optional `purpose` claim; the MCP door
   requires `mcp` now, while Console entry temporarily treats absence as `console-entry`. That
   legacy tolerance is scheduled for removal in the next minor.
+- **Request-scoped MCP effect ceilings ship.** The exact
+  `bfc.mcp:product,<ceiling>` middleware form publishes a `read`, `write` or `destructive`
+  ceiling, with dominance `read < write < destructive`; undeclared tool effects default to
+  `destructive`. `GET /bfc/meta` gains the conditional `mcp-effect-scoped` capability and, for
+  a wholly valid two-door surface, `endpoints.mcp_write`. An otherwise eligible targeted call
+  above its door's ceiling receives the bounded HTTP 400 JSON-RPC refusal `-32000` /
+  `effect_above_ceiling`. The delegated-tool conformance assertion now requires
+  `RespectsEffectCeiling`.
 
 None of that removes a field, renames one, retypes one, or changes what an existing field means,
 which is what rule 1 makes the major bump about. Written down here so it is not re-litigated, along
@@ -196,8 +211,8 @@ with the three things that WOULD have moved the major and none of which happened
   interceptor, plus the `bfc::` view namespace carrying the single package layout (Console PRD
   D11/D7). Additive: no existing request or response shape changes, and the capability names
   what this deployment SERVES, never that any page of the application renders it. (The chrome
-  and its route were retired in v0.19.1 — see
-  [Retired in v0.19.1](#retired-in-v0191).)
+  and its route were retired in v0.19.2 — see
+  [Retired in v0.19.2](#retired-in-v0192).)
 - New rotation route (PRD 1.7): `POST /bfc/credentials/{id}/rotate` — rotate-by-id on the unified
   store. Summary rows gained the nullable `rotated_at` field (rotation provenance). A row
   already superseded by rotation never mints again (the lineage never forks): with a live
@@ -587,12 +602,22 @@ MCP tools use the same two-value boundary through
 the value in `tools/list` as `_meta.classification`; an undeclared tool serializes conservatively
 as `content`, but is still non-conforming because the declaration itself is required. A product
 may advertise `mcp-delegated` only when every registered tool carries one of Laravel MCP's
-`#[IsReadOnly]`, `#[IsDestructive]`, or `#[IsIdempotent]` attributes and an explicit
-`ToolClassification`, and its suite runs
+`#[IsReadOnly]`, `#[IsDestructive]`, or `#[IsIdempotent]` attributes, an explicit
+`ToolClassification`, an explicit `ToolEffect`, matching `_meta.classification` and `_meta.effect`
+wire values (normally supplied by `AdvertisesToolClassification` and `AdvertisesToolEffect`), and
+the `RespectsEffectCeiling` trait, and its suite runs
 `ContractAssertions::assertBuiltForCloudMcpDelegatedTools()` against the server. The assertion
-checks registered tools eligible under that test's application state and verifies wire
-propagation. It does not inspect unregistered or currently ineligible tools, response bodies,
-implementations, or whether an annotation truthfully describes behavior.
+checks registered tools eligible under that test's application state, temporarily discovering
+them under a `destructive` ceiling, and verifies classification/effect wire propagation plus the
+ceiling-enforcement trait. It does not inspect unregistered or currently ineligible tools,
+response bodies, implementations, or whether an annotation or effect truthfully describes
+behavior.
+
+This tightened conformance leg is a migration requirement for every consuming server. In
+particular, a trait-bearing server reached through a local/stdio transport publishes no HTTP
+request ceiling, so `RespectsEffectCeiling` fails closed and publishes no tools. A product that
+needs local/stdio MCP must design a ceiling-bearing transport before adopting the trait there;
+this release defines only the HTTP middleware transport.
 
 ---
 
@@ -607,11 +632,11 @@ Public (`bfc-public` throttle). Identifies the instance.
 ```json
 {
   "product": "Sink",
-  "bfc_version": "0.19.1",
+  "bfc_version": "0.19.2",
   "api_version": 2,
-  "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials", "console-keys", "console-key-retire", "console-vitals", "app-action-audit-emit", "mcp-serve", "mcp-delegated"],
+  "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials", "console-keys", "console-key-retire", "console-vitals", "app-action-audit-emit", "mcp-serve", "mcp-delegated", "mcp-effect-scoped"],
   "claimed": true,
-  "endpoints": {"mcp": "/mcp"}
+  "endpoints": {"mcp": "/mcp", "mcp_write": "/mcp-write"}
 }
 ```
 
@@ -631,7 +656,7 @@ below are the ones that do carry a predicate, and each states it.
 optional claim-time key exchange and `POST /bfc/console/re-key`. It deliberately does **not** say
 `console` — key custody is not the Console, and a control plane that read `console` as "this
 deployment can be entered" would be reading a promise this capability does not make (the
-delegated-entry door it might once have imagined was retired in v0.19.1). The delegated-actor
+delegated-entry door it might once have imagined was retired in v0.19.2). The delegated-actor
 table does exist, retained for delegated MCP authentication; `console-keys` says nothing about
 it, and an instance can report it while serving no delegated surface at all.
 
@@ -677,6 +702,21 @@ observe and does not pretend to check: whether the
 advertised tools are annotated and classified is the application's own decision, made by its own
 test suite, and no package capability can see that. A deployment may report `mcp-serve` alone when
 it accepts registry bearers but not delegated assertions. The package does not mount an MCP server.
+
+`mcp-effect-scoped` means the whole configured effect surface has been verified. The route Laravel
+would actually dispatch for a POST to `built-for-cloud.mcp.path`, on the host serving the metadata
+request, carries the exact effective middleware `bfc.mcp:product,read`; and
+`built-for-cloud.mcp.write_path` is either genuinely `null` (the approved read-only, one-door shape)
+or a valid rooted path whose dispatched POST carries the exact effective middleware
+`bfc.mcp:product,write`. Middleware groups, aliases and exclusions are resolved as they are for
+`mcp-delegated`; a missing slot, extra parameter, malformed/non-rooted configured write path,
+wrong verb/domain/ceiling, absent route or excluded guard withholds the capability.
+
+`endpoints.mcp_write` is emitted only for the second, wholly valid two-door shape; a valid read-only
+shape advertises `mcp-effect-scoped` with only `endpoints.mcp`. Consumers MUST feature-detect
+`mcp-effect-scoped`, not infer effect enforcement from the presence or absence of
+`endpoints.mcp_write`. The endpoint member is an address available after the capability is known,
+not the feature flag.
 
 ---
 
@@ -2815,7 +2855,7 @@ field.
 {
   "version": 1,
   "api_version": 2,
-  "bfc_version": "0.19.1",
+  "bfc_version": "0.19.2",
   "app_version": "1.4.2",
   "health": "ok",
   "deployed_at": "2026-08-29T09:14:00+00:00",
@@ -2990,11 +3030,40 @@ The only carrier is `Authorization: Bearer <credential>`. Dispatch is exclusive 
   checks. Ordinary `mcp` credentials publish no admin actor; only the bounded escape publishes
   `bfc.actor_credential_id`.
 
-The optional middleware parameter `bfc.mcp:product` closes that bounded operator escape for a
-consumer product endpoint. It still admits purpose-`mcp` credentials and delegated MCP assertions,
-but refuses the `operator_management` + `operator` + `credential:admin` compound with the same
-reason-free `401`, before usage. Plain `bfc.mcp` deliberately retains the compound for consumers
-that use the package's default operator integration behavior. No second alias is registered.
+The optional first middleware parameter `bfc.mcp:product` closes that bounded operator escape for
+a consumer product endpoint. It still admits purpose-`mcp` credentials and delegated MCP
+assertions, but refuses the `operator_management` + `operator` + `credential:admin` compound with
+the same reason-free `401`, before usage. Plain `bfc.mcp` deliberately retains the compound for
+consumers that use the package's default operator integration behavior. No second alias is
+registered.
+
+The effect-scoped syntax is exactly `bfc.mcp:product,<ceiling>`, where `<ceiling>` is `read`,
+`write`, or `destructive`. The middleware publishes that ceiling only on the current request;
+missing or invalid values publish no ceiling rather than inheriting stale state. Tools using
+`RespectsEffectCeiling` are eligible when their declared `ToolEffect` is no higher than the
+request ceiling, with dominance `read < write < destructive`: a read door admits only read tools,
+a write door admits read and write tools, and a destructive door admits all three. An undeclared
+effect defaults to `destructive`, so omission never grants read access. Above-ceiling tools are
+absent from `tools/list` and their handlers are not invoked.
+
+An otherwise eligible targeted `tools/call` above the ceiling returns HTTP 400 with the stable,
+bounded JSON-RPC refusal:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {"code": -32000, "message": "effect_above_ceiling"}
+}
+```
+
+Only a string or integer request id is echoed; any other id becomes `null`, and the response does
+not echo the tool name, arguments, or policy details. This is distinct from Laravel MCP's vendor
+`-32602` not-found response: a genuinely absent tool, or one whose own registration predicate
+makes it dynamically ineligible, remains vendor-not-found rather than becoming an effect-ceiling
+refusal. Registration eligibility is evaluated before the ceiling for exactly that reason.
+
+*Pinned by* `tests/McpEffectCeilingTest.php` and `tests/McpMetadataTest.php`.
 
 An unbound installation credential (`subject_type=installation`, `purpose=mcp`, `user_id=null`)
 runs the immediate downstream pipeline inside `SystemAuthorityContext`. If that pipeline returns a
@@ -3146,7 +3215,7 @@ else.
 transaction it opened itself, on the default connection used by the audit models.** Do that and a
 rolled-back action takes both rows with it, so nothing is ever recorded about something that did
 not happen — the stream is transactional, or it is fiction. (Historically the package's own
-emitter was the delegated-entry door, retired in v0.19.1, which wrote the entry and its event on
+emitter was the delegated-entry door, retired in v0.19.2, which wrote the entry and its event on
 the default connection in one transaction and served no entry it could not record; the
 requirement on a consuming app is unchanged.)
 *Pinned by* `tests/RecorderTransactionGuardTest.php` ("refuses to record an app action outside a
@@ -3314,7 +3383,7 @@ instance, can tamper with its own history, and this package will neither prevent
 
 ## Console — what has landed, what has been RETIRED, and what is still RESERVED
 
-The vendor-side Console lands in stages, and in v0.19.1 one stage was removed again. This
+The vendor-side Console lands in stages, and in v0.19.2 one stage was removed again. This
 section says exactly which of its names are real, which were retired, and which are still only
 names, so a consumer never has to guess. This section deliberately contains no `### METHOD
 /path` route headings — the mechanical route-completeness check covers live routes only, and
@@ -3346,7 +3415,7 @@ the routes named here are documented in their own sections above.
 - **The app-action audit stream's schema and emission** —
   [above](#the-app-action-audit-stream).
 
-### Retired in v0.19.1
+### Retired in v0.19.2
 
 Console entry is retired. The following are REMOVED, not disabled: `POST /bfc/console/enter`,
 `GET /bfc/console/chrome.js` and the chrome/layout re-entry machinery, the `bfc-console`
