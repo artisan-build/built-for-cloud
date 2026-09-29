@@ -599,17 +599,41 @@ final class HttpContractDocTest extends TestCase
             'docs/http-contract.md and BuiltForCloud::VERSION disagree in a way nothing declares.',
         );
 
-        // The wider half of the same property: EVERY spelling of the
-        // release agrees, in prose as well as in the examples. The
-        // examples check above this one could not see the changelog's
-        // three prose mentions, and a document contradicting itself
-        // about its own release discriminator is the defect PR8 fixed by
-        // hand between two examples in this same file.
+        // The wider half of the same property: EVERY current-release
+        // spelling agrees, in prose as well as in the examples. A
+        // conventional v-prefixed release-note label is historical and
+        // excluded. The examples check above this one could not see bare
+        // prose mentions, and a document contradicting itself about its
+        // own release discriminator is the defect PR8 fixed by hand
+        // between two examples in this same file.
         $this->assertSame(
             [ContractScan::releaseVersionMentionsIn($doc)[0]],
             array_values(array_unique(ContractScan::releaseVersionMentionsIn($doc))),
             'docs/http-contract.md spells more than one release version: '
             .implode(', ', array_unique(ContractScan::releaseVersionMentionsIn($doc))),
+        );
+    }
+
+    public function test_current_release_mentions_exclude_v_prefixed_history_without_hiding_bare_contradictions(): void
+    {
+        $currentAndHistorical = <<<'MD'
+            {"bfc_version": "0.19.3"}
+            Current `bfc_version` 0.19.3. Effect scoping shipped in v0.19.2.
+            MD;
+
+        $this->assertSame(
+            ['0.19.3', '0.19.3'],
+            ContractScan::releaseVersionMentionsIn($currentAndHistorical),
+        );
+        $this->assertSame([], ContractScan::versionPairBreaksIn($currentAndHistorical, '0.19.3'));
+
+        $contradictory = $currentAndHistorical.PHP_EOL.'Current fallback 0.19.1.';
+
+        $this->assertSame(['0.19.3', '0.19.3', '0.19.1'], ContractScan::releaseVersionMentionsIn($contradictory));
+        $this->assertSame(
+            ['the document spells more than one release version (0.19.3, 0.19.1), so which one the '
+                .'constant should be compared to has no answer'],
+            ContractScan::versionPairBreaksIn($contradictory, '0.19.3'),
         );
     }
 
