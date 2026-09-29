@@ -20,4 +20,18 @@ enum Effect: string
     {
         return array_column(ContractsEffect::cases(), 'value');
     }
+
+    public function allows(self $effect): bool
+    {
+        return $this->rank() >= $effect->rank();
+    }
+
+    private function rank(): int
+    {
+        return match ($this) {
+            self::Read => 0,
+            self::Write => 1,
+            self::Destructive => 2,
+        };
+    }
 }

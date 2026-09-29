@@ -58,9 +58,14 @@ final class McpConfiguration
 {
     public static function endpoint(): ?string
     {
-        $path = config('built-for-cloud.mcp.path');
+        return self::configuredEndpoint('path');
+    }
 
-        if (! is_string($path) || preg_match('/^\/(?!\/)[^\s?#]*\z/u', $path) !== 1) {
+    public static function writeEndpoint(): ?string
+    {
+        $path = self::configuredEndpoint('write_path');
+
+        if ($path === null || ! self::endpointHasEffectCeiling($path, Effect::Write)) {
             return null;
         }
 
@@ -79,6 +84,18 @@ final class McpConfiguration
         }
 
         return self::advertisedEndpointIsGuarded();
+    }
+
+    public static function effectScoped(): bool
+    {
+        $endpoint = self::endpoint();
+
+        if ($endpoint === null || ! self::endpointHasEffectCeiling($endpoint, Effect::Read)) {
+            return false;
+        }
+
+        return config('built-for-cloud.mcp.write_path') === null
+            || self::writeEndpoint() !== null;
     }
 
     /**
@@ -102,22 +119,60 @@ final class McpConfiguration
      */
     private static function advertisedEndpointIsGuarded(): bool
     {
+        $endpoint = self::endpoint();
+
+        return $endpoint !== null && self::endpointHasGuard($endpoint);
+    }
+
+    private static function endpointHasEffectCeiling(string $endpoint, Effect $ceiling): bool
+    {
+        $middleware = self::endpointMiddleware($endpoint);
+
+        if ($middleware === null) {
+            return false;
+        }
+
+        $index = RouteMiddleware::indexOfClass($middleware, AuthenticateMcp::class);
+        $entry = $index === null ? null : ($middleware[$index] ?? null);
+
+        if (! is_string($entry)) {
+            return false;
+        }
+
+        $parts = explode(':', $entry, 2);
+
+        return isset($parts[1])
+            && explode(',', $parts[1]) === ['product', $ceiling->value];
+    }
+
+    private static function endpointHasGuard(string $endpoint): bool
+    {
+        $middleware = self::endpointMiddleware($endpoint);
+
+        return $middleware !== null && RouteMiddleware::indexOfClass(
+            $middleware,
+            AuthenticateMcp::class,
+        ) !== null;
+    }
+
+    /**
+     * @return list<mixed>|null
+     */
+    private static function endpointMiddleware(string $endpoint): ?array
+    {
         $router = app('router');
 
         if (! $router instanceof Router) {
-            return false;
+            return null;
         }
 
         try {
-            $route = $router->getRoutes()->match(self::mcpPostProbe());
+            $route = $router->getRoutes()->match(self::mcpPostProbe($endpoint));
         } catch (Throwable) {
-            return false;
+            return null;
         }
 
-        return RouteMiddleware::indexOfClass(
-            $router->gatherRouteMiddleware($route),
-            AuthenticateMcp::class,
-        ) !== null;
+        return $router->gatherRouteMiddleware($route);
     }
 
     /**
@@ -127,7 +182,7 @@ final class McpConfiguration
      * the host that actually serves this request, not merely share the
      * URI text).
      */
-    private static function mcpPostProbe(): Request
+    private static function mcpPostProbe(string $endpoint): Request
     {
         $current = app('request');
 
@@ -135,6 +190,17 @@ final class McpConfiguration
             ? $current->getHost()
             : 'localhost';
 
-        return Request::create('http://'.$host.(string) self::endpoint(), 'POST');
+        return Request::create('http://'.$host.$endpoint, 'POST');
+    }
+
+    private static function configuredEndpoint(string $key): ?string
+    {
+        $path = config('built-for-cloud.mcp.'.$key);
+
+        if (! is_string($path) || preg_match('/^\/(?!\/)[^\s?#]*\z/u', $path) !== 1) {
+            return null;
+        }
+
+        return $path;
     }
 }

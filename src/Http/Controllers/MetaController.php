@@ -93,7 +93,14 @@ final class MetaController
         ];
 
         if (($mcp = McpConfiguration::endpoint()) !== null) {
-            $payload['endpoints'] = ['mcp' => $mcp];
+            $endpoints = ['mcp' => $mcp];
+
+            if (McpConfiguration::effectScoped()
+                && ($mcpWrite = McpConfiguration::writeEndpoint()) !== null) {
+                $endpoints['mcp_write'] = $mcpWrite;
+            }
+
+            $payload['endpoints'] = $endpoints;
         }
 
         return response()->json($payload);
@@ -121,6 +128,10 @@ final class MetaController
 
         if (McpConfiguration::delegated()) {
             $capabilities[] = 'mcp-delegated';
+        }
+
+        if (McpConfiguration::effectScoped()) {
+            $capabilities[] = 'mcp-effect-scoped';
         }
 
         return $capabilities;
