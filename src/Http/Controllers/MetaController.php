@@ -95,9 +95,14 @@ final class MetaController
         if (($mcp = McpConfiguration::endpoint()) !== null) {
             $endpoints = ['mcp' => $mcp];
 
-            if (McpConfiguration::effectScoped()
-                && ($mcpWrite = McpConfiguration::writeEndpoint()) !== null) {
-                $endpoints['mcp_write'] = $mcpWrite;
+            if (McpConfiguration::effectScoped()) {
+                if (($mcpWrite = McpConfiguration::writeEndpoint()) !== null) {
+                    $endpoints['mcp_write'] = $mcpWrite;
+                }
+
+                if (($mcpDestructive = McpConfiguration::destructiveEndpoint()) !== null) {
+                    $endpoints['mcp_destructive'] = $mcpDestructive;
+                }
             }
 
             $payload['endpoints'] = $endpoints;

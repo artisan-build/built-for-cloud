@@ -133,6 +133,51 @@ it('advertises effect scoping and the write endpoint only for exact verified cei
         ]);
 });
 
+it('advertises effect scoping and the destructive endpoint for an exact verified destructive ceiling', function (): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.write_path' => null,
+        'built-for-cloud.mcp.destructive_path' => '/mcp-destructive',
+    ]);
+
+    Route::post('/mcp', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,read');
+    Route::post('/mcp-destructive', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,destructive');
+
+    $response = $this->getJson('/bfc/meta')->assertOk();
+
+    expect($response->json('capabilities'))->toContain('mcp-effect-scoped')
+        ->and($response->json('endpoints'))->toBe([
+            'mcp' => '/mcp',
+            'mcp_destructive' => '/mcp-destructive',
+        ]);
+});
+
+it('advertises all three verified MCP effect doors without aliasing their endpoint keys', function (): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.write_path' => '/mcp-write',
+        'built-for-cloud.mcp.destructive_path' => '/mcp-destructive',
+    ]);
+
+    Route::post('/mcp', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,read');
+    Route::post('/mcp-write', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,write');
+    Route::post('/mcp-destructive', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,destructive');
+
+    $response = $this->getJson('/bfc/meta')->assertOk();
+
+    expect($response->json('capabilities'))->toContain('mcp-effect-scoped')
+        ->and($response->json('endpoints'))->toBe([
+            'mcp' => '/mcp',
+            'mcp_write' => '/mcp-write',
+            'mcp_destructive' => '/mcp-destructive',
+        ]);
+});
+
 it('fails effect scoping closed for an explicitly configured malformed write path', function (mixed $writePath): void {
     config([
         'built-for-cloud.mcp.path' => '/mcp',
@@ -154,6 +199,143 @@ it('fails effect scoping closed for an explicitly configured malformed write pat
     'non-string integer' => 1,
     'non-string array' => [['/mcp-write']],
 ]);
+
+it('fails effect scoping closed for an explicitly configured malformed destructive path', function (mixed $destructivePath): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.write_path' => '/mcp-write',
+        'built-for-cloud.mcp.destructive_path' => $destructivePath,
+    ]);
+
+    Route::post('/mcp', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,read');
+    Route::post('/mcp-write', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,write');
+
+    $response = $this->getJson('/bfc/meta')->assertOk();
+
+    expect($response->json('capabilities'))->not->toContain('mcp-effect-scoped')
+        ->and($response->json('endpoints'))->toBe(['mcp' => '/mcp']);
+})->with([
+    'empty string' => '',
+    'relative path' => 'mcp-destructive',
+    'protocol-relative path' => '//other.example.com/mcp-destructive',
+    'query-bearing path' => '/mcp-destructive?mode=destructive',
+    'non-string integer' => 1,
+    'non-string array' => [['/mcp-destructive']],
+]);
+
+it('does not advertise effect scoping or a destructive endpoint for the wrong ceiling', function (string $middleware): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.destructive_path' => '/mcp-destructive',
+    ]);
+
+    Route::post('/mcp', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,read');
+    Route::post('/mcp-destructive', fn (): array => ['ok' => true])
+        ->middleware($middleware);
+
+    $response = $this->getJson('/bfc/meta')->assertOk();
+
+    expect($response->json('capabilities'))->not->toContain('mcp-effect-scoped')
+        ->and($response->json('endpoints'))->toBe(['mcp' => '/mcp']);
+})->with([
+    'bare guard' => 'bfc.mcp',
+    'read ceiling' => 'bfc.mcp:product,read',
+    'write ceiling' => 'bfc.mcp:product,write',
+]);
+
+it('requires the exact product slot and parameter count on the destructive door', function (string $middleware): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.destructive_path' => '/mcp-destructive',
+    ]);
+
+    Route::post('/mcp', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,read');
+    Route::post('/mcp-destructive', fn (): array => ['ok' => true])
+        ->middleware($middleware);
+
+    $response = $this->getJson('/bfc/meta')->assertOk();
+
+    expect($response->json('capabilities'))->not->toContain('mcp-effect-scoped')
+        ->and($response->json('endpoints'))->toBe(['mcp' => '/mcp']);
+})->with([
+    'missing product slot' => 'bfc.mcp:destructive',
+    'extra parameter' => 'bfc.mcp:product,destructive,extra',
+]);
+
+it('does not let same path verb or domain decoys certify the destructive door', function (): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.destructive_path' => '/mcp-destructive',
+    ]);
+
+    Route::post('/mcp', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,read');
+    Route::get('/mcp-destructive', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,destructive');
+    Route::domain('other.example.com')->post('/mcp-destructive', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,destructive');
+    Route::post('/mcp-destructive', fn (): array => ['ok' => true]);
+
+    $response = $this->getJson('/bfc/meta')->assertOk();
+
+    expect($response->json('capabilities'))->not->toContain('mcp-effect-scoped')
+        ->and($response->json('endpoints'))->toBe(['mcp' => '/mcp']);
+});
+
+it('withholds effect scoping when a configured destructive route is absent', function (): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.destructive_path' => '/mcp-destructive',
+    ]);
+
+    Route::post('/mcp', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,read');
+
+    $response = $this->getJson('/bfc/meta')->assertOk();
+
+    expect($response->json('capabilities'))->not->toContain('mcp-effect-scoped')
+        ->and($response->json('endpoints'))->toBe(['mcp' => '/mcp']);
+});
+
+it('withholds the destructive endpoint when its exact guard is excluded', function (): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.destructive_path' => '/mcp-destructive',
+    ]);
+
+    Route::post('/mcp', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,read');
+    Route::post('/mcp-destructive', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,destructive')
+        ->withoutMiddleware('bfc.mcp:product,destructive');
+
+    $response = $this->getJson('/bfc/meta')->assertOk();
+
+    expect($response->json('capabilities'))->not->toContain('mcp-effect-scoped')
+        ->and($response->json('endpoints'))->toBe(['mcp' => '/mcp']);
+});
+
+it('never lets a destructive route earn the write endpoint', function (): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.write_path' => '/mcp-destructive',
+    ]);
+
+    Route::post('/mcp', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,read');
+    Route::post('/mcp-destructive', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,destructive');
+
+    $response = $this->getJson('/bfc/meta')->assertOk();
+
+    expect(McpConfiguration::writeEndpoint())->toBeNull()
+        ->and($response->json('capabilities'))->not->toContain('mcp-effect-scoped')
+        ->and($response->json('endpoints'))->toBe(['mcp' => '/mcp']);
+});
 
 it('does not advertise effect scoping or a write endpoint for the wrong middleware parameter', function (): void {
     config([

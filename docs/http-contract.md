@@ -106,6 +106,12 @@ and the following closed `error` vocabulary. Clients branch on `error`.
 
 ### Changelog
 
+**Additive destructive MCP door discovery (release bump pending).** A deployment may declare a
+separately verified destructive MCP path. A wholly valid configured effect surface then adds
+`endpoints.mcp_destructive`; existing read-only and read/write shapes remain unchanged when that
+configuration is genuinely `null`. The release-number declarations below remain at the published
+v0.19.3 until the separate release-bump change.
+
 **v0.19.3.** Framework-enforced two-phase confirmation for individually marked destructive MCP
 tools ships additively. Discovery, preview, execution metadata and bounded refusals are documented
 under [MCP authentication](#mcp-authentication). This adds no deployment-wide capability: clients
@@ -651,7 +657,7 @@ Public (`bfc-public` throttle). Identifies the instance.
   "api_version": 2,
   "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials", "console-keys", "console-key-retire", "console-vitals", "app-action-audit-emit", "mcp-serve", "mcp-delegated", "mcp-effect-scoped"],
   "claimed": true,
-  "endpoints": {"mcp": "/mcp", "mcp_write": "/mcp-write"}
+  "endpoints": {"mcp": "/mcp", "mcp_write": "/mcp-write", "mcp_destructive": "/mcp-destructive"}
 }
 ```
 
@@ -721,17 +727,36 @@ it accepts registry bearers but not delegated assertions. The package does not m
 `mcp-effect-scoped` means the whole configured effect surface has been verified. The route Laravel
 would actually dispatch for a POST to `built-for-cloud.mcp.path`, on the host serving the metadata
 request, carries the exact effective middleware `bfc.mcp:product,read`; and
-`built-for-cloud.mcp.write_path` is either genuinely `null` (the approved read-only, one-door shape)
-or a valid rooted path whose dispatched POST carries the exact effective middleware
-`bfc.mcp:product,write`. Middleware groups, aliases and exclusions are resolved as they are for
-`mcp-delegated`; a missing slot, extra parameter, malformed/non-rooted configured write path,
-wrong verb/domain/ceiling, absent route or excluded guard withholds the capability.
+`built-for-cloud.mcp.write_path` is either genuinely `null` (no separately declared write door) or
+a valid rooted path whose dispatched POST carries the exact effective middleware
+`bfc.mcp:product,write`; and `built-for-cloud.mcp.destructive_path` is either genuinely `null` or a
+valid rooted path whose dispatched POST carries the exact effective middleware
+`bfc.mcp:product,destructive`. The optional path environment keys are
+`BUILT_FOR_CLOUD_MCP_WRITE_PATH` and `BUILT_FOR_CLOUD_MCP_DESTRUCTIVE_PATH`. Middleware groups,
+aliases and exclusions are resolved as they are for `mcp-delegated`; a bare guard, missing slot,
+extra parameter, malformed/non-rooted configured path, wrong verb/domain/ceiling, absent route or
+excluded guard on either configured optional door withholds the capability and all optional effect
+endpoint members. Genuine `null` alone means that optional door is not declared.
 
-`endpoints.mcp_write` is emitted only for the second, wholly valid two-door shape; a valid read-only
-shape advertises `mcp-effect-scoped` with only `endpoints.mcp`. Consumers MUST feature-detect
-`mcp-effect-scoped`, not infer effect enforcement from the presence or absence of
-`endpoints.mcp_write`. The endpoint member is an address available after the capability is known,
-not the feature flag.
+`endpoints.mcp_write` is emitted only when the whole configured surface is valid and the write door
+verifies; valid read-only and read+destructive shapes omit it. Consumers MUST feature-detect
+`mcp-effect-scoped`, not infer effect enforcement from the presence or absence of an optional
+endpoint member. Each endpoint member is an address available after the capability is known, not
+the feature flag.
+
+`endpoints.mcp_destructive` is emitted only when the whole configured surface is valid and the
+destructive path's dispatched POST carries exactly `bfc.mcp:product,destructive`. It is additive and
+never aliases, replaces or earns `endpoints.mcp_write`: `endpoints.mcp` remains the exact read door,
+`endpoints.mcp_write` remains the exact write door, and `endpoints.mcp_destructive` is the only
+advertised destructive door. Read+destructive and read+write+destructive are both valid shapes.
+
+Pinned by `tests/McpMetadataTest.php` — "advertises effect scoping and the destructive endpoint for
+an exact verified destructive ceiling", "advertises all three verified MCP effect doors without
+aliasing their endpoint keys", "fails effect scoping closed for an explicitly configured malformed
+destructive path", "requires the exact product slot and parameter count on the destructive door",
+"does not let same path verb or domain decoys certify the destructive door", "withholds the
+destructive endpoint when its exact guard is excluded", "withholds effect scoping when a configured
+destructive route is absent" and "never lets a destructive route earn the write endpoint".
 
 ---
 
@@ -3024,8 +3049,10 @@ mutating request).
 ## MCP authentication
 
 `AuthenticateMcp` is the plain Laravel middleware alias `bfc.mcp` for an installation-local,
-stateless MCP endpoint. The package does not mount that endpoint. A deployment declares the path
-it actually mounted with `built-for-cloud.mcp.path` and declares delegated support with
+stateless MCP endpoint. The package does not mount that endpoint. A deployment declares the read
+path it actually mounted with `built-for-cloud.mcp.path`, may declare separate write and destructive
+POST doors with `built-for-cloud.mcp.write_path` and `built-for-cloud.mcp.destructive_path`, and
+declares delegated support with
 `built-for-cloud.mcp.delegated`; the `mcp-delegated` capability rides that declaration AND the
 router-verified fact that `AuthenticateMcp` guards the declared path.
 
@@ -3145,11 +3172,13 @@ value-free `message` from this closed vocabulary:
 Two-phase confirmation never raises a request's effect authority. Because a marked tool must be
 `destructive`, `RespectsEffectCeiling` lists or calls it only through a request carrying the
 `destructive` ceiling. The read door and the optional advertised `mcp_write` door cannot reach it.
-The `mcp-effect-scoped` capability and `endpoints.mcp_write` continue to describe only the verified
-read/write surface above; there is no two-phase capability and no advertised destructive endpoint.
-A consuming application that deliberately mounts a destructive MCP door uses the exact middleware
-form `bfc.mcp:product,destructive`, and clients discover two-phase support per eligible tool through
-`tools/list`.
+The `mcp-effect-scoped` capability describes the verified whole surface; `endpoints.mcp_write` still
+names only the write ceiling and never the destructive one. A consuming application that mounts a
+destructive MCP door configures `built-for-cloud.mcp.destructive_path` (environment
+`BUILT_FOR_CLOUD_MCP_DESTRUCTIVE_PATH`) and uses the exact middleware form
+`bfc.mcp:product,destructive`. Clients discover the destructive door through
+`endpoints.mcp_destructive` and discover per-tool two-phase support through `tools/list`. For held
+Scalpels PR5, the discovery key is exactly `endpoints.mcp_destructive`.
 
 The wire protocol above is fixed; storage is deployment operation. Configure
 `built-for-cloud.mcp.two_phase.cache_store` (environment
