@@ -224,10 +224,10 @@ return [
     | endpoints.mcp value. Set `delegated` when AuthenticateMcp guards that
     | endpoint and the product runs the delegated-tool conformance assertion.
     | An exact effective `bfc.mcp:product,read` guard at `path` earns effect
-    | scoping when `write_path` is null. A non-null `write_path` declares a
-    | separate write door; effect scoping and endpoints.mcp_write are emitted
-    | only when it is a rooted path whose dispatched POST route has the exact
-    | effective `bfc.mcp:product,write` guard. Ambiguity understates access.
+    | scoping when `write_path` and `destructive_path` are null. Non-null
+    | optional paths declare separate doors; effect scoping and their endpoint
+    | keys are emitted only when each is rooted and its dispatched POST route
+    | has the exact effective guard for that door. Ambiguity understates access.
     | The capability is not earned by this flag alone: the router must confirm
     | that the route dispatched for the MCP POST at the declared path carries
     | the middleware in its effective pipeline (groups resolved, exclusions
@@ -243,6 +243,7 @@ return [
     'mcp' => [
         'path' => env('BUILT_FOR_CLOUD_MCP_PATH'),
         'write_path' => env('BUILT_FOR_CLOUD_MCP_WRITE_PATH'),
+        'destructive_path' => env('BUILT_FOR_CLOUD_MCP_DESTRUCTIVE_PATH'),
         'delegated' => env('BUILT_FOR_CLOUD_MCP_DELEGATED', false),
         'two_phase' => [
             // Must be a shared LockProvider store; array/file/null fail closed.

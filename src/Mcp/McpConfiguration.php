@@ -57,9 +57,15 @@ use Throwable;
  * Pinned by `tests/McpMetadataTest.php` — "advertises effect scoping for
  * an exact read door with no configured write path", "fails effect scoping
  * closed for an explicitly configured malformed write path", "requires the
- * exact product slot and parameter count on the write door" and "withholds
- * effect scoping and the write endpoint unless the primary door has an exact
- * read ceiling".
+ * exact product slot and parameter count on the write door", "advertises
+ * effect scoping and the destructive endpoint for an exact verified destructive
+ * ceiling", "requires the exact product slot and parameter count on the
+ * destructive door", "does not let same path verb or domain decoys certify the
+ * destructive door", "withholds the destructive endpoint when its exact guard
+ * is excluded", "withholds effect scoping when a configured destructive route
+ * is absent", "never lets a destructive route earn the write endpoint" and
+ * "withholds effect scoping and the write endpoint unless the primary door has
+ * an exact read ceiling".
  */
 final class McpConfiguration
 {
@@ -73,6 +79,17 @@ final class McpConfiguration
         $path = self::configuredEndpoint('write_path');
 
         if ($path === null || ! self::endpointHasEffectCeiling($path, Effect::Write)) {
+            return null;
+        }
+
+        return $path;
+    }
+
+    public static function destructiveEndpoint(): ?string
+    {
+        $path = self::configuredEndpoint('destructive_path');
+
+        if ($path === null || ! self::endpointHasEffectCeiling($path, Effect::Destructive)) {
             return null;
         }
 
@@ -101,8 +118,12 @@ final class McpConfiguration
             return false;
         }
 
-        return config('built-for-cloud.mcp.write_path') === null
-            || self::writeEndpoint() !== null;
+        if (config('built-for-cloud.mcp.write_path') !== null && self::writeEndpoint() === null) {
+            return false;
+        }
+
+        return config('built-for-cloud.mcp.destructive_path') === null
+            || self::destructiveEndpoint() !== null;
     }
 
     /**
