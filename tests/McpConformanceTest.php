@@ -3,8 +3,11 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Mcp\AdvertisesToolClassification;
+use ArtisanBuild\BuiltForCloud\Mcp\AdvertisesToolEffect;
 use ArtisanBuild\BuiltForCloud\Mcp\Classification;
+use ArtisanBuild\BuiltForCloud\Mcp\Effect;
 use ArtisanBuild\BuiltForCloud\Mcp\ToolClassification;
+use ArtisanBuild\BuiltForCloud\Mcp\ToolEffect;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
 use Laravel\Mcp\Server;
 use Laravel\Mcp\Server\Tool;
@@ -15,26 +18,70 @@ uses(ContractAssertions::class);
 
 #[IsReadOnly]
 #[ToolClassification(Classification::Metadata)]
+#[ToolEffect(Effect::Read)]
 final class ConformingMcpTool extends Tool
 {
-    use AdvertisesToolClassification;
+    use AdvertisesToolClassification, AdvertisesToolEffect;
 }
 
 #[ToolClassification(Classification::Content)]
+#[ToolEffect(Effect::Write)]
 final class MissingAnnotationMcpTool extends Tool
 {
-    use AdvertisesToolClassification;
+    use AdvertisesToolClassification, AdvertisesToolEffect;
 }
 
 #[IsReadOnly]
+#[ToolEffect(Effect::Read)]
 final class MissingClassificationMcpTool extends Tool
+{
+    use AdvertisesToolClassification, AdvertisesToolEffect;
+}
+
+#[IsReadOnly]
+#[ToolClassification(Classification::Content)]
+#[ToolEffect(Effect::Read)]
+final class MissingMetaMcpTool extends Tool
+{
+    use AdvertisesToolEffect;
+}
+
+#[IsReadOnly]
+#[ToolClassification(Classification::Metadata)]
+final class MissingEffectMcpTool extends Tool
 {
     use AdvertisesToolClassification;
 }
 
 #[IsReadOnly]
-#[ToolClassification(Classification::Content)]
-final class MissingMetaMcpTool extends Tool {}
+#[ToolClassification(Classification::Metadata)]
+final class UndeclaredAdvertisedEffectMcpTool extends Tool
+{
+    use AdvertisesToolClassification, AdvertisesToolEffect;
+}
+
+#[IsReadOnly]
+#[ToolClassification(Classification::Metadata)]
+#[ToolEffect(Effect::Read)]
+final class MissingEffectAdvertisementMcpTool extends Tool
+{
+    use AdvertisesToolClassification;
+}
+
+#[IsReadOnly]
+#[ToolClassification(Classification::Metadata)]
+#[ToolEffect(Effect::Read)]
+final class MismatchedEffectAdvertisementMcpTool extends Tool
+{
+    /** @return array<string, mixed> */
+    public function toArray(): array
+    {
+        $this->setMeta(ToolClassification::META_KEY, Classification::Metadata->value);
+        $this->setMeta(ToolEffect::META_KEY, Effect::Write->value);
+
+        return parent::toArray();
+    }
+}
 
 final class ConformingMcpServer extends Server
 {
@@ -50,12 +97,33 @@ final class OffendingMcpServer extends Server
     ];
 }
 
+final class MissingEffectMcpServer extends Server
+{
+    protected array $tools = [MissingEffectMcpTool::class];
+}
+
+final class UndeclaredAdvertisedEffectMcpServer extends Server
+{
+    protected array $tools = [UndeclaredAdvertisedEffectMcpTool::class];
+}
+
+final class MissingEffectAdvertisementMcpServer extends Server
+{
+    protected array $tools = [MissingEffectAdvertisementMcpTool::class];
+}
+
+final class MismatchedEffectAdvertisementMcpServer extends Server
+{
+    protected array $tools = [MismatchedEffectAdvertisementMcpTool::class];
+}
+
 it('accepts a server whose tools declare and advertise the delegated contract', function (): void {
     $this->assertBuiltForCloudMcpDelegatedTools(ConformingMcpServer::class);
 
     $tool = app(ConformingMcpTool::class)->toArray();
 
     expect($tool['_meta']['classification'])->toBe('metadata')
+        ->and($tool['_meta']['effect'])->toBe('read')
         ->and($tool['annotations']['readOnlyHint'])->toBeTrue();
 });
 
@@ -75,4 +143,36 @@ it('names every offending tool and the contract leg it violates', function (): v
     }
 
     $this->fail('The offending MCP server passed the delegated-tool conformance assertion.');
+});
+
+it('rejects a tool missing ToolEffect', function (): void {
+    expect(fn () => $this->assertBuiltForCloudMcpDelegatedTools(MissingEffectMcpServer::class))
+        ->toThrow(AssertionFailedError::class, MissingEffectMcpTool::class.' is missing ToolEffect.');
+});
+
+it('rejects a declared effect missing _meta.effect advertisement', function (): void {
+    expect(fn () => $this->assertBuiltForCloudMcpDelegatedTools(MissingEffectAdvertisementMcpServer::class))
+        ->toThrow(
+            AssertionFailedError::class,
+            MissingEffectAdvertisementMcpTool::class.' declares ToolEffect but does not advertise it in _meta.effect.',
+        );
+});
+
+it('rejects a serialized effect that differs from its declaration', function (): void {
+    expect(fn () => $this->assertBuiltForCloudMcpDelegatedTools(MismatchedEffectAdvertisementMcpServer::class))
+        ->toThrow(
+            AssertionFailedError::class,
+            MismatchedEffectAdvertisementMcpTool::class." advertises _meta.effect as 'write', which does not match ToolEffect 'read'.",
+        );
+});
+
+it('defaults an undeclared advertised effect to destructive while conformance still requires declaration', function (): void {
+    $tool = app(UndeclaredAdvertisedEffectMcpTool::class)->toArray();
+
+    expect($tool['_meta']['effect'])->toBe('destructive')
+        ->and(fn () => $this->assertBuiltForCloudMcpDelegatedTools(UndeclaredAdvertisedEffectMcpServer::class))
+        ->toThrow(
+            AssertionFailedError::class,
+            UndeclaredAdvertisedEffectMcpTool::class.' is missing ToolEffect.',
+        );
 });
