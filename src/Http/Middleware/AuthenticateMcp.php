@@ -22,6 +22,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\ConsoleEntryRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\DelegatedActorDeactivated;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
+use ArtisanBuild\BuiltForCloud\Mcp\RequestEffectCeiling;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\RolePolicy;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -56,6 +57,8 @@ use Throwable;
  * product-role policy before usage. Unbound installation MCP dispatch runs
  * inside SystemAuthorityContext. The optional `product` parameter closes the
  * bounded operator compound for consumers that do not expose that branch.
+ * A second parameter publishes the effect ceiling on this request only;
+ * missing or invalid values leave no ceiling and tools fail closed.
  *
  * THE CREDENTIAL IS TAKEN OUT OF THE REQUEST BEFORE ANYTHING CAN THROW,
  * and the claim is deliberately narrower than "no frame leaks it":
@@ -98,7 +101,10 @@ final class AuthenticateMcp
         #[SensitiveParameter] Request $request,
         Closure $next,
         ?string $admission = null,
+        ?string $ceiling = null,
     ): Response {
+        RequestEffectCeiling::publish($request, $ceiling);
+
         $bearer = $request->bearerToken();
 
         $this->forgetCredential($request);

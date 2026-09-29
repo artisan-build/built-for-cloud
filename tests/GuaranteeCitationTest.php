@@ -125,6 +125,8 @@ $expectedCitations = [
     'src/Mcp/McpConfiguration.php' => 1,
     'src/Mcp/AdvertisesToolClassification.php' => 1,
     'src/Mcp/AdvertisesToolEffect.php' => 1,
+    'src/Mcp/RequestEffectCeiling.php' => 1,
+    'src/Mcp/RespectsEffectCeiling.php' => 1,
     'src/Testing/McpDelegatedTools.php' => 1,
 ];
 
@@ -218,6 +220,8 @@ $strictlyCited = [
     'src/Mcp/McpConfiguration.php',
     'src/Mcp/AdvertisesToolClassification.php',
     'src/Mcp/AdvertisesToolEffect.php',
+    'src/Mcp/RequestEffectCeiling.php',
+    'src/Mcp/RespectsEffectCeiling.php',
     'src/Testing/McpDelegatedTools.php',
     'src/Console/RequestAssertion.php',
 ];
@@ -542,6 +546,8 @@ it('keeps every MCP surface the release added on the strict list', function () u
         ->toContain('src/Mcp/McpConfiguration.php')
         ->toContain('src/Mcp/AdvertisesToolClassification.php')
         ->toContain('src/Mcp/AdvertisesToolEffect.php')
+        ->toContain('src/Mcp/RequestEffectCeiling.php')
+        ->toContain('src/Mcp/RespectsEffectCeiling.php')
         ->toContain('src/Testing/McpDelegatedTools.php')
         ->toContain('src/Console/RequestAssertion.php');
 });

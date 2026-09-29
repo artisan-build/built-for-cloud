@@ -4,8 +4,12 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Testing;
 
+use ArtisanBuild\BuiltForCloud\Mcp\Effect;
+use ArtisanBuild\BuiltForCloud\Mcp\RequestEffectCeiling;
+use ArtisanBuild\BuiltForCloud\Mcp\RespectsEffectCeiling;
 use ArtisanBuild\BuiltForCloud\Mcp\ToolClassification;
 use ArtisanBuild\BuiltForCloud\Mcp\ToolEffect;
+use Illuminate\Http\Request;
 use Laravel\Mcp\Server;
 use Laravel\Mcp\Server\Tool;
 use Laravel\Mcp\Server\Tools\Annotations\IsDestructive;
@@ -19,7 +23,8 @@ use ReflectionClass;
 /**
  * Checks the registered, currently eligible tools of one Laravel MCP server.
  * Every tool must carry a behavioural annotation, explicitly declare a D14
- * classification and an effect, and serialize both declarations into `_meta`.
+ * classification and an effect, enforce the request effect ceiling, and
+ * serialize both declarations into `_meta`.
  *
  * This does not inspect tools absent from the server's registry, tools made
  * ineligible by the current application state, response bodies, tool
@@ -62,8 +67,17 @@ final class McpDelegatedTools
 
         $offences = [];
         $tools = [];
+        $request = app('request');
 
-        foreach ($server->createContext()->tools() as $tool) {
+        Assert::assertInstanceOf(Request::class, $request);
+
+        $registered = RequestEffectCeiling::run(
+            $request,
+            Effect::Destructive,
+            static fn () => $server->createContext()->tools(),
+        );
+
+        foreach ($registered as $tool) {
             $tools[] = $tool::class;
             self::inspect($tool, $offences);
         }
@@ -95,6 +109,10 @@ final class McpDelegatedTools
 
         if (! $annotation) {
             $offences[] = $name.' is missing IsReadOnly, IsDestructive, or IsIdempotent.';
+        }
+
+        if (! in_array(RespectsEffectCeiling::class, class_uses_recursive($tool), true)) {
+            $offences[] = $name.' is missing RespectsEffectCeiling.';
         }
 
         $classification = ToolClassification::of($tool);
