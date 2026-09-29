@@ -9,16 +9,20 @@ use ArtisanBuild\BuiltForCloud\Mcp\RequestEffectCeiling;
 use ArtisanBuild\BuiltForCloud\Mcp\RespectsEffectCeiling;
 use ArtisanBuild\BuiltForCloud\Mcp\ToolClassification;
 use ArtisanBuild\BuiltForCloud\Mcp\ToolEffect;
+use ArtisanBuild\BuiltForCloud\Mcp\TwoPhase;
 use Illuminate\Http\Request;
+use Illuminate\JsonSchema\JsonSchemaTypeFactory;
 use Laravel\Mcp\Server;
 use Laravel\Mcp\Server\Tool;
 use Laravel\Mcp\Server\Tools\Annotations\IsDestructive;
 use Laravel\Mcp\Server\Tools\Annotations\IsIdempotent;
 use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
+use Laravel\Mcp\Server\Tools\ToolSearch;
 use Laravel\Mcp\Server\Transport\FakeTransporter;
 use PHPUnit\Framework\Assert;
 use ReflectionAttribute;
 use ReflectionClass;
+use ReflectionProperty;
 
 /**
  * Checks the registered, currently eligible tools of one Laravel MCP server.
@@ -70,6 +74,20 @@ final class McpDelegatedTools
         $request = app('request');
 
         Assert::assertInstanceOf(Request::class, $request);
+
+        /** @var array<int|string, Tool|class-string<Tool>|array<int, Tool|class-string<Tool>>> $rawTools */
+        $rawTools = (new ReflectionProperty(Server::class, 'tools'))->getValue($server);
+        $groupedTools = $rawTools[ToolSearch::class] ?? [];
+
+        if (is_array($groupedTools)) {
+            foreach ($groupedTools as $groupedTool) {
+                $tool = is_string($groupedTool) ? app()->make($groupedTool) : $groupedTool;
+
+                if ($tool instanceof Tool && TwoPhase::of($tool) !== null) {
+                    $offences[] = $tool::class.' declares TwoPhase inside a ToolSearch group, whose execute_tools path bypasses the two-phase guard.';
+                }
+            }
+        }
 
         $registered = RequestEffectCeiling::run(
             $request,
@@ -127,6 +145,21 @@ final class McpDelegatedTools
             $offences[] = $name.' is missing ToolEffect.';
         }
 
+        $twoPhase = TwoPhase::of($tool);
+
+        if ($twoPhase !== null && $effect?->value !== Effect::Destructive) {
+            $offences[] = $name.' declares TwoPhase without a destructive ToolEffect.';
+        }
+
+        if ($twoPhase !== null && ! is_callable([$tool, TwoPhase::PREVIEW_METHOD])) {
+            $offences[] = $name.' declares TwoPhase without a public preview method.';
+        }
+
+        if ($twoPhase !== null
+            && array_key_exists(TwoPhase::CONFIRM_ARGUMENT, $tool->schema(new JsonSchemaTypeFactory))) {
+            $offences[] = $name.' declares the reserved top-level confirm field in its application schema.';
+        }
+
         $serialized = $tool->toArray();
         $advertised = $serialized['_meta'][ToolClassification::META_KEY] ?? null;
 
@@ -145,6 +178,12 @@ final class McpDelegatedTools
                 var_export($metadata[ToolEffect::META_KEY], true),
                 var_export($effect->value->value, true),
             );
+        }
+
+        if ($twoPhase !== null
+            && (($metadata[TwoPhase::META_KEY]['confirmationArgument'] ?? null) !== TwoPhase::CONFIRM_ARGUMENT
+                || ! array_key_exists(TwoPhase::CONFIRM_ARGUMENT, (array) ($serialized['inputSchema']['properties'] ?? [])))) {
+            $offences[] = $name.' declares TwoPhase but does not advertise its confirmation protocol.';
         }
     }
 }

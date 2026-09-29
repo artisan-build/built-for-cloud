@@ -125,8 +125,11 @@ $expectedCitations = [
     'src/Mcp/McpConfiguration.php' => 1,
     'src/Mcp/AdvertisesToolClassification.php' => 1,
     'src/Mcp/AdvertisesToolEffect.php' => 1,
+    'src/Mcp/CanonicalToolArguments.php' => 1,
     'src/Mcp/RequestEffectCeiling.php' => 1,
     'src/Mcp/RespectsEffectCeiling.php' => 1,
+    'src/Mcp/TwoPhaseCallTool.php' => 1,
+    'src/Mcp/TwoPhaseConfirmationStore.php' => 1,
     'src/Testing/McpDelegatedTools.php' => 1,
 ];
 
@@ -176,6 +179,9 @@ $exemptFromCitation = [
     'src/Mcp/Effect.php' => 'a bounded framework enum whose complete vocabulary is pinned against the contracts twin by ContractsCompatibilityTest',
     'src/Mcp/ToolClassification.php' => 'an attribute and its reflection reader; the declaration rules are the conformance instrument\'s and are cited there',
     'src/Mcp/ToolEffect.php' => 'an attribute and its reflection reader; the declaration rules are the conformance instrument\'s and are cited there',
+    'src/Mcp/TwoPhase.php' => 'an attribute and its reflection reader; declaration and wire rules are the conformance instrument\'s',
+    'src/Mcp/TwoPhaseConfirmationRefused.php' => 'the bounded refusal vocabulary enforced and cited by TwoPhaseCallTool and TwoPhaseConfirmationStore',
+    'src/Mcp/TwoPhaseToolInvoker.php' => 'the invocation adapter; ordering and request isolation guarantees are held and cited by TwoPhaseCallTool',
 ];
 
 /**
@@ -220,8 +226,11 @@ $strictlyCited = [
     'src/Mcp/McpConfiguration.php',
     'src/Mcp/AdvertisesToolClassification.php',
     'src/Mcp/AdvertisesToolEffect.php',
+    'src/Mcp/CanonicalToolArguments.php',
     'src/Mcp/RequestEffectCeiling.php',
     'src/Mcp/RespectsEffectCeiling.php',
+    'src/Mcp/TwoPhaseCallTool.php',
+    'src/Mcp/TwoPhaseConfirmationStore.php',
     'src/Testing/McpDelegatedTools.php',
     'src/Console/RequestAssertion.php',
 ];

@@ -47,6 +47,7 @@ use ArtisanBuild\BuiltForCloud\Listeners\RefuseSystemAuthorityAuthentication;
 use ArtisanBuild\BuiltForCloud\Listeners\SystemAuthorityQueueScope;
 use ArtisanBuild\BuiltForCloud\Mail\QueuedMailIdentity;
 use ArtisanBuild\BuiltForCloud\Mail\ScalpelsTransport;
+use ArtisanBuild\BuiltForCloud\Mcp\TwoPhaseCallTool;
 use ArtisanBuild\BuiltForCloud\View\Layout;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Auth\Events\Authenticated;
@@ -71,6 +72,7 @@ use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
+use Laravel\Mcp\Server\Methods\CallTool;
 use ReflectionProperty;
 use RuntimeException;
 use Throwable;
@@ -116,6 +118,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         // acting principal and its audit consumers cannot be computed
         // twice and disagree.
         $this->app->singleton(ActingPrincipalResolver::class);
+        $this->app->bind(CallTool::class, TwoPhaseCallTool::class);
 
         $this->app->bind(CredentialDeclaration::class, function (Application $app): CredentialDeclaration {
             /** @var class-string<CredentialDeclaration> $declaration */

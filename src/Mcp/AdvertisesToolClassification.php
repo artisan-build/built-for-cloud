@@ -36,6 +36,22 @@ trait AdvertisesToolClassification
             $this->advertiseToolEffect();
         }
 
-        return parent::toArray();
+        $tool = parent::toArray();
+
+        if (TwoPhase::of($this) !== null) {
+            /** @var array<string, mixed> $properties */
+            $properties = (array) ($tool['inputSchema']['properties'] ?? []);
+            $properties[TwoPhase::CONFIRM_ARGUMENT] = [
+                'type' => 'string',
+                'description' => 'Single-use confirmation returned by this tool preview.',
+            ];
+            $tool['inputSchema']['properties'] = $properties;
+            $tool['_meta'][TwoPhase::META_KEY] = [
+                'confirmationArgument' => TwoPhase::CONFIRM_ARGUMENT,
+                'protocolVersion' => 1,
+            ];
+        }
+
+        return $tool;
     }
 }
