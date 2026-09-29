@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud\Testing;
 
 use ArtisanBuild\BuiltForCloud\Mcp\ToolClassification;
+use ArtisanBuild\BuiltForCloud\Mcp\ToolEffect;
 use Laravel\Mcp\Server;
 use Laravel\Mcp\Server\Tool;
 use Laravel\Mcp\Server\Tools\Annotations\IsDestructive;
@@ -18,12 +19,13 @@ use ReflectionClass;
 /**
  * Checks the registered, currently eligible tools of one Laravel MCP server.
  * Every tool must carry a behavioural annotation, explicitly declare a D14
- * classification, and serialize that declaration into `_meta.classification`.
+ * classification and an effect, and serialize both declarations into `_meta`.
  *
  * This does not inspect tools absent from the server's registry, tools made
  * ineligible by the current application state, response bodies, tool
- * implementations, or whether an annotation truthfully describes behaviour.
- * It proves declaration and wire propagation, not semantic honesty.
+ * implementations, whether declarations truthfully describe behaviour, or
+ * whether callers are constrained by them. It proves declaration and wire
+ * propagation, not semantic honesty or enforcement.
  *
  * Pinned by `tests/McpConformanceTest.php` — "names every offending
  * tool and the contract leg it violates".
@@ -101,11 +103,30 @@ final class McpDelegatedTools
             $offences[] = $name.' is missing ToolClassification.';
         }
 
+        $effect = ToolEffect::of($tool);
+
+        if ($effect === null) {
+            $offences[] = $name.' is missing ToolEffect.';
+        }
+
         $serialized = $tool->toArray();
         $advertised = $serialized['_meta'][ToolClassification::META_KEY] ?? null;
 
         if ($classification !== null && $advertised !== $classification->value->value) {
             $offences[] = $name.' declares ToolClassification but does not advertise it in _meta.classification.';
+        }
+
+        $metadata = $serialized['_meta'] ?? [];
+
+        if ($effect !== null && ! array_key_exists(ToolEffect::META_KEY, $metadata)) {
+            $offences[] = $name.' declares ToolEffect but does not advertise it in _meta.effect.';
+        } elseif ($effect !== null && $metadata[ToolEffect::META_KEY] !== $effect->value->value) {
+            $offences[] = sprintf(
+                '%s advertises _meta.effect as %s, which does not match ToolEffect %s.',
+                $name,
+                var_export($metadata[ToolEffect::META_KEY], true),
+                var_export($effect->value->value, true),
+            );
         }
     }
 }

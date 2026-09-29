@@ -23,10 +23,18 @@ trait AdvertisesToolClassification
      */
     public function toArray(): array
     {
-        $declared = ToolClassification::of($this);
-        $classification = $declared === null ? Classification::Content : $declared->value;
+        $traits = class_uses($this);
 
-        $this->setMeta(ToolClassification::META_KEY, $classification->value);
+        if (isset($traits[AdvertisesToolClassification::class])) {
+            $declared = ToolClassification::of($this);
+            $classification = $declared === null ? Classification::Content : $declared->value;
+
+            $this->setMeta(ToolClassification::META_KEY, $classification->value);
+        }
+
+        if (isset($traits[AdvertisesToolEffect::class])) {
+            $this->advertiseToolEffect();
+        }
 
         return parent::toArray();
     }

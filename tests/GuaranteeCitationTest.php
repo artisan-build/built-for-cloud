@@ -124,6 +124,7 @@ $expectedCitations = [
     'src/Http/Middleware/AuthenticateMcp.php' => 1,
     'src/Mcp/McpConfiguration.php' => 1,
     'src/Mcp/AdvertisesToolClassification.php' => 1,
+    'src/Mcp/AdvertisesToolEffect.php' => 1,
     'src/Testing/McpDelegatedTools.php' => 1,
 ];
 
@@ -170,7 +171,9 @@ $exemptFromCitation = [
     'src/Console/ConsoleRole.php' => 'the two-value contract vocabulary (D8)',
     'src/Console/DelegatedClaims.php' => 'a readonly value object carrying one handoff\'s request or session claims',
     'src/Mcp/Classification.php' => 'a bounded enum: the two-value D14 boundary vocabulary, like ConsoleRole\'s',
+    'src/Mcp/Effect.php' => 'a bounded framework enum whose complete vocabulary is pinned against the contracts twin by ContractsCompatibilityTest',
     'src/Mcp/ToolClassification.php' => 'an attribute and its reflection reader; the declaration rules are the conformance instrument\'s and are cited there',
+    'src/Mcp/ToolEffect.php' => 'an attribute and its reflection reader; the declaration rules are the conformance instrument\'s and are cited there',
 ];
 
 /**
@@ -214,6 +217,7 @@ $strictlyCited = [
     'src/Http/Middleware/AuthenticateMcp.php',
     'src/Mcp/McpConfiguration.php',
     'src/Mcp/AdvertisesToolClassification.php',
+    'src/Mcp/AdvertisesToolEffect.php',
     'src/Testing/McpDelegatedTools.php',
     'src/Console/RequestAssertion.php',
 ];
@@ -537,6 +541,7 @@ it('keeps every MCP surface the release added on the strict list', function () u
         ->toContain('src/Http/Middleware/AuthenticateMcp.php')
         ->toContain('src/Mcp/McpConfiguration.php')
         ->toContain('src/Mcp/AdvertisesToolClassification.php')
+        ->toContain('src/Mcp/AdvertisesToolEffect.php')
         ->toContain('src/Testing/McpDelegatedTools.php')
         ->toContain('src/Console/RequestAssertion.php');
 });

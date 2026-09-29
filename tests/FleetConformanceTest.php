@@ -548,6 +548,7 @@ PHP);
         ->and($mcpReport->families['mcp_delegated']->violations)->toContain(
             AggregateOffendingMcpTool::class.' is missing IsReadOnly, IsDestructive, or IsIdempotent.',
             AggregateOffendingMcpTool::class.' is missing ToolClassification.',
+            AggregateOffendingMcpTool::class.' is missing ToolEffect.',
             'mcp-delegated-conformance',
         );
 });

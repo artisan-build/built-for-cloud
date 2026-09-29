@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyring;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleRole;
 use ArtisanBuild\BuiltForCloud\Mcp\Classification;
+use ArtisanBuild\BuiltForCloud\Mcp\Effect;
 use ArtisanBuild\BuiltForCloud\MetadataShape;
 use ArtisanBuild\BuiltForCloud\OwnershipClaim;
 use ArtisanBuild\BuiltForCloud\Vitals\VitalsPayload;
@@ -19,6 +20,7 @@ use ArtisanBuild\BuiltForCloudContracts\Console\AssertionVerifier as ContractsAs
 use ArtisanBuild\BuiltForCloudContracts\Console\ConsoleKeyring as ContractsConsoleKeyring;
 use ArtisanBuild\BuiltForCloudContracts\Console\ConsoleRole as ContractsConsoleRole;
 use ArtisanBuild\BuiltForCloudContracts\Mcp\Classification as ContractsClassification;
+use ArtisanBuild\BuiltForCloudContracts\Mcp\Effect as ContractsEffect;
 use ArtisanBuild\BuiltForCloudContracts\MetadataShape as ContractsMetadataShape;
 use ArtisanBuild\BuiltForCloudContracts\OwnershipClaim as ContractsOwnershipClaim;
 use ArtisanBuild\BuiltForCloudContracts\Vitals\VitalsPayload as ContractsVitalsPayload;
@@ -39,6 +41,10 @@ it('keeps the complete ordered enum vocabularies compatible', function (): void 
 
     expect($map(Classification::cases()))->toBe($map(ContractsClassification::cases()))
         ->and($map(Classification::cases()))->toBe(['Metadata' => 'metadata', 'Content' => 'content'])
+        ->and($map(Effect::cases()))->toBe($map(ContractsEffect::cases()))
+        ->and($map(Effect::cases()))->toBe(['Read' => 'read', 'Write' => 'write', 'Destructive' => 'destructive'])
+        ->and(Effect::values())->toBe(array_column(ContractsEffect::cases(), 'value'))
+        ->and(Effect::values())->toBe(['read', 'write', 'destructive'])
         ->and($map(ConsoleRole::cases()))->toBe($map(ContractsConsoleRole::cases()))
         ->and($map(ConsoleRole::cases()))->toBe(['Admin' => 'admin', 'Member' => 'member'])
         ->and(ConsoleRole::values())->toBe(ContractsConsoleRole::values())
@@ -153,7 +159,7 @@ it('keeps all old public contract FQCNs and runtime-heavy BfC classes', function
         expect(class_exists($class))->toBeTrue($class);
     }
 
-    foreach ([Classification::class, ConsoleRole::class, AssertionPurpose::class] as $enum) {
+    foreach ([Classification::class, Effect::class, ConsoleRole::class, AssertionPurpose::class] as $enum) {
         expect(enum_exists($enum))->toBeTrue($enum);
     }
 
