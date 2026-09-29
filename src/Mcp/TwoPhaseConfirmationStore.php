@@ -23,12 +23,12 @@ use Throwable;
  * Issues and atomically burns bounded two-phase confirmations.
  *
  * The mint marker and burn lock share one configured cache repository. The
- * burn is the atomic acquisition of a nonce-specific distributed lock whose
- * lease lasts through nonce expiry; it is intentionally never released. Thus
- * process death after acquisition, including death before protected execution,
- * cannot make the confirmation reusable. Array, file and null stores refuse:
- * supported stores must implement Laravel's LockProvider and be shared by all
- * workers serving this deployment.
+ * burn atomically acquires a nonce-specific distributed lock, retains it
+ * through nonce expiry, then removes the mint marker before execution. Losing
+ * either spent-state key therefore refuses a replay, while process death after
+ * lock acquisition cannot make the confirmation reusable. Array, file and null
+ * stores refuse: supported stores must implement Laravel's LockProvider and be
+ * shared by all workers serving this deployment.
  *
  * Pinned by `tests/McpTwoPhaseTest.php` — "gives exactly one winner when phase
  * two claims interleave at the atomic lock".
@@ -137,17 +137,19 @@ final class TwoPhaseConfirmationStore
                 throw TwoPhaseConfirmationRefused::because(TwoPhaseConfirmationRefused::UNAVAILABLE);
             }
 
-            $burned = $store
+            if ($store
                 ->lock($this->burnKey($payload['id']), max(1, $payload['exp'] - $now))
-                ->get();
+                ->get() !== true) {
+                throw TwoPhaseConfirmationRefused::because(TwoPhaseConfirmationRefused::SPENT);
+            }
+
+            if (! $repository->forget($this->markerKey($payload['id']))) {
+                throw TwoPhaseConfirmationRefused::because(TwoPhaseConfirmationRefused::UNAVAILABLE);
+            }
         } catch (TwoPhaseConfirmationRefused $refused) {
             throw $refused;
         } catch (Throwable) {
             throw TwoPhaseConfirmationRefused::because(TwoPhaseConfirmationRefused::UNAVAILABLE);
-        }
-
-        if ($burned !== true) {
-            throw TwoPhaseConfirmationRefused::because(TwoPhaseConfirmationRefused::SPENT);
         }
     }
 

@@ -33,6 +33,7 @@ use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\Server;
 use Laravel\Mcp\Server\Tool;
+use Laravel\Mcp\Server\Tools\ToolSearch;
 use PHPUnit\Framework\AssertionFailedError;
 
 uses(RefreshDatabase::class);
@@ -166,6 +167,46 @@ final class MissingPreviewTwoPhaseTool extends Tool
     }
 }
 
+#[ToolEffect(Effect::Destructive)]
+#[TwoPhase]
+final class ReservedConfirmTwoPhaseTool extends Tool
+{
+    use AdvertisesToolEffect, RespectsEffectCeiling;
+
+    /** @return array<string, mixed> */
+    public function schema(JsonSchema $schema): array
+    {
+        return ['confirm' => $schema->string()->required()];
+    }
+
+    public function preview(): Response
+    {
+        return Response::text('preview');
+    }
+
+    public function handle(): Response
+    {
+        return Response::text('invalid');
+    }
+}
+
+#[ToolEffect(Effect::Destructive)]
+final class UnmarkedConfirmTool extends Tool
+{
+    use AdvertisesToolEffect, RespectsEffectCeiling;
+
+    /** @return array<string, mixed> */
+    public function schema(JsonSchema $schema): array
+    {
+        return ['confirm' => $schema->string()->required()];
+    }
+
+    public function handle(): Response
+    {
+        return Response::text('unchanged');
+    }
+}
+
 final class InvalidEffectTwoPhaseServer extends Server
 {
     protected array $tools = [InvalidEffectTwoPhaseTool::class];
@@ -174,6 +215,18 @@ final class InvalidEffectTwoPhaseServer extends Server
 final class MissingPreviewTwoPhaseServer extends Server
 {
     protected array $tools = [MissingPreviewTwoPhaseTool::class];
+}
+
+final class ReservedConfirmTwoPhaseServer extends Server
+{
+    protected array $tools = [ReservedConfirmTwoPhaseTool::class];
+}
+
+final class ToolSearchTwoPhaseServer extends Server
+{
+    protected array $tools = [
+        ToolSearch::class => [TwoPhaseProbeTool::class],
+    ];
 }
 
 /** A lock-capable test store that is not one of production's refused local drivers. */
@@ -186,6 +239,8 @@ final class TwoPhaseSharedTestStore implements LockProvider, Store
 
     /** @var (Closure(): void)|null */
     public ?Closure $afterAcquire = null;
+
+    public bool $failForget = false;
 
     public function __construct()
     {
@@ -243,6 +298,10 @@ final class TwoPhaseSharedTestStore implements LockProvider, Store
 
     public function forget($key): bool
     {
+        if ($this->failForget) {
+            return false;
+        }
+
         return $this->values->forget($key);
     }
 
@@ -266,6 +325,11 @@ final class TwoPhaseSharedTestStore implements LockProvider, Store
     public function restoreLock($name, $owner): TwoPhaseSharedTestLock
     {
         return $this->lock($name, 0, $owner);
+    }
+
+    public function evictBurnLocks(): void
+    {
+        $this->locks = [];
     }
 }
 
@@ -571,6 +635,48 @@ it('refuses phase two over real HTTP when the authenticated subject changes', fu
     expect(TwoPhaseProbe::$executions)->toBe(0);
 });
 
+it('binds delegated phase two to the stable subject across fresh signed handoffs', function (): void {
+    config(['built-for-cloud.console.issuer' => 'https://scalpels.test']);
+    $key = consoleTestSigningKey();
+    $assertion = static fn (string $subject): string => consoleMint($key, consoleClaims([
+        'purpose' => 'mcp',
+        'aud' => 'deployment-a',
+        'sub' => $subject,
+    ]));
+
+    $confirmation = twoPhaseRpc(
+        'two-phase-probe',
+        ['target' => 'alpha'],
+        $assertion('operator-a'),
+    )->assertOk()
+        ->assertJsonPath('result._meta.two_phase.phase', 'preview')
+        ->json('result._meta.two_phase.confirmation');
+
+    expect($confirmation)->toBeString();
+
+    twoPhaseRpc(
+        'two-phase-probe',
+        ['target' => 'alpha', 'confirm' => $confirmation],
+        $assertion('operator-b'),
+    )->assertStatus(400)
+        ->assertExactJson([
+            'jsonrpc' => '2.0',
+            'id' => 1,
+            'error' => ['code' => TwoPhaseCallTool::REFUSAL_CODE, 'message' => 'confirmation_mismatched'],
+        ]);
+
+    expect(TwoPhaseProbe::$executions)->toBe(0);
+
+    twoPhaseRpc(
+        'two-phase-probe',
+        ['target' => 'alpha', 'confirm' => $confirmation],
+        $assertion('operator-a'),
+    )->assertOk()
+        ->assertJsonPath('result._meta.two_phase.phase', 'executed');
+
+    expect(TwoPhaseProbe::$executions)->toBe(1);
+});
+
 it('keeps a confirmation burned when protected execution throws outcome unknown', function (): void {
     $confirmation = twoPhasePreview(['target' => 'alpha', 'fail' => true]);
 
@@ -601,6 +707,47 @@ it('gives exactly one winner when phase two claims interleave at the atomic lock
     twoPhaseStore()->burn($minted['confirmation'], 'two-phase-probe', $arguments, $subject);
 
     expect($contender)->toBe('confirmation_spent');
+});
+
+it('refuses a spent confirmation after only its retained burn lock is evicted', function (): void {
+    $confirmation = twoPhasePreview();
+
+    twoPhaseRpc('two-phase-probe', ['target' => 'alpha', 'confirm' => $confirmation])
+        ->assertOk()
+        ->assertJsonPath('result._meta.two_phase.phase', 'executed');
+
+    twoPhaseTestStore()->evictBurnLocks();
+
+    twoPhaseRpc('two-phase-probe', ['target' => 'alpha', 'confirm' => $confirmation], id: 2)
+        ->assertStatus(400)
+        ->assertExactJson([
+            'jsonrpc' => '2.0',
+            'id' => 2,
+            'error' => ['code' => TwoPhaseCallTool::REFUSAL_CODE, 'message' => 'confirmation_spent'],
+        ]);
+
+    expect(TwoPhaseProbe::$executions)->toBe(1);
+});
+
+it('fails closed and retains the burn lock when removing the mint marker fails', function (): void {
+    $confirmation = twoPhasePreview();
+    $store = twoPhaseTestStore();
+    $store->failForget = true;
+
+    twoPhaseRpc('two-phase-probe', ['target' => 'alpha', 'confirm' => $confirmation])
+        ->assertStatus(400)
+        ->assertJsonPath('error.message', 'confirmation_unavailable');
+
+    expect(TwoPhaseProbe::$executions)->toBe(0)
+        ->and($store->locks)->toHaveCount(1);
+
+    $store->failForget = false;
+
+    twoPhaseRpc('two-phase-probe', ['target' => 'alpha', 'confirm' => $confirmation], id: 2)
+        ->assertStatus(400)
+        ->assertJsonPath('error.message', 'confirmation_spent');
+
+    expect(TwoPhaseProbe::$executions)->toBe(0);
 });
 
 it('fails closed on process local cache and unsupported ambiguous numeric values', function (): void {
@@ -645,4 +792,24 @@ it('conformance rejects invalid two phase declarations', function (): void {
             AssertionFailedError::class,
             MissingPreviewTwoPhaseTool::class.' declares TwoPhase without a public preview method.',
         );
+});
+
+it('conformance rejects two phase tools nested under ToolSearch by the real tool and bypass reason', function (): void {
+    expect(fn () => McpDelegatedTools::assertConforms(ToolSearchTwoPhaseServer::class))
+        ->toThrow(
+            AssertionFailedError::class,
+            TwoPhaseProbeTool::class.' declares TwoPhase inside a ToolSearch group, whose execute_tools path bypasses the two-phase guard.',
+        );
+});
+
+it('conformance rejects a reserved confirm field declared by a marked application tool', function (): void {
+    expect(fn () => McpDelegatedTools::assertConforms(ReservedConfirmTwoPhaseServer::class))
+        ->toThrow(
+            AssertionFailedError::class,
+            ReservedConfirmTwoPhaseTool::class.' declares the reserved top-level confirm field in its application schema.',
+        )
+        ->and(app(UnmarkedConfirmTool::class)->toArray()['inputSchema']['properties']['confirm'])
+        ->toBe(['type' => 'string'])
+        ->and(app(UnmarkedConfirmTool::class)->toArray()['_meta'] ?? [])
+        ->not->toHaveKey(TwoPhase::META_KEY);
 });
