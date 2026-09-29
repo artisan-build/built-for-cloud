@@ -709,6 +709,43 @@ it('gives exactly one winner when phase two claims interleave at the atomic lock
     expect($contender)->toBe('confirmation_spent');
 });
 
+it('refuses an unspent confirmation after only its mint marker is evicted', function (): void {
+    $confirmation = twoPhasePreview();
+    [$encodedPayload] = explode('.', $confirmation, 2);
+    $json = base64_decode(strtr($encodedPayload, '-_', '+/'), true);
+    expect($json)->toBeString();
+    $payload = json_decode($json, true, flags: JSON_THROW_ON_ERROR);
+    $context = [
+        (string) config('built-for-cloud.console.audience'),
+        (string) config('built-for-cloud.manifest.slug'),
+    ];
+    $frame = static fn (array $parts): string => implode(
+        '',
+        array_map(static fn (string $part): string => strlen($part).':'.$part, $parts),
+    );
+    $markerKey = TwoPhaseConfirmationStore::KEY_NAMESPACE
+        .hash('sha256', $frame($context))
+        .':mint:'.hash('sha256', $payload['id']);
+    $store = twoPhaseTestStore();
+
+    expect($store->get($markerKey))->toBeString()
+        ->and($store->locks)->toBeEmpty()
+        ->and($store->forget($markerKey))->toBeTrue()
+        ->and($store->get($markerKey))->toBeNull()
+        ->and($store->locks)->toBeEmpty();
+
+    twoPhaseRpc('two-phase-probe', ['target' => 'alpha', 'confirm' => $confirmation], id: 2)
+        ->assertStatus(400)
+        ->assertExactJson([
+            'jsonrpc' => '2.0',
+            'id' => 2,
+            'error' => ['code' => TwoPhaseCallTool::REFUSAL_CODE, 'message' => 'confirmation_spent'],
+        ]);
+
+    expect(TwoPhaseProbe::$executions)->toBe(0)
+        ->and($store->locks)->toBeEmpty();
+});
+
 it('refuses a spent confirmation after only its retained burn lock is evicted', function (): void {
     $confirmation = twoPhasePreview();
 
