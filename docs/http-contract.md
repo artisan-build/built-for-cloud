@@ -106,6 +106,13 @@ and the following closed `error` vocabulary. Clients branch on `error`.
 
 ### Changelog
 
+**v0.19.3.** Framework-enforced two-phase confirmation for individually marked destructive MCP
+tools ships additively. Discovery, preview, execution metadata and bounded refusals are documented
+under [MCP authentication](#mcp-authentication). This adds no deployment-wide capability: clients
+discover support from each tool's `tools/list` entry after reaching a destructive MCP door.
+`api_version` remains 2 because unmarked tools and existing request shapes are unchanged, while
+marked tools gain an optional framework-owned input and additive metadata.
+
 **v0.19.2.** Effect-scoped MCP dispatch ships additively. A deployment can advertise an exact
 read ceiling, optionally advertise a separately verified write door, and refuse an otherwise
 eligible above-ceiling tool call with a stable bounded JSON-RPC error. The delegated-tool
@@ -130,11 +137,11 @@ secret, and disconnect it through the existing exit-transition machinery. `GET /
 and never returned. `api_version` remains 2 because these are new routes and one new open-set
 capability member.
 
-**api_version 2** (bfc **0.19.2**, this release). All changes since version 1, in one inventory.
+**api_version 2** (bfc **0.19.3**, this release). All changes since version 1, in one inventory.
 Additive unless marked otherwise.
 
 **Everything the Console adds through this release is additive or a documented removal, so `api_version` stays 2. What carries the
-signal is `bfc_version` 0.19.2 plus the `capabilities` entries** — `console-keys`,
+signal is `bfc_version` 0.19.3 plus the `capabilities` entries** — `console-keys`,
 `console-key-retire`, `console-vitals`,
 `app-action-audit-emit`, `mcp-serve`, `mcp-delegated` and `mcp-effect-scoped`. (The
 `console-guard`, `console-enter` and `console-chrome-assets` entries this list once named were
@@ -174,6 +181,14 @@ because a reader applying rule 1 to their own change needs the real list:
   above its door's ceiling receives the bounded HTTP 400 JSON-RPC refusal `-32000` /
   `effect_above_ceiling`. The delegated-tool conformance assertion now requires
   `RespectsEffectCeiling`.
+- **Per-tool two-phase confirmation ships for marked destructive MCP tools.** A marked tool adds
+  the optional framework-reserved `confirm` input and advertises `_meta.two_phase` in
+  `tools/list`. A call without `confirm` runs only the tool's preview and returns a short-lived,
+  single-use confirmation; the same call with that confirmation burns it before protected
+  execution. Confirmations are bound to deployment/application context, tool, exact canonical
+  arguments and authenticated subject. This is per-tool protocol discovery, not a new
+  deployment-wide capability or endpoint flag; effect ceilings still decide whether the
+  destructive tool is reachable at all.
 
 None of that removes a field, renames one, retypes one, or changes what an existing field means,
 which is what rule 1 makes the major bump about. Written down here so it is not re-litigated, along
@@ -632,7 +647,7 @@ Public (`bfc-public` throttle). Identifies the instance.
 ```json
 {
   "product": "Sink",
-  "bfc_version": "0.19.2",
+  "bfc_version": "0.19.3",
   "api_version": 2,
   "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials", "console-keys", "console-key-retire", "console-vitals", "app-action-audit-emit", "mcp-serve", "mcp-delegated", "mcp-effect-scoped"],
   "claimed": true,
@@ -2855,7 +2870,7 @@ field.
 {
   "version": 1,
   "api_version": 2,
-  "bfc_version": "0.19.2",
+  "bfc_version": "0.19.3",
   "app_version": "1.4.2",
   "health": "ok",
   "deployed_at": "2026-08-29T09:14:00+00:00",
@@ -3064,6 +3079,97 @@ makes it dynamically ineligible, remains vendor-not-found rather than becoming a
 refusal. Registration eligibility is evaluated before the ceiling for exactly that reason.
 
 *Pinned by* `tests/McpEffectCeilingTest.php` and `tests/McpMetadataTest.php`.
+
+### Two-phase destructive tools
+
+Two-phase confirmation is an opt-in property of one tool, declared by the framework's `TwoPhase`
+attribute. It is not a deployment-wide mode or capability. In `tools/list`, each marked tool gains
+an optional top-level string property named `confirm` and this metadata:
+
+```json
+{
+  "_meta": {
+    "two_phase": {
+      "confirmationArgument": "confirm",
+      "protocolVersion": 1
+    }
+  }
+}
+```
+
+The `confirm` name is framework-reserved for a marked tool: its application schema must not declare
+that top-level field. Unmarked tools do not gain `_meta.two_phase`, and a field named `confirm` in
+an unmarked tool remains application input. A marked tool must also declare
+`ToolEffect(Effect::Destructive)`, expose a public non-streaming `preview` method, and not sit inside
+a `ToolSearch` group whose `execute_tools` path would bypass the guard. The consuming server's
+delegated-tool conformance assertion checks those requirements and the advertised protocol.
+
+The two calls are:
+
+1. **Preview:** call the marked tool without `confirm`. Only `preview` runs; the protected handler
+   does not. A successful preview response gains
+   `result._meta.two_phase = {"phase":"preview","confirmation":"<opaque>","expires_at":<unix-seconds>}`.
+   A preview that returns an MCP error receives no confirmation. Clients must treat the confirmation
+   as opaque.
+2. **Execute:** repeat the same tool call with the returned string as the top-level `confirm`
+   argument. The framework removes `confirm` before either handler sees the arguments, validates
+   and burns the confirmation, and only then invokes the protected handler. Successful protected
+   response messages gain `result._meta.two_phase = {"phase":"executed"}`.
+
+The confirmation is short-lived and bound to its random nonce, expiry, tool name, exact canonical
+arguments, type-qualified authenticated subject, deployment audience and application slug. Object
+member order is immaterial, but object/list identity and every value are not: changing the tool,
+subject, deployment/application context or arguments refuses phase two. Canonical two-phase
+arguments may contain nulls, booleans, integers, strings, lists and objects; floating-point values
+are refused because they do not provide a safe cross-runtime precision boundary. Canonical input is
+bounded to 65,536 bytes and depth 32. The confirmation is at most 512 characters on input.
+
+Burn is deliberately before execution. It atomically acquires a nonce-specific distributed lock,
+retains that lock through expiry, and removes the mint marker before the protected handler starts.
+Concurrent or repeated phase-two calls therefore have at most one winner. If the protected handler
+or response transport fails after burn, the operation's outcome is unknown and the confirmation
+remains spent; retry begins with a new preview rather than reusing it. This is at-most-once
+protected-handler start, not a promise that an executed operation completed successfully.
+
+Every two-phase protocol refusal is HTTP 400 JSON-RPC error code `-32001`, with one stable,
+value-free `message` from this closed vocabulary:
+
+| `message` | Meaning |
+| --- | --- |
+| `confirmation_expired` | The confirmation's expiry has passed. |
+| `confirmation_invalid` | The input, signature, payload, or canonical arguments are malformed or unsupported. |
+| `confirmation_mismatched` | The confirmation belongs to another tool, argument set, subject, deployment, or application. |
+| `confirmation_spent` | The confirmation was already claimed, replayed, or its mint marker is absent. |
+| `confirmation_unavailable` | Required framework state, configuration, cache, or atomic burn operation is unavailable. |
+
+Two-phase confirmation never raises a request's effect authority. Because a marked tool must be
+`destructive`, `RespectsEffectCeiling` lists or calls it only through a request carrying the
+`destructive` ceiling. The read door and the optional advertised `mcp_write` door cannot reach it.
+The `mcp-effect-scoped` capability and `endpoints.mcp_write` continue to describe only the verified
+read/write surface above; there is no two-phase capability and no advertised destructive endpoint.
+A consuming application that deliberately mounts a destructive MCP door uses the exact middleware
+form `bfc.mcp:product,destructive`, and clients discover two-phase support per eligible tool through
+`tools/list`.
+
+The wire protocol above is fixed; storage is deployment operation. Configure
+`built-for-cloud.mcp.two_phase.cache_store` (environment
+`BUILT_FOR_CLOUD_MCP_CONFIRMATION_STORE`) to one cache shared by every worker serving the deployment.
+Its store must implement Laravel's `LockProvider`; process-local `array`, `file`, and `null` stores
+are unsupported and fail closed. `built-for-cloud.mcp.two_phase.ttl_seconds` (environment
+`BUILT_FOR_CLOUD_MCP_CONFIRMATION_TTL`) defaults to 300 seconds and accepts 30 through 900 seconds,
+inclusive. The deployment audience and application slug must also be present because they are part
+of the confirmation binding.
+
+Unsupported stores or TTLs, missing context, cache exceptions and mint-marker removal failures
+refuse as `confirmation_unavailable` without protected execution. Expiry and binding mismatch
+refuse before protected execution. Replay, failure to acquire the nonce lock, and loss of an
+unspent mint marker refuse as spent. After a successful burn, loss of the retained lock still
+cannot make the confirmation reusable because the mint marker is already absent. If marker removal
+fails after lock acquisition, execution is refused and the lock remains retained, so a later
+attempt is spent. These fail-closed cases are why the shared lock-capable cache is a requirement
+rather than a performance option.
+
+*Pinned by* `tests/McpTwoPhaseTest.php`.
 
 An unbound installation credential (`subject_type=installation`, `purpose=mcp`, `user_id=null`)
 runs the immediate downstream pipeline inside `SystemAuthorityContext`. If that pipeline returns a
