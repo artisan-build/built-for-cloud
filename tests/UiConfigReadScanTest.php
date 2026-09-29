@@ -6,6 +6,7 @@ use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTransitions;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome;
 use ArtisanBuild\BuiltForCloud\LandingManifest;
+use ArtisanBuild\BuiltForCloud\Mcp\TwoPhaseConfirmationStore;
 use ArtisanBuild\BuiltForCloud\Testing\UiConfigReadScan;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConditionedLifecycleRefusal;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UiConditionedPurposeGate;
@@ -51,6 +52,7 @@ it('derives every published config read with a named disposition and detects rog
         UiHome::class.'|built-for-cloud.ui.personal_credentials|1' => 'display',
         UiHome::class.'|built-for-cloud.ui.session_management|1' => 'display',
         LandingManifest::class.'|built-for-cloud.manifest|1' => 'display',
+        TwoPhaseConfirmationStore::class.'|built-for-cloud.manifest.slug|1' => 'security-binding',
         UiCredentialPurposes::class.'|built-for-cloud.ui.credential_purposes|1' => 'transport-validator',
     ];
 

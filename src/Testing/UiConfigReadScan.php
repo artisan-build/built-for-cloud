@@ -8,6 +8,7 @@ use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\ManageTransitions;
 use ArtisanBuild\BuiltForCloud\Http\Controllers\UiHome;
 use ArtisanBuild\BuiltForCloud\LandingManifest;
+use ArtisanBuild\BuiltForCloud\Mcp\TwoPhaseConfirmationStore;
 use ArtisanBuild\BuiltForCloud\UiCredentialPurposes;
 use FilesystemIterator;
 use RecursiveDirectoryIterator;
@@ -30,7 +31,7 @@ use SplFileInfo;
  */
 final class UiConfigReadScan
 {
-    /** @var array<string, 'display'|'mapper'|'mount'|'transport-validator'> */
+    /** @var array<string, 'display'|'mapper'|'mount'|'security-binding'|'transport-validator'> */
     public const array PUBLISHED_DISPOSITIONS = [
         AppPurposeRegistry::class.'|built-for-cloud.credentials.app_purposes|1' => 'mapper',
         ManageTransitions::class.'|built-for-cloud.ui.managed_transitions|1' => 'display',
@@ -40,6 +41,7 @@ final class UiConfigReadScan
         UiHome::class.'|built-for-cloud.ui.personal_credentials|1' => 'display',
         UiHome::class.'|built-for-cloud.ui.session_management|1' => 'display',
         LandingManifest::class.'|built-for-cloud.manifest|1' => 'display',
+        TwoPhaseConfirmationStore::class.'|built-for-cloud.manifest.slug|1' => 'security-binding',
         UiCredentialPurposes::class.'|built-for-cloud.ui.credential_purposes|1' => 'transport-validator',
     ];
 
@@ -55,8 +57,8 @@ final class UiConfigReadScan
         'auth\\members.blade|built-for-cloud.ui.managed_transitions|1' => 'display',
     ];
 
-    /** @var list<'display'|'mapper'|'mount'|'transport-validator'> */
-    private const array NAMED_DISPOSITIONS = ['display', 'mapper', 'mount', 'transport-validator'];
+    /** @var list<'display'|'mapper'|'mount'|'security-binding'|'transport-validator'> */
+    private const array NAMED_DISPOSITIONS = ['display', 'mapper', 'mount', 'security-binding', 'transport-validator'];
 
     /**
      * @return list<string> `<consumer>|<exact key>|<ordinal>` identities
@@ -110,7 +112,7 @@ final class UiConfigReadScan
 
     /**
      * @param  list<string>  $additionalRoots
-     * @return array<string, 'display'|'mapper'|'mount'|'transport-validator'>
+     * @return array<string, 'display'|'mapper'|'mount'|'security-binding'|'transport-validator'>
      */
     public static function assertPublishedConfigurationDispositions(string $sourceRoot, array $additionalRoots = []): array
     {
