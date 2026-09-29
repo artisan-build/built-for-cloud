@@ -98,6 +98,164 @@ it('recognises a parameterized package middleware alias as the exact guard class
     expect($this->getJson('/bfc/meta')->json('capabilities'))->toContain('mcp-delegated');
 });
 
+it('advertises effect scoping for an exact read door with no configured write path', function (): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.write_path' => null,
+    ]);
+
+    Route::post('/mcp', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,read');
+
+    $response = $this->getJson('/bfc/meta')->assertOk();
+
+    expect($response->json('capabilities'))->toContain('mcp-effect-scoped')
+        ->and($response->json('endpoints'))->toBe(['mcp' => '/mcp']);
+});
+
+it('advertises effect scoping and the write endpoint only for exact verified ceilings', function (): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.write_path' => '/mcp-write',
+    ]);
+
+    Route::post('/mcp', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,read');
+    Route::post('/mcp-write', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,write');
+
+    $response = $this->getJson('/bfc/meta')->assertOk();
+
+    expect($response->json('capabilities'))->toContain('mcp-effect-scoped')
+        ->and($response->json('endpoints'))->toBe([
+            'mcp' => '/mcp',
+            'mcp_write' => '/mcp-write',
+        ]);
+});
+
+it('fails effect scoping closed for an explicitly configured malformed write path', function (mixed $writePath): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.write_path' => $writePath,
+    ]);
+
+    Route::post('/mcp', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,read');
+
+    $response = $this->getJson('/bfc/meta')->assertOk();
+
+    expect($response->json('capabilities'))->not->toContain('mcp-effect-scoped')
+        ->and($response->json('endpoints'))->toBe(['mcp' => '/mcp']);
+})->with([
+    'empty string' => '',
+    'relative path' => 'mcp-write',
+    'protocol-relative path' => '//other.example.com/mcp-write',
+    'query-bearing path' => '/mcp-write?mode=write',
+    'non-string integer' => 1,
+    'non-string array' => [['/mcp-write']],
+]);
+
+it('does not advertise effect scoping or a write endpoint for the wrong middleware parameter', function (): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.write_path' => '/mcp-write',
+    ]);
+
+    Route::post('/mcp', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,read');
+    Route::post('/mcp-write', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,read');
+
+    $response = $this->getJson('/bfc/meta')->assertOk();
+
+    expect($response->json('capabilities'))->not->toContain('mcp-effect-scoped')
+        ->and($response->json('endpoints'))->toBe(['mcp' => '/mcp']);
+});
+
+it('requires the exact product slot and parameter count on the write door', function (string $middleware): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.write_path' => '/mcp-write',
+    ]);
+
+    Route::post('/mcp', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,read');
+    Route::post('/mcp-write', fn (): array => ['ok' => true])
+        ->middleware($middleware);
+
+    $response = $this->getJson('/bfc/meta')->assertOk();
+
+    expect($response->json('capabilities'))->not->toContain('mcp-effect-scoped')
+        ->and($response->json('endpoints'))->toBe(['mcp' => '/mcp']);
+})->with([
+    'missing product slot' => 'bfc.mcp:write',
+    'extra parameter' => 'bfc.mcp:product,write,extra',
+]);
+
+it('withholds effect scoping and the write endpoint unless the primary door has an exact read ceiling', function (?string $middleware): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.write_path' => '/mcp-write',
+    ]);
+
+    $primary = Route::post('/mcp', fn (): array => ['ok' => true]);
+
+    if ($middleware !== null) {
+        $primary->middleware($middleware);
+    }
+
+    Route::post('/mcp-write', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,write');
+
+    $response = $this->getJson('/bfc/meta')->assertOk();
+
+    expect($response->json('capabilities'))->not->toContain('mcp-effect-scoped')
+        ->and($response->json('endpoints'))->toBe(['mcp' => '/mcp']);
+})->with([
+    'missing guard' => null,
+    'bare guard' => 'bfc.mcp',
+    'missing ceiling parameter' => 'bfc.mcp:product',
+    'wrong ceiling' => 'bfc.mcp:product,write',
+]);
+
+it('does not let same path verb or domain decoys certify the write door', function (): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.write_path' => '/mcp-write',
+    ]);
+
+    Route::post('/mcp', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,read');
+    Route::get('/mcp-write', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,write');
+    Route::domain('other.example.com')->post('/mcp-write', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,write');
+    Route::post('/mcp-write', fn (): array => ['ok' => true]);
+
+    $response = $this->getJson('/bfc/meta')->assertOk();
+
+    expect($response->json('capabilities'))->not->toContain('mcp-effect-scoped')
+        ->and($response->json('endpoints'))->toBe(['mcp' => '/mcp']);
+});
+
+it('withholds the write endpoint when its exact guard is excluded', function (): void {
+    config([
+        'built-for-cloud.mcp.path' => '/mcp',
+        'built-for-cloud.mcp.write_path' => '/mcp-write',
+    ]);
+
+    Route::post('/mcp', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,read');
+    Route::post('/mcp-write', fn (): array => ['ok' => true])
+        ->middleware('bfc.mcp:product,write')
+        ->withoutMiddleware('bfc.mcp:product,write');
+
+    $response = $this->getJson('/bfc/meta')->assertOk();
+
+    expect($response->json('capabilities'))->not->toContain('mcp-effect-scoped')
+        ->and($response->json('endpoints'))->toBe(['mcp' => '/mcp']);
+});
+
 it('does not recognise a different middleware class that shares the guard prefix', function (): void {
     config([
         'built-for-cloud.mcp.path' => '/mcp',

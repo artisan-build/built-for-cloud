@@ -10,13 +10,15 @@ use Laravel\Mcp\Exceptions\JsonRpcException;
 
 /**
  * Filters Laravel MCP tool registration against the current request's ceiling.
- * Undeclared effects fail closed as destructive, and a targeted above-ceiling
- * call receives the bounded policy refusal without invoking the tool.
+ * A tool excluded by its existing registration predicate remains absent.
+ * Otherwise, undeclared effects fail closed as destructive, and a targeted
+ * above-ceiling call receives the bounded policy refusal without invocation.
  *
  * Pinned by `tests/McpEffectCeilingTest.php` — "neither lists nor calls a
  * write tool through the read door", "treats an undeclared tool as destructive
  * rather than read" and "distinguishes an above ceiling refusal from a
- * genuinely absent tool".
+ * genuinely absent tool" and "preserves a false registration predicate before
+ * applying the effect ceiling".
  *
  * @phpstan-ignore trait.unused (the supported seam for consuming products and conformance fixtures)
  */

@@ -6,6 +6,7 @@ use ArtisanBuild\BuiltForCloud\Mcp\AdvertisesToolClassification;
 use ArtisanBuild\BuiltForCloud\Mcp\AdvertisesToolEffect;
 use ArtisanBuild\BuiltForCloud\Mcp\Classification;
 use ArtisanBuild\BuiltForCloud\Mcp\Effect;
+use ArtisanBuild\BuiltForCloud\Mcp\RespectsEffectCeiling;
 use ArtisanBuild\BuiltForCloud\Mcp\ToolClassification;
 use ArtisanBuild\BuiltForCloud\Mcp\ToolEffect;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
@@ -21,21 +22,21 @@ uses(ContractAssertions::class);
 #[ToolEffect(Effect::Read)]
 final class ConformingMcpTool extends Tool
 {
-    use AdvertisesToolClassification, AdvertisesToolEffect;
+    use AdvertisesToolClassification, AdvertisesToolEffect, RespectsEffectCeiling;
 }
 
 #[ToolClassification(Classification::Content)]
 #[ToolEffect(Effect::Write)]
 final class MissingAnnotationMcpTool extends Tool
 {
-    use AdvertisesToolClassification, AdvertisesToolEffect;
+    use AdvertisesToolClassification, AdvertisesToolEffect, RespectsEffectCeiling;
 }
 
 #[IsReadOnly]
 #[ToolEffect(Effect::Read)]
 final class MissingClassificationMcpTool extends Tool
 {
-    use AdvertisesToolClassification, AdvertisesToolEffect;
+    use AdvertisesToolClassification, AdvertisesToolEffect, RespectsEffectCeiling;
 }
 
 #[IsReadOnly]
@@ -43,21 +44,21 @@ final class MissingClassificationMcpTool extends Tool
 #[ToolEffect(Effect::Read)]
 final class MissingMetaMcpTool extends Tool
 {
-    use AdvertisesToolEffect;
+    use AdvertisesToolEffect, RespectsEffectCeiling;
 }
 
 #[IsReadOnly]
 #[ToolClassification(Classification::Metadata)]
 final class MissingEffectMcpTool extends Tool
 {
-    use AdvertisesToolClassification;
+    use AdvertisesToolClassification, RespectsEffectCeiling;
 }
 
 #[IsReadOnly]
 #[ToolClassification(Classification::Metadata)]
 final class UndeclaredAdvertisedEffectMcpTool extends Tool
 {
-    use AdvertisesToolClassification, AdvertisesToolEffect;
+    use AdvertisesToolClassification, AdvertisesToolEffect, RespectsEffectCeiling;
 }
 
 #[IsReadOnly]
@@ -65,7 +66,7 @@ final class UndeclaredAdvertisedEffectMcpTool extends Tool
 #[ToolEffect(Effect::Read)]
 final class MissingEffectAdvertisementMcpTool extends Tool
 {
-    use AdvertisesToolClassification;
+    use AdvertisesToolClassification, RespectsEffectCeiling;
 }
 
 #[IsReadOnly]
@@ -81,6 +82,14 @@ final class MismatchedEffectAdvertisementMcpTool extends Tool
 
         return parent::toArray();
     }
+}
+
+#[IsReadOnly]
+#[ToolClassification(Classification::Metadata)]
+#[ToolEffect(Effect::Read)]
+final class MissingEffectCeilingMcpTool extends Tool
+{
+    use AdvertisesToolClassification, AdvertisesToolEffect;
 }
 
 final class ConformingMcpServer extends Server
@@ -115,6 +124,11 @@ final class MissingEffectAdvertisementMcpServer extends Server
 final class MismatchedEffectAdvertisementMcpServer extends Server
 {
     protected array $tools = [MismatchedEffectAdvertisementMcpTool::class];
+}
+
+final class MissingEffectCeilingMcpServer extends Server
+{
+    protected array $tools = [MissingEffectCeilingMcpTool::class];
 }
 
 it('accepts a server whose tools declare and advertise the delegated contract', function (): void {
@@ -155,6 +169,14 @@ it('rejects a declared effect missing _meta.effect advertisement', function (): 
         ->toThrow(
             AssertionFailedError::class,
             MissingEffectAdvertisementMcpTool::class.' declares ToolEffect but does not advertise it in _meta.effect.',
+        );
+});
+
+it('rejects a tool that does not enforce the request effect ceiling', function (): void {
+    expect(fn () => $this->assertBuiltForCloudMcpDelegatedTools(MissingEffectCeilingMcpServer::class))
+        ->toThrow(
+            AssertionFailedError::class,
+            MissingEffectCeilingMcpTool::class.' is missing RespectsEffectCeiling.',
         );
 });
 

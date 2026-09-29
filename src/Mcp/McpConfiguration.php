@@ -53,6 +53,13 @@ use Throwable;
  * verb or domain", "withholds delegated MCP when the guard is declared
  * and then excluded" and "earns delegated MCP for a guarded route at
  * the root path".
+ *
+ * Pinned by `tests/McpMetadataTest.php` — "advertises effect scoping for
+ * an exact read door with no configured write path", "fails effect scoping
+ * closed for an explicitly configured malformed write path", "requires the
+ * exact product slot and parameter count on the write door" and "withholds
+ * effect scoping and the write endpoint unless the primary door has an exact
+ * read ceiling".
  */
 final class McpConfiguration
 {
