@@ -1061,6 +1061,8 @@ it('never turns a malformed cached snapshot into a 500', function (): void {
 });
 
 it('accepts canonical integer strings from a cache-backed queue snapshot', function (): void {
+    $this->freezeTime();
+
     Cache::shouldReceive('remember')->andReturn([
         'pending' => '12',
         'reserved' => '3',
