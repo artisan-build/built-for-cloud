@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Mcp\RequestEffectCeiling;
 use ArtisanBuild\BuiltForCloud\Mcp\RespectsEffectCeiling;
 use ArtisanBuild\BuiltForCloud\Mcp\ToolClassification;
 use ArtisanBuild\BuiltForCloud\Mcp\ToolEffect;
+use ArtisanBuild\BuiltForCloud\Mcp\TwoPhase;
 use Illuminate\Http\Request;
 use Laravel\Mcp\Server;
 use Laravel\Mcp\Server\Tool;
@@ -127,6 +128,16 @@ final class McpDelegatedTools
             $offences[] = $name.' is missing ToolEffect.';
         }
 
+        $twoPhase = TwoPhase::of($tool);
+
+        if ($twoPhase !== null && $effect?->value !== Effect::Destructive) {
+            $offences[] = $name.' declares TwoPhase without a destructive ToolEffect.';
+        }
+
+        if ($twoPhase !== null && ! is_callable([$tool, TwoPhase::PREVIEW_METHOD])) {
+            $offences[] = $name.' declares TwoPhase without a public preview method.';
+        }
+
         $serialized = $tool->toArray();
         $advertised = $serialized['_meta'][ToolClassification::META_KEY] ?? null;
 
@@ -145,6 +156,12 @@ final class McpDelegatedTools
                 var_export($metadata[ToolEffect::META_KEY], true),
                 var_export($effect->value->value, true),
             );
+        }
+
+        if ($twoPhase !== null
+            && (($metadata[TwoPhase::META_KEY]['confirmationArgument'] ?? null) !== TwoPhase::CONFIRM_ARGUMENT
+                || ! array_key_exists(TwoPhase::CONFIRM_ARGUMENT, (array) ($serialized['inputSchema']['properties'] ?? [])))) {
+            $offences[] = $name.' declares TwoPhase but does not advertise its confirmation protocol.';
         }
     }
 }

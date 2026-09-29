@@ -244,6 +244,11 @@ return [
         'path' => env('BUILT_FOR_CLOUD_MCP_PATH'),
         'write_path' => env('BUILT_FOR_CLOUD_MCP_WRITE_PATH'),
         'delegated' => env('BUILT_FOR_CLOUD_MCP_DELEGATED', false),
+        'two_phase' => [
+            // Must be a shared LockProvider store; array/file/null fail closed.
+            'cache_store' => env('BUILT_FOR_CLOUD_MCP_CONFIRMATION_STORE'),
+            'ttl_seconds' => (int) env('BUILT_FOR_CLOUD_MCP_CONFIRMATION_TTL', 300),
+        ],
     ],
 
     /*
