@@ -65,13 +65,14 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
  *    compared to each other. Deliberately doc-internal.
  *  - {@see releaseVersionMentionsIn()} — a SYNTACTIC set, and worth
  *    reading as one: semver-shaped tokens standing bare in the text,
- *    plus the value of a JSON field spelled exactly `bfc_version`. It
- *    is wider than the examples scan, which reads only the second of
- *    those, and the changelog's three running-text spellings are inside
- *    it for that reason. It is NOT "every mention of a release": a
- *    version under any other key is {@see foreignVersionMentionsIn()}'s,
- *    so a document naming another package's release as
- *    `"scalpels_version": "0.7.0"` says nothing to this comparison.
+ *    plus the value of a JSON field spelled exactly `bfc_version`.
+ *    Conventional `v`-prefixed release labels are historical/release-note
+ *    references, not current-release discriminators. It is wider than
+ *    the examples scan, which reads only the JSON values. It is NOT
+ *    "every mention of a release": a version under any other key is
+ *    {@see foreignVersionMentionsIn()}'s, so a document naming another
+ *    package's release as `"scalpels_version": "0.7.0"` says nothing
+ *    to this comparison.
  *  - {@see foreignVersionMentionsIn()} — semver tokens that are the
  *    JSON value of a field other than `bfc_version`. `app_version` in
  *    the vitals example is the consuming application's release and is
@@ -659,7 +660,9 @@ final class ContractScan
     /**
      * The semver tokens this parse READS AS THIS DOCUMENT'S OWN
      * RELEASE, in document order: a token standing bare in the text, or
-     * the value of a JSON field spelled exactly `bfc_version`.
+     * the value of a JSON field spelled exactly `bfc_version`. A
+     * conventional `v`-prefixed semver is a historical/release-note label,
+     * not a current-release mention.
      *
      * **A syntactic rule, not "every release the document mentions",
      * and the difference is load-bearing.** A version given under any
@@ -834,7 +837,7 @@ final class ContractScan
         $doc = (string) preg_replace(self::RELEASE_WINDOW, ' ', $doc);
 
         preg_match_all(
-            '/"([A-Za-z_][A-Za-z0-9_]*)"\s*:\s*"(\d+\.\d+\.\d+[^"]*)"|(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)/',
+            '/"([A-Za-z_][A-Za-z0-9_]*)"\s*:\s*"(\d+\.\d+\.\d+[^"]*)"|(?<!v)(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)/',
             $doc,
             $matches,
             PREG_SET_ORDER,
