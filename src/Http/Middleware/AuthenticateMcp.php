@@ -155,7 +155,7 @@ final class AuthenticateMcp
         return $next($request);
     }
 
-    private function hasOversizedJsonRpcId(Request $request): bool
+    private function hasOversizedJsonRpcId(#[SensitiveParameter] Request $request): bool
     {
         $payload = $request->json()->all();
 
