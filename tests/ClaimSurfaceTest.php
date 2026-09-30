@@ -472,6 +472,8 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     // v0.19.5 added the product MCP id-ceiling changelog and contract
     // prose: four blocks more, with two absolute-bearing blocks, one
     // paired to its focused tests and one unpaired.
+    // v0.19.6 added the PayloadFilter changelog paragraph: one block more,
+    // without changing the absolute pairing vocabulary.
     $gateSurfaces = [
         'src/Console', 'src/Audit', 'resources/views',
         'docs/http-contract.md',
@@ -481,7 +483,7 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1048,
+        'blocks' => 1049,
         'absolute' => 340,
         'paired' => 66,
         'unpaired' => 274,
