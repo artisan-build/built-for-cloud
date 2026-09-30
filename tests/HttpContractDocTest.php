@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Tests;
 
 use ArtisanBuild\BuiltForCloud\Audit\AppActionReason;
 use ArtisanBuild\BuiltForCloud\BuiltForCloud;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Route;
@@ -43,6 +44,15 @@ final class HttpContractDocTest extends TestCase
         $this->getJson('/bfc/meta')->assertOk()->assertJsonPath('api_version', 2);
 
         $this->assertStringContainsString('"api_version": 2', $this->contractDoc());
+    }
+
+    public function test_product_mcp_json_rpc_id_ceiling_is_documented(): void
+    {
+        $this->assertSame(256, AuthenticateMcp::MAX_JSON_RPC_ID_BYTES);
+        $this->assertStringContainsString(
+            'JSON encoding is at most **'.AuthenticateMcp::MAX_JSON_RPC_ID_BYTES.' bytes**',
+            $this->contractDoc(),
+        );
     }
 
     public function test_device_contract_distinguishes_live_installation_grants_from_durable_credentials(): void

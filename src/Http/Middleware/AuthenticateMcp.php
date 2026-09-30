@@ -86,6 +86,8 @@ final class AuthenticateMcp
 
     public const string AUDIT_NOTE = 'mcp authentication refused: ';
 
+    public const int MAX_JSON_RPC_ID_BYTES = 256;
+
     public function __construct(
         private readonly CredentialResolver $credentials,
         private readonly CredentialUsageRecorder $usage,
@@ -104,6 +106,12 @@ final class AuthenticateMcp
         ?string $ceiling = null,
     ): Response {
         RequestEffectCeiling::publish($request, $ceiling);
+
+        if ($admission === 'product') {
+            $dispatch = $next;
+            $next = fn (Request $request): Response => app(EnforceProductMcpRequestId::class)
+                ->handle($request, $dispatch);
+        }
 
         $bearer = $request->bearerToken();
 

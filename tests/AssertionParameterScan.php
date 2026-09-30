@@ -98,6 +98,7 @@ final class AssertionParameterScan
     public const array ROOTS = [
         'Console',
         'Http/Middleware/AuthenticateMcp.php',
+        'Http/Middleware/EnforceProductMcpRequestId.php',
     ];
 
     /** The package's PSR-4 prefix, for turning a path into a class. */

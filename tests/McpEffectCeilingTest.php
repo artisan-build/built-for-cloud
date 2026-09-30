@@ -5,6 +5,7 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
 use ArtisanBuild\BuiltForCloud\Mcp\Effect;
 use ArtisanBuild\BuiltForCloud\Mcp\RequestEffectCeiling;
 use ArtisanBuild\BuiltForCloud\Mcp\RespectsEffectCeiling;
@@ -13,6 +14,9 @@ use ArtisanBuild\BuiltForCloud\SubjectType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Testing\TestResponse;
+use Laravel\Mcp\Enums\MetaKey;
+use Laravel\Mcp\Enums\ProtocolVersion;
+use Laravel\Mcp\Enums\RequestHeader;
 use Laravel\Mcp\Facades\Mcp;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\Server;
@@ -30,6 +34,19 @@ final class EffectCeilingProbe
     public static int $disabledWriteCalls = 0;
 
     public static int $undeclaredCalls = 0;
+
+    public static int $downstreamCalls = 0;
+}
+
+final class EffectCeilingDownstreamProbe
+{
+    /** @param Closure(Request): SymfonyResponse $next */
+    public function handle(Request $request, Closure $next): SymfonyResponse
+    {
+        EffectCeilingProbe::$downstreamCalls++;
+
+        return $next($request);
+    }
 }
 
 #[ToolEffect(Effect::Read)]
@@ -122,13 +139,14 @@ beforeEach(function (): void {
     EffectCeilingProbe::$writeCalls = 0;
     EffectCeilingProbe::$disabledWriteCalls = 0;
     EffectCeilingProbe::$undeclaredCalls = 0;
+    EffectCeilingProbe::$downstreamCalls = 0;
 
     Mcp::web('/effect/read', EffectCeilingServer::class)
-        ->middleware('bfc.mcp:product,read');
+        ->middleware(['bfc.mcp:product,read', EffectCeilingDownstreamProbe::class]);
     Mcp::web('/effect/write', EffectCeilingServer::class)
-        ->middleware('bfc.mcp:product,write');
+        ->middleware(['bfc.mcp:product,write', EffectCeilingDownstreamProbe::class]);
     Mcp::web('/effect/destructive', EffectCeilingServer::class)
-        ->middleware('bfc.mcp:product,destructive');
+        ->middleware(['bfc.mcp:product,destructive', EffectCeilingDownstreamProbe::class]);
     Mcp::web('/effect/missing', EffectCeilingServer::class)
         ->middleware('bfc.mcp:product');
     Mcp::web('/effect/invalid', EffectCeilingServer::class)
@@ -150,7 +168,7 @@ beforeEach(function (): void {
 /**
  * @param  array<string, mixed>  $params
  */
-function effectCeilingRpc(string $path, string $method, array $params = [], int $id = 1): TestResponse
+function effectCeilingRpc(string $path, string $method, array $params = [], int|string $id = 1): TestResponse
 {
     return test()->postJson($path, [
         'jsonrpc' => '2.0',
@@ -159,6 +177,27 @@ function effectCeilingRpc(string $path, string $method, array $params = [], int 
         'params' => $params,
     ], [
         'Authorization' => 'Bearer effect-ceiling-secret',
+    ]);
+}
+
+/** @param array<string, string> $headers */
+function modernEffectCeilingRpc(string $path, string $id, array $headers): TestResponse
+{
+    return test()->postJson($path, [
+        'jsonrpc' => '2.0',
+        'id' => $id,
+        'method' => 'tools/call',
+        'params' => [
+            'name' => 'ceiling-read',
+            'arguments' => [],
+            '_meta' => [
+                MetaKey::PROTOCOL_VERSION->value => ProtocolVersion::LATEST->value,
+                MetaKey::CLIENT_CAPABILITIES->value => (object) [],
+            ],
+        ],
+    ], [
+        'Authorization' => 'Bearer effect-ceiling-secret',
+        ...$headers,
     ]);
 }
 
@@ -183,6 +222,77 @@ it('neither lists nor calls a write tool through the read door', function (): vo
 
     expect(EffectCeilingProbe::$writeCalls)->toBe(0);
 });
+
+it('refuses an oversized id at the product door before the tool executes', function (): void {
+    $maximumId = str_repeat('x', AuthenticateMcp::MAX_JSON_RPC_ID_BYTES - 2);
+    $oversizedId = $maximumId.'x';
+
+    effectCeilingRpc('/effect/read', 'tools/call', [
+        'name' => 'ceiling-read',
+        'arguments' => [],
+    ], $oversizedId)->assertStatus(400)
+        ->assertExactJson([
+            'jsonrpc' => '2.0',
+            'id' => null,
+            'error' => [
+                'code' => -32600,
+                'message' => 'Invalid Request',
+            ],
+        ]);
+
+    expect(EffectCeilingProbe::$readCalls)->toBe(0);
+
+    effectCeilingRpc('/effect/read', 'tools/call', [
+        'name' => 'ceiling-read',
+        'arguments' => [],
+    ], $maximumId)->assertOk()
+        ->assertJsonPath('id', $maximumId)
+        ->assertJsonPath('result.content.0.text', 'read-called');
+
+    expect(EffectCeilingProbe::$readCalls)->toBe(1);
+});
+
+it('guards modern requests before Laravel MCP header validation on every product effect door', function (string $path, array $invalidHeaders): void {
+    $maximumId = str_repeat('x', AuthenticateMcp::MAX_JSON_RPC_ID_BYTES - 2);
+    $oversizedId = $maximumId.'x';
+
+    $refused = modernEffectCeilingRpc($path, $oversizedId, $invalidHeaders)
+        ->assertStatus(400)
+        ->assertExactJson([
+            'jsonrpc' => '2.0',
+            'id' => null,
+            'error' => [
+                'code' => -32600,
+                'message' => 'Invalid Request',
+            ],
+        ]);
+
+    expect($refused->getContent())->not->toContain($oversizedId)
+        ->and(EffectCeilingProbe::$downstreamCalls)->toBe(0)
+        ->and(EffectCeilingProbe::$readCalls)->toBe(0);
+
+    modernEffectCeilingRpc($path, $maximumId, [
+        RequestHeader::PROTOCOL_VERSION->value => ProtocolVersion::LATEST->value,
+        RequestHeader::METHOD->value => 'tools/call',
+        RequestHeader::NAME->value => 'ceiling-read',
+    ])->assertOk()
+        ->assertJsonPath('id', $maximumId)
+        ->assertJsonPath('result.content.0.text', 'read-called');
+
+    expect(EffectCeilingProbe::$downstreamCalls)->toBe(1)
+        ->and(EffectCeilingProbe::$readCalls)->toBe(1);
+})->with([
+    'read door missing protocol header' => ['/effect/read', []],
+    'write door mismatched protocol header' => ['/effect/write', [
+        RequestHeader::PROTOCOL_VERSION->value => '2024-11-05',
+        RequestHeader::METHOD->value => 'tools/call',
+        RequestHeader::NAME->value => 'ceiling-read',
+    ]],
+    'destructive door missing protocol header' => ['/effect/destructive', [
+        RequestHeader::METHOD->value => 'tools/call',
+        RequestHeader::NAME->value => 'ceiling-read',
+    ]],
+]);
 
 it('leaves write tools unreachable and metadata understated without a valid write door', function (): void {
     config([
