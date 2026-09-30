@@ -33,6 +33,7 @@ use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\EnforceProductMcpRequestId;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureContractMajor;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAbility;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
@@ -200,6 +201,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router->aliasMiddleware('bfc.mcp', AuthenticateMcp::class);
             $router->aliasMiddleware('bfc.standalone', EnsureStandaloneAuthority::class);
             $this->prioritizeContractMajorAdmission($router);
+            $this->prioritizeProductMcpIdAdmission($router);
 
             // These convenience aliases remain public. Package operator routes
             // verify their resolved gate on match, and each final operator
@@ -295,6 +297,38 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $admissionMiddleware = $resolved[$admission];
             array_splice($resolved, $admission, 1);
             array_splice($resolved, $firstAuthentication, 0, [$admissionMiddleware]);
+            $event->route->computedMiddleware = $resolved;
+        });
+    }
+
+    /** Place the product-only id bound before Laravel MCP's own route middleware. */
+    private function prioritizeProductMcpIdAdmission(Router $router): void
+    {
+        $router->matched(static function (RouteMatched $event) use ($router): void {
+            $resolved = $router->resolveMiddleware(
+                $event->route->gatherMiddleware(),
+                $event->route->excludedMiddleware(),
+            );
+            $authentication = RouteMiddleware::indexOfClass($resolved, AuthenticateMcp::class);
+            $entry = $authentication === null ? null : ($resolved[$authentication] ?? null);
+
+            if (! is_string($entry)) {
+                return;
+            }
+
+            [, $parameters] = array_pad(explode(':', $entry, 2), 2, null);
+
+            if ($parameters === null || explode(',', $parameters)[0] !== 'product') {
+                return;
+            }
+
+            $guard = RouteMiddleware::indexOfClass($resolved, EnforceProductMcpRequestId::class);
+
+            if ($guard !== null) {
+                array_splice($resolved, $guard, 1);
+            }
+
+            array_unshift($resolved, EnforceProductMcpRequestId::class);
             $event->route->computedMiddleware = $resolved;
         });
     }

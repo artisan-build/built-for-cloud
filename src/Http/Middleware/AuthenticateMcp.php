@@ -109,9 +109,8 @@ final class AuthenticateMcp
 
         if ($admission === 'product') {
             $dispatch = $next;
-            $next = fn (Request $request): Response => $this->hasOversizedJsonRpcId($request)
-                ? $this->refuseOversizedJsonRpcId()
-                : $dispatch($request);
+            $next = fn (Request $request): Response => app(EnforceProductMcpRequestId::class)
+                ->handle($request, $dispatch);
         }
 
         $bearer = $request->bearerToken();
@@ -153,31 +152,6 @@ final class AuthenticateMcp
         }
 
         return $next($request);
-    }
-
-    private function hasOversizedJsonRpcId(#[SensitiveParameter] Request $request): bool
-    {
-        $payload = $request->json()->all();
-
-        if (! array_key_exists('id', $payload)) {
-            return false;
-        }
-
-        $encoded = json_encode($payload['id'], JSON_UNESCAPED_UNICODE);
-
-        return is_string($encoded) && strlen($encoded) > self::MAX_JSON_RPC_ID_BYTES;
-    }
-
-    private function refuseOversizedJsonRpcId(): JsonResponse
-    {
-        return response()->json([
-            'jsonrpc' => '2.0',
-            'id' => null,
-            'error' => [
-                'code' => -32600,
-                'message' => 'Invalid Request',
-            ],
-        ], Response::HTTP_BAD_REQUEST);
     }
 
     private function accountCanUseProduct(?Credential $credential): bool

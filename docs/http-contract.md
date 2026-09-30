@@ -3084,11 +3084,13 @@ the same reason-free `401`, before usage. Plain `bfc.mcp` deliberately retains t
 consumers that use the package's default operator integration behavior. No second alias is
 registered.
 
-After authentication, every middleware form whose first parameter is `product` admits an `id` only
-when its decoded value's JSON encoding is at most **256 bytes**, using the same
+For every middleware form whose first parameter is `product`, the package inserts its id admission
+at the front of the matched route's effective middleware. It therefore runs before Laravel MCP's
+transport-header validation as well as before authentication and tool dispatch. An `id` is admitted
+only when its decoded value's JSON encoding is at most **256 bytes**, using the same
 `JSON_UNESCAPED_UNICODE` encoding as Laravel MCP responses. The boundary is inclusive: exactly 256
-bytes proceeds to downstream dispatch. At 257 bytes or more the middleware returns HTTP 400 before
-the MCP server or any tool runs:
+bytes proceeds through the route's existing header, authentication and effect admission. At 257
+bytes or more the guard returns HTTP 400 before any later route middleware, MCP server or tool runs:
 
 ```json
 {
@@ -3098,9 +3100,12 @@ the MCP server or any tool runs:
 }
 ```
 
-The refusal never reflects the oversized id. Authentication retains its existing refusal, usage
-and assertion-burn ordering because this check wraps only downstream dispatch. Notifications with
-no `id` and plain non-product `bfc.mcp` routes are unchanged. *Pinned by*
+The refusal never reflects the oversized id. For every request inside the limit, authentication
+retains its existing refusal, usage and assertion-burn ordering. Notifications with no `id` and
+plain non-product `bfc.mcp` routes are unchanged. The supported Laravel MCP v1.0 request shape is
+one top-level JSON-RPC object whose `id`, when present, is a string or integer; notifications omit
+it. Laravel MCP v1.0 does not dispatch JSON-RPC batches, and this guard does not scan ids inside a
+top-level list. *Pinned by*
 `tests/McpProductAdmissionTest.php` and `tests/HttpContractDocTest.php`.
 
 The effect-scoped syntax is exactly `bfc.mcp:product,<ceiling>`, where `<ceiling>` is `read`,

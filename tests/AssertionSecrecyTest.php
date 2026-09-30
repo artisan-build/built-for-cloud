@@ -45,10 +45,10 @@ it('marks every frame in this package that holds console assertion bytes', funct
         'AuthenticateMcp::dispatchAsInstallationSystem($request)',
         'AuthenticateMcp::forgetCredential($request)',
         'AuthenticateMcp::handle($request)',
-        'AuthenticateMcp::hasOversizedJsonRpcId($request)',
         // Not an assertion, but the same rule and the same reason: this
         // request carries a live operator bearer token.
         'ConsoleKeyDelivery::optionalFrom($request)',
+        'EnforceProductMcpRequestId::handle($request)',
         'RequestAssertion::principal($request)',
         'RequestAssertion::publish($request)',
     ]);
