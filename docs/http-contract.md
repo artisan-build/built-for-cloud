@@ -106,6 +106,11 @@ and the following closed `error` vocabulary. Clients branch on `error`.
 
 ### Changelog
 
+**v0.19.5.** Product MCP admission now bounds the JSON encoding of every request `id` to 256
+bytes before downstream dispatch. Oversized ids receive the standard JSON-RPC invalid-request
+response and no tool executes. Plain non-product `bfc.mcp` routes retain their prior behavior.
+`api_version` remains 2 because this tightens admission at the explicitly bounded product door.
+
 **v0.19.4.** Additive destructive MCP door discovery ships. A deployment may declare a
 separately verified destructive MCP path. A wholly valid configured effect surface then adds
 `endpoints.mcp_destructive`; existing read-only and read/write shapes remain unchanged when that
@@ -143,11 +148,11 @@ secret, and disconnect it through the existing exit-transition machinery. `GET /
 and never returned. `api_version` remains 2 because these are new routes and one new open-set
 capability member.
 
-**api_version 2** (bfc **0.19.4**, this release). All changes since version 1, in one inventory.
+**api_version 2** (bfc **0.19.5**, this release). All changes since version 1, in one inventory.
 Additive unless marked otherwise.
 
 **Everything the Console adds through this release is additive or a documented removal, so `api_version` stays 2. What carries the
-signal is `bfc_version` 0.19.4 plus the `capabilities` entries** — `console-keys`,
+signal is `bfc_version` 0.19.5 plus the `capabilities` entries** — `console-keys`,
 `console-key-retire`, `console-vitals`,
 `app-action-audit-emit`, `mcp-serve`, `mcp-delegated` and `mcp-effect-scoped`. (The
 `console-guard`, `console-enter` and `console-chrome-assets` entries this list once named were
@@ -653,7 +658,7 @@ Public (`bfc-public` throttle). Identifies the instance.
 ```json
 {
   "product": "Sink",
-  "bfc_version": "0.19.4",
+  "bfc_version": "0.19.5",
   "api_version": 2,
   "capabilities": ["tokens", "ownership", "onboarding", "webhooks", "credentials", "console-keys", "console-key-retire", "console-vitals", "app-action-audit-emit", "mcp-serve", "mcp-delegated", "mcp-effect-scoped"],
   "claimed": true,
@@ -2895,7 +2900,7 @@ field.
 {
   "version": 1,
   "api_version": 2,
-  "bfc_version": "0.19.4",
+  "bfc_version": "0.19.5",
   "app_version": "1.4.2",
   "health": "ok",
   "deployed_at": "2026-08-29T09:14:00+00:00",
@@ -3078,6 +3083,25 @@ assertions, but refuses the `operator_management` + `operator` + `credential:adm
 the same reason-free `401`, before usage. Plain `bfc.mcp` deliberately retains the compound for
 consumers that use the package's default operator integration behavior. No second alias is
 registered.
+
+After authentication, every middleware form whose first parameter is `product` admits an `id` only
+when its decoded value's JSON encoding is at most **256 bytes**, using the same
+`JSON_UNESCAPED_UNICODE` encoding as Laravel MCP responses. The boundary is inclusive: exactly 256
+bytes proceeds to downstream dispatch. At 257 bytes or more the middleware returns HTTP 400 before
+the MCP server or any tool runs:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": null,
+  "error": {"code": -32600, "message": "Invalid Request"}
+}
+```
+
+The refusal never reflects the oversized id. Authentication retains its existing refusal, usage
+and assertion-burn ordering because this check wraps only downstream dispatch. Notifications with
+no `id` and plain non-product `bfc.mcp` routes are unchanged. *Pinned by*
+`tests/McpProductAdmissionTest.php` and `tests/HttpContractDocTest.php`.
 
 The effect-scoped syntax is exactly `bfc.mcp:product,<ceiling>`, where `<ceiling>` is `read`,
 `write`, or `destructive`. The middleware publishes that ceiling only on the current request;

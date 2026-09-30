@@ -5,6 +5,7 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
+use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
 use ArtisanBuild\BuiltForCloud\Mcp\Effect;
 use ArtisanBuild\BuiltForCloud\Mcp\RequestEffectCeiling;
 use ArtisanBuild\BuiltForCloud\Mcp\RespectsEffectCeiling;
@@ -150,7 +151,7 @@ beforeEach(function (): void {
 /**
  * @param  array<string, mixed>  $params
  */
-function effectCeilingRpc(string $path, string $method, array $params = [], int $id = 1): TestResponse
+function effectCeilingRpc(string $path, string $method, array $params = [], int|string $id = 1): TestResponse
 {
     return test()->postJson($path, [
         'jsonrpc' => '2.0',
@@ -182,6 +183,35 @@ it('neither lists nor calls a write tool through the read door', function (): vo
         ]);
 
     expect(EffectCeilingProbe::$writeCalls)->toBe(0);
+});
+
+it('refuses an oversized id at the product door before the tool executes', function (): void {
+    $maximumId = str_repeat('x', AuthenticateMcp::MAX_JSON_RPC_ID_BYTES - 2);
+    $oversizedId = $maximumId.'x';
+
+    effectCeilingRpc('/effect/read', 'tools/call', [
+        'name' => 'ceiling-read',
+        'arguments' => [],
+    ], $oversizedId)->assertStatus(400)
+        ->assertExactJson([
+            'jsonrpc' => '2.0',
+            'id' => null,
+            'error' => [
+                'code' => -32600,
+                'message' => 'Invalid Request',
+            ],
+        ]);
+
+    expect(EffectCeilingProbe::$readCalls)->toBe(0);
+
+    effectCeilingRpc('/effect/read', 'tools/call', [
+        'name' => 'ceiling-read',
+        'arguments' => [],
+    ], $maximumId)->assertOk()
+        ->assertJsonPath('id', $maximumId)
+        ->assertJsonPath('result.content.0.text', 'read-called');
+
+    expect(EffectCeilingProbe::$readCalls)->toBe(1);
 });
 
 it('leaves write tools unreachable and metadata understated without a valid write door', function (): void {

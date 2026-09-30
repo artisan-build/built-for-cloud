@@ -31,7 +31,8 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  * test-only probes through the router's real `bfc.mcp` alias and asserts
  * recognized account roles, unknown and unresolved accounts, installation
  * system attribution (including deferred streaming work), the `product`
- * compound exclusion, usage ordering, and context cleanup.
+ * compound exclusion, the product JSON-RPC id ceiling, usage ordering, and
+ * context cleanup.
  *
  * Pinned by `tests/McpProductAdmissionTest.php` — "proves MCP product
  * admission through the reusable consumer helper".
@@ -42,6 +43,7 @@ final class McpProductAdmission
     {
         $context = app(SystemAuthorityContext::class);
         $prefix = '/_bfc/testing/mcp-product-admission-'.bin2hex(random_bytes(8));
+        $idProbeDispatches = 0;
 
         Route::post($prefix.'/plain', static fn (): array => [
             'system_authority' => app(SystemAuthorityContext::class)->active(),
@@ -49,6 +51,11 @@ final class McpProductAdmission
         Route::post($prefix.'/product', static fn (): array => [
             'system_authority' => app(SystemAuthorityContext::class)->active(),
         ])->middleware('bfc.mcp:product');
+        Route::post($prefix.'/id-probe', static function () use (&$idProbeDispatches): array {
+            $idProbeDispatches++;
+
+            return ['system_authority' => app(SystemAuthorityContext::class)->active()];
+        })->middleware('bfc.mcp:product');
         Route::post($prefix.'/stream', static fn (): StreamedResponse => response()->stream(
             static function (): void {
                 echo app(SystemAuthorityContext::class)->active() ? 'active' : 'inactive';
@@ -108,6 +115,41 @@ final class McpProductAdmission
         );
         Assert::assertNotNull($installation['credential']->refresh()->last_used_at);
         Assert::assertFalse($context->active(), 'System authority leaked after the installation MCP request.');
+
+        $maximumId = str_repeat('x', AuthenticateMcp::MAX_JSON_RPC_ID_BYTES - 2);
+        $oversizedId = $maximumId.'x';
+        Assert::assertSame(
+            AuthenticateMcp::MAX_JSON_RPC_ID_BYTES,
+            strlen(json_encode($maximumId, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)),
+        );
+        Assert::assertSame(
+            AuthenticateMcp::MAX_JSON_RPC_ID_BYTES + 1,
+            strlen(json_encode($oversizedId, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)),
+        );
+
+        self::assertResponse(
+            self::request($prefix.'/id-probe', $installation['plaintext'], self::rpcPayload($oversizedId)),
+            Response::HTTP_BAD_REQUEST,
+            [
+                'jsonrpc' => '2.0',
+                'id' => null,
+                'error' => ['code' => -32600, 'message' => 'Invalid Request'],
+            ],
+        );
+        Assert::assertSame(0, $idProbeDispatches, 'An oversized JSON-RPC id reached the product tool.');
+
+        self::assertResponse(
+            self::request($prefix.'/id-probe', $installation['plaintext'], self::rpcPayload($maximumId)),
+            Response::HTTP_OK,
+            ['system_authority' => true],
+        );
+        Assert::assertSame(1, $idProbeDispatches, 'An exactly 256-byte JSON-RPC id was not admitted.');
+
+        self::assertResponse(
+            self::request($prefix.'/plain', $installation['plaintext'], self::rpcPayload($oversizedId)),
+            Response::HTTP_OK,
+            ['system_authority' => true],
+        );
 
         $stream = self::request($prefix.'/stream', $installation['plaintext']);
         Assert::assertInstanceOf(StreamedResponse::class, $stream);
@@ -258,21 +300,34 @@ final class McpProductAdmission
         return ['credential' => $credential, 'plaintext' => $plaintext];
     }
 
-    private static function request(string $uri, string $plaintext): Response
+    /** @param array<string, mixed> $body */
+    private static function request(string $uri, string $plaintext, array $body = []): Response
     {
-        return app('router')->dispatch(self::bearerRequest($uri, $plaintext));
+        return app('router')->dispatch(self::bearerRequest($uri, $plaintext, $body));
     }
 
-    private static function bearerRequest(string $uri, string $plaintext): Request
+    /** @param array<string, mixed> $body */
+    private static function bearerRequest(string $uri, string $plaintext, array $body = []): Request
     {
         return Request::create($uri, 'POST', server: [
             'HTTP_AUTHORIZATION' => 'Bearer '.$plaintext,
             'CONTENT_TYPE' => 'application/json',
             'HTTP_ACCEPT' => 'application/json',
-        ]);
+        ], content: $body === [] ? null : json_encode($body, JSON_THROW_ON_ERROR));
     }
 
-    /** @param array<string, bool|string> $body */
+    /** @return array{jsonrpc: string, id: string, method: string, params: array{}} */
+    private static function rpcPayload(string $id): array
+    {
+        return [
+            'jsonrpc' => '2.0',
+            'id' => $id,
+            'method' => 'tools/list',
+            'params' => [],
+        ];
+    }
+
+    /** @param array<string, mixed> $body */
     private static function assertResponse(Response $response, int $status, array $body): void
     {
         Assert::assertSame($status, $response->getStatusCode());
