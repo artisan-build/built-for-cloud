@@ -469,6 +469,9 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     // own `GET /` contract section: four blocks more, no claim changed.
     // The dashboard then arrived with its own view and `GET /dashboard`
     // contract section: three blocks more, no claim changed.
+    // v0.19.5 added the product MCP id-ceiling changelog and contract
+    // prose: four blocks more, with two absolute-bearing blocks, one
+    // paired to its focused tests and one unpaired.
     $gateSurfaces = [
         'src/Console', 'src/Audit', 'resources/views',
         'docs/http-contract.md',
@@ -478,10 +481,10 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1044,
-        'absolute' => 338,
-        'paired' => 65,
-        'unpaired' => 273,
+        'blocks' => 1048,
+        'absolute' => 340,
+        'paired' => 66,
+        'unpaired' => 274,
     ]);
 
     // The surfaces the restatement map runs over are wider than the
