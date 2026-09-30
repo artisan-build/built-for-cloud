@@ -50,6 +50,7 @@ use ArtisanBuild\BuiltForCloud\Mail\QueuedMailIdentity;
 use ArtisanBuild\BuiltForCloud\Mail\ScalpelsTransport;
 use ArtisanBuild\BuiltForCloud\Mcp\TwoPhaseCallTool;
 use ArtisanBuild\BuiltForCloud\View\Layout;
+use ArtisanBuild\BuiltForCloudContracts\PayloadFilter;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Auth\Events\Authenticated;
 use Illuminate\Auth\Events\Login;
@@ -109,6 +110,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         $this->app->singleton(SystemAuthorityQueueScope::class);
         $this->app->singleton(QueuedMailIdentity::class);
         $this->app->singleton(LandingManifest::class, static fn (): LandingManifest => LandingManifest::fromConfiguration());
+        $this->app->bind(PayloadFilter::class, PassThroughPayloadFilter::class);
 
         // P5b's forward-only carry: exchange has one durable destination.
         $this->app->bind(DurableCredentialMinter::class, UnifiedStoreCredentialMinter::class);

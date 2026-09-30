@@ -6,7 +6,7 @@
     "type": "library",
     "require": {
         "php": "^8.3",
-        "artisan-build/built-for-cloud-contracts": "^0.3",
+        "artisan-build/built-for-cloud-contracts": "^0.4",
         "composer/semver": "^3.4",
         "illuminate/auth": "^13.24",
         "illuminate/console": "^13.24",

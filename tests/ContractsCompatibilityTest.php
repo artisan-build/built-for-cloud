@@ -22,7 +22,10 @@ use ArtisanBuild\BuiltForCloudContracts\Console\ConsoleRole as ContractsConsoleR
 use ArtisanBuild\BuiltForCloudContracts\Mcp\Classification as ContractsClassification;
 use ArtisanBuild\BuiltForCloudContracts\Mcp\Effect as ContractsEffect;
 use ArtisanBuild\BuiltForCloudContracts\MetadataShape as ContractsMetadataShape;
+use ArtisanBuild\BuiltForCloudContracts\OutboundPayload;
 use ArtisanBuild\BuiltForCloudContracts\OwnershipClaim as ContractsOwnershipClaim;
+use ArtisanBuild\BuiltForCloudContracts\PayloadDisposition;
+use ArtisanBuild\BuiltForCloudContracts\PayloadFilter;
 use ArtisanBuild\BuiltForCloudContracts\Vitals\VitalsPayload as ContractsVitalsPayload;
 use Illuminate\Database\Eloquent\Model;
 
@@ -70,6 +73,23 @@ it('keeps every extracted contract constant exact', function (): void {
         ->and(MetadataShape::SEMVER)->toBe(ContractsMetadataShape::SEMVER)->toBe('/^(?=.{1,32}$)\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9a-z]+(?:[.-][0-9a-z]+)*)?(?:\+[0-9a-z]+(?:[.-][0-9a-z]+)*)?$/D')
         ->and(MetadataShape::TIMESTAMP)->toBe(ContractsMetadataShape::TIMESTAMP)->toBe('/^(?=.{1,40}$)\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/D')
         ->and(MetadataShape::CONSOLE_KEY_ID)->toBe(ContractsMetadataShape::CONSOLE_KEY_ID)->toBe('/^[A-Za-z0-9._-]{1,64}\z/');
+});
+
+it('exposes the payload filter contract through the runtime package', function (): void {
+    $payload = new OutboundPayload(
+        'assay',
+        'run.step',
+        1,
+        PayloadDisposition::Droppable,
+        ['usage' => ['input_tokens' => 1]],
+        ['capture' => 'usage'],
+    );
+    $filter = app(PayloadFilter::class);
+
+    expect($payload->product)->toBe('assay')
+        ->and($payload->disposition)->toBe(PayloadDisposition::Droppable)
+        ->and($filter)->toBeInstanceOf(PayloadFilter::class)
+        ->and($filter->filter($payload))->toBe($payload);
 });
 
 it('keeps key id validation compatible over positive boundaries and rejections', function (): void {
