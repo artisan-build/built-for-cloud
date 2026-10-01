@@ -47,8 +47,7 @@ class CredentialAbilityRegistry
             );
         }
 
-        if (preg_match('/^[a-z][a-z0-9-]*\.[a-z][a-z0-9_.-]*$/D', $ability) !== 1
-            || in_array('', explode('.', $ability), true)) {
+        if (preg_match('/^[a-z][a-z0-9-]*\.[a-z][a-z0-9_.-]*$/D', $ability) !== 1) {
             throw new InvalidArgumentException(
                 sprintf('Invalid app credential ability "%s".', $ability),
             );

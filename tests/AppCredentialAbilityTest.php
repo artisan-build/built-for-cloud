@@ -73,10 +73,20 @@ it('binds an empty registry and supports registration from an application servic
 
 it('validates registrations atomically and treats duplicate registration as idempotent', function (): void {
     $registry = app(CredentialAbilityRegistry::class);
-    $registry->register('a.b', 'assay-2.content_v1.read-only');
+    $registry->register(
+        'a.b',
+        'assay-2.content_v1.read-only',
+        'assay.usage.',
+        'assay.usage..read',
+    );
     $registry->register('a.b');
 
-    expect($registry->all())->toBe(['a.b', 'assay-2.content_v1.read-only']);
+    expect($registry->all())->toBe([
+        'a.b',
+        'assay-2.content_v1.read-only',
+        'assay.usage.',
+        'assay.usage..read',
+    ]);
 
     foreach ([
         'assay',
@@ -86,7 +96,6 @@ it('validates registrations atomically and treats duplicate registration as idem
         '.usage',
         'assay.',
         'assay..usage',
-        'assay.usage.',
     ] as $malformed) {
         expect(fn () => $registry->register($malformed))
             ->toThrow(InvalidArgumentException::class, 'Invalid app credential ability');

@@ -450,9 +450,9 @@ API listing shape.
   **App-owned abilities.** A consuming application's service provider may resolve
   `CredentialAbilityRegistry` and call `register('assay.usage', 'assay.content')`. The registry is
   empty by default, duplicate registration is idempotent, and names must match
-  `^[a-z][a-z0-9-]*\.[a-z][a-z0-9_.-]*$` without empty dot-delimited segments. A name that collides
-  with any current `OperatorAbility` value is refused during registration. Registration does not
-  extend or alter `OperatorAbility`, its admin equivalence, or its closed semantics.
+  `^[a-z][a-z0-9-]*\.[a-z][a-z0-9_.-]*$`. A name that collides with any current
+  `OperatorAbility` value is refused during registration. Registration does not extend or alter
+  `OperatorAbility`, its admin equivalence, or its closed semantics.
 
   An app ability is accepted for minting, direct credential updates, and rotation only while it is
   registered. `bfc.ability:<ability>` compares the complete string exactly: there is no prefix,
