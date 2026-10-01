@@ -199,15 +199,31 @@ it('visits app provider queue and schedule surfaces when an optional integration
     app()->register(RogueScheduleServiceProvider::class);
 
     $fixtures = __DIR__.'/Fixtures';
-    $report = (new FleetConformance($this))->inspect(aggregateControlSpec(
-        $fixtures,
-        [
-            dirname(__DIR__).'/src/BuiltForCloudServiceProvider.php',
-            $fixtures.'/RogueScheduleServiceProvider.php',
-            $fixtures.'/RogueSystemAuthorityServiceProvider.php',
-        ],
-        [$fixtures],
-    ));
+    $consumer = aggregateControlRoot('UnavailableOptionalToolInvoker.php', <<<'PHP'
+<?php
+namespace AggregateControl;
+final class UnavailableOptionalToolInvoker extends \Laravel\Mcp\Server\UnavailableToolInvoker {}
+PHP);
+    $autoload = static function (string $class) use ($consumer): void {
+        if ($class === 'AggregateControl\UnavailableOptionalToolInvoker') {
+            require $consumer.'/UnavailableOptionalToolInvoker.php';
+        }
+    };
+    spl_autoload_register($autoload, true, true);
+
+    try {
+        $report = (new FleetConformance($this))->inspect(aggregateControlSpec(
+            $consumer,
+            [
+                dirname(__DIR__).'/src/BuiltForCloudServiceProvider.php',
+                $fixtures.'/RogueScheduleServiceProvider.php',
+                $fixtures.'/RogueSystemAuthorityServiceProvider.php',
+            ],
+            [$consumer, $fixtures],
+        ));
+    } finally {
+        spl_autoload_unregister($autoload);
+    }
     $authority = $report->families['system_authority'];
 
     expect($authority->applicability)->toBe('applicable')
