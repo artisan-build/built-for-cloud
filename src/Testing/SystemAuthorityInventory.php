@@ -58,7 +58,7 @@ final class SystemAuthorityInventory
         $queued = [];
 
         foreach (array_keys($sources) as $class) {
-            if (is_a($class, ShouldQueue::class, true)) {
+            if (self::isQueueEntry($class)) {
                 $queued[] = $class;
             }
         }
@@ -85,6 +85,17 @@ final class SystemAuthorityInventory
                 'scheduled' => self::scheduledViolations($scheduled, $sources, $roots),
             ],
         ];
+    }
+
+    private static function isQueueEntry(string $class): bool
+    {
+        try {
+            return is_a($class, ShouldQueue::class, true);
+        } catch (Throwable) {
+            // Optional integrations can be present in source while their
+            // suggested dependency, and therefore their parent, is absent.
+            return false;
+        }
     }
 
     /**

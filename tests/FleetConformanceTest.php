@@ -9,6 +9,11 @@ use ArtisanBuild\BuiltForCloud\Testing\ConformanceFailed;
 use ArtisanBuild\BuiltForCloud\Testing\ConsumerConformance;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
 use ArtisanBuild\BuiltForCloud\Testing\FleetConformance;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueHumanQueuedJob;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueScheduleRegistration;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueScheduleServiceProvider;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueSystemAuthorityServiceProvider;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnclassifiedStateChangingCommand;
 use Illuminate\Foundation\Auth\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -188,6 +193,32 @@ function aggregateControlRoot(string $relativePath, string $contents): string
 
     return $root;
 }
+
+it('visits app provider queue and schedule surfaces when an optional integration cannot load', function (): void {
+    app()->register(RogueSystemAuthorityServiceProvider::class);
+    app()->register(RogueScheduleServiceProvider::class);
+
+    $fixtures = __DIR__.'/Fixtures';
+    $report = (new FleetConformance($this))->inspect(aggregateControlSpec(
+        $fixtures,
+        [
+            dirname(__DIR__).'/src/BuiltForCloudServiceProvider.php',
+            $fixtures.'/RogueScheduleServiceProvider.php',
+            $fixtures.'/RogueSystemAuthorityServiceProvider.php',
+        ],
+        [$fixtures],
+    ));
+    $authority = $report->families['system_authority'];
+
+    expect($authority->applicability)->toBe('applicable')
+        ->and($authority->visited)->toBeGreaterThan(0)
+        ->and($authority->discovered)->toContain(
+            UnclassifiedStateChangingCommand::class,
+            RogueHumanQueuedJob::class,
+            RogueScheduleRegistration::class,
+        )
+        ->and($authority->violations)->not->toContain('scanner-execution-failed:system_authority');
+});
 
 it('runs the single fleet entry point with every family and deterministic exact report schemas', function (): void {
     $spec = packageConformanceSpec();
