@@ -414,6 +414,7 @@ it('rejects a replayed nonce inside the window, and a replay outliving the windo
 
 it('rejects a replay at the exact edge of the acceptance window: the nonce entry outlives the last verifiable instant (rework Fix 2)', function (): void {
     config()->set('built-for-cloud.hmac.timestamp_tolerance_seconds', 300);
+    $this->freezeTime();
 
     $credential = activeKeyFor('acme');
 

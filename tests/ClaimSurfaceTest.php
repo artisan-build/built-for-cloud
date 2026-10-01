@@ -474,6 +474,8 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     // paired to its focused tests and one unpaired.
     // v0.19.6 added the PayloadFilter changelog paragraph: one block more,
     // without changing the absolute pairing vocabulary.
+    // App-owned credential abilities add three contract blocks, two of
+    // which carry unpaired absolute vocabulary.
     $gateSurfaces = [
         'src/Console', 'src/Audit', 'resources/views',
         'docs/http-contract.md',
@@ -483,10 +485,10 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1049,
-        'absolute' => 340,
+        'blocks' => 1052,
+        'absolute' => 342,
         'paired' => 66,
-        'unpaired' => 274,
+        'unpaired' => 276,
     ]);
 
     // The surfaces the restatement map runs over are wider than the
