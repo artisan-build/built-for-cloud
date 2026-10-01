@@ -11,6 +11,7 @@ use ArtisanBuild\BuiltForCloud\AuditReason;
 use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesRotationOverrides;
 use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialAbilities;
 use ArtisanBuild\BuiltForCloud\CredentialAlgorithm;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
@@ -35,7 +36,6 @@ use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintedSecret;
 use ArtisanBuild\BuiltForCloud\MintResult;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
-use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\ReportedStatus;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\RotationResult;
@@ -124,7 +124,7 @@ final class RotateCredential
         ?CredentialManagementScope $managementScope = null,
         ?SubmissionNonce $submission = null,
     ): ?RotationResult {
-        OperatorAbility::assertValues($options->abilities);
+        app(CredentialAbilities::class)->assertValues($options->abilities);
 
         $target = Credential::query()->whereKey($id);
         $managementScope?->apply($target);

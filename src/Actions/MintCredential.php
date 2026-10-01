@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\Contracts\ConstrainsMintedCredentials;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\CredentialAbilities;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
@@ -25,7 +26,6 @@ use ArtisanBuild\BuiltForCloud\MintedSecret;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\MintResult;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
-use ArtisanBuild\BuiltForCloud\OperatorAbility;
 use ArtisanBuild\BuiltForCloud\Scope;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
@@ -95,7 +95,7 @@ final class MintCredential
 
     private function validateProtocolBoundary(Subject $subject, MintOptions $options): void
     {
-        OperatorAbility::assertValues($options->abilities);
+        app(CredentialAbilities::class)->assertValues($options->abilities);
 
         if ($options->purpose === null) {
             throw InvalidCredentialInput::missingPurpose();

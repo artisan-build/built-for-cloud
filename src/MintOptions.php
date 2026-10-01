@@ -78,7 +78,7 @@ final readonly class MintOptions
             kind: self::kindFrom($input['kind'] ?? null),
             purpose: self::purposeFrom($input['purpose'] ?? null),
             name: self::optionalString($input['name'] ?? null),
-            abilities: OperatorAbility::parseValues(self::abilitiesFrom($input['abilities'] ?? null)),
+            abilities: app(CredentialAbilities::class)->parseValues(self::abilitiesFrom($input['abilities'] ?? null)),
             expiresAt: self::expiryFrom($input['expires_at'] ?? null),
             userId: self::optionalString($input['user_id'] ?? null),
             codeTtlSeconds: self::codeTtlFrom($input['code_ttl_seconds'] ?? null),

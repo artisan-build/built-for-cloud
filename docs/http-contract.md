@@ -106,6 +106,11 @@ and the following closed `error` vocabulary. Clients branch on `error`.
 
 ### Changelog
 
+**App-owned credential abilities (additive, unreleased).** A consuming application may register
+namespaced credential abilities from its service provider. This extends only the accepted values
+of the existing `abilities` field; no request or response field changes shape, and `api_version`
+remains 2.
+
 **v0.19.6.** Applications may now bind the shared outbound `PayloadFilter` contract to redact or
 drop product payloads at send time, with a pass-through default and reusable cross-product
 conformance assertion. No Built for Cloud sender is wired through the new seam in this release,
@@ -227,9 +232,10 @@ with the three things that WOULD have moved the major and none of which happened
   copied unchanged by rotation. Generic minting enforces the kind/subject/purpose matrix documented
   below. The upgrade migration does not guess a purpose for existing rows: it retires every one as
   a visible tombstone with `purpose: null`, and operators must re-mint replacement credentials.
-- Persisted abilities are now closed over the documented `OperatorAbility` vocabulary. Claim scopes
-  such as `consume` and `onboard` are wire vocabulary, not stored abilities, and unknown ability
-  input is rejected before a credential, audit event, or delivery is created.
+- Persisted abilities accept the documented closed `OperatorAbility` vocabulary plus app-owned
+  abilities currently registered by the consuming application. Claim scopes such as `consume` and
+  `onboard` are wire vocabulary, not stored abilities, and every other ability input is rejected
+  before a credential, audit event, or delivery is created.
 - The package now owns one reserved installation signing root, provisioned only by the local
   `bfc:signing-root:provision --local` command and consumed in-process through `SigningRootMac`.
   It has no HTTP creation, listing, or mutation surface; its direct-active rotation is
@@ -440,6 +446,19 @@ API listing shape.
   list is how a break-glass credential is marked. The operator gate enforces that exact
   `OperatorAbility::adminEquivalent()` set; an enum ability outside it is not inherited. The MCP
   pair and `metadata:read` are outside the expansion.
+
+  **App-owned abilities.** A consuming application's service provider may resolve
+  `CredentialAbilityRegistry` and call `register('assay.usage', 'assay.content')`. The registry is
+  empty by default, duplicate registration is idempotent, and names must match
+  `^[a-z][a-z0-9-]*\.[a-z][a-z0-9_.-]*$` without empty dot-delimited segments. A name that collides
+  with any current `OperatorAbility` value is refused during registration. Registration does not
+  extend or alter `OperatorAbility`, its admin equivalence, or its closed semantics.
+
+  An app ability is accepted for minting, direct credential updates, and rotation only while it is
+  registered. `bfc.ability:<ability>` compares the complete string exactly: there is no prefix,
+  implication, glob, or wildcard behavior. If a later application release removes a registration,
+  historical rows and their raw `abilities` arrays remain readable and are not rewritten or deleted,
+  but that removed ability immediately stops matching, including through `bfc.ability`.
 
   **Caveat — an app with a declared mint ceiling cannot mint `console:key:write` until it
   edits its own declaration.** This affects one specific kind of app: one whose credential
@@ -1557,8 +1576,9 @@ Input validation is shared: both transports normalize options through one input 
 reject the same junk with the same message (HTTP as a `422 {"message": ...}`, the CLI as a
 failure exit). A non-integer `code_ttl_seconds` (e.g. `"60junk"`) is rejected, never truncated;
 a negative one hits the same bounds error on both transports. `abilities` is bounded: at most
-32 entries, each at most 128 characters, and every entry must be a backed value from the closed
-operator ability vocabulary above. **An empty `abilities` list normalizes to `null`** —
+32 entries, each at most 128 characters, and every entry must be either a backed value from the
+closed operator ability vocabulary above or an app-owned ability currently registered as described
+above. **An empty `abilities` list normalizes to `null`** —
 both grant nothing, and summaries always serialize the one canonical shape (`null`).
 
 Summary rows share one shape:

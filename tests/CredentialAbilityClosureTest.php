@@ -28,7 +28,7 @@ use Illuminate\Support\Facades\Route;
 
 uses(RefreshDatabase::class, WithCredentials::class);
 
-it('closes the complete persisted ability vocabulary around the enum', function (): void {
+it('keeps the operator enum closed and rejects unknown values with no app registrations', function (): void {
     expect(OperatorAbility::tryFrom('credential:admin'))->toBe(OperatorAbility::Admin)
         ->and(OperatorAbility::vocabulary())->toBe(array_column(OperatorAbility::cases(), 'value'))
         ->and(OperatorAbility::vocabulary())->not->toContain('*', 'consume', 'onboard');

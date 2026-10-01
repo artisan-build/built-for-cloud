@@ -106,6 +106,8 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         );
 
         $this->app->singleton(UsageReporter::class, NullUsageReporter::class);
+        $this->app->singleton(CredentialAbilityRegistry::class);
+        $this->app->singleton(CredentialAbilities::class);
         $this->app->singleton(SystemAuthorityContext::class);
         $this->app->singleton(SystemAuthorityQueueScope::class);
         $this->app->singleton(QueuedMailIdentity::class);
