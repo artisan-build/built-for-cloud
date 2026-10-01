@@ -178,7 +178,7 @@ final class Credential extends Model implements Authenticatable
                 $credential->assertValidStoredPurpose($boundAsymmetricSigning);
             }
 
-            OperatorAbility::assertValues($credential->abilities);
+            app(CredentialAbilities::class)->assertValues($credential->abilities);
 
             if ($credential->kind === CredentialKind::Asymmetric && $credential->secret_hash !== null) {
                 throw new InvalidArgumentException(
@@ -314,11 +314,7 @@ final class Credential extends Model implements Authenticatable
      */
     public function hasAbility(string $ability): bool
     {
-        if ($this->abilities === null || $this->abilities === []) {
-            return false;
-        }
-
-        return in_array($ability, $this->abilities, true);
+        return app(CredentialAbilities::class)->matches($this->abilities, $ability);
     }
 
     public function subject(): Subject

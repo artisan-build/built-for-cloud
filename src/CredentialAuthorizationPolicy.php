@@ -206,7 +206,7 @@ final readonly class CredentialAuthorizationPolicy
             }
         }
 
-        OperatorAbility::assertValues($abilities);
+        app(CredentialAbilities::class)->assertValues($abilities);
         $abilities = array_values(array_unique($abilities));
         sort($abilities, SORT_STRING);
 
