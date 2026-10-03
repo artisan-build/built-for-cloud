@@ -528,6 +528,20 @@ it('fails when the delivery channel reveals the secret twice', function (): void
         ->and($failure->getMessage())->toContain('exactly once');
 });
 
+it('fails when the delivery channel never reveals the secret', function (): void {
+    $marker = leakMarker();
+
+    $failure = null;
+
+    try {
+        $this->assertRevealsSecretExactlyOnce('this channel revealed nothing at all', $marker);
+    } catch (AssertionFailedError $failure) {
+    }
+
+    expect($failure)->toBeInstanceOf(AssertionFailedError::class)
+        ->and($failure->getMessage())->toContain('exactly once');
+});
+
 it('fails when a recoverable encoding of the secret survives beyond the single reveal', function (): void {
     $marker = leakMarker();
 
