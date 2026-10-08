@@ -103,7 +103,7 @@ final class ScalpelsTransport extends AbstractTransport
             $idempotencyKey = hash('sha256', $message->getMessageId());
             $request = $this->request($connection, $idempotencyKey, $encoded);
 
-            for ($attempt = 1; $attempt <= self::MAX_ATTEMPTS; $attempt++) {
+            foreach (range(1, self::MAX_ATTEMPTS) as $attempt) {
                 try {
                     $response = $request->post($connection->baseUrl.ManagedMail::PATH);
                 } catch (Throwable) {
