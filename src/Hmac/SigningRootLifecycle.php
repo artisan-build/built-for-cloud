@@ -22,6 +22,7 @@ use ArtisanBuild\BuiltForCloud\RotationResult;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
+use Throwable;
 
 final class SigningRootLifecycle
 {
@@ -48,6 +49,39 @@ final class SigningRootLifecycle
                     credentialId: $root->id,
                     actor: $actor,
                 );
+
+                return new MintResult($this->summary($root), DeliveryShape::None);
+            }),
+        );
+    }
+
+    public function ensure(?AuditActor $actor = null): MintResult
+    {
+        return app(HmacWriterBarrier::class)->exclusive(
+            'signing-root ensure',
+            fn (): MintResult => DB::transaction(function () use ($actor): MintResult {
+                $this->lockInstallation();
+
+                $reserved = SigningRootMac::reservedCandidates()->lockForUpdate()->get();
+
+                if ($reserved->isEmpty()) {
+                    $root = $this->createRoot();
+
+                    $this->recorder->record(
+                        event: LifecycleEventType::Issued,
+                        credentialId: $root->id,
+                        actor: $actor,
+                    );
+
+                    return new MintResult($this->summary($root), DeliveryShape::None);
+                }
+
+                $current = $this->currentCandidates();
+                $root = $current->first();
+
+                if ($root === null || ! $this->isSafeExistingState($reserved, $current, $root)) {
+                    throw SigningRootRefused::unavailable();
+                }
 
                 return new MintResult($this->summary($root), DeliveryShape::None);
             }),
@@ -161,6 +195,77 @@ final class SigningRootLifecycle
             && $root->abilities === null
             && $root->user_id === null
             && $root->secret_ciphertext !== null;
+    }
+
+    /**
+     * @param  Collection<int, Credential>  $reserved
+     * @param  Collection<int, Credential>  $current
+     */
+    private function isSafeExistingState(Collection $reserved, Collection $current, Credential $root): bool
+    {
+        if ($current->count() !== 1 || ! $this->isValidCurrentRoot($root)) {
+            return false;
+        }
+
+        foreach ($reserved as $candidate) {
+            if ($candidate->id === $root->id) {
+                continue;
+            }
+
+            if (! $this->isCompletedHistoricalRoot($candidate)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function isValidCurrentRoot(Credential $root): bool
+    {
+        if (! $this->hasExactStoredIdentity($root)) {
+            return false;
+        }
+
+        try {
+            $plaintext = $this->keyring->decrypt(
+                (string) $root->getRawOriginal('secret_ciphertext'),
+                $root->getRawOriginal('secret_key_version'),
+            );
+        } catch (Throwable) {
+            return false;
+        }
+
+        return preg_match('/^[a-f0-9]{64}$/D', $plaintext) === 1;
+    }
+
+    private function isCompletedHistoricalRoot(Credential $root): bool
+    {
+        try {
+            return $this->hasExactStoredIdentity($root)
+                && $root->status === CredentialStatus::Active
+                && $root->revoked_at === null
+                && $root->rotated_at !== null
+                && $root->expires_at !== null
+                && ! $root->expires_at->isFuture();
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    private function hasExactStoredIdentity(Credential $root): bool
+    {
+        $attributes = $root->getAttributes();
+
+        return ($attributes['kind'] ?? null) === CredentialKind::Hmac->value
+            && ($attributes['purpose'] ?? null) === CredentialPurpose::SigningRoot->value
+            && ($attributes['subject_type'] ?? null) === SubjectType::Installation->value
+            && ($attributes['subject_ref'] ?? null) === SigningRootMac::SUBJECT_REF
+            && ($attributes['abilities'] ?? null) === null
+            && ($attributes['user_id'] ?? null) === null
+            && is_string($attributes['secret_ciphertext'] ?? null)
+            && $attributes['secret_ciphertext'] !== ''
+            && is_string($attributes['secret_key_version'] ?? null)
+            && $attributes['secret_key_version'] !== '';
     }
 
     private function summary(Credential $credential): CredentialSummary

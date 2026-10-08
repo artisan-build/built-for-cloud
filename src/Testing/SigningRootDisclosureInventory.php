@@ -82,7 +82,7 @@ final class SigningRootDisclosureInventory
                 }
 
                 if ($className === 'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootLifecycle'
-                    && in_array($method, ['provision', 'rotate'], true)) {
+                    && in_array($method, ['ensure', 'provision', 'rotate'], true)) {
                     $safe = str_contains($code, 'DeliveryShape::None')
                         && ! str_contains($code, 'new MintedSecret')
                         && ! str_contains($code, 'deliveryFingerprint:')
@@ -114,7 +114,7 @@ final class SigningRootDisclosureInventory
             }
 
             if (preg_match('/protected\s+\$signature\s*=\s*[\'"]([^\s\'"]+)/', $source, $signature) === 1
-                && in_array($signature[1], ['bfc:signing-root:provision', 'bfc:credential:rotate'], true)) {
+                && in_array($signature[1], ['bfc:signing-root:ensure', 'bfc:signing-root:provision', 'bfc:credential:rotate'], true)) {
                 $commandSurfaces[] = $className.'='.$signature[1];
             }
         }
@@ -126,6 +126,7 @@ final class SigningRootDisclosureInventory
         }
 
         $expectedReturns = [
+            'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootLifecycle::ensure|delivery=none',
             'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootLifecycle::provision|delivery=none',
             'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootLifecycle::rotate|delivery=none',
         ];
@@ -144,6 +145,7 @@ final class SigningRootDisclosureInventory
 
         if (self::sortedUnique($commandSurfaces) !== [
             'ArtisanBuild\\BuiltForCloud\\Commands\\CredentialRotateCommand=bfc:credential:rotate',
+            'ArtisanBuild\\BuiltForCloud\\Commands\\SigningRootEnsureCommand=bfc:signing-root:ensure',
             'ArtisanBuild\\BuiltForCloud\\Commands\\SigningRootProvisionCommand=bfc:signing-root:provision',
         ]) {
             $violations[] = 'root-command-surface-set';

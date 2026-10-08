@@ -77,6 +77,77 @@ it('provisions exactly one direct-active root through the local-only framed comm
         ->and(Credential::query()->count())->toBe(1);
 });
 
+it('ensures one root from empty then succeeds unchanged when that exact valid root already exists', function (): void {
+    expect(Artisan::call('bfc:signing-root:ensure'))->toBe(1)
+        ->and(Artisan::output())->toContain('local-only')
+        ->and(Credential::query()->count())->toBe(0);
+
+    expect(Artisan::call('bfc:signing-root:ensure', ['--local' => true]))->toBe(0);
+
+    /** @var Credential $root */
+    $root = Credential::query()->sole();
+    $plaintext = app(HmacKeyring::class)->decrypt((string) $root->secret_ciphertext, $root->secret_key_version);
+    $before = DB::table('credentials')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all();
+    $auditBefore = DB::table('credential_audit_events')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all();
+
+    expect(Artisan::output())->toContain('Installation signing root is present.', 'No secret was exported.')
+        ->and(Artisan::output())->not->toContain($root->id, $plaintext, (string) $root->secret_ciphertext, (string) $root->secret_key_version);
+
+    expect(Artisan::call('bfc:signing-root:ensure', ['--local' => true]))->toBe(0)
+        ->and(Artisan::output())->toContain('Installation signing root is present.', 'No secret was exported.')
+        ->and(Artisan::output())->not->toContain($root->id, $plaintext, (string) $root->secret_ciphertext, (string) $root->secret_key_version)
+        ->and(DB::table('credentials')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all())->toBe($before)
+        ->and(DB::table('credential_audit_events')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all())->toBe($auditBefore);
+});
+
+it('refuses ensure without writing when the reserved-root state is unsafe', function (string $state): void {
+    $root = signingRoot();
+
+    if ($state === 'malformed current root') {
+        DB::table('credentials')->where('id', $root->id)->update(['abilities' => '[]']);
+    } elseif ($state === 'multiple current roots') {
+        $duplicate = $root->getAttributes();
+        $duplicate['id'] = (string) Str::uuid();
+        $duplicate['created_at'] = now();
+        $duplicate['updated_at'] = now();
+        DB::table('credentials')->insert($duplicate);
+    } elseif ($state === 'rotation in progress') {
+        app(SigningRootLifecycle::class)->rotate($root->id, false);
+    } elseif ($state === 'unreadable current root') {
+        DB::table('credentials')->where('id', $root->id)->update([
+            'secret_ciphertext' => 'malformed-ciphertext',
+        ]);
+    } elseif ($state === 'ambiguous non-current root') {
+        DB::table('credentials')->where('id', $root->id)->update(['expires_at' => now()]);
+    }
+
+    $before = DB::table('credentials')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all();
+    $auditBefore = DB::table('credential_audit_events')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all();
+
+    expect(Artisan::call('bfc:signing-root:ensure', ['--local' => true]))->toBe(1)
+        ->and(Artisan::output())->toContain('Exactly one valid current installation signing root is required.')
+        ->and(DB::table('credentials')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all())->toBe($before)
+        ->and(DB::table('credential_audit_events')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all())->toBe($auditBefore);
+})->with([
+    'malformed current root',
+    'multiple current roots',
+    'rotation in progress',
+    'unreadable current root',
+    'ambiguous non-current root',
+]);
+
+it('refuses ensure without writing while an hmac key rewrap is in progress', function (): void {
+    $root = signingRoot();
+    $before = DB::table('credentials')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all();
+    $auditBefore = DB::table('credential_audit_events')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all();
+    config(['app.key' => 'base64:'.base64_encode(str_repeat('new-test-key-32b', 2))]);
+
+    expect(Artisan::call('bfc:signing-root:ensure', ['--local' => true]))->toBe(1)
+        ->and(Artisan::output())->toContain('APP_KEY rewrap of the hmac store is in progress')
+        ->and(DB::table('credentials')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all())->toBe($before)
+        ->and(DB::table('credential_audit_events')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all())->toBe($auditBefore);
+});
+
 it('MACs opaque bytes with the sole current root and exposes only its id and lowercase HMAC-SHA256', function (): void {
     $root = signingRoot();
     $bytes = "opaque\0bytes\n{not-json}";
