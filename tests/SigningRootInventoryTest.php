@@ -25,6 +25,7 @@ it('derives the exact signing-root producer selectors decrypt dispositions and d
         'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacSigner::signBound',
         'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacVerifier::verify',
         'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacVerifier::verifyBound',
+        'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootLifecycle::isValidCurrentRoot',
         'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootMac::mac',
         'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootMac::verify',
         'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::deliverPendingSigningKey',
@@ -64,6 +65,7 @@ it('derives material-free delivery summary list audit command and HTTP surfaces'
         'signing_key',
         'signing_key_code',
     ])->and($inventory['root_returns'])->toBe([
+        'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootLifecycle::ensure|delivery=none',
         'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootLifecycle::provision|delivery=none',
         'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootLifecycle::rotate|delivery=none',
     ])->and($inventory['summary_fields'])->toBe([
@@ -74,10 +76,12 @@ it('derives material-free delivery summary list audit command and HTTP surfaces'
         'ArtisanBuild\\BuiltForCloud\\Actions\\ListCredentials::__invoke',
         'ArtisanBuild\\BuiltForCloud\\CredentialManagementScope::apply',
     ])->and($inventory['audit_writes'])->toBe([
+        'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootLifecycle::ensure|writes=1|note=absent',
         'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootLifecycle::provision|writes=1|note=absent',
         'ArtisanBuild\\BuiltForCloud\\Hmac\\SigningRootLifecycle::rotate|writes=2|note=absent',
     ])->and($inventory['command_surfaces'])->toBe([
         'ArtisanBuild\\BuiltForCloud\\Commands\\CredentialRotateCommand=bfc:credential:rotate',
+        'ArtisanBuild\\BuiltForCloud\\Commands\\SigningRootEnsureCommand=bfc:signing-root:ensure',
         'ArtisanBuild\\BuiltForCloud\\Commands\\SigningRootProvisionCommand=bfc:signing-root:provision',
     ])->and($inventory['http_surfaces'])->toBe([
         'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageCredentials::rotate',

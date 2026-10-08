@@ -96,6 +96,7 @@ function packageConformanceExpected(): array
             'ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand',
             'ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand',
             'ArtisanBuild\BuiltForCloud\Commands\PruneCredentialAuthorizationsCommand',
+            'ArtisanBuild\BuiltForCloud\Commands\SigningRootEnsureCommand',
             'ArtisanBuild\BuiltForCloud\Commands\SigningRootProvisionCommand',
             'ArtisanBuild\BuiltForCloud\Commands\SubjectOffboardCommand',
             'ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand',

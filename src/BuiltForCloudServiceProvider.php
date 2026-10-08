@@ -22,6 +22,7 @@ use ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand;
 use ArtisanBuild\BuiltForCloud\Commands\PruneCredentialAuthorizationsCommand;
+use ArtisanBuild\BuiltForCloud\Commands\SigningRootEnsureCommand;
 use ArtisanBuild\BuiltForCloud\Commands\SigningRootProvisionCommand;
 use ArtisanBuild\BuiltForCloud\Commands\SubjectOffboardCommand;
 use ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand;
@@ -481,6 +482,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             OwnershipMintClaimCommand::class,
             OwnershipRemintOwnerTokenCommand::class,
             PruneCredentialAuthorizationsCommand::class,
+            SigningRootEnsureCommand::class,
             SigningRootProvisionCommand::class,
             SubjectOffboardCommand::class,
             WarnExpiringCredentialsCommand::class,

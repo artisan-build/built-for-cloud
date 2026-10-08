@@ -17,6 +17,7 @@ use ArtisanBuild\BuiltForCloud\Commands\OutboxDrainCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipMintClaimCommand;
 use ArtisanBuild\BuiltForCloud\Commands\OwnershipRemintOwnerTokenCommand;
 use ArtisanBuild\BuiltForCloud\Commands\PruneCredentialAuthorizationsCommand;
+use ArtisanBuild\BuiltForCloud\Commands\SigningRootEnsureCommand;
 use ArtisanBuild\BuiltForCloud\Commands\SigningRootProvisionCommand;
 use ArtisanBuild\BuiltForCloud\Commands\SubjectOffboardCommand;
 use ArtisanBuild\BuiltForCloud\Commands\WarnExpiringCredentialsCommand;
@@ -81,6 +82,7 @@ function p5eCommandDisposition(): array
             SubjectOffboardCommand::class,
             ConsoleReKeyCommand::class,
             ConsoleRetireKeyCommand::class,
+            SigningRootEnsureCommand::class,
             SigningRootProvisionCommand::class,
             PruneCredentialAuthorizationsCommand::class,
         ],
@@ -120,7 +122,7 @@ it('derives commands, queued work, and the exact package schedule without human 
     $expectedCommands = p5eSorted(array_merge(...array_values(p5eCommandDisposition())));
 
     expect($inventory['commands'])->toBe($expectedCommands)
-        ->and($inventory['commands'])->toHaveCount(18)
+        ->and($inventory['commands'])->toHaveCount(19)
         ->and($inventory['queued'])->toBe([DeliverOwnershipWebhook::class])
         ->and($inventory['scheduled'])->toBe([p5eProductionSchedule()])
         ->and($inventory['violations'])->toBe([
@@ -358,8 +360,8 @@ it('classifies every derived command exactly once across the five frozen disposi
         'in-environment-maintenance',
         'install-scaffold',
         'read-only',
-    ])->and($members)->toHaveCount(18)
-        ->and(array_unique($members))->toHaveCount(18)
+    ])->and($members)->toHaveCount(19)
+        ->and(array_unique($members))->toHaveCount(19)
         ->and(p5eSorted($members))->toBe($inventory['commands']);
 
     $controlled = SystemAuthorityInventory::discover(
@@ -399,7 +401,7 @@ it('proves every local-only mutation refuses without the mandatory local flag', 
     foreach (p5eCommandDisposition()['local-only-mandatory-flag'] as $class) {
         $source = p5eSource($class);
 
-        $class === SigningRootProvisionCommand::class
+        in_array($class, [SigningRootEnsureCommand::class, SigningRootProvisionCommand::class], true)
             ? expect($source)->toContain("if (! (bool) \$this->option('local'))")
             : expect($source)->toContain('if (! $this->requireLocal())');
     }
