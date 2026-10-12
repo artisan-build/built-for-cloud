@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Hmac;
 
+use ArtisanBuild\BuiltForCloud\Actions\Concerns\ConsultsDeclaration;
 use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\AuditActor;
 use ArtisanBuild\BuiltForCloud\AuditReason;
@@ -12,8 +13,10 @@ use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
+use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\DeliveryShape;
 use ArtisanBuild\BuiltForCloud\ExactCredentialTarget;
+use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\SigningRootRefused;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
@@ -27,6 +30,8 @@ use Throwable;
 
 final class SigningRootLifecycle
 {
+    use ConsultsDeclaration;
+
     public function __construct(
         private readonly HmacKeyring $keyring,
         private readonly LifecycleEventRecorder $recorder,
@@ -90,14 +95,26 @@ final class SigningRootLifecycle
     }
 
     /**
+     * AUTHORIZATION AND THE TARGET BOTH BELONG TO THE LOCKED ROW, and both
+     * are settled here rather than by the caller.
+     *
+     * The verb matrix ({@see AuthorizesCredentialVerbs}) is consulted with
+     * the subject of the source selected under the installation lock — the
+     * row this method is about to mutate. Consulting it earlier, on
+     * {@see RotateCredential}'s unlocked read, asks the declaration about a
+     * subject that may not be the one that gets rotated: a reserved row is
+     * reserved by its PURPOSE, so it can carry a noncanonical subject and
+     * become canonical before this lock is granted, and a declaration that
+     * narrows by subject would then never be asked about the subject it
+     * denies.
+     *
      * `$target` is the caller's exact predicate ({@see ExactCredentialTarget}),
-     * handed down by {@see RotateCredential} rather than checked there. It is
-     * asserted against the source this method reads UNDER the installation
-     * lock, before any replacement is created, because the identity check
-     * below proves the CANONICAL root identity and says nothing about the
-     * identity a caller pinned. A reserved row carrying a noncanonical
-     * subject can become canonical between a caller's selection and this
-     * lock, and the caller's predicate has to see that.
+     * handed down by {@see RotateCredential} rather than checked there, and
+     * asserted AFTER authorization: a caller who may not rotate this subject
+     * learns nothing about the row from a predicate answer. The identity
+     * check below proves the CANONICAL root identity and says nothing about
+     * the identity a caller pinned, which is why the predicate is asserted
+     * separately and under the same lock.
      */
     public function rotate(string $id, bool $emergency, ?AuditActor $actor = null, ?ExactCredentialTarget $target = null): RotationResult
     {
@@ -114,6 +131,13 @@ final class SigningRootLifecycle
                     || $source->id !== $id
                     || ! $this->hasExactIdentity($source)) {
                     throw SigningRootRefused::unavailable();
+                }
+
+                // The matrix consults the subject the LOCKED row declares,
+                // never the one the pre-read saw (SEC-V3-07 applied to the
+                // reserved path).
+                if (! $this->verbAllowed(CredentialVerb::Rotate, $source->subject())) {
+                    throw CredentialVerbRefused::byMatrix(CredentialVerb::Rotate);
                 }
 
                 $target?->assertMatches($source);

@@ -81,7 +81,7 @@ final class RotationCutoverIncomplete extends RuntimeException
             sprintf(
                 'Credential %s was retargeted before its retirement, so it was NOT retired and is still live '
                 .'(listed with its rotated_at stamp); credential %s stands as the replacement phase one '
-                .'committed. Nothing partial was written. Re-select the credential and rotate it again to '
+                .'committed. Nothing was written in phase two. Re-select the credential and rotate it again to '
                 .'complete the cutover, or revoke %s by id.',
                 $supersededId,
                 $replacementId,

@@ -153,16 +153,14 @@ final class RotateCredential
                 throw CredentialVerbRefused::signingRootLifecycleOnly();
             }
 
-            if (! $this->verbAllowed(CredentialVerb::Rotate, $targeted->subject())) {
-                throw CredentialVerbRefused::byMatrix(CredentialVerb::Rotate);
-            }
-
-            // The caller's exact target travels INTO the lifecycle, which
-            // asserts it against the source it reads under the
-            // installation lock. It is not checked here: the unlocked
-            // read is exactly the state a concurrent retarget invalidates,
-            // and the lifecycle's own identity proof is about the CANONICAL
-            // root, not about the identity this caller pinned.
+            // BOTH the verb-matrix decision and the caller's exact target
+            // travel INTO the lifecycle, which settles them against the
+            // source it selects under the installation lock. Neither is
+            // decided here: the unlocked read is exactly the state a
+            // concurrent retarget invalidates, so a subject authorized on
+            // it need not be the subject that gets mutated, and the
+            // lifecycle's own identity proof is about the CANONICAL root
+            // rather than about the identity this caller pinned.
             return app(SigningRootLifecycle::class)->rotate($id, $options->emergency, $actor, $options->target);
         }
 
@@ -328,18 +326,6 @@ final class RotateCredential
             return null;
         }
 
-        // The exact-target recheck, and it is deliberately the FIRST thing
-        // the lock buys. A consumer that pre-selected this row by purpose
-        // and subject held that answer only until its own query returned;
-        // re-proving it here means no retarget can land between the
-        // caller's selection and this rotation's write. A refusal costs the
-        // caller nothing, because the whole phase-one transaction rolls
-        // back: nothing minted, nothing stamped, and the submission nonce
-        // restored. Checking before the consume rather than after is
-        // belt only — the rollback is what delivers that, which is why no
-        // test claims the ordering.
-        $options->target?->assertMatches($source);
-
         /** @var CredentialProtocolBinding|null $binding */
         $binding = CredentialProtocolBinding::query()->whereKey($source->id)->lockForUpdate()->first();
         $this->assertRotatableBinding($source, $binding);
@@ -351,6 +337,21 @@ final class RotateCredential
         if (! $this->verbAllowed(CredentialVerb::Rotate, $source->subject())) {
             throw CredentialVerbRefused::byMatrix(CredentialVerb::Rotate);
         }
+
+        // The exact-target recheck, against the row this transaction has
+        // LOCKED: a consumer that pre-selected this row by purpose and
+        // subject held that answer only until its own query returned, and
+        // re-proving it here means no retarget can land between the
+        // caller's selection and this rotation's write.
+        //
+        // It sits BEHIND the authority answer deliberately. A caller who
+        // may not rotate this subject should learn nothing about the row
+        // from a predicate answer, and authorization is the question that
+        // does not depend on what the caller claims to know. A refusal
+        // costs the caller nothing either way: the whole phase-one
+        // transaction rolls back, nothing is minted or stamped, and the
+        // submission nonce below is never consumed.
+        $options->target?->assertMatches($source);
 
         $submission?->consume();
 
@@ -897,12 +898,6 @@ final class RotateCredential
 
                 $source = $credentials[$id];
                 $successor = $credentials[$successorId];
-                // The same locked recheck the minting path performs: the
-                // reissue path holds its own lock on the source row, so
-                // the caller's pre-selection is re-proved here too rather
-                // than being a dimension one entry point enforces and
-                // another does not.
-                $options->target?->assertMatches($source);
                 $managementScope?->assertRotationAllowed($source);
 
                 $alreadyReissued = CredentialAuditEvent::query()
@@ -918,6 +913,13 @@ final class RotateCredential
                 if (! $this->verbAllowed(CredentialVerb::Rotate, $source->subject())) {
                     throw CredentialVerbRefused::byMatrix(CredentialVerb::Rotate);
                 }
+
+                // The same locked recheck the minting path performs, in the
+                // same place relative to the authority answer: this path
+                // holds its own lock on the source row, so the caller's
+                // pre-selection is re-proved here too rather than being a
+                // dimension one entry point enforces and another does not.
+                $options->target?->assertMatches($source);
 
                 $this->assertRotatableBinding($source, $bindings[$id]);
                 $this->assertRotatableBinding($successor, $bindings[$successorId]);
