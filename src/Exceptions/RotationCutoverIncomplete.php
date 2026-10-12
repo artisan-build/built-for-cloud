@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Exceptions;
 
+use ArtisanBuild\BuiltForCloud\ExactCredentialTarget;
 use RuntimeException;
 use Throwable;
 
@@ -57,6 +58,37 @@ final class RotationCutoverIncomplete extends RuntimeException
             ),
             $supersededId,
             $activatedId,
+            $previous,
+        );
+    }
+
+    /**
+     * Failure path B reached by the EXACT TARGET rather than by a broken
+     * write: phase one committed, and then phase two locked the source to
+     * retire it and found it no longer matching the predicate the caller
+     * pinned ({@see ExactCredentialTarget}).
+     * Nothing was retired — a row that has moved to another subject must
+     * not have its life shortened by a rotation that was never about it —
+     * so the superseded row is still live with its `rotated_at` stamp.
+     *
+     * Deliberately NOT a bare {@see RotationRefused}: phase one STANDS, and
+     * a caller told only "the target moved" would reasonably conclude that
+     * nothing happened.
+     */
+    public static function targetMovedBeforeRetirement(string $supersededId, string $replacementId, ?Throwable $previous = null): self
+    {
+        return new self(
+            sprintf(
+                'Credential %s was retargeted before its retirement, so it was NOT retired and is still live '
+                .'(listed with its rotated_at stamp); credential %s stands as the replacement phase one '
+                .'committed. Nothing partial was written. Re-select the credential and rotate it again to '
+                .'complete the cutover, or revoke %s by id.',
+                $supersededId,
+                $replacementId,
+                $supersededId,
+            ),
+            $supersededId,
+            $replacementId,
             $previous,
         );
     }
