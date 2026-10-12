@@ -148,8 +148,11 @@ it('pins only the dimensions the caller supplied', function (): void {
 });
 
 it('leaves a mismatched rotation submission nonce unconsumed', function (): void {
-    // The predicate is checked BEFORE the nonce is consumed, so a refused
-    // rotation does not burn the operator's one permit.
+    // A refused rotation does not burn the operator's one permit. The
+    // predicate is checked before the consume, but the consume is itself a
+    // conditional DELETE inside the phase-one transaction, so the ROLLBACK
+    // is what this test actually observes. Moving the check after the
+    // consume leaves it green; the claim is the outcome, not the ordering.
     $source = exactTargetSource();
     $target = exactTargetFor();
     $nonce = SubmissionNonce::issue('session-exact-target', '42', CredentialVerb::Rotate, $source->id);
@@ -163,7 +166,7 @@ it('leaves a mismatched rotation submission nonce unconsumed', function (): void
     ))->toThrow(RotationRefused::class);
 
     expect(DB::table('bfc_submission_nonces')->count())->toBe(1);
-})->note('AC1 "without side effects": the refusal precedes the nonce consume, so the permit survives for a corrected call.');
+})->note('AC1 "without side effects": a refused rotation leaves the permit usable for a corrected call. Proven by the phase-one rollback, not by the check order. Debt row bfc-rotate-exact-target-nonce-order.');
 
 it('refuses the cutover completion of a retargeted row', function (): void {
     // The stamped-row path reaches the same locked recheck, so completion
