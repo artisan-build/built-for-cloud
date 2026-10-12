@@ -66,6 +66,14 @@ use Throwable;
  * ({@see ConstrainsMintedCredentials} via the shared check), and the
  * audit rows carry the override reason code plus the delta.
  *
+ * A caller that pre-selected its target may hand that selection over as
+ * data, through {@see RotateOptions::$target}: the purpose and subject (and
+ * optionally kind and ownership) it believes the row carries. Every path
+ * that locks the source row re-proves the predicate against the LOCKED row
+ * before consuming a nonce or minting anything, so a consumer no longer has
+ * to pre-select and hope nothing changed. Absent, nothing extra is asserted
+ * and the verb behaves exactly as it always has.
+ *
  * Make-before-break, in two phases whose failure modes are the contract
  * (D6 point 5):
  *
@@ -78,7 +86,11 @@ use Throwable;
  *    already bounds it. At grace end the old row dies by its own expiry —
  *    no reaper needed. If THIS write fails, the committed replacement
  *    stands and {@see RotationCutoverIncomplete} names the still-live old
- *    row (failure path B).
+ *    row (failure path B). When the caller pinned an exact target, this
+ *    write takes its own transaction, locks the source and re-proves the
+ *    target before writing: the retirement is a mutation of the source
+ *    row, so it owes the predicate the same locked proof phase one gave
+ *    it, and a row that moved is reported unretired rather than shortened.
  *
  * Per kind (D6 point 6): `bearer`/`basic` mint a fresh secret, delivered
  * once through the sealed carrier; `asymmetric` issues a fresh enrollment
@@ -141,11 +153,15 @@ final class RotateCredential
                 throw CredentialVerbRefused::signingRootLifecycleOnly();
             }
 
-            if (! $this->verbAllowed(CredentialVerb::Rotate, $targeted->subject())) {
-                throw CredentialVerbRefused::byMatrix(CredentialVerb::Rotate);
-            }
-
-            return app(SigningRootLifecycle::class)->rotate($id, $options->emergency, $actor);
+            // BOTH the verb-matrix decision and the caller's exact target
+            // travel INTO the lifecycle, which settles them against the
+            // source it selects under the installation lock. Neither is
+            // decided here: the unlocked read is exactly the state a
+            // concurrent retarget invalidates, so a subject authorized on
+            // it need not be the subject that gets mutated, and the
+            // lifecycle's own identity proof is about the CANONICAL root
+            // rather than about the identity this caller pinned.
+            return app(SigningRootLifecycle::class)->rotate($id, $options->emergency, $actor, $options->target);
         }
 
         if ($options->reissuePendingDelivery) {
@@ -206,7 +222,13 @@ final class RotateCredential
         }
 
         try {
-            $this->retire($result->supersededId, $options->emergency);
+            $this->retireSuperseded($result->supersededId, $options);
+        } catch (RotationRefused $refusal) {
+            throw RotationCutoverIncomplete::targetMovedBeforeRetirement(
+                $result->supersededId,
+                $result->mint->summary->id,
+                $refusal,
+            );
         } catch (Throwable $exception) {
             throw RotationCutoverIncomplete::retirementFailed(
                 $result->supersededId,
@@ -216,6 +238,49 @@ final class RotateCredential
         }
 
         return $result;
+    }
+
+    /**
+     * PHASE TWO, and the exact target's second locked boundary.
+     *
+     * Phase one committed and released its lock, which is the two-phase
+     * contract and stays that way: a separately fallible retirement is
+     * failure path B, not something to fold back into phase one. But the
+     * retirement is itself a MUTATION of the source row, so it owes the
+     * predicate the same proof phase one gave it. Its own transaction
+     * locks the source, re-proves the target against the LOCKED row, and
+     * writes the expiry before committing, so no retarget can land
+     * between that check and that write.
+     *
+     * A caller that pinned nothing keeps exactly the retirement it always
+     * had: the guarded expiry-set by id, no phase-two lock, no new
+     * failure mode.
+     */
+    private function retireSuperseded(string $id, RotateOptions $options): void
+    {
+        $target = $options->target;
+
+        if ($target === null) {
+            $this->retire($id, $options->emergency);
+
+            return;
+        }
+
+        DB::transaction(function () use ($id, $target, $options): void {
+            /** @var Credential|null $source */
+            $source = Credential::query()->whereKey($id)->lockForUpdate()->first();
+
+            if ($source === null) {
+                // The row is gone. There is nothing to retire and nothing
+                // the predicate could protect — the same outcome the
+                // unguarded expiry-set had when it matched no rows.
+                return;
+            }
+
+            $target->assertMatches($source);
+
+            $this->retire($id, $options->emergency);
+        });
     }
 
     /**
@@ -272,6 +337,21 @@ final class RotateCredential
         if (! $this->verbAllowed(CredentialVerb::Rotate, $source->subject())) {
             throw CredentialVerbRefused::byMatrix(CredentialVerb::Rotate);
         }
+
+        // The exact-target recheck, against the row this transaction has
+        // LOCKED: a consumer that pre-selected this row by purpose and
+        // subject held that answer only until its own query returned, and
+        // re-proving it here means no retarget can land between the
+        // caller's selection and this rotation's write.
+        //
+        // It sits BEHIND the authority answer deliberately. A caller who
+        // may not rotate this subject should learn nothing about the row
+        // from a predicate answer, and authorization is the question that
+        // does not depend on what the caller claims to know. A refusal
+        // costs the caller nothing either way: the whole phase-one
+        // transaction rolls back, nothing is minted or stamped, and the
+        // submission nonce below is never consumed.
+        $options->target?->assertMatches($source);
 
         $submission?->consume();
 
@@ -833,6 +913,13 @@ final class RotateCredential
                 if (! $this->verbAllowed(CredentialVerb::Rotate, $source->subject())) {
                     throw CredentialVerbRefused::byMatrix(CredentialVerb::Rotate);
                 }
+
+                // The same locked recheck the minting path performs, in the
+                // same place relative to the authority answer: this path
+                // holds its own lock on the source row, so the caller's
+                // pre-selection is re-proved here too rather than being a
+                // dimension one entry point enforces and another does not.
+                $options->target?->assertMatches($source);
 
                 $this->assertRotatableBinding($source, $bindings[$id]);
                 $this->assertRotatableBinding($successor, $bindings[$successorId]);

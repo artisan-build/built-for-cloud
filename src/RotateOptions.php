@@ -28,6 +28,17 @@ use Carbon\CarbonInterface;
  *   whose replacement is delivered as a fresh enrollment code (the claim
  *   primitive's required 60s–7d lifetime, PRD 1.1).
  *
+ * - `target` is the caller's own pre-selection, handed over as data the
+ *   package enforces ({@see ExactCredentialTarget}): the purpose, subject,
+ *   and optionally kind and ownership the caller believes the row carries,
+ *   re-proved against the row AFTER it is locked. It changes nothing about
+ *   the replacement; it only decides whether this rotation happens at all.
+ *   Absent — every caller before this option, and every caller that does not
+ *   pre-select — nothing extra is asserted. It is deliberately NOT a
+ *   transport input (see {@see fromInput()}): a predicate an HTTP or CLI
+ *   client supplies about itself buys no safety, and the identity boundary
+ *   those transports need is {@see CredentialManagementScope}.
+ *
  * Both transports construct this through {@see fromInput()}, where
  * presence means key-presence in the input array: the HTTP transport's
  * `$request->only()` keeps an explicit JSON null and drops an absent
@@ -50,6 +61,7 @@ final readonly class RotateOptions
         public ?CarbonInterface $expiresAt = null,
         public ?int $codeTtlSeconds = null,
         public bool $reissuePendingDelivery = false,
+        public ?ExactCredentialTarget $target = null,
     ) {}
 
     /**

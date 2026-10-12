@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Exceptions;
 
+use ArtisanBuild\BuiltForCloud\ExactCredentialTarget;
 use RuntimeException;
 
 /**
@@ -117,6 +118,25 @@ final class RotationRefused extends RuntimeException
     public static function pendingDeliveryUnavailable(): self
     {
         return new self('The pending credential delivery is unavailable.');
+    }
+
+    /**
+     * The exact-target refusal: the caller pinned the identity it had
+     * selected ({@see ExactCredentialTarget}) and the LOCKED row no longer
+     * carries it. Thrown before the nonce is consumed and before anything
+     * is minted, so the rotation leaves no trace. Names the dimensions
+     * that disagree, never their values.
+     *
+     * @param  list<string>  $dimensions
+     */
+    public static function targetNoLongerMatches(string $id, array $dimensions): self
+    {
+        return new self(sprintf(
+            'Credential %s no longer matches the exact target this rotation pinned (%s); '
+            .'it was retargeted after the caller selected it. Re-select the credential and rotate again.',
+            $id,
+            implode(', ', $dimensions),
+        ));
     }
 
     public static function verificationCopy(): self
