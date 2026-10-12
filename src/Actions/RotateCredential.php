@@ -149,16 +149,6 @@ final class RotateCredential
         }
 
         if (SigningRootMac::isReserved($targeted)) {
-            // The reserved row's own identity is re-proved under the
-            // installation lock by {@see SigningRootLifecycle::rotate()},
-            // which refuses anything that is not EXACTLY the standing
-            // root. An exact target is therefore checked here against the
-            // unlocked read: the dimensions it pins are the ones that
-            // lifecycle holds invariant, so a match it sees now is a match
-            // the lock will still see, and a mismatch refuses before the
-            // lifecycle is entered at all.
-            $options->target?->assertMatches($targeted);
-
             if ($options->requestsChange() || $options->override || $options->codeTtlSeconds !== null) {
                 throw CredentialVerbRefused::signingRootLifecycleOnly();
             }
@@ -167,7 +157,13 @@ final class RotateCredential
                 throw CredentialVerbRefused::byMatrix(CredentialVerb::Rotate);
             }
 
-            return app(SigningRootLifecycle::class)->rotate($id, $options->emergency, $actor);
+            // The caller's exact target travels INTO the lifecycle, which
+            // asserts it against the source it reads under the
+            // installation lock. It is not checked here: the unlocked
+            // read is exactly the state a concurrent retarget invalidates,
+            // and the lifecycle's own identity proof is about the CANONICAL
+            // root, not about the identity this caller pinned.
+            return app(SigningRootLifecycle::class)->rotate($id, $options->emergency, $actor, $options->target);
         }
 
         if ($options->reissuePendingDelivery) {

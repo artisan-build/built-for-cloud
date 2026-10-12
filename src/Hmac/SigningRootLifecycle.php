@@ -13,6 +13,7 @@ use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialSummary;
 use ArtisanBuild\BuiltForCloud\DeliveryShape;
+use ArtisanBuild\BuiltForCloud\ExactCredentialTarget;
 use ArtisanBuild\BuiltForCloud\Exceptions\SigningRootRefused;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\LifecycleEventRecorder;
@@ -88,11 +89,21 @@ final class SigningRootLifecycle
         );
     }
 
-    public function rotate(string $id, bool $emergency, ?AuditActor $actor = null): RotationResult
+    /**
+     * `$target` is the caller's exact predicate ({@see ExactCredentialTarget}),
+     * handed down by {@see RotateCredential} rather than checked there. It is
+     * asserted against the source this method reads UNDER the installation
+     * lock, before any replacement is created, because the identity check
+     * below proves the CANONICAL root identity and says nothing about the
+     * identity a caller pinned. A reserved row carrying a noncanonical
+     * subject can become canonical between a caller's selection and this
+     * lock, and the caller's predicate has to see that.
+     */
+    public function rotate(string $id, bool $emergency, ?AuditActor $actor = null, ?ExactCredentialTarget $target = null): RotationResult
     {
         return app(HmacWriterBarrier::class)->exclusive(
             'signing-root rotation',
-            fn (): RotationResult => DB::transaction(function () use ($id, $emergency, $actor): RotationResult {
+            fn (): RotationResult => DB::transaction(function () use ($id, $emergency, $actor, $target): RotationResult {
                 $this->lockInstallation();
 
                 $current = $this->currentCandidates();
@@ -104,6 +115,8 @@ final class SigningRootLifecycle
                     || ! $this->hasExactIdentity($source)) {
                     throw SigningRootRefused::unavailable();
                 }
+
+                $target?->assertMatches($source);
 
                 $cutover = now();
                 $replacement = $this->createRoot();
