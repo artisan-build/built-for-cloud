@@ -66,6 +66,10 @@ the superseded row is still live, which is the existing failure-path-B recovery.
 carries the target into its own lifecycle and asserts it under the installation lock, before any
 replacement root exists.
 
+The predicate is answered after the authority question, not before it. Every locked path asks the verb
+matrix about the subject of the row it has locked, and only then re-proves the caller's target against
+that row, so a caller who may not rotate a subject learns nothing about it from a predicate answer.
+
 ```php
 use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
