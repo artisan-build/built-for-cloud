@@ -283,10 +283,12 @@ final class RotateCredential
         // the lock buys. A consumer that pre-selected this row by purpose
         // and subject held that answer only until its own query returned;
         // re-proving it here means no retarget can land between the
-        // caller's selection and this rotation's write. It runs before the
-        // submission nonce is consumed and before anything is minted, so a
-        // refusal costs the caller nothing — the whole phase-one
-        // transaction rolls back with no trace.
+        // caller's selection and this rotation's write. A refusal costs the
+        // caller nothing, because the whole phase-one transaction rolls
+        // back: nothing minted, nothing stamped, and the submission nonce
+        // restored. Checking before the consume rather than after is
+        // belt only — the rollback is what delivers that, which is why no
+        // test claims the ordering.
         $options->target?->assertMatches($source);
 
         /** @var CredentialProtocolBinding|null $binding */
