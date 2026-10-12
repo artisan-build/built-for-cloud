@@ -66,6 +66,14 @@ use Throwable;
  * ({@see ConstrainsMintedCredentials} via the shared check), and the
  * audit rows carry the override reason code plus the delta.
  *
+ * A caller that pre-selected its target may hand that selection over as
+ * data, through {@see RotateOptions::$target}: the purpose and subject (and
+ * optionally kind and ownership) it believes the row carries. Every path
+ * that locks the source row re-proves the predicate against the LOCKED row
+ * before consuming a nonce or minting anything, so a consumer no longer has
+ * to pre-select and hope nothing changed. Absent, nothing extra is asserted
+ * and the verb behaves exactly as it always has.
+ *
  * Make-before-break, in two phases whose failure modes are the contract
  * (D6 point 5):
  *
@@ -137,6 +145,16 @@ final class RotateCredential
         }
 
         if (SigningRootMac::isReserved($targeted)) {
+            // The reserved row's own identity is re-proved under the
+            // installation lock by {@see SigningRootLifecycle::rotate()},
+            // which refuses anything that is not EXACTLY the standing
+            // root. An exact target is therefore checked here against the
+            // unlocked read: the dimensions it pins are the ones that
+            // lifecycle holds invariant, so a match it sees now is a match
+            // the lock will still see, and a mismatch refuses before the
+            // lifecycle is entered at all.
+            $options->target?->assertMatches($targeted);
+
             if ($options->requestsChange() || $options->override || $options->codeTtlSeconds !== null) {
                 throw CredentialVerbRefused::signingRootLifecycleOnly();
             }
@@ -260,6 +278,16 @@ final class RotateCredential
         if ($source === null) {
             return null;
         }
+
+        // The exact-target recheck, and it is deliberately the FIRST thing
+        // the lock buys. A consumer that pre-selected this row by purpose
+        // and subject held that answer only until its own query returned;
+        // re-proving it here means no retarget can land between the
+        // caller's selection and this rotation's write. It runs before the
+        // submission nonce is consumed and before anything is minted, so a
+        // refusal costs the caller nothing — the whole phase-one
+        // transaction rolls back with no trace.
+        $options->target?->assertMatches($source);
 
         /** @var CredentialProtocolBinding|null $binding */
         $binding = CredentialProtocolBinding::query()->whereKey($source->id)->lockForUpdate()->first();
@@ -818,6 +846,12 @@ final class RotateCredential
 
                 $source = $credentials[$id];
                 $successor = $credentials[$successorId];
+                // The same locked recheck the minting path performs: the
+                // reissue path holds its own lock on the source row, so
+                // the caller's pre-selection is re-proved here too rather
+                // than being a dimension one entry point enforces and
+                // another does not.
+                $options->target?->assertMatches($source);
                 $managementScope?->assertRotationAllowed($source);
 
                 $alreadyReissued = CredentialAuditEvent::query()

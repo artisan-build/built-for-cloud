@@ -45,6 +45,44 @@ account freshness.
 | **Revocation** | Stops a credential resolving immediately and records the lifecycle event. |
 | **Usage** | Successful presentations update `last_used_at`; first use consumes an associated claim code in the same transaction. |
 
+### Rotating under an exact target
+
+A consumer that pre-selects a credential holds that answer only until its own query returns. Rotation
+takes an id, so in the window between the selection and the write the row's purpose, subject, kind or
+ownership can change, and an id-only rotation has no way to notice.
+
+`RotateOptions` accepts an `ExactCredentialTarget` for that case. It carries the purpose and subject the
+caller believes the row has, and optionally its kind and ownership. Every rotation path that locks the
+source row re-evaluates the predicate against the locked row, before it consumes a submission nonce and
+before it mints anything, and refuses with `RotationRefused` when a pinned dimension disagrees. The
+refusal names the dimensions that moved and never their values.
+
+```php
+use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
+use ArtisanBuild\BuiltForCloud\CredentialKind;
+use ArtisanBuild\BuiltForCloud\CredentialOwnership;
+use ArtisanBuild\BuiltForCloud\CredentialPurpose;
+use ArtisanBuild\BuiltForCloud\ExactCredentialTarget;
+use ArtisanBuild\BuiltForCloud\RotateOptions;
+use ArtisanBuild\BuiltForCloud\Subject;
+use ArtisanBuild\BuiltForCloud\SubjectType;
+
+$result = app(RotateCredential::class)($credentialId, new RotateOptions(
+    target: new ExactCredentialTarget(
+        purpose: CredentialPurpose::Consumption,
+        subject: new Subject(SubjectType::Installation, $appId),
+        kind: CredentialKind::Bearer,
+        ownership: CredentialOwnership::Installation,
+    ),
+));
+```
+
+A dimension the caller leaves out is not asserted. The option is additive, so callers that pass no
+target keep the behaviour they have today, and nothing about the replacement changes either way: the
+predicate only decides whether this rotation happens. It is a PHP-level option rather than a request
+field, because a predicate an HTTP or CLI client supplies about itself buys no safety. The row boundary
+those transports need is `CredentialManagementScope`.
+
 ### App adoption purposes
 
 An application can map its own fixed operation ids to the package's closed protocol-purpose
