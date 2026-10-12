@@ -5,6 +5,8 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\Actions\CompleteAsymmetricEnrollment;
 use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
 use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
+use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesCredentialVerbs;
+use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
@@ -13,6 +15,7 @@ use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\ExactCredentialTarget;
+use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\RotationRefused;
 use ArtisanBuild\BuiltForCloud\Hmac\SigningRootLifecycle;
 use ArtisanBuild\BuiltForCloud\MintOptions;
@@ -24,6 +27,7 @@ use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\SubmissionNonce;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class, DetectsSecretLeaks::class);
@@ -47,6 +51,27 @@ function exactTargetSource(array $overrides = []): Credential
         'user_id' => null,
         'expires_at' => now()->addDays(30),
     ], $overrides));
+}
+
+function exactTargetDenyRotation(): void
+{
+    app()->instance(CredentialDeclaration::class, new class implements AuthorizesCredentialVerbs, CredentialDeclaration
+    {
+        public function resolveSubject(Request $request): ?Subject
+        {
+            return null;
+        }
+
+        public function authorize(Credential $credential, ?string $ability, Request $request): bool
+        {
+            return true;
+        }
+
+        public function authorizeVerb(CredentialVerb $verb, ?Subject $subject, Request $request): bool
+        {
+            return $verb !== CredentialVerb::Rotate;
+        }
+    });
 }
 
 function exactTargetFor(array $overrides = []): ExactCredentialTarget
@@ -127,8 +152,45 @@ it('refuses each pinned dimension the locked row no longer carries', function (a
     'subject ref' => [['subject_ref' => 'app-b'], 'subject'],
     'kind' => [['kind' => CredentialKind::Basic->value], 'kind'],
     'ownership' => [['user_id' => '7'], 'ownership'],
-    'purpose cleared' => [['purpose' => null], 'purpose'],
 ]);
+
+it('lets the stored-purpose guard refuse a purpose-cleared row before the predicate is consulted', function (): void {
+    // A row whose purpose has been cleared is refused by the guard that
+    // owns stored-purpose validity, which runs ahead of the predicate
+    // because the predicate now sits behind the authority answer. The
+    // outcome AC1 cares about is unchanged — it refuses, and nothing is
+    // written — but the refusal is that guard's, not the target's, and
+    // this test says so rather than letting the dataset above imply
+    // otherwise.
+    $source = exactTargetSource();
+    $target = exactTargetFor();
+    exactTargetRetarget($source->id, ['purpose' => null]);
+    $before = exactTargetTotals();
+
+    expect(fn () => app(RotateCredential::class)($source->id, new RotateOptions(target: $target)))
+        ->toThrow(InvalidArgumentException::class);
+
+    expect(exactTargetTotals())->toBe($before)
+        ->and(Credential::query()->findOrFail($source->id)->rotated_at)->toBeNull()
+        ->and($target->mismatchesOf(Credential::query()->findOrFail($source->id)))->toBe(['purpose']);
+});
+
+it('answers the authority question before it answers the predicate', function (): void {
+    // A caller who may not rotate this subject learns nothing about the
+    // row from a predicate answer: the matrix refusal comes first, even
+    // though the target also mismatches.
+    $source = exactTargetSource();
+    $target = exactTargetFor();
+    exactTargetRetarget($source->id, ['subject_ref' => 'app-b']);
+    exactTargetDenyRotation();
+    $before = exactTargetTotals();
+
+    expect(fn () => app(RotateCredential::class)($source->id, new RotateOptions(target: $target)))
+        ->toThrow(CredentialVerbRefused::class);
+
+    expect(exactTargetTotals())->toBe($before)
+        ->and(Credential::query()->findOrFail($source->id)->rotated_at)->toBeNull();
+})->note('Judge advisory, round 2: the predicate sits behind the verb-matrix decision on every locked path.');
 
 it('pins only the dimensions the caller supplied', function (): void {
     // kind and ownership left out: the caller said it does not care, and

@@ -4,15 +4,20 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\BuiltForCloudServiceProvider;
+use ArtisanBuild\BuiltForCloud\Contracts\AuthorizesCredentialVerbs;
+use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
+use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
 use ArtisanBuild\BuiltForCloud\CredentialOwnership;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
+use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\ExactCredentialTarget;
 use ArtisanBuild\BuiltForCloud\RotateOptions;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\TestCase;
 use Illuminate\Foundation\Application;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 require __DIR__.'/../../vendor/autoload.php';
@@ -21,6 +26,13 @@ require __DIR__.'/../../vendor/autoload.php';
  * Rotates a RESERVED signing-root row under an exact target, from a second
  * process, so the parent test can hold the installation authority lock and
  * retarget the row while this process waits for it.
+ *
+ * `deny_subject_ref`, when supplied, binds an ordinary subject-aware
+ * declaration that denies the rotate verb for exactly that subject ref and
+ * allows it everywhere else. That is what makes the authorization question
+ * observable: whichever subject the matrix is asked about decides the
+ * outcome, so the answer reveals whether the package asked about the
+ * pre-read row or the locked one.
  */
 $input = json_decode((string) stream_get_contents(STDIN), true, flags: JSON_THROW_ON_ERROR);
 
@@ -76,6 +88,30 @@ $case = new class('testProbe') extends TestCase
         parent::setUp();
 
         DB::connection()->statement("set application_name = '".(string) $input['application_name']."'");
+
+        $denied = $input['deny_subject_ref'] ?? null;
+
+        if (is_string($denied)) {
+            app()->instance(CredentialDeclaration::class, new class($denied) implements AuthorizesCredentialVerbs, CredentialDeclaration
+            {
+                public function __construct(private readonly string $denied) {}
+
+                public function resolveSubject(Request $request): ?Subject
+                {
+                    return null;
+                }
+
+                public function authorize(Credential $credential, ?string $ability, Request $request): bool
+                {
+                    return true;
+                }
+
+                public function authorizeVerb(CredentialVerb $verb, ?Subject $subject, Request $request): bool
+                {
+                    return $verb !== CredentialVerb::Rotate || $subject?->ref !== $this->denied;
+                }
+            });
+        }
 
         $target = new ExactCredentialTarget(
             purpose: CredentialPurpose::from((string) $input['purpose']),
