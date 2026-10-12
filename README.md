@@ -57,6 +57,15 @@ source row re-evaluates the predicate against the locked row, before it consumes
 before it mints anything, and refuses with `RotationRefused` when a pinned dimension disagrees. The
 refusal names the dimensions that moved and never their values.
 
+That includes the second phase. Rotation mints the replacement in one transaction and retires the source
+in a separate one, so the lock the first phase held is gone by the time the retirement runs. The
+retirement is itself a write to the source row, so when a target is pinned it takes its own transaction,
+locks the source and re-proves the target before shortening any expiry. A row that moved in that window
+is reported unretired rather than retired: `RotationCutoverIncomplete` says the replacement stands and
+the superseded row is still live, which is the existing failure-path-B recovery. Signing-root rotation
+carries the target into its own lifecycle and asserts it under the installation lock, before any
+replacement root exists.
+
 ```php
 use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
