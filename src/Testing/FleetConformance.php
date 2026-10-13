@@ -6,6 +6,7 @@ namespace ArtisanBuild\BuiltForCloud\Testing;
 
 use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
 use ArtisanBuild\BuiltForCloud\BuiltForCloud;
+use Illuminate\Encryption\MissingAppKeyException;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use SplFileInfo;
@@ -102,6 +103,9 @@ final readonly class FleetConformance
                 'credential_listing' => $this->callAssertion('assertBuiltForCloudCredentialListingContract'),
                 'transport_parity' => $this->callAssertion('assertBuiltForCloudTransportParityContract'),
             };
+        } catch (MissingAppKeyException) {
+            // An unmet environment prerequisite still fails the family; it is only labelled by its cause.
+            $violations[] = 'prerequisite-missing:app_key';
         } catch (Throwable) {
             $violations[] = 'assertion-failed:'.$family;
         }
