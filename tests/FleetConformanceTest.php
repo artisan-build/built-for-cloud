@@ -648,6 +648,29 @@ it('rejects an app-owned human guard and provider through both aggregate auth fa
         ->and($offender->families['thin_host']->violations)->toContain($member);
 });
 
+it('fails the auth schema family on a missing app key under a label that names the prerequisite', function (): void {
+    $spec = packageConformanceSpec(runtime: ['auth_schema'], capabilities: []);
+    $key = config('app.key');
+    config(['app.key' => null]);
+
+    $missing = (new FleetConformance($this))->inspect($spec);
+
+    expect($missing->passed)->toBeFalse()
+        ->and($missing->families['runtime.auth_schema']->applicability)->toBe('applicable')
+        ->and($missing->families['runtime.auth_schema']->violations)->toBe(['prerequisite-missing:app_key']);
+
+    config([
+        'app.key' => $key,
+        'auth.guards.foreign-human' => ['driver' => 'session', 'provider' => 'users'],
+    ]);
+
+    $genuine = (new FleetConformance($this))->inspect($spec);
+
+    expect($key)->toBeString()->not->toBe('')
+        ->and($genuine->passed)->toBeFalse()
+        ->and($genuine->families['runtime.auth_schema']->violations)->toBe(['assertion-failed:runtime.auth_schema']);
+});
+
 it('never leaks absolute paths or test-created secret material in a failing report', function (): void {
     $secret = 'test-created-secret-'.bin2hex(random_bytes(8));
     $consumer = sys_get_temp_dir().'/bfc-conformance-'.bin2hex(random_bytes(6));
