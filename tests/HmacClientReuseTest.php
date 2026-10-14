@@ -46,10 +46,13 @@ it('keeps the built-for-cloud compatibility symbols on the client-owned implemen
         nonce: str_repeat('a', 16),
         audience: 'test-audience',
     );
+    $compatibilityFailure = HmacVerificationFailed::wrongAudience();
 
     expect(CredentialPurpose::Signing)->toBe(SharedCredentialPurpose::Signing)
         ->and($envelope)->toBeInstanceOf(SharedHmacEnvelope::class)
-        ->and(is_a(HmacVerificationFailed::class, SharedHmacVerificationFailed::class, true))->toBeTrue()
+        ->and($compatibilityFailure::class)->toBe(HmacVerificationFailed::class)
+        ->and($compatibilityFailure->reason)->toBe('wrong_audience')
+        ->and($compatibilityFailure->getPrevious())->toBeInstanceOf(SharedHmacVerificationFailed::class)
         ->and(is_a(
             HmacCredentialIssuerClient::class,
             ArtisanBuild\BfcClient\Contracts\HmacCredentialIssuerClient::class,
@@ -151,5 +154,16 @@ it('verifies a server-signed callback through the shared verifier without receiv
         $this->fail('The tampered callback should have been refused.');
     } catch (SharedHmacVerificationFailed $failure) {
         expect($failure->reason)->toBe('invalid_signature');
+    }
+
+    $compatibilityHeader = app(HmacSigner::class)->sign($subject, $body, 'shared.callback');
+
+    try {
+        app(HmacVerifier::class)->verify($subject, $compatibilityHeader, '{"event":"tampered"}');
+        $this->fail('The compatibility verifier should have translated the shared refusal.');
+    } catch (HmacVerificationFailed $failure) {
+        expect($failure::class)->toBe(HmacVerificationFailed::class)
+            ->and($failure->reason)->toBe('invalid_signature')
+            ->and($failure->getPrevious())->toBeInstanceOf(SharedHmacVerificationFailed::class);
     }
 });

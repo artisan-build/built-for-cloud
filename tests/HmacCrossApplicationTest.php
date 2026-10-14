@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BfcClient\Actions\InstallHmacCredentialFromClaim;
+use ArtisanBuild\BfcClient\Exceptions\HmacVerificationFailed;
 use ArtisanBuild\BfcClient\Hmac\HmacVerifier;
 use ArtisanBuild\BuiltForCloud\Actions\ActivateCredential;
 use ArtisanBuild\BuiltForCloud\Actions\CutOverImportedHmacCredential;
@@ -21,7 +22,6 @@ use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacCredentialTransferRefused;
 use ArtisanBuild\BuiltForCloud\Exceptions\HmacSigningRefused;
-use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
 use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;

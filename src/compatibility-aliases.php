@@ -10,7 +10,6 @@ use ArtisanBuild\BfcClient\CredentialPurpose;
 use ArtisanBuild\BfcClient\CredentialStatus;
 use ArtisanBuild\BfcClient\Exceptions\HmacCredentialTransferRefused;
 use ArtisanBuild\BfcClient\Exceptions\HmacKeyUnreadable;
-use ArtisanBuild\BfcClient\Exceptions\HmacVerificationFailed;
 use ArtisanBuild\BfcClient\Hmac\EncryptedHmacKey;
 use ArtisanBuild\BfcClient\Hmac\HmacEnvelope;
 use ArtisanBuild\BfcClient\HmacCredentialTransfer;
@@ -32,7 +31,6 @@ $aliases = [
     CredentialStatus::class => ArtisanBuild\BuiltForCloud\CredentialStatus::class,
     HmacCredentialTransferRefused::class => ArtisanBuild\BuiltForCloud\Exceptions\HmacCredentialTransferRefused::class,
     HmacKeyUnreadable::class => ArtisanBuild\BuiltForCloud\Exceptions\HmacKeyUnreadable::class,
-    HmacVerificationFailed::class => ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed::class,
     EncryptedHmacKey::class => ArtisanBuild\BuiltForCloud\Hmac\EncryptedHmacKey::class,
     HmacEnvelope::class => ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope::class,
     HmacCredentialTransfer::class => ArtisanBuild\BuiltForCloud\HmacCredentialTransfer::class,

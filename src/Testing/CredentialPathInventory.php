@@ -59,7 +59,11 @@ final class CredentialPathInventory
      */
     public static function comparePurposePolicy(string $sourceRoot, array $additionalRoots = []): array
     {
-        $classes = self::classes(self::sourceFiles([$sourceRoot, ...$additionalRoots]));
+        $classes = self::classes(self::sourceFiles([
+            $sourceRoot,
+            SharedCallbackSecuritySource::rootFor($sourceRoot),
+            ...$additionalRoots,
+        ]));
         $expectedCallers = [
             'ArtisanBuild\\BuiltForCloud\\Auth\\BasicAuthenticator::credential' => 1,
             'ArtisanBuild\\BuiltForCloud\\Auth\\BearerAuthenticator::credential' => 1,
@@ -102,6 +106,10 @@ final class CredentialPathInventory
             }
         }
 
+        if (self::hasSharedHmacVerifierSeam($classes)) {
+            $selectors[] = 'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacVerifier';
+        }
+
         ksort($callers);
         $selectors = self::sortedUnique($selectors);
 
@@ -131,7 +139,9 @@ final class CredentialPathInventory
         $dispositions = self::purposeDispositions($classes, $violations);
 
         foreach ($selectors as $selector) {
-            $code = $classes[$selector]['code'];
+            $code = $selector === 'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacVerifier'
+                ? self::sharedHmacVerifierSeamCode($classes)
+                : $classes[$selector]['code'];
 
             if (preg_match('/->where\s*\(\s*[\'"]purpose[\'"]\s*,\s*CredentialPurpose::Signing->value\s*\)/', $code) !== 1) {
                 $violations[] = 'missing-signing-purpose:'.$selector;
@@ -171,7 +181,11 @@ final class CredentialPathInventory
      */
     public static function discover(string $sourceRoot, array $additionalRoots = []): array
     {
-        $files = self::sourceFiles([$sourceRoot, ...$additionalRoots]);
+        $files = self::sourceFiles([
+            $sourceRoot,
+            SharedCallbackSecuritySource::rootFor($sourceRoot),
+            ...$additionalRoots,
+        ]);
         $classes = self::classes($files);
         $provider = self::requiredContents($sourceRoot.'/BuiltForCloudServiceProvider.php');
         $providerCode = self::withoutComments($provider);
@@ -612,8 +626,12 @@ final class CredentialPathInventory
     {
         $items = [];
 
-        foreach (['ArtisanBuild\\BuiltForCloud\\AuditActorType', 'ArtisanBuild\\BuiltForCloud\\Audit\\AppActorType', 'ArtisanBuild\\BuiltForCloud\\SubjectType'] as $enum) {
-            $code = $classes[$enum]['code'] ?? '';
+        foreach ([
+            'ArtisanBuild\\BuiltForCloud\\AuditActorType' => 'ArtisanBuild\\BuiltForCloud\\AuditActorType',
+            'ArtisanBuild\\BuiltForCloud\\Audit\\AppActorType' => 'ArtisanBuild\\BuiltForCloud\\Audit\\AppActorType',
+            'ArtisanBuild\\BuiltForCloud\\SubjectType' => 'ArtisanBuild\\BfcClient\\SubjectType',
+        ] as $enum => $sourceClass) {
+            $code = $classes[$enum]['code'] ?? $classes[$sourceClass]['code'] ?? '';
             preg_match_all('/\bcase\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*[\'\"]([^\'\"]+)[\'\"]/', $code, $cases, PREG_SET_ORDER);
 
             foreach ($cases as $case) {
@@ -656,6 +674,10 @@ final class CredentialPathInventory
                 && str_contains($code, 'CredentialKind::Hmac')) {
                 $items[] = 'key-selection:'.$sink;
             }
+        }
+
+        if (self::hasSharedHmacVerifierSeam($classes)) {
+            $items[] = 'key-selection:ArtisanBuild\\BuiltForCloud\\Hmac\\HmacVerifier';
         }
 
         $asymmetric = 'ArtisanBuild\\BuiltForCloud\\AsymmetricVerificationKeys';
@@ -1087,7 +1109,7 @@ final class CredentialPathInventory
             }
 
             $short = $constructorType[1];
-            $dependency = $imports[$short] ?? ($namespace === '' ? $short : $namespace.'\\'.$short);
+            $dependency = self::compatibilityIdentity($imports[$short] ?? ($namespace === '' ? $short : $namespace.'\\'.$short));
 
             if (self::isResolutionService($dependency)) {
                 $dependencies[] = $dependency;
@@ -1095,7 +1117,7 @@ final class CredentialPathInventory
         }
 
         foreach ($locatedTypes[1] as $short) {
-            $dependency = $imports[$short] ?? ($namespace === '' ? $short : $namespace.'\\'.$short);
+            $dependency = self::compatibilityIdentity($imports[$short] ?? ($namespace === '' ? $short : $namespace.'\\'.$short));
 
             if (self::isResolutionService($dependency)) {
                 $dependencies[] = $dependency;
@@ -1103,6 +1125,43 @@ final class CredentialPathInventory
         }
 
         return array_values(array_unique($dependencies));
+    }
+
+    /** @param array<string, array{code: string, imports: array<string, string>}> $classes */
+    private static function hasSharedHmacVerifierSeam(array $classes): bool
+    {
+        $shared = $classes['ArtisanBuild\\BfcClient\\Hmac\\HmacVerifier']['code'] ?? '';
+        $store = $classes['ArtisanBuild\\BuiltForCloud\\Hmac\\UnifiedHmacCredentialStore']['code'] ?? '';
+        $compatibility = $classes['ArtisanBuild\\BuiltForCloud\\Hmac\\HmacVerifier']['code'] ?? '';
+        $provider = $classes['ArtisanBuild\\BuiltForCloud\\BuiltForCloudServiceProvider']['code'] ?? '';
+
+        return str_contains($shared, 'HmacCredentialStore')
+            && str_contains($shared, '$this->credentials->find(')
+            && str_contains($shared, 'CredentialPurpose::Signing')
+            && str_contains($store, 'Credential::query()')
+            && str_contains($store, 'CredentialKind::Hmac')
+            && str_contains($store, 'CredentialPurpose::Signing')
+            && str_contains($compatibility, 'SharedHmacVerifier')
+            && str_contains($compatibility, 'public function verify(')
+            && str_contains($provider, 'HmacCredentialStore::class')
+            && str_contains($provider, 'UnifiedHmacCredentialStore');
+    }
+
+    /** @param array<string, array{code: string, imports: array<string, string>}> $classes */
+    private static function sharedHmacVerifierSeamCode(array $classes): string
+    {
+        return implode("\n", [
+            $classes['ArtisanBuild\\BfcClient\\Hmac\\HmacVerifier']['code'] ?? '',
+            $classes['ArtisanBuild\\BuiltForCloud\\Hmac\\UnifiedHmacCredentialStore']['code'] ?? '',
+            $classes['ArtisanBuild\\BuiltForCloud\\Hmac\\HmacVerifier']['code'] ?? '',
+        ]);
+    }
+
+    private static function compatibilityIdentity(string $class): string
+    {
+        return $class === 'ArtisanBuild\\BfcClient\\Hmac\\HmacVerifier'
+            ? 'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacVerifier'
+            : $class;
     }
 
     private static function isResolutionService(string $class): bool

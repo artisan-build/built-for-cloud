@@ -7,15 +7,24 @@ namespace ArtisanBuild\BuiltForCloud\Hmac;
 use ArtisanBuild\BfcClient\BoundCredentialScope;
 use ArtisanBuild\BfcClient\Contracts\HmacCredentialStore;
 use ArtisanBuild\BfcClient\Contracts\HmacVerificationConfiguration;
+use ArtisanBuild\BfcClient\Exceptions\HmacVerificationFailed as SharedHmacVerificationFailed;
 use ArtisanBuild\BfcClient\Hmac\HmacVerifier as SharedHmacVerifier;
 use ArtisanBuild\BfcClient\Subject;
 use ArtisanBuild\BfcClient\VerifiedHmacCredential;
 use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
 use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
 use ArtisanBuild\BuiltForCloud\ManagedAccountAccess;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 
-/** @deprecated Use ArtisanBuild\BfcClient\Hmac\HmacVerifier. */
+/**
+ * Compatibility boundary over the client-owned verifier. Its shared replay
+ * algorithm keeps the nonce entry beyond the inclusive timestamp interval,
+ * so a nonce accepted once cannot be accepted again anywhere in its valid
+ * window — boundary included.
+ *
+ * @deprecated Use ArtisanBuild\BfcClient\Hmac\HmacVerifier.
+ */
 final class HmacVerifier
 {
     private readonly SharedHmacVerifier $shared;
@@ -45,7 +54,11 @@ final class HmacVerifier
         string $body,
         ?string $audience = null,
     ): Credential {
-        $verified = $this->shared->verify($subject, $header, $body, $audience);
+        try {
+            $verified = $this->shared->verify($subject, $header, $body, $audience);
+        } catch (SharedHmacVerificationFailed $failure) {
+            throw HmacVerificationFailed::fromShared($failure);
+        }
         /** @var Credential|null $credential */
         $credential = Credential::query()->whereKey($verified->credentialId)->first();
 
@@ -61,6 +74,10 @@ final class HmacVerifier
         string $header,
         string $body,
     ): VerifiedHmacCredential {
-        return $this->shared->verifyBound($scope, $header, $body);
+        try {
+            return $this->shared->verifyBound($scope, $header, $body);
+        } catch (SharedHmacVerificationFailed $failure) {
+            throw HmacVerificationFailed::fromShared($failure);
+        }
     }
 }
