@@ -12,7 +12,7 @@ final readonly class BuiltForCloudAppPurposeRegistry implements HmacAppPurposeRe
 {
     public function __construct(private AppPurposeRegistry $purposes) {}
 
-    public function purpose(string $appPurpose): ?CredentialPurpose
+    public function purpose(string $appPurpose): CredentialPurpose
     {
         return $this->purposes->purpose($appPurpose);
     }

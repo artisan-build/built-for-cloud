@@ -12,7 +12,7 @@ final readonly class UiHmacAppPurposeRegistry implements HmacAppPurposeRegistry
 {
     public function __construct(private UiCredentialPurposes $purposes) {}
 
-    public function purpose(string $appPurpose): ?CredentialPurpose
+    public function purpose(string $appPurpose): CredentialPurpose
     {
         return $this->purposes->purposeForSubmission($appPurpose);
     }
