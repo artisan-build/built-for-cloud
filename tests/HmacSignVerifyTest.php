@@ -2,8 +2,8 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BfcClient\Hmac\HmacVerifier;
 use ArtisanBuild\BfcClient\Exceptions\HmacVerificationFailed;
+use ArtisanBuild\BfcClient\Hmac\HmacVerifier;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\ResolvesHmacSubjects;
 use ArtisanBuild\BuiltForCloud\Credential;
