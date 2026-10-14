@@ -4,6 +4,12 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud;
 
+use ArtisanBuild\BfcClient\Actions\InstallHmacCredentialFromClaim;
+use ArtisanBuild\BfcClient\Contracts\HmacAppPurposeRegistry;
+use ArtisanBuild\BfcClient\Contracts\HmacCredentialStore;
+use ArtisanBuild\BfcClient\Contracts\HmacVerificationConfiguration;
+use ArtisanBuild\BfcClient\Hmac\HmacKeyring;
+use ArtisanBuild\BfcClient\Hmac\HmacVerifier;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialResolver;
 use ArtisanBuild\BuiltForCloud\Auth\HumanAuthConfiguration;
@@ -33,6 +39,11 @@ use ArtisanBuild\BuiltForCloud\Contracts\ResolvesAsymmetricEnrollmentScope;
 use ArtisanBuild\BuiltForCloud\Contracts\UsageReporter;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipReleasePending;
 use ArtisanBuild\BuiltForCloud\Events\OwnershipTransferred;
+use ArtisanBuild\BuiltForCloud\Hmac\BuiltForCloudAppPurposeRegistry;
+use ArtisanBuild\BuiltForCloud\Hmac\BuiltForCloudHmacVerification;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
+use ArtisanBuild\BuiltForCloud\Hmac\UiHmacAppPurposeRegistry;
+use ArtisanBuild\BuiltForCloud\Hmac\UnifiedHmacCredentialStore;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\AuthenticateMcp;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnforceProductMcpRequestId;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureContractMajor;
@@ -107,6 +118,20 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
         );
 
         $this->app->singleton(UsageReporter::class, NullUsageReporter::class);
+        $this->app->singleton(HmacCredentialStore::class, fn (Application $app): UnifiedHmacCredentialStore => new UnifiedHmacCredentialStore(
+            $app->make(LifecycleEventRecorder::class),
+            $app->make(ManagedAccountAccess::class),
+            fn (): HmacWriterBarrier => $app->make(HmacWriterBarrier::class),
+        ));
+        $this->app->singleton(HmacAppPurposeRegistry::class, BuiltForCloudAppPurposeRegistry::class);
+        $this->app->singleton(HmacVerificationConfiguration::class, BuiltForCloudHmacVerification::class);
+        $this->app->singleton(HmacKeyring::class);
+        $this->app->singleton(HmacVerifier::class);
+        $this->app->singleton(InstallHmacCredentialFromClaim::class, fn (Application $app): InstallHmacCredentialFromClaim => new InstallHmacCredentialFromClaim(
+            $app->make(UiHmacAppPurposeRegistry::class),
+            $app->make(HmacKeyring::class),
+            $app->make(HmacCredentialStore::class),
+        ));
         $this->app->singleton(CredentialAbilityRegistry::class);
         $this->app->singleton(CredentialAbilities::class);
         $this->app->singleton(SystemAuthorityContext::class);

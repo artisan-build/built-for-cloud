@@ -9,14 +9,16 @@ it('derives HMAC plaintext access and permits only the authenticated transfer bo
     $inventory = HmacSecretSurfaceInventory::discover(dirname(__DIR__).'/src');
 
     expect($inventory['plaintext_access'])->toContain(
-        'ArtisanBuild\\BuiltForCloud\\Actions\\InstallHmacCredentialFromClaim::install',
+        'ArtisanBuild\\BfcClient\\Actions\\InstallHmacCredentialFromClaim::install',
+        'ArtisanBuild\\BfcClient\\Hmac\\HmacKeyring::decrypt',
+        'ArtisanBuild\\BfcClient\\Hmac\\HmacVerifier::verifySignatureAndConsume',
+        'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacKeyring::decrypt',
         'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacSigner::signBound',
-        'ArtisanBuild\\BuiltForCloud\\Hmac\\HmacVerifier::verifyBound',
         'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::deliverPendingSigningKey',
     )->and($inventory['allowed_egress'])->toBe([
+        'ArtisanBuild\\BfcClient\\ImportedHmacSecret::reveal',
         'ArtisanBuild\\BuiltForCloud\\HttpHmacCredentialIssuerClient::claim',
         'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::deliverPendingSigningKey',
-        'ArtisanBuild\\BuiltForCloud\\ImportedHmacSecret::reveal',
         'ArtisanBuild\\BuiltForCloud\\MintedSecret::reveal',
     ])->and($inventory['reported_egress'])->toBe([])
         ->and($inventory['process_arguments'])->toBe([])

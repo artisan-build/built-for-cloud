@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Http\Middleware;
 
+use ArtisanBuild\BfcClient\Exceptions\HmacKeyUnreadable;
+use ArtisanBuild\BfcClient\Exceptions\HmacVerificationFailed;
+use ArtisanBuild\BfcClient\Hmac\HmacEnvelope;
+use ArtisanBuild\BfcClient\Hmac\HmacVerifier;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\ResolvesHmacSubjects;
-use ArtisanBuild\BuiltForCloud\Exceptions\HmacKeyUnreadable;
-use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
-use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
-use ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier;
 use Closure;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Http\JsonResponse;
@@ -76,7 +76,7 @@ final class VerifyHmacSignature
             return $this->reject();
         }
 
-        $request->attributes->set('bfc.hmac_credential_id', $credential->id);
+        $request->attributes->set('bfc.hmac_credential_id', $credential->credentialId);
 
         return $next($request);
     }

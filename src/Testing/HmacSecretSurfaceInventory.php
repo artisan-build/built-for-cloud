@@ -22,9 +22,9 @@ final class HmacSecretSurfaceInventory
 
     /** @var list<string> */
     private const array ALLOWED_EGRESS = [
+        'ArtisanBuild\\BfcClient\\ImportedHmacSecret::reveal',
         'ArtisanBuild\\BuiltForCloud\\Http\\Controllers\\ManageOnboarding::deliverPendingSigningKey',
         'ArtisanBuild\\BuiltForCloud\\HttpHmacCredentialIssuerClient::claim',
-        'ArtisanBuild\\BuiltForCloud\\ImportedHmacSecret::reveal',
         'ArtisanBuild\\BuiltForCloud\\MintedSecret::reveal',
     ];
 
@@ -48,7 +48,7 @@ final class HmacSecretSurfaceInventory
             foreach (self::methods($source) as $method => $code) {
                 $member = $namespace[1].'\\'.$class[1].'::'.$method;
 
-                if (preg_match('/->(?:decrypt|reveal)\s*\(/', $code) === 1
+                if (preg_match('/->(?:decrypt|decryptString|reveal)\s*\(/', $code) === 1
                     && preg_match('/Hmac|hmac|signing_key|signingKey|plaintext|ImportedHmacSecret/', $source.$code) === 1) {
                     $access[] = $member;
                 }
@@ -98,7 +98,11 @@ final class HmacSecretSurfaceInventory
     {
         $sources = [];
 
-        foreach ([[$sourceRoot, true], ...array_map(static fn (string $root): array => [$root, false], $additionalRoots)] as [$root, $production]) {
+        foreach ([
+            [$sourceRoot, true],
+            [SharedCallbackSecuritySource::rootFor($sourceRoot), false],
+            ...array_map(static fn (string $root): array => [$root, false], $additionalRoots),
+        ] as [$root, $production]) {
             $files = is_file($root)
                 ? [new SplFileInfo($root)]
                 : iterator_to_array(new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)));

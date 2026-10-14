@@ -81,7 +81,7 @@ final class SigningRootInventory
                     }
                 }
 
-                if (str_contains($record['code'], 'HmacKeyring') && preg_match('/->decrypt\s*\(/', $code) === 1) {
+                if (str_contains($record['code'], 'HmacKeyring') && preg_match('/->(?:decrypt|decryptString)\s*\(/', $code) === 1) {
                     $decryptSites[] = $member;
 
                     if (self::rootReachable($class, $code)) {
@@ -233,7 +233,11 @@ final class SigningRootInventory
     {
         $classes = [];
 
-        foreach ([[$sourceRoot, true], ...array_map(static fn (string $root): array => [$root, false], $additionalRoots)] as [$root, $production]) {
+        foreach ([
+            [$sourceRoot, true],
+            [SharedCallbackSecuritySource::rootFor($sourceRoot), false],
+            ...array_map(static fn (string $root): array => [$root, false], $additionalRoots),
+        ] as [$root, $production]) {
             foreach (self::phpFiles($root, $production) as $file) {
                 $code = self::withoutComments((string) file_get_contents($file));
 

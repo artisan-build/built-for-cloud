@@ -39,7 +39,7 @@ it('validates every bound string and the shared audience grammar', function (arr
         $values['installation'],
         $values['application'],
         $values['audience'],
-    ))->toThrow(InvalidCredentialInput::class, 'bound credential scope is invalid');
+    ))->toThrow(InvalidArgumentException::class, 'bound credential scope is invalid');
 })->with([
     'empty' => [['installation' => '']],
     'control' => [['application' => "app\n1"]],
