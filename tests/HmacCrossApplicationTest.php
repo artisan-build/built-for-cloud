@@ -2,9 +2,10 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BfcClient\Actions\InstallHmacCredentialFromClaim;
+use ArtisanBuild\BfcClient\Hmac\HmacVerifier;
 use ArtisanBuild\BuiltForCloud\Actions\ActivateCredential;
 use ArtisanBuild\BuiltForCloud\Actions\CutOverImportedHmacCredential;
-use ArtisanBuild\BfcClient\Actions\InstallHmacCredentialFromClaim;
 use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
 use ArtisanBuild\BuiltForCloud\Actions\RotateCredential;
 use ArtisanBuild\BuiltForCloud\AuditReason;
@@ -26,7 +27,6 @@ use ArtisanBuild\BuiltForCloud\Exceptions\RewrapInProgress;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacSigner;
-use ArtisanBuild\BfcClient\Hmac\HmacVerifier;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacWriterBarrier;
 use ArtisanBuild\BuiltForCloud\HmacCredentialTransfer;
 use ArtisanBuild\BuiltForCloud\HttpHmacCredentialIssuerClient;

@@ -1,28 +1,48 @@
 <?php
 
 declare(strict_types=1);
+use ArtisanBuild\BfcClient\BoundCredentialScope;
+use ArtisanBuild\BfcClient\ClaimedHmacCredential;
+use ArtisanBuild\BfcClient\Contracts\HmacCredentialIssuerClient;
+use ArtisanBuild\BfcClient\CredentialKind;
+use ArtisanBuild\BfcClient\CredentialMaterialRole;
+use ArtisanBuild\BfcClient\CredentialPurpose;
+use ArtisanBuild\BfcClient\CredentialStatus;
+use ArtisanBuild\BfcClient\Exceptions\HmacCredentialTransferRefused;
+use ArtisanBuild\BfcClient\Exceptions\HmacKeyUnreadable;
+use ArtisanBuild\BfcClient\Exceptions\HmacVerificationFailed;
+use ArtisanBuild\BfcClient\Hmac\EncryptedHmacKey;
+use ArtisanBuild\BfcClient\Hmac\HmacEnvelope;
+use ArtisanBuild\BfcClient\HmacCredentialTransfer;
+use ArtisanBuild\BfcClient\ImportedHmacSecret;
+use ArtisanBuild\BfcClient\InstalledHmacCredential;
+use ArtisanBuild\BfcClient\IssuerHmacCutoverReceipt;
+use ArtisanBuild\BfcClient\SensitiveString;
+use ArtisanBuild\BfcClient\Subject;
+use ArtisanBuild\BfcClient\SubjectType;
+use ArtisanBuild\BfcClient\VerifiedHmacCredential;
 
 $aliases = [
-    ArtisanBuild\BfcClient\BoundCredentialScope::class => ArtisanBuild\BuiltForCloud\BoundCredentialScope::class,
-    ArtisanBuild\BfcClient\ClaimedHmacCredential::class => ArtisanBuild\BuiltForCloud\ClaimedHmacCredential::class,
-    ArtisanBuild\BfcClient\Contracts\HmacCredentialIssuerClient::class => ArtisanBuild\BuiltForCloud\Contracts\HmacCredentialIssuerClient::class,
-    ArtisanBuild\BfcClient\CredentialKind::class => ArtisanBuild\BuiltForCloud\CredentialKind::class,
-    ArtisanBuild\BfcClient\CredentialMaterialRole::class => ArtisanBuild\BuiltForCloud\CredentialMaterialRole::class,
-    ArtisanBuild\BfcClient\CredentialPurpose::class => ArtisanBuild\BuiltForCloud\CredentialPurpose::class,
-    ArtisanBuild\BfcClient\CredentialStatus::class => ArtisanBuild\BuiltForCloud\CredentialStatus::class,
-    ArtisanBuild\BfcClient\Exceptions\HmacCredentialTransferRefused::class => ArtisanBuild\BuiltForCloud\Exceptions\HmacCredentialTransferRefused::class,
-    ArtisanBuild\BfcClient\Exceptions\HmacKeyUnreadable::class => ArtisanBuild\BuiltForCloud\Exceptions\HmacKeyUnreadable::class,
-    ArtisanBuild\BfcClient\Exceptions\HmacVerificationFailed::class => ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed::class,
-    ArtisanBuild\BfcClient\Hmac\EncryptedHmacKey::class => ArtisanBuild\BuiltForCloud\Hmac\EncryptedHmacKey::class,
-    ArtisanBuild\BfcClient\Hmac\HmacEnvelope::class => ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope::class,
-    ArtisanBuild\BfcClient\HmacCredentialTransfer::class => ArtisanBuild\BuiltForCloud\HmacCredentialTransfer::class,
-    ArtisanBuild\BfcClient\ImportedHmacSecret::class => ArtisanBuild\BuiltForCloud\ImportedHmacSecret::class,
-    ArtisanBuild\BfcClient\InstalledHmacCredential::class => ArtisanBuild\BuiltForCloud\InstalledHmacCredential::class,
-    ArtisanBuild\BfcClient\IssuerHmacCutoverReceipt::class => ArtisanBuild\BuiltForCloud\IssuerHmacCutoverReceipt::class,
-    ArtisanBuild\BfcClient\SensitiveString::class => ArtisanBuild\BuiltForCloud\SensitiveString::class,
-    ArtisanBuild\BfcClient\Subject::class => ArtisanBuild\BuiltForCloud\Subject::class,
-    ArtisanBuild\BfcClient\SubjectType::class => ArtisanBuild\BuiltForCloud\SubjectType::class,
-    ArtisanBuild\BfcClient\VerifiedHmacCredential::class => ArtisanBuild\BuiltForCloud\VerifiedHmacCredential::class,
+    BoundCredentialScope::class => ArtisanBuild\BuiltForCloud\BoundCredentialScope::class,
+    ClaimedHmacCredential::class => ArtisanBuild\BuiltForCloud\ClaimedHmacCredential::class,
+    HmacCredentialIssuerClient::class => ArtisanBuild\BuiltForCloud\Contracts\HmacCredentialIssuerClient::class,
+    CredentialKind::class => ArtisanBuild\BuiltForCloud\CredentialKind::class,
+    CredentialMaterialRole::class => ArtisanBuild\BuiltForCloud\CredentialMaterialRole::class,
+    CredentialPurpose::class => ArtisanBuild\BuiltForCloud\CredentialPurpose::class,
+    CredentialStatus::class => ArtisanBuild\BuiltForCloud\CredentialStatus::class,
+    HmacCredentialTransferRefused::class => ArtisanBuild\BuiltForCloud\Exceptions\HmacCredentialTransferRefused::class,
+    HmacKeyUnreadable::class => ArtisanBuild\BuiltForCloud\Exceptions\HmacKeyUnreadable::class,
+    HmacVerificationFailed::class => ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed::class,
+    EncryptedHmacKey::class => ArtisanBuild\BuiltForCloud\Hmac\EncryptedHmacKey::class,
+    HmacEnvelope::class => ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope::class,
+    HmacCredentialTransfer::class => ArtisanBuild\BuiltForCloud\HmacCredentialTransfer::class,
+    ImportedHmacSecret::class => ArtisanBuild\BuiltForCloud\ImportedHmacSecret::class,
+    InstalledHmacCredential::class => ArtisanBuild\BuiltForCloud\InstalledHmacCredential::class,
+    IssuerHmacCutoverReceipt::class => ArtisanBuild\BuiltForCloud\IssuerHmacCutoverReceipt::class,
+    SensitiveString::class => ArtisanBuild\BuiltForCloud\SensitiveString::class,
+    Subject::class => ArtisanBuild\BuiltForCloud\Subject::class,
+    SubjectType::class => ArtisanBuild\BuiltForCloud\SubjectType::class,
+    VerifiedHmacCredential::class => ArtisanBuild\BuiltForCloud\VerifiedHmacCredential::class,
 ];
 
 foreach ($aliases as $implementation => $compatibilityName) {

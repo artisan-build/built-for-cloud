@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BfcClient\Actions\InstallHmacCredentialFromClaim;
+use ArtisanBuild\BfcClient\AppPurposeRegistry;
+use ArtisanBuild\BfcClient\ConfiguredHmacVerification;
 use ArtisanBuild\BfcClient\Contracts\HmacAppPurposeRegistry;
 use ArtisanBuild\BfcClient\Contracts\HmacCredentialStore;
 use ArtisanBuild\BfcClient\Contracts\HmacVerificationConfiguration;
@@ -16,6 +18,7 @@ use ArtisanBuild\BfcClient\Hmac\HmacVerifier as SharedHmacVerifier;
 use ArtisanBuild\BfcClient\StoredHmacCredential;
 use ArtisanBuild\BuiltForCloud\Actions\InstallHmacCredentialFromClaim as CompatibleInstallHmacCredentialFromClaim;
 use ArtisanBuild\BuiltForCloud\AuditReason;
+use ArtisanBuild\BuiltForCloud\Contracts\HmacCredentialIssuerClient;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialProtocolBinding;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
@@ -48,7 +51,7 @@ it('keeps the built-for-cloud compatibility symbols on the client-owned implemen
         ->and($envelope)->toBeInstanceOf(SharedHmacEnvelope::class)
         ->and(is_a(HmacVerificationFailed::class, SharedHmacVerificationFailed::class, true))->toBeTrue()
         ->and(is_a(
-            ArtisanBuild\BuiltForCloud\Contracts\HmacCredentialIssuerClient::class,
+            HmacCredentialIssuerClient::class,
             ArtisanBuild\BfcClient\Contracts\HmacCredentialIssuerClient::class,
             true,
         ))->toBeTrue()
@@ -59,8 +62,8 @@ it('keeps the built-for-cloud compatibility symbols on the client-owned implemen
 
 it('resolves the shared security algorithms over the unified store adapters', function (): void {
     expect(app(HmacCredentialStore::class))->toBeInstanceOf(UnifiedHmacCredentialStore::class)
-        ->and(app(HmacAppPurposeRegistry::class))->not->toBeInstanceOf(ArtisanBuild\BfcClient\AppPurposeRegistry::class)
-        ->and(app(HmacVerificationConfiguration::class))->not->toBeInstanceOf(ArtisanBuild\BfcClient\ConfiguredHmacVerification::class)
+        ->and(app(HmacAppPurposeRegistry::class))->not->toBeInstanceOf(AppPurposeRegistry::class)
+        ->and(app(HmacVerificationConfiguration::class))->not->toBeInstanceOf(ConfiguredHmacVerification::class)
         ->and(app(SharedHmacKeyring::class))->toBeInstanceOf(SharedHmacKeyring::class)
         ->and(app(SharedHmacVerifier::class))->toBeInstanceOf(SharedHmacVerifier::class)
         ->and(app(InstallHmacCredentialFromClaim::class))->toBeInstanceOf(InstallHmacCredentialFromClaim::class);
