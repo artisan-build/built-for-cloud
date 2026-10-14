@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use ArtisanBuild\BuiltForCloud\Actions\InstallHmacCredentialFromClaim;
+use ArtisanBuild\BfcClient\Actions\InstallHmacCredentialFromClaim;
 use ArtisanBuild\BuiltForCloud\BoundCredentialScope;
 use ArtisanBuild\BuiltForCloud\ClaimedHmacCredential;
 use ArtisanBuild\BuiltForCloud\Contracts\HmacCredentialIssuerClient;

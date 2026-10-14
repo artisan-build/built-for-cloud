@@ -6,6 +6,7 @@
     "type": "library",
     "require": {
         "php": "^8.3",
+        "artisan-build/bfc-client": "^0.2.2",
         "artisan-build/built-for-cloud-contracts": "^0.4",
         "composer/semver": "^3.4",
         "illuminate/auth": "^13.24",
@@ -32,6 +33,9 @@
         "pestphp/pest": "^4.0"
     },
     "autoload": {
+        "files": [
+            "src/compatibility-aliases.php"
+        ],
         "psr-4": {
             "ArtisanBuild\\BuiltForCloud\\": "src/"
         }

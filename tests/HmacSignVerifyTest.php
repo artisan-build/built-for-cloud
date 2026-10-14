@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BfcClient\Hmac\HmacVerifier;
 use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Contracts\ResolvesHmacSubjects;
 use ArtisanBuild\BuiltForCloud\Credential;
@@ -11,7 +12,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\HmacVerificationFailed;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacSigner;
-use ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier;
+use ArtisanBuild\BuiltForCloud\Hmac\HmacVerifier as CompatibleHmacVerifier;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\DetectsSecretLeaks;
@@ -91,15 +92,15 @@ it('signs with the active key and verifies through the canonical envelope, stamp
 
     $verified = app(HmacVerifier::class)->verify(hmacSubject(), $header, $body);
 
-    expect($verified->id)->toBe($credential->id)
-        ->and($verified->refresh()->last_used_at)->not->toBeNull();
+    expect($verified->credentialId)->toBe($credential->id)
+        ->and($credential->refresh()->last_used_at)->not->toBeNull();
 });
 
 it('preserves direct one-argument verifier construction', function (): void {
     $credential = activeKeyFor('acme');
     $header = headerSignedBy($credential, 'body');
 
-    $verified = (new HmacVerifier(app(HmacKeyring::class)))->verify(hmacSubject(), $header, 'body');
+    $verified = (new CompatibleHmacVerifier(app(HmacKeyring::class)))->verify(hmacSubject(), $header, 'body');
 
     expect($verified->id)->toBe($credential->id);
 });
@@ -142,7 +143,7 @@ it('retains equal audience arguments as compatibility confirmations, never overr
     $audience = (string) config('built-for-cloud.hmac.audience');
     $header = app(HmacSigner::class)->sign(hmacSubject(), 'body', 'evt', $audience);
 
-    expect(app(HmacVerifier::class)->verify(hmacSubject(), $header, 'body', $audience)->id)
+    expect(app(HmacVerifier::class)->verify(hmacSubject(), $header, 'body', $audience)->credentialId)
         ->toBe($credential->id);
 });
 
@@ -204,7 +205,7 @@ it('refuses a revoked HMAC row at both ordinary selectors', function (): void {
 
     expect(fn (): string => app(HmacSigner::class)->sign(hmacSubject('revoked-purpose-control'), 'body', 'evt'))
         ->toThrow(HmacSigningRefused::class)
-        ->and(fn (): Credential => app(HmacVerifier::class)->verify(
+        ->and(fn () => app(HmacVerifier::class)->verify(
             hmacSubject('revoked-purpose-control'),
             $header,
             'body',
@@ -277,8 +278,8 @@ it('verifies old AND new through the grace window by key id, only the new after 
     $newHeader = headerSignedBy($new, $body);
 
     // Through grace: BOTH verify, the key id selecting which key checks.
-    expect(app(HmacVerifier::class)->verify(hmacSubject(), $oldHeader, $body)->id)->toBe($old->id)
-        ->and(app(HmacVerifier::class)->verify(hmacSubject(), $newHeader, $body)->id)->toBe($new->id);
+    expect(app(HmacVerifier::class)->verify(hmacSubject(), $oldHeader, $body)->credentialId)->toBe($old->id)
+        ->and(app(HmacVerifier::class)->verify(hmacSubject(), $newHeader, $body)->credentialId)->toBe($new->id);
 
     // After grace: only the new — the old died by its own expiry.
     $this->travel(61)->minutes();
@@ -286,10 +287,10 @@ it('verifies old AND new through the grace window by key id, only the new after 
     $oldLate = headerSignedBy($old, $body);
     $newLate = headerSignedBy($new, $body);
 
-    expect(fn (): Credential => app(HmacVerifier::class)->verify(hmacSubject(), $oldLate, $body))
+    expect(fn () => app(HmacVerifier::class)->verify(hmacSubject(), $oldLate, $body))
         ->toThrow(HmacVerificationFailed::class);
 
-    expect(app(HmacVerifier::class)->verify(hmacSubject(), $newLate, $body)->id)->toBe($new->id);
+    expect(app(HmacVerifier::class)->verify(hmacSubject(), $newLate, $body)->credentialId)->toBe($new->id);
 });
 
 it('kills old-key verification immediately under an emergency retirement (locked AC 5)', function (): void {
@@ -365,7 +366,7 @@ it('accepts a timestamp exactly at the tolerance bound and rejects one second pa
 
     $atBound = headerSignedBy($credential, 'body', timestamp: now()->getTimestamp() - 300);
 
-    expect(app(HmacVerifier::class)->verify(hmacSubject(), $atBound, 'body')->id)->toBe($credential->id);
+    expect(app(HmacVerifier::class)->verify(hmacSubject(), $atBound, 'body')->credentialId)->toBe($credential->id);
 
     $pastBound = headerSignedBy($credential, 'body', timestamp: now()->getTimestamp() - 301);
 
@@ -379,7 +380,7 @@ it('accepts a timestamp exactly at the tolerance bound and rejects one second pa
     // The bound is two-sided: a future-dated message is just as stale.
     $future = headerSignedBy($credential, 'body', timestamp: now()->getTimestamp() + 301);
 
-    expect(fn (): Credential => app(HmacVerifier::class)->verify(hmacSubject(), $future, 'body'))
+    expect(fn () => app(HmacVerifier::class)->verify(hmacSubject(), $future, 'body'))
         ->toThrow(HmacVerificationFailed::class);
 });
 
@@ -389,7 +390,7 @@ it('rejects a replayed nonce inside the window, and a replay outliving the windo
     $credential = activeKeyFor('acme');
     $header = headerSignedBy($credential, 'body');
 
-    expect(app(HmacVerifier::class)->verify(hmacSubject(), $header, 'body')->id)->toBe($credential->id);
+    expect(app(HmacVerifier::class)->verify(hmacSubject(), $header, 'body')->credentialId)->toBe($credential->id);
 
     // The exact bytes again, inside the window: the nonce is consumed.
     try {
@@ -424,7 +425,7 @@ it('rejects a replay at the exact edge of the acceptance window: the nonce entry
     // exact edge the nonce entry must still cover.
     $header = headerSignedBy($credential, 'body', timestamp: now()->getTimestamp() + 300);
 
-    expect(app(HmacVerifier::class)->verify(hmacSubject(), $header, 'body')->id)->toBe($credential->id);
+    expect(app(HmacVerifier::class)->verify(hmacSubject(), $header, 'body')->credentialId)->toBe($credential->id);
 
     $this->travel(600)->seconds();
 
@@ -449,7 +450,7 @@ it('caps accepted verifications per key per window, so one credential cannot fil
     foreach (range(1, 3) as $i) {
         $header = headerSignedBy($credential, 'body-'.$i);
 
-        expect(app(HmacVerifier::class)->verify(hmacSubject(), $header, 'body-'.$i)->id)->toBe($credential->id);
+        expect(app(HmacVerifier::class)->verify(hmacSubject(), $header, 'body-'.$i)->credentialId)->toBe($credential->id);
     }
 
     // The fourth ACCEPTED verification inside the window is refused —
@@ -467,7 +468,7 @@ it('caps accepted verifications per key per window, so one credential cannot fil
     // The ceiling is PER KEY: another credential's traffic is untouched.
     $bystanderHeader = headerSignedBy($bystander, 'body');
 
-    expect(app(HmacVerifier::class)->verify(hmacSubject('other'), $bystanderHeader, 'body')->id)->toBe($bystander->id);
+    expect(app(HmacVerifier::class)->verify(hmacSubject('other'), $bystanderHeader, 'body')->credentialId)->toBe($bystander->id);
 });
 
 it('spends no rate budget on replays: one captured envelope replayed N times cannot rate-limit the legitimate holder (rework attempt-3 Fix 2)', function (): void {
@@ -478,7 +479,7 @@ it('spends no rate budget on replays: one captured envelope replayed N times can
     // One genuine verification: one nonce slot, one budget unit.
     $captured = headerSignedBy($credential, 'body-1');
 
-    expect(app(HmacVerifier::class)->verify(hmacSubject(), $captured, 'body-1')->id)->toBe($credential->id);
+    expect(app(HmacVerifier::class)->verify(hmacSubject(), $captured, 'body-1')->credentialId)->toBe($credential->id);
 
     // The attacker replays the captured envelope five times: every one
     // is rejected as a replay, and NONE spends a budget unit.
@@ -495,7 +496,7 @@ it('spends no rate budget on replays: one captured envelope replayed N times can
     foreach ([2, 3] as $i) {
         $fresh = headerSignedBy($credential, 'body-'.$i);
 
-        expect(app(HmacVerifier::class)->verify(hmacSubject(), $fresh, 'body-'.$i)->id)->toBe($credential->id);
+        expect(app(HmacVerifier::class)->verify(hmacSubject(), $fresh, 'body-'.$i)->credentialId)->toBe($credential->id);
     }
 
     // And the ceiling still binds a genuine flood of NEW nonces.
@@ -590,12 +591,12 @@ it('rejects a tampered body and a tampered envelope field under a valid signatur
     $credential = activeKeyFor('acme');
     $header = headerSignedBy($credential, 'body');
 
-    expect(fn (): Credential => app(HmacVerifier::class)->verify(hmacSubject(), $header, 'tampered-body'))
+    expect(fn () => app(HmacVerifier::class)->verify(hmacSubject(), $header, 'tampered-body'))
         ->toThrow(HmacVerificationFailed::class);
 
     $retargeted = str_replace('event=test.event', 'event=other.event', $header);
 
-    expect(fn (): Credential => app(HmacVerifier::class)->verify(hmacSubject(), $retargeted, 'body'))
+    expect(fn () => app(HmacVerifier::class)->verify(hmacSubject(), $retargeted, 'body'))
         ->toThrow(HmacVerificationFailed::class);
 });
 
