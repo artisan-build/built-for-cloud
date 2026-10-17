@@ -212,8 +212,7 @@ final class ActingPrincipalResolver
     private function requestPrincipal(
         #[SensitiveParameter] Request $request,
         ?string $applicableGuard,
-    ): mixed
-    {
+    ): mixed {
         $guardConfigured = $applicableGuard !== null
             && is_array(config('auth.guards.'.$applicableGuard));
 
