@@ -7,6 +7,7 @@ namespace ArtisanBuild\BuiltForCloud\Console;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\Exceptions\DelegatedPrincipalUnsupported;
 use ArtisanBuild\BuiltForCloud\Exceptions\NoActingPrincipal;
+use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Contracts\Auth\UserProvider;
@@ -31,9 +32,11 @@ use SensitiveParameter;
  * request assertion wins over any request principal; without one, the
  * request resolver's principal is returned unchanged.
  *
- * ONE VALUE, not two equal answers. {@see resolve()} memoizes and hands
- * back the identical object to every caller. The memo is keyed on the
- * REQUEST INSTANCE — not merely set once, because this singleton
+ * ONE VALUE, not two equal answers. For the same supplied request state,
+ * {@see resolve()} memoizes and hands back the identical object to every
+ * caller. Different supplied Request instances may correctly produce
+ * different objects. The memo is keyed on the REQUEST INSTANCE — not
+ * merely set once, because this singleton
  * outlives a single request in a long-lived worker, and a principal
  * resolved for an earlier request must never leak into this one (the
  * same discipline {@see CredentialGuard} applies for the same reason) —
@@ -116,7 +119,9 @@ final class ActingPrincipalResolver
 
     /**
      * Resolve the host application's local user row when the acting source
-     * has one. A verified delegated actor never aliases a local user.
+     * has one. A verified delegated actor never aliases a local user, and a
+     * contained local row is not returned. Null is a projection result, not
+     * an authorization decision; authorize the acting principal separately.
      */
     public function localUser(#[SensitiveParameter] Request $request): ?Authenticatable
     {
@@ -129,7 +134,10 @@ final class ActingPrincipalResolver
         $principal = $acting->principal;
 
         if (! $principal instanceof Credential) {
-            return $principal;
+            return $principal instanceof Authenticatable
+                && ! OffboardedSubject::userOrSubjectIsOffboarded($request, $principal)
+                    ? $principal
+                    : null;
         }
 
         $userId = $principal->user_id;
@@ -141,11 +149,13 @@ final class ActingPrincipalResolver
         $provider = $this->localUserProvider($acting->guard);
         $user = $provider?->retrieveById($userId);
 
-        if ($user === null || $this->isDelegatedActor($user)) {
+        if ($user === null
+            || $this->isDelegatedActor($user)
+            || ! hash_equals((string) $user->getAuthIdentifier(), $userId)) {
             return null;
         }
 
-        return hash_equals((string) $user->getAuthIdentifier(), $userId) ? $user : null;
+        return OffboardedSubject::userOrSubjectIsOffboarded($request, $user) ? null : $user;
     }
 
     /**

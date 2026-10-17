@@ -106,7 +106,7 @@ final class EnsureUserIsAuthenticated
         // deactivated user is rejected and the surviving session is
         // invalidated, which is the stated compensation for session
         // drivers outside the offboard transaction's reach.
-        if (OffboardedSubject::userIsOffboarded((string) $user->getAuthIdentifier())) {
+        if (OffboardedSubject::userOrSubjectIsOffboarded($request, $user)) {
             if ($request->hasSession()) {
                 $request->session()->invalidate();
             }
