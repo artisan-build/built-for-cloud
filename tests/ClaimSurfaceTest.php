@@ -476,8 +476,9 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     // without changing the absolute pairing vocabulary.
     // App-owned credential abilities add three contract blocks, two of
     // which carry unpaired absolute vocabulary.
-    // The acting-principal API adds two package exception declarations;
-    // each is one block carrying one unpaired absolute in its class name.
+    // The acting-principal API adds two prose blocks with unpaired
+    // absolutes: localUser never aliases a delegated actor, and acting()
+    // never throws when a bare delegated actor reaches it.
     $gateSurfaces = [
         'src/Console', 'src/Audit', 'resources/views',
         'docs/http-contract.md',
