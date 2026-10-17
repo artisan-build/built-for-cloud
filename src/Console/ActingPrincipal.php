@@ -45,7 +45,7 @@ use Illuminate\Contracts\Auth\Authenticatable;
 final readonly class ActingPrincipal
 {
     private function __construct(
-        /** The guard that answered, or null when nobody is acting. */
+        /** The guard that answered, or null for a guardless request principal or nobody. */
         public ?string $guard,
         /**
          * Whether a delegated actor is THE ACTING PRINCIPAL — a verified
@@ -106,7 +106,7 @@ final readonly class ActingPrincipal
         );
     }
 
-    public static function local(string $guard, Authenticatable $user): self
+    public static function local(?string $guard, Authenticatable $user): self
     {
         return new self(
             guard: $guard,

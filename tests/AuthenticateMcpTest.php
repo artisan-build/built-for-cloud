@@ -328,7 +328,7 @@ it('authenticates a unified bearer, records its use and does not leak the prior 
         ->assertJsonPath('user_id', $credential->getKey())
         ->assertJsonPath('actor_token_id', null)
         ->assertJsonPath('actor_credential_id', null)
-        ->assertJsonPath('acting_id', null)
+        ->assertJsonPath('acting_id', $credential->id)
         ->assertJsonPath('delegated', false)
         ->assertJsonPath('system_authority', true);
 
@@ -487,8 +487,8 @@ it('gives a non-admin unified bearer no admin attribution', function (): void {
         ->assertJsonPath('user_id', $credential->id)
         ->assertJsonPath('actor_token_id', null)
         ->assertJsonPath('actor_credential_id', null)
-        ->assertJsonPath('audit_type', null)
-        ->assertJsonPath('audit_ref', null);
+        ->assertJsonPath('audit_type', 'api_token')
+        ->assertJsonPath('audit_ref', $credential->id);
 
     expect(CredentialAuditEvent::query()
         ->where('credential_id', $credential->id)
@@ -527,8 +527,8 @@ it('gives a non-operator with credential admin ability no admin attribution', fu
         ->assertJsonPath('user_id', $credential->id)
         ->assertJsonPath('actor_token_id', null)
         ->assertJsonPath('actor_credential_id', null)
-        ->assertJsonPath('audit_type', null)
-        ->assertJsonPath('audit_ref', null);
+        ->assertJsonPath('audit_type', 'api_token')
+        ->assertJsonPath('audit_ref', $credential->id);
 
     expect(CredentialAuditEvent::query()
         ->where('credential_id', $credential->id)

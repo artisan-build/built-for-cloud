@@ -82,6 +82,8 @@ use Throwable;
  */
 final class AuthenticateMcp
 {
+    private const string EXPLICIT_REQUEST_PRINCIPAL = 'bfc.explicit_request_principal';
+
     public const int REFUSAL_STATUS = 401;
 
     public const string AUDIT_NOTE = 'mcp authentication refused: ';
@@ -143,6 +145,10 @@ final class AuthenticateMcp
             $request->attributes->set('bfc.actor_credential_id', $credential->id);
         }
 
+        // ActingPrincipalResolver uses this internal marker to distinguish
+        // the resolver installed here from Laravel's default resolver in a
+        // headless application, where no auth guard exists to consult.
+        $request->attributes->set(self::EXPLICIT_REQUEST_PRINCIPAL, true);
         $request->setUserResolver(static fn () => $credential);
 
         if ($credential->purpose === CredentialPurpose::Mcp
@@ -222,6 +228,7 @@ final class AuthenticateMcp
      */
     private function forgetCredential(#[SensitiveParameter] Request $request): void
     {
+        $request->attributes->remove(self::EXPLICIT_REQUEST_PRINCIPAL);
         $request->headers->remove('Authorization');
         $request->server->remove('HTTP_AUTHORIZATION');
         $request->server->remove('REDIRECT_HTTP_AUTHORIZATION');
