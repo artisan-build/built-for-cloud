@@ -9,6 +9,7 @@ use ArtisanBuild\BuiltForCloud\Actions\ListCredentials;
 use ArtisanBuild\BuiltForCloud\Actions\MintCredential;
 use ArtisanBuild\BuiltForCloud\AppPurposeRegistry;
 use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
+use ArtisanBuild\BuiltForCloud\AuthorityMode;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\CredentialAuditEvent;
 use ArtisanBuild\BuiltForCloud\CredentialKind;
@@ -23,6 +24,7 @@ use ArtisanBuild\BuiltForCloud\Exceptions\InvalidCredentialInput;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Hmac\SigningRootMac;
+use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintOptions;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
@@ -78,6 +80,59 @@ final class InstallationCredentialUiTest extends TestCase
                 'product_url' => 'https://scalpels.app/products/test-created-installation-credential-application',
             ],
         ]);
+    }
+
+    public function test_managed_installation_credential_controls_render_in_the_package_styled_panel(): void
+    {
+        config(['built-for-cloud.managed.client_secret' => str_repeat('a', 64)]);
+        DB::table('bfc_authority')->where('key', InstallationAuthority::KEY)->update([
+            'mode' => AuthorityMode::Managed->value,
+            'generation' => 2,
+            'issuer' => 'https://issuer.example.test',
+            'connection_id' => 'credential-ui-connection',
+            'organization_id' => 'credential-ui-organization',
+            'installation_id' => 'credential-ui-installation',
+            'authority_base_url' => 'https://authority.example.test',
+            'managed_connection_status' => 'active',
+            'managed_connection_generation' => 2,
+            'managed_connection_roster_version' => 3,
+            'managed_connection_response_sequence' => 4,
+        ]);
+        $actor = $this->user(UserRole::Owner);
+        $actor->forceFill([
+            'scalpels_issuer' => 'https://issuer.example.test',
+            'scalpels_connection_id' => 'credential-ui-connection',
+            'scalpels_id' => 'credential-ui-subject',
+            'managed_membership_status' => 'active',
+            'managed_membership_role' => UserRole::Owner->value,
+            'managed_membership_generation' => 2,
+            'managed_membership_roster_version' => 3,
+            'managed_membership_response_sequence' => 4,
+            'managed_membership_responded_at' => now()->toAtomString(),
+            'membership_confirmed_at' => now(),
+        ])->save();
+
+        $page = $this->actingAsVersioned($actor, 'web')
+            ->get(route('bfc.ui.installation-credentials.index'))
+            ->assertOk()
+            ->assertSee($actor->name);
+        $html = (string) $page->getContent();
+
+        $this->assertMatchesRegularExpression(
+            '/<section(?=[^>]*data-testid="installation-credentials")(?=[^>]*class="[^"]*\\bbfc-auth\\b[^"]*")[^>]*>/',
+            $html,
+        );
+        $this->assertMatchesRegularExpression(
+            '/<div(?=[^>]*data-testid="installation-credentials-panel")(?=[^>]*class="[^"]*\\bbfc-panel\\b[^"]*")[^>]*>/',
+            $html,
+        );
+        $this->assertGreaterThan(0, substr_count($html, 'data-testid="installation-credentials-issue-option"'));
+        $this->assertStringContainsString('test.mcp', $html);
+
+        $css = (string) file_get_contents(__DIR__.'/../resources/dist/bfc.css');
+        $this->assertStringContainsString('.bfc-auth input:not([type=hidden])', $css);
+        $this->assertStringContainsString('.bfc-auth select', $css);
+        $this->assertStringContainsString('.bfc-auth button', $css);
     }
 
     /** @return iterable<string, array{UserRole, string, CredentialPurpose, CredentialKind, SubjectType}> */
