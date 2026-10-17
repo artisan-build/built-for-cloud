@@ -4,7 +4,12 @@ declare(strict_types=1);
 
 namespace ArtisanBuild\BuiltForCloud\Console;
 
+use ArtisanBuild\BuiltForCloud\Credential;
+use ArtisanBuild\BuiltForCloud\Exceptions\DelegatedPrincipalUnsupported;
+use ArtisanBuild\BuiltForCloud\Exceptions\NoActingPrincipal;
 use Illuminate\Auth\AuthManager;
+use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Contracts\Auth\UserProvider;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Http\Request;
 
@@ -15,16 +20,15 @@ use Illuminate\Http\Request;
  * THIS CLASS MUTATES NOTHING — and that is a claim about this class, not
  * about the request. It only ever READS.
  *
- * WHAT IT READS. The route's applicable guard is
- * `AuthManager::getDefaultDriver()`: whatever the app configured, or
- * whatever an `auth:<guard>` middleware just set for the request it runs
- * in. A verified MCP request assertion is read from
+ * WHAT IT READS. A verified MCP request assertion is read from
  * {@see RequestAssertion}, which the MCP middleware published before
- * anything behind it ran.
+ * anything behind it ran. Without one, the supplied request's own user
+ * resolver is authoritative: it carries either a direct credential, the
+ * applicable guard's local session user, or nobody.
  *
  * PRECEDENCE — delegated wins, and there is no union. A verified
- * request assertion wins over a local principal; without one, guard
- * resolution is unchanged.
+ * request assertion wins over any request principal; without one, the
+ * request resolver's principal is returned unchanged.
  *
  * ONE VALUE, not two equal answers. {@see resolve()} memoizes and hands
  * back the identical object to every caller. The memo is keyed on the
@@ -53,6 +57,10 @@ final class ActingPrincipalResolver
 
     private ?ActingPrincipal $resolvedRequestAssertion = null;
 
+    private mixed $resolvedRequestPrincipal = null;
+
+    private bool $resolvedRequestPrincipalSet = false;
+
     public function __construct(private readonly Container $app) {}
 
     /**
@@ -61,47 +69,130 @@ final class ActingPrincipalResolver
      */
     public function resolve(): ActingPrincipal
     {
-        $request = $this->request();
+        return $this->acting($this->request());
+    }
+
+    /**
+     * The one answer to who is acting on the supplied request. A verified
+     * assertion wins; otherwise the supplied request's own user resolver is
+     * authoritative for both direct credentials and local sessions.
+     */
+    public function acting(Request $request): ActingPrincipal
+    {
         $applicable = $this->applicableGuardName();
         $requestAssertion = RequestAssertion::principal($request);
+        $requestPrincipal = $requestAssertion instanceof ActingPrincipal
+            ? null
+            : $this->requestPrincipal($request);
+
+        return $this->actingFromSources($request, $applicable, $requestAssertion, $requestPrincipal);
+    }
+
+    private function actingFromSources(
+        Request $request,
+        ?string $applicable,
+        ?ActingPrincipal $requestAssertion,
+        mixed $requestPrincipal,
+    ): ActingPrincipal {
 
         if ($this->resolvedFor !== $request
             || $this->resolvedUnder !== $applicable
-            || $this->resolvedRequestAssertion !== $requestAssertion) {
+            || $this->resolvedRequestAssertion !== $requestAssertion
+            || ! $this->resolvedRequestPrincipalSet
+            || $this->resolvedRequestPrincipal !== $requestPrincipal) {
             $this->resolved = null;
             $this->resolvedFor = $request;
             $this->resolvedUnder = $applicable;
             $this->resolvedRequestAssertion = $requestAssertion;
+            $this->resolvedRequestPrincipal = $requestPrincipal;
+            $this->resolvedRequestPrincipalSet = true;
         }
 
-        return $this->resolved ??= $this->resolveNow($requestAssertion);
+        return $this->resolved ??= $this->resolveNow($requestAssertion, $requestPrincipal, $applicable);
     }
 
-    private function resolveNow(?ActingPrincipal $requestAssertion): ActingPrincipal
+    /**
+     * Resolve the host application's local user row when the acting source
+     * has one. A verified delegated actor never aliases a local user.
+     */
+    public function localUser(Request $request): ?Authenticatable
     {
+        $acting = $this->acting($request);
+
+        if ($acting->delegated || $acting->principal instanceof DelegatedActor) {
+            return null;
+        }
+
+        $principal = $acting->principal;
+
+        if (! $principal instanceof Credential) {
+            return $principal;
+        }
+
+        $userId = $principal->user_id;
+
+        if ($userId === null || DelegatedActor::isReservedIdentifier($userId)) {
+            return null;
+        }
+
+        $provider = $this->localUserProvider($acting->guard);
+        $user = $provider?->retrieveById($userId);
+
+        if ($user === null || $this->isDelegatedActor($user)) {
+            return null;
+        }
+
+        return hash_equals((string) $user->getAuthIdentifier(), $userId) ? $user : null;
+    }
+
+    /**
+     * @throws DelegatedPrincipalUnsupported
+     * @throws NoActingPrincipal
+     */
+    public function require(Request $request): ActingPrincipal
+    {
+        $applicable = $this->applicableGuardName();
+        $requestAssertion = RequestAssertion::principal($request);
+        $requestPrincipal = $requestAssertion instanceof ActingPrincipal
+            ? null
+            : $this->requestPrincipal($request);
+
+        if (! $requestAssertion instanceof ActingPrincipal
+            && $requestPrincipal instanceof DelegatedActor) {
+            throw new DelegatedPrincipalUnsupported('A delegated actor must come from a verified request assertion.');
+        }
+
+        $acting = $this->actingFromSources($request, $applicable, $requestAssertion, $requestPrincipal);
+
+        if (! $acting->check()) {
+            throw new NoActingPrincipal('No acting principal is available for this request.');
+        }
+
+        return $acting;
+    }
+
+    private function resolveNow(
+        ?ActingPrincipal $requestAssertion,
+        mixed $requestPrincipal,
+        ?string $applicableGuard,
+    ): ActingPrincipal {
         // A verified assertion is the delegated principal for this request,
-        // ahead of any local session and never unioned with it.
+        // ahead of any request user or local session and never unioned with it.
         if ($requestAssertion instanceof ActingPrincipal) {
             return $requestAssertion;
         }
 
-        $guard = $this->localGuardName();
-
-        if ($guard === null) {
+        // A bare delegated actor has no verified claims. acting() never
+        // throws, so it resolves to nobody; require() names the unsupported
+        // delegated source structurally.
+        if (! $requestPrincipal instanceof Authenticatable || $requestPrincipal instanceof DelegatedActor) {
             return ActingPrincipal::none();
         }
 
-        $user = $this->auth()->guard($guard)->user();
-
-        // A delegated actor reached through a guard that is not this
-        // package's carries no verified claims — nothing could attribute
-        // or authorize from it — so it is not a local principal either.
-        // The typed branch fails towards nobody.
-        if ($user === null || $user instanceof DelegatedActor) {
-            return ActingPrincipal::none();
-        }
-
-        return ActingPrincipal::local($guard, $user);
+        return ActingPrincipal::local(
+            $requestPrincipal instanceof Credential ? null : $applicableGuard,
+            $requestPrincipal,
+        );
     }
 
     /**
@@ -115,22 +206,27 @@ final class ActingPrincipalResolver
         return is_string($guard) && $guard !== '' ? $guard : null;
     }
 
-    /**
-     * The applicable guard when it is the app's OWN, or null when it
-     * structurally has none.
-     *
-     * Runtime configuration can remove or replace the package-installed
-     * web guard, and asking the AuthManager for a guard that does not
-     * exist throws — so structural absence is read as "nobody
-     * is acting locally", the same stance {@see CredentialGuard} takes.
-     * A CONFIGURED guard that throws during resolution is a different
-     * state and is left to propagate.
-     */
-    private function localGuardName(): ?string
+    private function requestPrincipal(Request $request): mixed
     {
-        $guard = $this->applicableGuardName();
+        return ($request->getUserResolver())();
+    }
 
-        return $guard === null ? null : (is_array(config('auth.guards.'.$guard)) ? $guard : null);
+    private function localUserProvider(?string $guard): ?UserProvider
+    {
+        $guardConfig = $guard === null ? null : config('auth.guards.'.$guard);
+        $provider = is_array($guardConfig) ? ($guardConfig['provider'] ?? null) : null;
+
+        return $this->auth()->createUserProvider(is_string($provider) ? $provider : 'users');
+    }
+
+    /**
+     * Keep this check behind a method because a configured user provider's
+     * static return type can otherwise make the defensive branch look
+     * impossible to static analysis.
+     */
+    private function isDelegatedActor(Authenticatable $user): bool
+    {
+        return $user instanceof DelegatedActor;
     }
 
     private function auth(): AuthManager
