@@ -1,5 +1,6 @@
 <x-bfc-layout title="Installation credentials">
-<section data-testid="installation-credentials">
+<section class="bfc-auth" data-testid="installation-credentials">
+    <div class="bfc-panel" data-testid="installation-credentials-panel">
     <h1>Installation credentials</h1>
 
     @isset($error)
@@ -49,30 +50,33 @@
 
     <section data-testid="installation-credentials-list">
         <h2>Installation credentials</h2>
-        <ul>
+        <ul class="bfc-list">
             @foreach ($credentials as $credential)
-                <li data-testid="installation-credentials-item">
+                <li class="bfc-row" data-testid="installation-credentials-item">
                     <strong>{{ $credential->name ?? $credential->id }}</strong>
                     <span>{{ $credential->kind->value }}</span>
                     <span>{{ $credential->purpose?->value }}</span>
                     <span>{{ $credential->subjectType->value }}:{{ $credential->subjectRef }}</span>
                     <span>{{ $credential->status }}</span>
-                    <form method="POST" action="{{ route('bfc.ui.installation-credentials.rotate', $credential->id) }}">
-                        @csrf
-                        <input type="hidden" name="{{ \ArtisanBuild\BuiltForCloud\SubmissionNonce::FIELD }}" value="{{ $rotationNonces[$credential->id] }}">
-                        @if ($credential->kind === \ArtisanBuild\BuiltForCloud\CredentialKind::Asymmetric)
-                            <label>Enrollment code lifetime in seconds <input name="code_ttl_seconds" inputmode="numeric" required></label>
-                        @endif
-                        <button type="submit">Rotate</button>
-                    </form>
-                    <form method="POST" action="{{ route('bfc.ui.installation-credentials.destroy', $credential->id) }}">
-                        @csrf
-                        @method('DELETE')
-                        <button type="submit">Revoke</button>
-                    </form>
+                    <div class="bfc-actions">
+                        <form method="POST" action="{{ route('bfc.ui.installation-credentials.rotate', $credential->id) }}">
+                            @csrf
+                            <input type="hidden" name="{{ \ArtisanBuild\BuiltForCloud\SubmissionNonce::FIELD }}" value="{{ $rotationNonces[$credential->id] }}">
+                            @if ($credential->kind === \ArtisanBuild\BuiltForCloud\CredentialKind::Asymmetric)
+                                <label>Enrollment code lifetime in seconds <input name="code_ttl_seconds" inputmode="numeric" required></label>
+                            @endif
+                            <button type="submit">Rotate</button>
+                        </form>
+                        <form method="POST" action="{{ route('bfc.ui.installation-credentials.destroy', $credential->id) }}">
+                            @csrf
+                            @method('DELETE')
+                            <button type="submit">Revoke</button>
+                        </form>
+                    </div>
                 </li>
             @endforeach
         </ul>
     </section>
+    </div>
 </section>
 </x-bfc-layout>
