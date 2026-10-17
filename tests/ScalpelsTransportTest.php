@@ -77,7 +77,6 @@ function managedMailEmail(string $messageId = 'managed-mail-message@example.test
 {
     $email = (new Email)
         ->from(new Address('private-sender@example.test', 'Private Sender'))
-        ->replyTo(new Address('private-reply@example.test', 'Private Reply'))
         ->to(new Address('to@example.test', 'Tō Recipient'))
         ->subject('Managed subject')
         ->text('Managed text body');
@@ -96,6 +95,25 @@ function resolvedScalpelsTransport(?Closure $sleep = null): ScalpelsTransport
         app(QueuedMailIdentity::class),
         $sleep,
     );
+}
+
+/** @return array<string, mixed> */
+function sendManagedMailAndCapturePayload(Email $email): array
+{
+    $payload = null;
+    Http::fake(function (ClientRequest $request) use (&$payload) {
+        $payload = json_decode($request->body(), true, flags: JSON_THROW_ON_ERROR);
+
+        return Http::response(['message_id' => SCALPELS_MESSAGE_ID], 202);
+    });
+
+    resolvedScalpelsTransport()->send($email);
+
+    if (! is_array($payload)) {
+        throw new RuntimeException('Managed-mail payload was not captured.');
+    }
+
+    return $payload;
 }
 
 function queuedMailTestJob(string $payload): SyncJob
@@ -172,6 +190,118 @@ it('maps structured content exactly and sends the managed authority envelope and
     ])->and(array_keys($payload))->not->toContain('from', 'reply_to', 'sender', 'headers', 'X-Private-Custom');
     expect(base64_decode($payload['attachments'][0]['content'], true))->toBe($binary);
 });
+
+it('maps one named Reply-To through the contract recipient shape', function (): void {
+    configureManagedMailConnection();
+    $payload = sendManagedMailAndCapturePayload(
+        managedMailEmail()->replyTo(new Address('reply@example.test', 'Reply Name')),
+    );
+
+    expect($payload[ManagedMail::REPLY_TO_FIELD] ?? null)->toBe([
+        ['address' => 'reply@example.test', 'name' => 'Reply Name'],
+    ]);
+});
+
+it('refuses multiple or malformed Reply-To addresses before egress', function (): void {
+    configureManagedMailConnection();
+    Http::fake();
+    $multiple = managedMailEmail()->replyTo(
+        new Address('first-reply@example.test', 'First Reply'),
+        new Address('second-reply@example.test', 'Second Reply'),
+    );
+    $malformedAddress = new Address('reply@example.test', 'Reply Name');
+    // Address sanitizes constructor input, so inject malformed state to exercise the transport boundary.
+    (new ReflectionProperty(Address::class, 'name'))->setValue($malformedAddress, "Reply\r\nInjected");
+    $malformed = managedMailEmail()->replyTo($malformedAddress);
+
+    foreach ([$multiple, $malformed] as $email) {
+        expect(fn () => resolvedScalpelsTransport()->send($email))
+            ->toThrow(TransportException::class, 'Managed mail delivery failed.');
+    }
+
+    Http::assertNothingSent();
+});
+
+it('forwards valid declared email keys unchanged', function (string $emailKey): void {
+    configureManagedMailConnection();
+    $email = managedMailEmail();
+    $email->getHeaders()->addTextHeader('X-Scalpels-Email', $emailKey);
+
+    $payload = sendManagedMailAndCapturePayload($email);
+
+    expect($payload[ManagedMail::EMAIL_KEY_FIELD] ?? null)->toBe($emailKey);
+})->with([
+    'dotted key' => 'welcome.signup',
+    'underscore key' => 'welcome_signup',
+    'single-character key' => 'x',
+    'manifest-unknown key' => 'not.in.manifest',
+]);
+
+it('refuses malformed or ambiguous declared email keys before egress', function (): void {
+    configureManagedMailConnection();
+    Http::fake();
+    $invalidKeys = [
+        '',
+        ' welcome.signup',
+        'welcome.signup ',
+        'Welcome.signup',
+        str_repeat('x', ManagedMail::MAX_EMAIL_KEY_BYTES + 1),
+        "welcome\r\nsignup",
+        "welcome\x01signup",
+        'https://example.test/welcome',
+        'welcome..signup',
+    ];
+
+    foreach ($invalidKeys as $invalidKey) {
+        $email = managedMailEmail();
+        $email->getHeaders()->addTextHeader('X-Scalpels-Email', $invalidKey);
+
+        expect(fn () => resolvedScalpelsTransport()->send($email))
+            ->toThrow(TransportException::class, 'Managed mail delivery failed.');
+    }
+
+    $ambiguous = managedMailEmail();
+    $ambiguous->getHeaders()->addTextHeader('X-Scalpels-Email', 'welcome.signup');
+    $ambiguous->getHeaders()->addTextHeader('X-Scalpels-Email', 'welcome.reminder');
+
+    expect(fn () => resolvedScalpelsTransport()->send($ambiguous))
+        ->toThrow(TransportException::class, 'Managed mail delivery failed.');
+    Http::assertNothingSent();
+});
+
+it('emits every optional-field combination in contract order without leaking generic headers', function (
+    bool $withReplyTo,
+    bool $withEmailKey,
+): void {
+    configureManagedMailConnection();
+    $email = managedMailEmail();
+    $email->getHeaders()->addTextHeader('X-Private-Custom', 'private-header-value');
+
+    if ($withReplyTo) {
+        $email->replyTo(new Address('reply@example.test', 'Reply Name'));
+    }
+
+    if ($withEmailKey) {
+        $email->getHeaders()->addTextHeader('X-Scalpels-Email', 'welcome.signup');
+    }
+
+    $payload = sendManagedMailAndCapturePayload($email);
+    $expectedMailFields = array_values(array_filter(
+        ManagedMail::ALLOWED_PAYLOAD_FIELDS,
+        static fn (string $field): bool => in_array($field, ManagedMail::PAYLOAD_FIELDS, true)
+            || ($field === ManagedMail::REPLY_TO_FIELD && $withReplyTo)
+            || ($field === ManagedMail::EMAIL_KEY_FIELD && $withEmailKey),
+    ));
+
+    expect(array_slice(array_keys($payload), 2))->toBe($expectedMailFields)
+        ->and($payload)->not->toHaveKeys(['headers', 'X-Private-Custom', 'X-Scalpels-Email'])
+        ->and(json_encode($payload, JSON_THROW_ON_ERROR))->not->toContain('private-header-value');
+})->with([
+    'neither' => [false, false],
+    'Reply-To only' => [true, false],
+    'email key only' => [false, true],
+    'both' => [true, true],
+]);
 
 it('replays retryable HTTP outcomes once with the same idempotency key and bounded retry after', function (int $status): void {
     configureManagedMailConnection();
@@ -382,6 +512,38 @@ it('refuses contract cap violations and unsupported raw or custom message parts 
     Http::assertNothingSent();
 });
 
+it('counts optional fields in the final JSON message-size limit', function (): void {
+    configureManagedMailConnection();
+    $probeText = 'x';
+    $probe = sendManagedMailAndCapturePayload(managedMailEmail()->text($probeText));
+    $probeBytes = strlen(json_encode(
+        $probe,
+        JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE,
+    ));
+    $limitTextBytes = ManagedMail::MAX_MESSAGE_BYTES - ($probeBytes - strlen($probeText));
+    $requests = 0;
+    $capturedBytes = null;
+    Http::fake(function (ClientRequest $request) use (&$requests, &$capturedBytes) {
+        $requests++;
+        $capturedBytes = strlen($request->body());
+
+        return Http::response(['message_id' => SCALPELS_MESSAGE_ID], 202);
+    });
+    $atLimit = managedMailEmail()->text(str_repeat('x', $limitTextBytes));
+
+    resolvedScalpelsTransport()->send($atLimit);
+
+    expect($capturedBytes)->toBe(ManagedMail::MAX_MESSAGE_BYTES)
+        ->and($requests)->toBe(1);
+    $withOptionalField = managedMailEmail()
+        ->text(str_repeat('x', $limitTextBytes));
+    $withOptionalField->getHeaders()->addTextHeader('X-Scalpels-Email', 'x');
+
+    expect(fn () => resolvedScalpelsTransport()->send($withOptionalField))
+        ->toThrow(TransportException::class, 'Managed mail delivery failed.')
+        ->and($requests)->toBe(1);
+});
+
 it('refuses inline content and missing attachment filenames before egress', function (): void {
     configureManagedMailConnection();
     Http::fake();
@@ -442,6 +604,9 @@ it('removes bearer and message content from failures chains reports logs and tra
         'private-subject-sentinel',
         'private-body-sentinel',
         'private-attachment-sentinel',
+        'private-reply@example.test',
+        'Private Reply Sentinel',
+        'private.email-key-sentinel',
     ];
     $logs = [];
     $attempts = 0;
@@ -458,13 +623,18 @@ it('removes bearer and message content from failures chains reports logs and tra
             'private-subject-sentinel',
             'private-body-sentinel',
             'private-attachment-sentinel',
+            'private-reply@example.test',
+            'Private Reply Sentinel',
+            'private.email-key-sentinel',
         ]));
     });
     $email = managedMailEmail()
         ->to($sentinels[1])
         ->subject($sentinels[2])
         ->text($sentinels[3])
-        ->attach($sentinels[4], 'private-file.bin', 'application/octet-stream');
+        ->attach($sentinels[4], 'private-file.bin', 'application/octet-stream')
+        ->replyTo(new Address($sentinels[5], $sentinels[6]));
+    $email->getHeaders()->addTextHeader('X-Scalpels-Email', $sentinels[7]);
     $failure = null;
 
     try {

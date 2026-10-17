@@ -29,6 +29,8 @@ use Throwable;
 
 final class ScalpelsTransport extends AbstractTransport
 {
+    private const string EMAIL_KEY_HEADER = 'X-Scalpels-Email';
+
     private const int REQUEST_TIMEOUT_SECONDS = 8;
 
     private const int MAX_ATTEMPTS = 2;
@@ -216,6 +218,39 @@ final class ScalpelsTransport extends AbstractTransport
             throw new TransportException('Managed mail delivery failed.');
         }
 
+        $optionalPayload = [];
+        $replyTo = $email->getReplyTo();
+
+        if (! ManagedMail::isReplyToRecipientCountWithinLimit(count($replyTo))) {
+            throw new TransportException('Managed mail delivery failed.');
+        }
+
+        if ($replyTo !== []) {
+            $optionalPayload[ManagedMail::REPLY_TO_FIELD] = $this->recipients($replyTo);
+        }
+
+        $emailKey = $this->emailKey($email);
+
+        if ($emailKey !== null) {
+            $optionalPayload[ManagedMail::EMAIL_KEY_FIELD] = $emailKey;
+        }
+
+        if (array_keys($optionalPayload) !== array_values(array_intersect(
+            ManagedMail::OPTIONAL_PAYLOAD_FIELDS,
+            array_keys($optionalPayload),
+        ))) {
+            throw new TransportException('Managed mail delivery failed.');
+        }
+
+        $mailPayload = [...$mailPayload, ...$optionalPayload];
+
+        if (array_keys($mailPayload) !== array_values(array_intersect(
+            ManagedMail::ALLOWED_PAYLOAD_FIELDS,
+            array_keys($mailPayload),
+        ))) {
+            throw new TransportException('Managed mail delivery failed.');
+        }
+
         $encoded = json_encode([
             'connection_id' => $connection->connectionId,
             'installation_id' => $connection->installationId,
@@ -227,6 +262,27 @@ final class ScalpelsTransport extends AbstractTransport
         }
 
         return $encoded;
+    }
+
+    private function emailKey(#[SensitiveParameter] Email $email): ?string
+    {
+        $headers = iterator_to_array($email->getHeaders()->all(self::EMAIL_KEY_HEADER), false);
+
+        if ($headers === []) {
+            return null;
+        }
+
+        if (count($headers) !== 1) {
+            throw new TransportException('Managed mail delivery failed.');
+        }
+
+        $emailKey = $headers[0]->getBody();
+
+        if (! is_string($emailKey) || ! ManagedMail::isValidEmailKey($emailKey)) {
+            throw new TransportException('Managed mail delivery failed.');
+        }
+
+        return $emailKey;
     }
 
     /**
