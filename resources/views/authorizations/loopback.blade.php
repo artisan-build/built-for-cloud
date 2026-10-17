@@ -1,5 +1,6 @@
 <x-bfc-layout title="Loopback authorization">
-<section data-testid="device-authorization-loopback">
+<section class="bfc-auth" data-testid="device-authorization-loopback">
+    <div class="bfc-panel" data-testid="device-authorization-loopback-panel">
     @if ($outcome === 'unavailable')
         <div data-testid="device-authorization-unavailable">This authorization is unavailable.</div>
     @elseif ($outcome === 'retry')
@@ -22,7 +23,7 @@
                     <dt>Label</dt><dd>{{ $authorization['label'] }}</dd>
                 @endif
             </dl>
-            <div data-testid="device-authorization-actions">
+            <div class="bfc-actions" data-testid="device-authorization-actions">
                 <form method="POST" action="{{ route('bfc.loopback.decide') }}">
                     @csrf
                     <input type="hidden" name="action" value="approve">
@@ -38,5 +39,6 @@
             </div>
         </article>
     @endif
+    </div>
 </section>
 </x-bfc-layout>

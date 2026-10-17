@@ -1,5 +1,6 @@
 <x-bfc-layout title="Device authorization">
-<section data-testid="device-authorization-page">
+<section class="bfc-auth" data-testid="device-authorization-page">
+    <div class="bfc-panel" data-testid="device-authorization-panel">
     @if ($outcome === 'unavailable')
         <div data-testid="device-authorization-unavailable">This authorization is unavailable.</div>
     @elseif ($outcome === 'retry')
@@ -26,7 +27,7 @@
                             <dt>Label</dt><dd>{{ $authorization['label'] }}</dd>
                         @endif
                     </dl>
-                    <div data-testid="device-authorization-actions">
+                    <div class="bfc-actions" data-testid="device-authorization-actions">
                         <form method="POST" action="{{ route('bfc.device.decide') }}">
                             @csrf
                             <input type="hidden" name="user_code" value="{{ $authorization['userCode'] }}">
@@ -46,5 +47,6 @@
             @endforeach
         </div>
     @endif
+    </div>
 </section>
 </x-bfc-layout>
