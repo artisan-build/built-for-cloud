@@ -125,10 +125,11 @@ final readonly class PersonalCredentialSurface
         $subject = $this->requireSubject($request);
 
         return ($this->mint)($subject, $this->selfServiceOptions(
+            $request,
             $options,
             $subject,
             $this->defaultPurpose($options->kind, $subject),
-        ), $this->actor());
+        ), $this->actor($request));
     }
 
     public function mintMineForPurpose(
@@ -141,8 +142,8 @@ final readonly class PersonalCredentialSurface
 
         return ($this->mint)(
             $subject,
-            $this->selfServiceOptions($options, $subject, $purpose),
-            $this->actor(),
+            $this->selfServiceOptions($request, $options, $subject, $purpose),
+            $this->actor($request),
             $submission,
         );
     }
@@ -166,7 +167,7 @@ final readonly class PersonalCredentialSurface
         return ($this->rotate)(
             $id,
             $options,
-            $this->actor(),
+            $this->actor($request),
             $this->personalScope($request, $subject),
             $submission,
         );
@@ -187,7 +188,7 @@ final readonly class PersonalCredentialSurface
 
         return ($this->revoke)(
             $id,
-            $this->actor(),
+            $this->actor($request),
             managementScope: $this->personalScope($request, $subject),
         );
     }
@@ -198,7 +199,7 @@ final readonly class PersonalCredentialSurface
 
         return SubmissionNonce::issue(
             $request->session()->token(),
-            $this->requireSessionUserId(),
+            $this->requireSessionUserId($request),
             $verb,
             $target,
         );
@@ -215,7 +216,7 @@ final readonly class PersonalCredentialSurface
         return SubmissionNonce::presented(
             $nonce,
             $request->session()->token(),
-            $this->requireSessionUserId(),
+            $this->requireSessionUserId($request),
             $verb,
             $target,
         );
@@ -273,7 +274,7 @@ final readonly class PersonalCredentialSurface
      */
     private function requireSubject(Request $request): Subject
     {
-        $this->requireLocalPrincipal();
+        $this->requireLocalPrincipal($request);
 
         return $this->subject($request) ?? throw SelfServiceUnavailable::noResolvableSubject();
     }
@@ -288,9 +289,9 @@ final readonly class PersonalCredentialSurface
      *
      * @throws SelfServiceUnavailable
      */
-    private function requireLocalPrincipal(): ActingPrincipal
+    private function requireLocalPrincipal(Request $request): ActingPrincipal
     {
-        $acting = app(ActingPrincipalResolver::class)->resolve();
+        $acting = app(ActingPrincipalResolver::class)->acting($request);
 
         if ($acting->delegatedSessionPresent()) {
             throw SelfServiceUnavailable::delegatedPrincipal();
@@ -322,6 +323,7 @@ final readonly class PersonalCredentialSurface
      * @throws CredentialVerbRefused
      */
     private function selfServiceOptions(
+        Request $request,
         MintOptions $options,
         Subject $subject,
         CredentialPurpose $purpose,
@@ -344,7 +346,7 @@ final readonly class PersonalCredentialSurface
             // null and [] both grant nothing, and summaries serialize null.
             abilities: $abilities === [] ? null : $abilities,
             expiresAt: $options->expiresAt,
-            userId: $this->sessionUserId(),
+            userId: $this->sessionUserId($request),
             codeTtlSeconds: $options->codeTtlSeconds,
         );
     }
@@ -367,16 +369,16 @@ final readonly class PersonalCredentialSurface
      * name or email. Null when no session user is resolvable — an actor is
      * absent rather than guessed.
      */
-    private function actor(): ?AuditActor
+    private function actor(Request $request): ?AuditActor
     {
-        $userId = $this->sessionUserId();
+        $userId = $this->sessionUserId($request);
 
         return $userId === null ? null : AuditActor::boundUser($userId);
     }
 
-    private function sessionUserId(): ?string
+    private function sessionUserId(Request $request): ?string
     {
-        $user = $this->sessionUser();
+        $user = $this->sessionUser($request);
 
         if ($user === null) {
             return null;
@@ -387,16 +389,16 @@ final readonly class PersonalCredentialSurface
         return is_scalar($id) && (string) $id !== '' ? (string) $id : null;
     }
 
-    private function requireSessionUserId(): string
+    private function requireSessionUserId(Request $request): string
     {
-        return $this->sessionUserId() ?? throw SelfServiceUnavailable::noLocalUserIdentifier();
+        return $this->sessionUserId($request) ?? throw SelfServiceUnavailable::noLocalUserIdentifier();
     }
 
     private function personalScope(Request $request, ?Subject $subject = null): CredentialManagementScope
     {
         return CredentialManagementScope::personal(
             $subject ?? $this->requireSubject($request),
-            $this->requireSessionUserId(),
+            $this->requireSessionUserId($request),
         );
     }
 
@@ -418,9 +420,13 @@ final readonly class PersonalCredentialSurface
      *
      * @throws SelfServiceUnavailable when a delegated console session is on the request
      */
-    private function sessionUser(): ?Authenticatable
+    private function sessionUser(Request $request): ?Authenticatable
     {
-        return $this->requireLocalPrincipal()->principal;
+        $principal = $this->requireLocalPrincipal($request)->principal;
+
+        // A direct API credential is an acting principal but not a local
+        // browser-session human, even when it is bound to a user row.
+        return $principal instanceof Credential ? null : $principal;
     }
 
     private function declaration(): CredentialDeclaration

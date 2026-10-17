@@ -38,6 +38,11 @@ it('marks every frame in this package that holds console assertion bytes', funct
     // this list is drift too — it would mean the bytes now travel
     // somewhere this test no longer looks.
     expect(AssertionParameterScan::framesIn($classes))->toBe([
+        'ActingPrincipalResolver::acting($request)',
+        'ActingPrincipalResolver::actingFromSources($request)',
+        'ActingPrincipalResolver::localUser($request)',
+        'ActingPrincipalResolver::requestPrincipal($request)',
+        'ActingPrincipalResolver::require($request)',
         'AssertionVerifier::keyIdOf($token)',
         'AssertionVerifier::verify($token)',
         'AuthenticateMcp::authenticateAssertion($assertionToken)',

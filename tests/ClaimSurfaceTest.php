@@ -476,6 +476,8 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     // without changing the absolute pairing vocabulary.
     // App-owned credential abilities add three contract blocks, two of
     // which carry unpaired absolute vocabulary.
+    // The acting-principal API adds two package exception declarations;
+    // each is one block carrying one unpaired absolute in its class name.
     $gateSurfaces = [
         'src/Console', 'src/Audit', 'resources/views',
         'docs/http-contract.md',
@@ -485,10 +487,10 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1052,
-        'absolute' => 342,
+        'blocks' => 1054,
+        'absolute' => 344,
         'paired' => 66,
-        'unpaired' => 276,
+        'unpaired' => 278,
     ]);
 
     // The surfaces the restatement map runs over are wider than the

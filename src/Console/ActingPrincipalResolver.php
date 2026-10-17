@@ -12,6 +12,7 @@ use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Contracts\Auth\UserProvider;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Http\Request;
+use SensitiveParameter;
 
 /**
  * The single acting principal: ONE value, read by the principal and the
@@ -49,6 +50,8 @@ use Illuminate\Http\Request;
  */
 final class ActingPrincipalResolver
 {
+    private const string EXPLICIT_REQUEST_PRINCIPAL = 'bfc.explicit_request_principal';
+
     private ?ActingPrincipal $resolved = null;
 
     private ?Request $resolvedFor = null;
@@ -77,19 +80,19 @@ final class ActingPrincipalResolver
      * assertion wins; otherwise the supplied request's own user resolver is
      * authoritative for both direct credentials and local sessions.
      */
-    public function acting(Request $request): ActingPrincipal
+    public function acting(#[SensitiveParameter] Request $request): ActingPrincipal
     {
         $applicable = $this->applicableGuardName();
         $requestAssertion = RequestAssertion::principal($request);
         $requestPrincipal = $requestAssertion instanceof ActingPrincipal
             ? null
-            : $this->requestPrincipal($request);
+            : $this->requestPrincipal($request, $applicable);
 
         return $this->actingFromSources($request, $applicable, $requestAssertion, $requestPrincipal);
     }
 
     private function actingFromSources(
-        Request $request,
+        #[SensitiveParameter] Request $request,
         ?string $applicable,
         ?ActingPrincipal $requestAssertion,
         mixed $requestPrincipal,
@@ -115,7 +118,7 @@ final class ActingPrincipalResolver
      * Resolve the host application's local user row when the acting source
      * has one. A verified delegated actor never aliases a local user.
      */
-    public function localUser(Request $request): ?Authenticatable
+    public function localUser(#[SensitiveParameter] Request $request): ?Authenticatable
     {
         $acting = $this->acting($request);
 
@@ -149,13 +152,13 @@ final class ActingPrincipalResolver
      * @throws DelegatedPrincipalUnsupported
      * @throws NoActingPrincipal
      */
-    public function require(Request $request): ActingPrincipal
+    public function require(#[SensitiveParameter] Request $request): ActingPrincipal
     {
         $applicable = $this->applicableGuardName();
         $requestAssertion = RequestAssertion::principal($request);
         $requestPrincipal = $requestAssertion instanceof ActingPrincipal
             ? null
-            : $this->requestPrincipal($request);
+            : $this->requestPrincipal($request, $applicable);
 
         if (! $requestAssertion instanceof ActingPrincipal
             && $requestPrincipal instanceof DelegatedActor) {
@@ -206,8 +209,19 @@ final class ActingPrincipalResolver
         return is_string($guard) && $guard !== '' ? $guard : null;
     }
 
-    private function requestPrincipal(Request $request): mixed
+    private function requestPrincipal(
+        #[SensitiveParameter] Request $request,
+        ?string $applicableGuard,
+    ): mixed
     {
+        $guardConfigured = $applicableGuard !== null
+            && is_array(config('auth.guards.'.$applicableGuard));
+
+        if (! $guardConfigured
+            && $request->attributes->getBoolean(self::EXPLICIT_REQUEST_PRINCIPAL) !== true) {
+            return null;
+        }
+
         return ($request->getUserResolver())();
     }
 
