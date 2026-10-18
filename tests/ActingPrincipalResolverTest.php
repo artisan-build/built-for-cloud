@@ -5,10 +5,12 @@ declare(strict_types=1);
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Console\RequestAssertion;
+use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\Exceptions\DelegatedPrincipalUnsupported;
 use ArtisanBuild\BuiltForCloud\Exceptions\NoActingPrincipal;
 use ArtisanBuild\BuiltForCloud\OffboardedSubject;
+use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SelfServiceDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
@@ -116,6 +118,8 @@ it('does not project either containment half through session or direct credentia
 
     $request = Request::create($arrival === 'credential' ? '/mcp' : '/dashboard', $arrival === 'credential' ? 'POST' : 'GET');
 
+    $credential = null;
+
     if ($arrival === 'credential') {
         $credential = Credential::factory()->create(['user_id' => $userId]);
         $request->setUserResolver(static fn (): Credential => $credential);
@@ -124,12 +128,124 @@ it('does not project either containment half through session or direct credentia
     }
 
     expect(app(ActingPrincipalResolver::class)->localUser($request))->toBeNull();
+
+    if ($credential instanceof Credential) {
+        expect($request->user())->toBe($credential);
+    }
 })->with([
     'session, per-user row' => ['session', 'user'],
     'session, subject row only' => ['session', 'subject'],
     'credential, per-user row' => ['credential', 'user'],
     'credential, subject row only' => ['credential', 'subject'],
 ]);
+
+it('still projects a healthy local user while unrelated containment rows exist', function (string $arrival): void {
+    config(['built-for-cloud.credentials.declaration' => SelfServiceDeclaration::class]);
+
+    $user = resolverTestUser('Healthy Local User');
+    $unrelated = resolverTestUser('Unrelated Local User');
+    OffboardedSubject::query()->create([
+        'subject_type' => SubjectType::UserPrincipal,
+        'subject_ref' => 'user:somebody-else',
+        'user_id' => OffboardedSubject::SUBJECT_ROW,
+        'offboarded_at' => now(),
+    ]);
+    OffboardedSubject::query()->create([
+        'subject_type' => SubjectType::UserPrincipal,
+        'subject_ref' => 'user:'.$unrelated->getAuthIdentifier(),
+        'user_id' => (string) $unrelated->getAuthIdentifier(),
+        'offboarded_at' => now(),
+    ]);
+
+    $request = Request::create($arrival === 'credential' ? '/mcp' : '/dashboard', $arrival === 'credential' ? 'POST' : 'GET');
+
+    if ($arrival === 'credential') {
+        $credential = Credential::factory()->create(['user_id' => (string) $user->getAuthIdentifier()]);
+        $request->setUserResolver(static fn (): Credential => $credential);
+    } else {
+        $request->setUserResolver(static fn (): User => $user);
+    }
+
+    expect(app(ActingPrincipalResolver::class)->localUser($request)?->getAuthIdentifier())
+        ->toBe($user->getAuthIdentifier());
+})->with([
+    'session arrival' => 'session',
+    'direct credential arrival' => 'credential',
+]);
+
+it('ignores subject rows for null and non-user-principal declarations but retains per-user containment', function (?Subject $declaredSubject): void {
+    $user = resolverTestUser('Fallback Local User');
+    $userId = (string) $user->getAuthIdentifier();
+    app()->instance(CredentialDeclaration::class, new class($declaredSubject) implements CredentialDeclaration
+    {
+        public function __construct(private readonly ?Subject $subject) {}
+
+        public function resolveSubject(Request $request): ?Subject
+        {
+            return $this->subject;
+        }
+
+        public function authorize(Credential $credential, ?string $ability, Request $request): bool
+        {
+            return true;
+        }
+    });
+
+    $rowSubject = $declaredSubject ?? new Subject(SubjectType::UserPrincipal, 'user:'.$userId);
+    OffboardedSubject::query()->create([
+        'subject_type' => $rowSubject->type,
+        'subject_ref' => $rowSubject->ref,
+        'user_id' => OffboardedSubject::SUBJECT_ROW,
+        'offboarded_at' => now(),
+    ]);
+
+    $request = Request::create('/dashboard', 'GET');
+    $request->setUserResolver(static fn (): User => $user);
+    $resolver = app(ActingPrincipalResolver::class);
+
+    expect($resolver->localUser($request))->toBe($user);
+
+    OffboardedSubject::query()->create([
+        'subject_type' => SubjectType::ExternalConsumer,
+        'subject_ref' => 'per-user-'.$userId,
+        'user_id' => $userId,
+        'offboarded_at' => now(),
+    ]);
+
+    expect($resolver->localUser($request))->toBeNull();
+})->with([
+    'null declaration result' => null,
+    'non-user-principal declaration result' => new Subject(SubjectType::Installation, 'installation:local-user'),
+]);
+
+it('retains canonical subject containment when a synthetic local identifier is empty', function (): void {
+    app()->instance(CredentialDeclaration::class, new class implements CredentialDeclaration
+    {
+        public function resolveSubject(Request $request): ?Subject
+        {
+            return new Subject(SubjectType::UserPrincipal, 'user:');
+        }
+
+        public function authorize(Credential $credential, ?string $ability, Request $request): bool
+        {
+            return true;
+        }
+    });
+
+    $user = new User;
+    $user->forceFill(['id' => '']);
+    OffboardedSubject::query()->create([
+        'subject_type' => SubjectType::UserPrincipal,
+        'subject_ref' => 'user:',
+        'user_id' => OffboardedSubject::SUBJECT_ROW,
+        'offboarded_at' => now(),
+    ]);
+    $request = Request::create('/dashboard', 'GET');
+    $request->setUserResolver(static fn (): User => $user);
+
+    expect(OffboardedSubject::userIsOffboarded(''))->toBeFalse()
+        ->and(OffboardedSubject::userOrSubjectIsOffboarded($request, $user))->toBeTrue();
+});
 
 it('requires each supported assertion credential and session arrival shape', function (): void {
     $actor = resolverTestActor();

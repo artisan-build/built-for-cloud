@@ -82,7 +82,7 @@ final class EnsureUserIsAdmin
         // so it carries the check itself, whatever session store kept the
         // session alive. The surviving session dies on this first
         // appearance.
-        if (OffboardedSubject::userIsOffboarded((string) $user->getAuthIdentifier())) {
+        if (OffboardedSubject::userOrSubjectIsOffboarded($request, $user)) {
             if ($request->hasSession()) {
                 $request->session()->invalidate();
             }

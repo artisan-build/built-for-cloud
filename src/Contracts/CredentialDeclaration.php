@@ -17,11 +17,14 @@ use Illuminate\Http\Request;
 interface CredentialDeclaration
 {
     /**
-     * Derive the subject a self-service surface should act for, from the
-     * authenticated request — server-side, never from client input. Return
-     * null when this request implies no subject. Consumed by the
-     * self-service surfaces in later package versions; the guard does not
-     * call it.
+     * Derive the canonical subject from the supplied request's own user.
+     * Read `$request->user()`, not the ambient guard. When the request has a
+     * user, never fall back to headers or input. Return null when the request
+     * implies no subject.
+     *
+     * Self-service operations and local-human containment and projection
+     * gates call this hook. It may run on every authenticated page view.
+     * Keep it fast and side-effect free. Avoid extra I/O.
      */
     public function resolveSubject(Request $request): ?Subject;
 

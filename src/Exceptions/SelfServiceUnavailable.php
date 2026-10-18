@@ -38,6 +38,11 @@ final class SelfServiceUnavailable extends RuntimeException
         return new self('The authenticated session has no usable local user identifier, so the personal-credentials surface refuses it.');
     }
 
+    public static function containedLocalPrincipal(): self
+    {
+        return new self('The authenticated local user is contained, so the personal-credentials surface refuses it.');
+    }
+
     /**
      * A DELEGATED actor is on this request, and this surface can only
      * act as the authenticated local human.
