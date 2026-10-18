@@ -700,11 +700,6 @@ final class McpDelegatedEnforcement
             return 'invalid-unique-items';
         }
 
-        if (($schema['uniqueItems'] ?? false) === true
-            && count(array_unique(array_map(serialize(...), $value))) !== count($value)) {
-            return 'array-items-not-unique';
-        }
-
         if (isset($schema['items'])) {
             if (! is_array($schema['items'])) {
                 return 'invalid-array-items';
@@ -718,7 +713,191 @@ final class McpDelegatedEnforcement
             }
         }
 
+        if (($schema['uniqueItems'] ?? false) === true) {
+            $itemSchema = is_array($schema['items'] ?? null) ? $schema['items'] : [];
+
+            for ($left = 0, $count = count($value); $left < $count; $left++) {
+                for ($right = $left + 1; $right < $count; $right++) {
+                    $equal = self::jsonValuesEqual($value[$left], $value[$right], $itemSchema);
+
+                    if ($equal === null) {
+                        return 'unsupported-json-unique-item';
+                    }
+
+                    if ($equal) {
+                        return 'array-items-not-unique';
+                    }
+                }
+            }
+        }
+
         return null;
+    }
+
+    /**
+     * JSON Schema equality: object member order is ignored, array order is
+     * retained, and integer/float representations share one number domain.
+     * Null means a value cannot be compared with unambiguous JSON semantics.
+     *
+     * @param  array<string, mixed>  $schema
+     */
+    private static function jsonValuesEqual(mixed $left, mixed $right, array $schema): ?bool
+    {
+        foreach (['anyOf', 'oneOf'] as $choice) {
+            if (! is_array($schema[$choice] ?? null)) {
+                continue;
+            }
+
+            foreach ($schema[$choice] as $candidate) {
+                if (is_array($candidate)
+                    && self::validateValue($candidate, $left) === null
+                    && self::validateValue($candidate, $right) === null) {
+                    return self::jsonValuesEqual($left, $right, $candidate);
+                }
+            }
+        }
+
+        $type = $schema['type'] ?? null;
+        if (is_array($type)) {
+            foreach ($type as $candidate) {
+                if (is_string($candidate)
+                    && self::matchesType($candidate, $left)
+                    && self::matchesType($candidate, $right)) {
+                    return self::jsonValuesEqual($left, $right, [...$schema, 'type' => $candidate]);
+                }
+            }
+
+            return false;
+        }
+
+        if (! is_string($type)) {
+            $type = self::runtimeJsonType($left, $right);
+
+            if ($type === null) {
+                return null;
+            }
+
+            if ($type === 'different') {
+                return false;
+            }
+        }
+
+        return match ($type) {
+            'array' => self::jsonArraysEqual($left, $right, $schema),
+            'boolean' => is_bool($left) && is_bool($right) ? $left === $right : false,
+            'integer' => is_int($left) && is_int($right) ? $left === $right : false,
+            'null' => $left === null && $right === null,
+            'number' => self::jsonNumbersEqual($left, $right),
+            'object' => self::jsonObjectsEqual($left, $right, $schema),
+            'string' => is_string($left) && is_string($right) ? $left === $right : false,
+            default => null,
+        };
+    }
+
+    private static function runtimeJsonType(mixed $left, mixed $right): ?string
+    {
+        if ((is_int($left) || is_float($left)) && (is_int($right) || is_float($right))) {
+            return 'number';
+        }
+
+        if (is_array($left) && is_array($right)) {
+            if ($left === [] || $right === []) {
+                return null;
+            }
+
+            return array_is_list($left) === array_is_list($right)
+                ? (array_is_list($left) ? 'array' : 'object')
+                : 'different';
+        }
+
+        if (is_bool($left) || is_bool($right)) {
+            return is_bool($left) && is_bool($right) ? 'boolean' : 'different';
+        }
+
+        if ($left === null || $right === null) {
+            return $left === null && $right === null ? 'null' : 'different';
+        }
+
+        if (is_string($left) || is_string($right)) {
+            return is_string($left) && is_string($right) ? 'string' : 'different';
+        }
+
+        if (is_array($left) || is_array($right) || is_int($left) || is_float($left) || is_int($right) || is_float($right)) {
+            return 'different';
+        }
+
+        return null;
+    }
+
+    /** @param array<string, mixed> $schema */
+    private static function jsonArraysEqual(mixed $left, mixed $right, array $schema): ?bool
+    {
+        if (! is_array($left) || ! is_array($right) || ! array_is_list($left) || ! array_is_list($right)) {
+            return false;
+        }
+
+        if (count($left) !== count($right)) {
+            return false;
+        }
+
+        $itemSchema = is_array($schema['items'] ?? null) ? $schema['items'] : [];
+        foreach ($left as $index => $leftItem) {
+            $equal = self::jsonValuesEqual($leftItem, $right[$index], $itemSchema);
+
+            if ($equal !== true) {
+                return $equal;
+            }
+        }
+
+        return true;
+    }
+
+    /** @param array<string, mixed> $schema */
+    private static function jsonObjectsEqual(mixed $left, mixed $right, array $schema): ?bool
+    {
+        if (! is_array($left) || ! is_array($right)) {
+            return false;
+        }
+
+        $leftKeys = array_keys($left);
+        $rightKeys = array_keys($right);
+
+        if (array_filter($leftKeys, 'is_string') !== $leftKeys
+            || array_filter($rightKeys, 'is_string') !== $rightKeys) {
+            return null;
+        }
+
+        sort($leftKeys);
+        sort($rightKeys);
+
+        if ($leftKeys !== $rightKeys) {
+            return false;
+        }
+
+        $properties = is_array($schema['properties'] ?? null) ? $schema['properties'] : [];
+        foreach ($leftKeys as $key) {
+            $propertySchema = is_array($properties[$key] ?? null) ? $properties[$key] : [];
+            $equal = self::jsonValuesEqual($left[$key], $right[$key], $propertySchema);
+
+            if ($equal !== true) {
+                return $equal;
+            }
+        }
+
+        return true;
+    }
+
+    private static function jsonNumbersEqual(mixed $left, mixed $right): ?bool
+    {
+        if ((! is_int($left) && ! is_float($left)) || (! is_int($right) && ! is_float($right))) {
+            return false;
+        }
+
+        if (! is_finite((float) $left) || ! is_finite((float) $right)) {
+            return null;
+        }
+
+        return $left == $right;
     }
 
     /** @param array<string, mixed> $schema */

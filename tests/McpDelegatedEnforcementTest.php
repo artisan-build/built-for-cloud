@@ -326,6 +326,89 @@ final class UniqueArrayFixtureServer extends Server
 #[IsReadOnly]
 #[ToolClassification(Classification::Metadata)]
 #[ToolEffect(Effect::Read)]
+final class UniqueObjectArrayFixtureTool extends Tool
+{
+    use AdvertisesToolClassification, AdvertisesToolEffect, RespectsEffectCeiling;
+
+    public static bool $invoked = false;
+
+    public static bool $authorizationReached = false;
+
+    /** @var list<array<string, mixed>> */
+    public static array $received = [];
+
+    /** @return array<string, mixed> */
+    public function schema(JsonSchema $schema): array
+    {
+        return [
+            'items' => $schema->array()->items($schema->object([
+                'name' => $schema->string()->required(),
+                'payload' => $schema->object([
+                    'labels' => $schema->array()->items($schema->string())->required(),
+                    'meta' => $schema->object([
+                        'left' => $schema->number()->required(),
+                        'right' => $schema->number()->required(),
+                    ])->withoutAdditionalProperties()->required(),
+                ])->withoutAdditionalProperties()->required(),
+            ])->withoutAdditionalProperties())->min(2)->max(2)->unique()->required(),
+        ];
+    }
+
+    public function handle(Request $input): Response
+    {
+        self::$invoked = true;
+        app(ActingPrincipalResolver::class)->require(request());
+        $items = $input->get('items');
+        self::$received = is_array($items) ? $items : [];
+
+        if (($items[0]['payload']['labels'] ?? null) === ['x', 'y']
+            && ($items[1]['payload']['labels'] ?? null) === ['y', 'x']) {
+            self::$authorizationReached = true;
+        }
+
+        return Response::text('unique-object-array-reached');
+    }
+}
+
+final class UniqueObjectArrayFixtureServer extends Server
+{
+    protected array $tools = [UniqueObjectArrayFixtureTool::class];
+}
+
+#[IsReadOnly]
+#[ToolClassification(Classification::Metadata)]
+#[ToolEffect(Effect::Read)]
+final class UniqueNumberArrayFixtureTool extends Tool
+{
+    use AdvertisesToolClassification, AdvertisesToolEffect, RespectsEffectCeiling;
+
+    public static bool $invoked = false;
+
+    /** @return array<string, mixed> */
+    public function schema(JsonSchema $schema): array
+    {
+        return [
+            'numbers' => $schema->array()->items($schema->number())->min(2)->max(2)->unique()->required(),
+        ];
+    }
+
+    public function handle(): Response
+    {
+        self::$invoked = true;
+        app(ActingPrincipalResolver::class)->require(request());
+
+        return Response::text('unique-number-array-reached');
+    }
+}
+
+final class UniqueNumberArrayFixtureServer extends Server
+{
+    protected array $tools = [UniqueNumberArrayFixtureTool::class];
+}
+
+#[IsReadOnly]
+#[ToolClassification(Classification::Metadata)]
+#[ToolEffect(Effect::Read)]
 final class ClosedObjectFixtureTool extends Tool
 {
     use AdvertisesToolClassification, AdvertisesToolEffect, RespectsEffectCeiling;
@@ -524,6 +607,10 @@ beforeEach(function (): void {
     NumberMultipleFixtureTool::$authorizationReached = false;
     UniqueArrayFixtureTool::$received = [];
     UniqueArrayFixtureTool::$authorizationReached = false;
+    UniqueObjectArrayFixtureTool::$invoked = false;
+    UniqueObjectArrayFixtureTool::$authorizationReached = false;
+    UniqueObjectArrayFixtureTool::$received = [];
+    UniqueNumberArrayFixtureTool::$invoked = false;
     ClosedObjectFixtureTool::$authorizationReached = false;
     ObservationMismatchFixtureTool::$mode = 'role';
     app()->forgetInstance('mcp.request');
@@ -716,6 +803,65 @@ it('fails closed on unique arrays until a schema-valid reviewed override is supp
     expect($covered['violations'])->toBe([])
         ->and(UniqueArrayFixtureTool::$received)->toBe([false, true])
         ->and(UniqueArrayFixtureTool::$authorizationReached)->toBeTrue();
+});
+
+it('uses recursive JSON equality for unique object items while preserving nested array order', function (): void {
+    $first = [
+        'name' => 'same',
+        'payload' => [
+            'labels' => ['x', 'y'],
+            'meta' => ['left' => 1, 'right' => 2],
+        ],
+    ];
+    $sameWithReorderedObjects = [
+        'payload' => [
+            'meta' => ['right' => 2, 'left' => 1],
+            'labels' => ['x', 'y'],
+        ],
+        'name' => 'same',
+    ];
+    $duplicate = McpDelegatedEnforcement::probe(
+        UniqueObjectArrayFixtureServer::class,
+        arguments: [
+            UniqueObjectArrayFixtureTool::class => [
+                'items' => [$first, $sameWithReorderedObjects],
+            ],
+        ],
+    );
+
+    expect($duplicate['unreached'])->toBe([
+        UniqueObjectArrayFixtureTool::class => 'override-invalid:property-items:array-items-not-unique',
+    ])->and(UniqueObjectArrayFixtureTool::$invoked)->toBeFalse()
+        ->and(UniqueObjectArrayFixtureTool::$authorizationReached)->toBeFalse();
+
+    $distinctByNestedArrayOrder = [
+        'payload' => [
+            'meta' => ['right' => 2, 'left' => 1],
+            'labels' => ['y', 'x'],
+        ],
+        'name' => 'same',
+    ];
+    $validArguments = ['items' => [$first, $distinctByNestedArrayOrder]];
+    $valid = McpDelegatedEnforcement::probe(
+        UniqueObjectArrayFixtureServer::class,
+        arguments: [UniqueObjectArrayFixtureTool::class => $validArguments],
+    );
+
+    expect($valid['violations'])->toBe([])
+        ->and(UniqueObjectArrayFixtureTool::$invoked)->toBeTrue()
+        ->and(UniqueObjectArrayFixtureTool::$received)->toBe($validArguments['items'])
+        ->and(UniqueObjectArrayFixtureTool::$authorizationReached)->toBeTrue();
+});
+
+it('treats integer and float forms of the same JSON number as duplicate unique items', function (): void {
+    $result = McpDelegatedEnforcement::probe(
+        UniqueNumberArrayFixtureServer::class,
+        arguments: [UniqueNumberArrayFixtureTool::class => ['numbers' => [1, 1.0]]],
+    );
+
+    expect($result['unreached'])->toBe([
+        UniqueNumberArrayFixtureTool::class => 'override-invalid:property-numbers:array-items-not-unique',
+    ])->and(UniqueNumberArrayFixtureTool::$invoked)->toBeFalse();
 });
 
 it('honors closed object constraints for synthesis and reviewed overrides', function (): void {
