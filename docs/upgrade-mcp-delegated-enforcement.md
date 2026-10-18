@@ -38,7 +38,7 @@ $this->assertBuiltForCloudFleetConformance($spec);
 
 Run `assertHonors()` before fleet conformance. This order matters. The successful assertion records the server and exact tool list in the current test application, which lets the later fleet check distinguish a behavioral probe that ran in this test process from a capability flag and server class that were merely declared. A `ConsumerConformance` spec that advertises `mcp-delegated` fails with `mcp-delegated-enforcement-not-run` until that record exists.
 
-The probe builds minimum values from each tool's JSON schema. Defaults and enum values win. It also handles required objects, arrays, booleans, bounded numbers, common string formats, and plain strings. A pattern or unknown format is not guessed. The tool appears in `unreached`, and `assertHonors()` fails instead of skipping it. Supply reviewed arguments for that tool:
+The probe builds minimum values from each tool's JSON schema. Defaults and enum values win. It handles required and closed objects, array item bounds, booleans, bounded numbers and numeric multiples, common string formats, and string length bounds. A pattern, unknown format, or multi-item uniqueness constraint is not guessed. The tool appears in `unreached`, and `assertHonors()` fails instead of skipping it. Reviewed overrides are checked against the same schema before invocation. Supply arguments for that tool:
 
 ```php
 McpDelegatedEnforcement::assertHonors(
@@ -84,18 +84,20 @@ McpDelegatedEnforcement::assertHonors(
 
 The probe records `negative_authorization` as `passed`, `failed`, or `absent`. Absence is explicit because some products have no principal-owned rows. Do not use `absent` when a tool reads principal-owned or tenant-owned data.
 
+The fixture assertion passes `AssertionVerifier` before publication. This helper does not establish expiry enforcement after publication or the single-use `AssertionBurn` behavior paid by production middleware.
+
 ## Consumer migration inventory
 
 The inventory below comes from the 2026-10-17 audit of the 13 catalog repositories at their recorded `origin/main` revisions. It is migration evidence, not a claim about later commits or deployments.
 
 | Products | Required migration |
 | --- | --- |
-| Assay, Telltale, Wake | Replace the app-owned `RequestAssertion` and credential resolver with `ActingPrincipalResolver`. Add the exact tool list and enforcement assertion. Assay and Wake must keep their registration predicates; the new assertion evaluates them under delegation. |
-| Reel | Replace direct `DelegatedActor` handling with the canonical resolver, then add enforcement. |
-| Crate, Hone, Matte, Muster, Slate | Their audited tools were identity-blind. Every tool must observe the canonical principal. Add a second-subject case wherever product rows gain principal or tenant ownership. |
-| Capstan | The audited resolver accepted credentials only. Move every tool to the canonical resolver and define delegated ownership without mapping the actor to a local user. Add a scoped second-subject case. |
-| Witness | The audited resolver accepted credentials only, while all six tools scoped through local user rows. Choose the delegated ownership model, migrate all tools, and prove it with a second-subject case. |
-| Bobbin | Remove the delegated fallback to the first team. Resolve an explicit authorized scope and add a second-subject case that fails if team-one rows cross subjects. |
-| Sink | Confirm the advertised MCP path uses the package MCP middleware rather than the legacy assertion-refusing door. Make every tool observe the canonical principal and add enforcement. |
+| Assay, Telltale, Wake | Replace the app-owned `RequestAssertion` and credential resolver with `ActingPrincipalResolver`. Add the exact-list enforcement assertion. Assay and Wake must keep their registration predicates; the new assertion evaluates them under delegation. |
+| Reel | Replace direct `DelegatedActor` handling with the canonical resolver, then add the exact-list enforcement assertion. |
+| Crate, Hone, Matte, Muster, Slate | Their audited tools were identity-blind. Every tool must observe the canonical principal, and each product must add the exact-list enforcement assertion. Add a second-subject case wherever product rows gain principal or tenant ownership. |
+| Capstan | The audited resolver accepted credentials only. Move every tool to the canonical resolver and define delegated ownership without mapping the actor to a local user. Add the exact-list enforcement assertion and a scoped second-subject case. |
+| Witness | The audited resolver accepted credentials only, while all six tools scoped through local user rows. Choose the delegated ownership model, migrate all tools, add the exact-list enforcement assertion, and prove isolation with a second-subject case. |
+| Bobbin | Remove the delegated fallback to the first team. Resolve an explicit authorized scope, add the exact-list enforcement assertion, and add a second-subject case that fails if team-one rows cross subjects. |
+| Sink | Confirm the advertised MCP path uses the package MCP middleware rather than the legacy assertion-refusing door. Make every tool observe the canonical principal and add the exact-list enforcement assertion. |
 
 Delegated assertions remain invalid on `bfc.admin`, `bfc.auth`, and local personal-credential surfaces. This upgrade applies only to MCP tool handlers and does not widen delegated authority.

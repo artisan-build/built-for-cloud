@@ -43,7 +43,7 @@ final readonly class FleetConformance
         ],
         'mcp_delegated' => [
             'tools registered and invoked under the verified delegated assertion fixture',
-            'application-supplied second-subject authorization is recorded when present and is not inferred when absent',
+            'whether a second-subject authorization case ran, response-body correctness, and evidence from another process are not established',
         ],
     ];
 

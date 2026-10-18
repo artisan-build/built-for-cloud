@@ -6,10 +6,12 @@ namespace ArtisanBuild\BuiltForCloud\Testing;
 
 use ArtisanBuild\BuiltForCloud\Console\Assertion;
 use ArtisanBuild\BuiltForCloud\Console\AssertionVerifier;
+use ArtisanBuild\BuiltForCloud\Console\ConsoleKey;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleKeyring;
 use ArtisanBuild\BuiltForCloud\Console\ConsoleRole;
 use Carbon\CarbonImmutable;
-use RuntimeException;
+use Illuminate\Database\UniqueConstraintViolationException;
+use InvalidArgumentException;
 
 /**
  * Fixed, signed assertions for the delegated conformance harness. The
@@ -55,13 +57,20 @@ final class McpDelegatedAssertionFixture
             $fixtureKey = $keyring->find(self::KEY_ID);
             $normalized = ConsoleKeyring::normalizePublicKey(self::PUBLIC_KEY);
 
-            if ($fixtureKey === null) {
-                $fixtureKey = $keyring->add(self::KEY_ID, self::PUBLIC_KEY);
-                $created = true;
-            } elseif (! hash_equals($fixtureKey->public_key, $normalized)) {
-                throw new RuntimeException('The delegated enforcement fixture key id is already bound to different material.');
+            if ($fixtureKey !== null) {
+                throw new McpDelegatedFixtureCollision('console-key-id');
             }
 
+            if (ConsoleKey::query()->where('public_key', $normalized)->exists()) {
+                throw new McpDelegatedFixtureCollision('console-key-material');
+            }
+
+            try {
+                $fixtureKey = $keyring->add(self::KEY_ID, self::PUBLIC_KEY);
+            } catch (InvalidArgumentException|UniqueConstraintViolationException $collision) {
+                throw new McpDelegatedFixtureCollision('console-key-race');
+            }
+            $created = true;
             $keyring->activate(self::KEY_ID);
             $token = $role->value.':'.($secondary ? 'secondary' : 'primary');
 

@@ -15,6 +15,7 @@ use ArtisanBuild\BuiltForCloud\Mcp\Effect;
 use ArtisanBuild\BuiltForCloud\Mcp\RequestEffectCeiling;
 use Closure;
 use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Request as HttpRequest;
 use Laravel\Mcp\Request as McpRequest;
 use Laravel\Mcp\Response;
@@ -33,6 +34,13 @@ use Traversable;
 final class McpDelegatedEnforcement
 {
     private const string STATE_BINDING = 'bfc.testing.mcp-delegated-enforcement-state';
+
+    /** @var list<string> */
+    private const array SUPPORTED_SCHEMA_KEYWORDS = [
+        'additionalProperties', 'anyOf', 'const', 'default', 'description', 'enum', 'format',
+        'items', 'maximum', 'maxItems', 'maxLength', 'minimum', 'minItems', 'minLength',
+        'multipleOf', 'oneOf', 'pattern', 'properties', 'required', 'title', 'type', 'uniqueItems',
+    ];
 
     /**
      * @param  class-string<Server>  $serverClass
@@ -120,9 +128,10 @@ final class McpDelegatedEnforcement
         $unreached = [];
         $violations = [];
         $negativeStatus = $negativeAuthorization instanceof Closure ? 'failed' : 'absent';
+        $createdActorIds = [];
 
         try {
-            $primary = self::publish($request, $role, false);
+            $primary = self::publish($request, $role, false, $createdActorIds);
             $declarations = McpDelegatedTools::discover($serverClass);
             array_push($violations, ...$declarations['violations']);
 
@@ -135,9 +144,12 @@ final class McpDelegatedEnforcement
             }
 
             foreach ($registered as $toolClass => $tool) {
-                $toolArguments = array_key_exists($toolClass, $arguments)
-                    ? ['ok' => true, 'value' => $arguments[$toolClass], 'reason' => '']
-                    : self::argumentsFor($tool);
+                $hasOverride = array_key_exists($toolClass, $arguments);
+                $toolArguments = self::argumentsFor(
+                    $tool,
+                    $hasOverride ? $arguments[$toolClass] : null,
+                    $hasOverride,
+                );
 
                 if (! $toolArguments['ok']) {
                     $unreached[$toolClass] = $toolArguments['reason'];
@@ -171,11 +183,18 @@ final class McpDelegatedEnforcement
                     $errors,
                     $unreached,
                     $violations,
+                    $createdActorIds,
                 );
             }
+        } catch (McpDelegatedFixtureCollision $failure) {
+            $violations[] = 'probe-setup-failed:fixture-state-collision:'.$failure->reason;
         } catch (Throwable $failure) {
             $violations[] = 'probe-setup-failed:'.$failure::class;
         } finally {
+            foreach ($createdActorIds as $actorId) {
+                DelegatedActor::query()->whereKey($actorId)->delete();
+            }
+
             if ($originalRequest instanceof HttpRequest) {
                 app()->instance('request', $originalRequest);
             } else {
@@ -221,10 +240,39 @@ final class McpDelegatedEnforcement
         return app(self::STATE_BINDING);
     }
 
-    private static function publish(HttpRequest $request, ConsoleRole $role, bool $secondary): ActingPrincipal
-    {
+    /** @param list<int|string> $createdActorIds */
+    private static function publish(
+        HttpRequest $request,
+        ConsoleRole $role,
+        bool $secondary,
+        array &$createdActorIds,
+    ): ActingPrincipal {
         $assertion = McpDelegatedAssertionFixture::verified($role, $secondary);
-        $actor = DelegatedActor::recordHandoff($assertion);
+        $identityHash = DelegatedActor::identityHash($assertion->issuer, $assertion->subject);
+
+        if (DelegatedActor::query()->where('identity_hash', $identityHash)->exists()) {
+            throw new McpDelegatedFixtureCollision('delegated-actor-identity');
+        }
+
+        try {
+            $actor = DelegatedActor::query()->create([
+                'identity_hash' => $identityHash,
+                'issuer' => $assertion->issuer,
+                'subject' => $assertion->subject,
+                'last_handoff_display_name' => $assertion->displayName,
+                'last_handoff_on_behalf_of' => $assertion->onBehalfOf,
+                'last_handoff_role' => $assertion->role->value,
+            ]);
+        } catch (UniqueConstraintViolationException) {
+            throw new McpDelegatedFixtureCollision('delegated-actor-race');
+        }
+        $actorId = $actor->getKey();
+        if (! is_int($actorId) && ! is_string($actorId)) {
+            $actor->delete();
+
+            throw new \RuntimeException('The delegated enforcement fixture actor has no stable identifier.');
+        }
+        $createdActorIds[] = $actorId;
 
         if (! $actor->isActive()) {
             throw new \RuntimeException('The delegated enforcement fixture actor is inactive.');
@@ -260,9 +308,10 @@ final class McpDelegatedEnforcement
     }
 
     /**
+     * @param  array<string, mixed>|null  $override
      * @return array{ok: bool, value: array<string, mixed>, reason: string}
      */
-    private static function argumentsFor(Tool $tool): array
+    private static function argumentsFor(Tool $tool, ?array $override = null, bool $hasOverride = false): array
     {
         try {
             $schema = $tool->toArray()['inputSchema'] ?? null;
@@ -274,10 +323,24 @@ final class McpDelegatedEnforcement
             return ['ok' => false, 'value' => [], 'reason' => 'invalid-input-schema'];
         }
 
+        if ($hasOverride) {
+            $validation = self::validateValue($schema, $override);
+
+            return $validation === null
+                ? ['ok' => true, 'value' => $override, 'reason' => '']
+                : ['ok' => false, 'value' => [], 'reason' => 'override-invalid:'.$validation];
+        }
+
         $synthesized = self::synthesize($schema);
 
         if (! $synthesized['ok'] || ! is_array($synthesized['value'])) {
             return ['ok' => false, 'value' => [], 'reason' => $synthesized['reason']];
+        }
+
+        $validation = self::validateValue($schema, $synthesized['value']);
+
+        if ($validation !== null) {
+            return ['ok' => false, 'value' => [], 'reason' => 'synthesized-invalid:'.$validation];
         }
 
         return ['ok' => true, 'value' => $synthesized['value'], 'reason' => ''];
@@ -380,7 +443,20 @@ final class McpDelegatedEnforcement
      */
     private static function synthesizeArray(array $schema): array
     {
-        $minimum = max(0, is_int($schema['minItems'] ?? null) ? $schema['minItems'] : 0);
+        $minimum = $schema['minItems'] ?? 0;
+        $maximum = $schema['maxItems'] ?? null;
+
+        if (! is_int($minimum) || $minimum < 0 || ($maximum !== null && (! is_int($maximum) || $maximum < 0))) {
+            return ['ok' => false, 'value' => null, 'reason' => 'invalid-array-bounds'];
+        }
+
+        if ($maximum !== null && $minimum > $maximum) {
+            return ['ok' => false, 'value' => null, 'reason' => 'empty-array-range'];
+        }
+
+        if (($schema['uniqueItems'] ?? false) === true && $minimum > 1) {
+            return ['ok' => false, 'value' => null, 'reason' => 'unsupported-unique-items'];
+        }
 
         if ($minimum === 0) {
             return ['ok' => true, 'value' => [], 'reason' => ''];
@@ -408,6 +484,17 @@ final class McpDelegatedEnforcement
             return ['ok' => false, 'value' => null, 'reason' => 'unsupported-string-pattern'];
         }
 
+        $minimum = $schema['minLength'] ?? 0;
+        $maximum = $schema['maxLength'] ?? null;
+
+        if (! is_int($minimum) || $minimum < 0 || ($maximum !== null && (! is_int($maximum) || $maximum < 0))) {
+            return ['ok' => false, 'value' => null, 'reason' => 'invalid-string-bounds'];
+        }
+
+        if ($maximum !== null && $minimum > $maximum) {
+            return ['ok' => false, 'value' => null, 'reason' => 'empty-string-range'];
+        }
+
         $format = $schema['format'] ?? null;
         $value = match ($format) {
             'date' => '1970-01-01',
@@ -426,10 +513,12 @@ final class McpDelegatedEnforcement
             return ['ok' => false, 'value' => null, 'reason' => 'unsupported-string-format'];
         }
 
-        $minimum = max(0, is_int($schema['minLength'] ?? null) ? $schema['minLength'] : 0);
-
         if ($format === null && strlen($value) < $minimum) {
             $value = str_repeat('x', $minimum);
+        }
+
+        if ($maximum !== null && self::stringLength($value) > $maximum) {
+            return ['ok' => false, 'value' => null, 'reason' => 'format-exceeds-max-length'];
         }
 
         return ['ok' => true, 'value' => $value, 'reason' => ''];
@@ -463,17 +552,334 @@ final class McpDelegatedEnforcement
     private static function synthesizeNumber(array $schema): array
     {
         $minimum = $schema['minimum'] ?? 0;
+        $multiple = $schema['multipleOf'] ?? 1;
 
-        if (! is_int($minimum) && ! is_float($minimum)) {
+        if ((! is_int($minimum) && ! is_float($minimum))
+            || (! is_int($multiple) && ! is_float($multiple))
+            || $multiple <= 0) {
             return ['ok' => false, 'value' => null, 'reason' => 'invalid-number-minimum'];
         }
 
-        $value = (float) $minimum;
+        $value = (float) (ceil($minimum / $multiple) * $multiple);
         $maximum = $schema['maximum'] ?? null;
 
         return (is_int($maximum) || is_float($maximum)) && $value > $maximum
             ? ['ok' => false, 'value' => null, 'reason' => 'empty-number-range']
             : ['ok' => true, 'value' => $value, 'reason' => ''];
+    }
+
+    /**
+     * Return the first deterministic reason the value violates the schema,
+     * or null when it satisfies every constraint this Laravel builder emits.
+     *
+     * @param  array<string, mixed>  $schema
+     */
+    private static function validateValue(array $schema, mixed $value): ?string
+    {
+        foreach (array_keys($schema) as $keyword) {
+            if (! is_string($keyword) || ! in_array($keyword, self::SUPPORTED_SCHEMA_KEYWORDS, true)) {
+                return 'unsupported-schema-keyword:'.(is_string($keyword) ? $keyword : 'non-string');
+            }
+        }
+
+        if (array_key_exists('const', $schema) && $value !== $schema['const']) {
+            return 'const-mismatch';
+        }
+
+        if (isset($schema['enum'])) {
+            if (! is_array($schema['enum']) || ! in_array($value, $schema['enum'], true)) {
+                return 'enum-mismatch';
+            }
+        }
+
+        foreach (['anyOf', 'oneOf'] as $choice) {
+            if (! array_key_exists($choice, $schema)) {
+                continue;
+            }
+
+            if (! is_array($schema[$choice])) {
+                return 'invalid-'.$choice;
+            }
+
+            $matches = 0;
+            foreach ($schema[$choice] as $candidate) {
+                if (is_array($candidate) && self::validateValue($candidate, $value) === null) {
+                    $matches++;
+                }
+            }
+
+            if (($choice === 'anyOf' && $matches === 0) || ($choice === 'oneOf' && $matches !== 1)) {
+                return $choice.'-mismatch';
+            }
+        }
+
+        $type = $schema['type'] ?? (isset($schema['properties']) ? 'object' : null);
+        if ($type === null) {
+            return null;
+        }
+
+        $types = is_array($type) ? $type : [$type];
+        if ($types === [] || array_filter($types, 'is_string') !== $types) {
+            return 'invalid-schema-type';
+        }
+
+        $matchedType = null;
+        foreach ($types as $candidate) {
+            if (self::matchesType($candidate, $value)) {
+                $matchedType = $candidate;
+                break;
+            }
+        }
+
+        if ($matchedType === null) {
+            return 'type-mismatch';
+        }
+
+        if (is_array($type)) {
+            $allowed = ['anyOf', 'const', 'default', 'description', 'enum', 'oneOf', 'title', 'type'];
+        } else {
+            $allowed = match ($matchedType) {
+                'array' => ['anyOf', 'const', 'default', 'description', 'enum', 'items', 'maxItems', 'minItems', 'oneOf', 'title', 'type', 'uniqueItems'],
+                'integer', 'number' => ['anyOf', 'const', 'default', 'description', 'enum', 'maximum', 'minimum', 'multipleOf', 'oneOf', 'title', 'type'],
+                'object' => ['additionalProperties', 'anyOf', 'const', 'default', 'description', 'enum', 'oneOf', 'properties', 'required', 'title', 'type'],
+                'string' => ['anyOf', 'const', 'default', 'description', 'enum', 'format', 'maxLength', 'minLength', 'oneOf', 'pattern', 'title', 'type'],
+                default => ['anyOf', 'const', 'default', 'description', 'enum', 'oneOf', 'title', 'type'],
+            };
+        }
+
+        foreach (array_keys($schema) as $keyword) {
+            if (! in_array($keyword, $allowed, true)) {
+                return 'unsupported-'.$matchedType.'-keyword:'.$keyword;
+            }
+        }
+
+        return match ($matchedType) {
+            'array' => self::validateArray($schema, $value),
+            'integer', 'number' => self::validateNumber($schema, $value),
+            'object' => self::validateObject($schema, $value),
+            'string' => self::validateString($schema, $value),
+            default => null,
+        };
+    }
+
+    private static function matchesType(string $type, mixed $value): bool
+    {
+        return match ($type) {
+            'array' => is_array($value) && array_is_list($value),
+            'boolean' => is_bool($value),
+            'integer' => is_int($value),
+            'null' => $value === null,
+            'number' => (is_int($value) || is_float($value)) && is_finite((float) $value),
+            'object' => is_array($value) && ($value === [] || ! array_is_list($value)),
+            'string' => is_string($value),
+            default => false,
+        };
+    }
+
+    /** @param array<string, mixed> $schema
+     * @param  list<mixed>  $value
+     */
+    private static function validateArray(array $schema, array $value): ?string
+    {
+        $minimum = $schema['minItems'] ?? 0;
+        $maximum = $schema['maxItems'] ?? null;
+
+        if (! is_int($minimum) || $minimum < 0 || ($maximum !== null && (! is_int($maximum) || $maximum < 0))) {
+            return 'invalid-array-bounds';
+        }
+
+        if (count($value) < $minimum) {
+            return 'array-below-min-items';
+        }
+
+        if ($maximum !== null && count($value) > $maximum) {
+            return 'array-above-max-items';
+        }
+
+        if (isset($schema['uniqueItems']) && ! is_bool($schema['uniqueItems'])) {
+            return 'invalid-unique-items';
+        }
+
+        if (($schema['uniqueItems'] ?? false) === true
+            && count(array_unique(array_map(serialize(...), $value))) !== count($value)) {
+            return 'array-items-not-unique';
+        }
+
+        if (isset($schema['items'])) {
+            if (! is_array($schema['items'])) {
+                return 'invalid-array-items';
+            }
+
+            foreach ($value as $index => $item) {
+                $reason = self::validateValue($schema['items'], $item);
+                if ($reason !== null) {
+                    return 'item-'.$index.':'.$reason;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /** @param array<string, mixed> $schema */
+    private static function validateNumber(array $schema, int|float $value): ?string
+    {
+        foreach (['minimum', 'maximum', 'multipleOf'] as $keyword) {
+            if (isset($schema[$keyword]) && ! is_int($schema[$keyword]) && ! is_float($schema[$keyword])) {
+                return 'invalid-'.$keyword;
+            }
+        }
+
+        if (isset($schema['minimum']) && $value < $schema['minimum']) {
+            return 'number-below-minimum';
+        }
+
+        if (isset($schema['maximum']) && $value > $schema['maximum']) {
+            return 'number-above-maximum';
+        }
+
+        if (isset($schema['multipleOf'])) {
+            $multiple = (float) $schema['multipleOf'];
+            if ($multiple <= 0) {
+                return 'invalid-multipleOf';
+            }
+
+            $quotient = (float) $value / $multiple;
+            if (abs($quotient - round($quotient)) > 1e-9 * max(1.0, abs($quotient))) {
+                return 'number-not-multiple';
+            }
+        }
+
+        return null;
+    }
+
+    /** @param array<string, mixed> $schema
+     * @param  array<string, mixed>  $value
+     */
+    private static function validateObject(array $schema, array $value): ?string
+    {
+        $properties = $schema['properties'] ?? [];
+        $required = $schema['required'] ?? [];
+
+        if ((! is_array($properties) && ! is_object($properties)) || ! is_array($required)) {
+            return 'invalid-object-schema';
+        }
+
+        $properties = (array) $properties;
+        foreach ($required as $name) {
+            if (! is_string($name) || ! array_key_exists($name, $value)) {
+                return 'missing-required-property:'.(is_string($name) ? $name : 'non-string');
+            }
+        }
+
+        if (isset($schema['additionalProperties']) && ! is_bool($schema['additionalProperties'])) {
+            return 'invalid-additional-properties';
+        }
+
+        if (($schema['additionalProperties'] ?? true) === false) {
+            foreach (array_diff(array_keys($value), array_keys($properties)) as $extra) {
+                return 'additional-property:'.$extra;
+            }
+        }
+
+        foreach ($value as $name => $propertyValue) {
+            if (! isset($properties[$name])) {
+                continue;
+            }
+
+            if (! is_array($properties[$name])) {
+                return 'invalid-property-schema:'.$name;
+            }
+
+            $reason = self::validateValue($properties[$name], $propertyValue);
+            if ($reason !== null) {
+                return 'property-'.$name.':'.$reason;
+            }
+        }
+
+        return null;
+    }
+
+    /** @param array<string, mixed> $schema */
+    private static function validateString(array $schema, string $value): ?string
+    {
+        $minimum = $schema['minLength'] ?? 0;
+        $maximum = $schema['maxLength'] ?? null;
+
+        if (! is_int($minimum) || $minimum < 0 || ($maximum !== null && (! is_int($maximum) || $maximum < 0))) {
+            return 'invalid-string-bounds';
+        }
+
+        $length = self::stringLength($value);
+        if ($length < $minimum) {
+            return 'string-below-min-length';
+        }
+
+        if ($maximum !== null && $length > $maximum) {
+            return 'string-above-max-length';
+        }
+
+        if (isset($schema['pattern'])) {
+            if (! is_string($schema['pattern'])) {
+                return 'invalid-string-pattern';
+            }
+
+            $matches = self::patternMatches($schema['pattern'], $value);
+            if ($matches === null) {
+                return 'invalid-string-pattern';
+            }
+            if (! $matches) {
+                return 'string-pattern-mismatch';
+            }
+        }
+
+        if (isset($schema['format'])) {
+            if (! is_string($schema['format'])) {
+                return 'invalid-string-format';
+            }
+
+            $matches = self::formatMatches($schema['format'], $value);
+            if ($matches === null) {
+                return 'unsupported-string-format';
+            }
+            if (! $matches) {
+                return 'string-format-mismatch';
+            }
+        }
+
+        return null;
+    }
+
+    private static function stringLength(string $value): int
+    {
+        return function_exists('mb_strlen') ? mb_strlen($value) : strlen($value);
+    }
+
+    private static function patternMatches(string $pattern, string $value): ?bool
+    {
+        $result = @preg_match($pattern, $value);
+
+        if ($result === false) {
+            $result = @preg_match('~'.str_replace('~', '\\~', $pattern).'~u', $value);
+        }
+
+        return $result === false ? null : $result === 1;
+    }
+
+    private static function formatMatches(string $format, string $value): ?bool
+    {
+        return match ($format) {
+            'date' => ($date = \DateTimeImmutable::createFromFormat('!Y-m-d', $value)) !== false
+                && $date->format('Y-m-d') === $value,
+            'date-time' => \DateTimeImmutable::createFromFormat(DATE_ATOM, $value) !== false,
+            'email' => filter_var($value, FILTER_VALIDATE_EMAIL) !== false,
+            'hostname' => filter_var($value, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME) !== false,
+            'ipv4' => filter_var($value, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false,
+            'ipv6' => filter_var($value, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false,
+            'uri', 'url' => filter_var($value, FILTER_VALIDATE_URL) !== false,
+            'uuid' => preg_match('/\A[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/i', $value) === 1,
+            default => null,
+        };
     }
 
     /**
@@ -518,13 +924,37 @@ final class McpDelegatedEnforcement
 
         $result = null;
         $responseError = false;
+        $container = app();
+        $mcpRequestWasBound = $container->bound('mcp.request');
+        $priorMcpRequest = null;
+
+        if ($mcpRequestWasBound) {
+            $resolvedMcpRequest = $container->make('mcp.request');
+            if (! $resolvedMcpRequest instanceof McpRequest) {
+                throw new \RuntimeException('The existing mcp.request binding is invalid.');
+            }
+            $priorMcpRequest = $resolvedMcpRequest;
+        }
+        $typedRequestWasBound = $container->bound(McpRequest::class);
+        $priorTypedRequest = null;
+
+        if ($typedRequestWasBound) {
+            $resolvedTypedRequest = $container->make(McpRequest::class);
+            if (! $resolvedTypedRequest instanceof McpRequest) {
+                throw new \RuntimeException('The existing Laravel MCP request binding is invalid.');
+            }
+            $priorTypedRequest = $resolvedTypedRequest;
+        }
+        $mcpRequest = new McpRequest($arguments);
+        $container->instance('mcp.request', $mcpRequest);
+        $container->instance(McpRequest::class, $mcpRequest);
 
         try {
             $invoked[] = $toolClass;
             $result = RequestEffectCeiling::run(
                 $request,
                 Effect::Destructive,
-                static fn (): mixed => app()->call([$tool, 'handle'], ['request' => new McpRequest($arguments)]),
+                static fn (): mixed => app()->call([$tool, 'handle']),
             );
 
             if ($result instanceof Traversable) {
@@ -539,6 +969,18 @@ final class McpDelegatedEnforcement
             $errors[$toolClass] = 'execution-exception:'.$failure::class;
             $violations[] = 'tool-execution-failed:'.$toolClass.':'.$failure::class;
         } finally {
+            if ($priorMcpRequest instanceof McpRequest) {
+                $container->instance('mcp.request', $priorMcpRequest);
+            } else {
+                $container->forgetInstance('mcp.request');
+            }
+
+            if ($priorTypedRequest instanceof McpRequest) {
+                $container->instance(McpRequest::class, $priorTypedRequest);
+            } else {
+                $container->forgetInstance(McpRequest::class);
+            }
+
             $request->attributes->remove(ActingPrincipalResolver::OBSERVER_ATTRIBUTE);
             $request->setUserResolver($resolver);
         }
@@ -618,6 +1060,7 @@ final class McpDelegatedEnforcement
      * @param  array<class-string<Tool>, string>  $errors
      * @param  array<class-string<Tool>, string>  $unreached
      * @param  list<string>  $violations
+     * @param  list<int|string>  $createdActorIds
      * @return 'passed'|'failed'
      */
     private static function runNegativeAuthorizationCase(
@@ -631,14 +1074,13 @@ final class McpDelegatedEnforcement
         array &$errors,
         array &$unreached,
         array &$violations,
+        array &$createdActorIds,
     ): string {
         $request = HttpRequest::create('/bfc-testing/mcp-delegated/negative', 'POST');
         app()->instance('request', $request);
-        $secondary = self::publish($request, $role, true);
+        $secondary = self::publish($request, $role, true, $createdActorIds);
 
-        if ($primary->identifier() === $secondary->identifier()) {
-            $violations[] = 'negative-authorization-subjects-not-distinct';
-
+        if (! self::negativeSubjectsAreDistinct($primary, $secondary, $violations)) {
             return 'failed';
         }
 
@@ -666,16 +1108,15 @@ final class McpDelegatedEnforcement
                 return null;
             }
 
-            if ($arguments === null) {
-                $synthesized = self::argumentsFor($tool);
-                if (! $synthesized['ok']) {
-                    $unreached[$toolClass] = $synthesized['reason'];
-                    $violations[] = 'negative-tool-unreached:'.$toolClass.':'.$synthesized['reason'];
+            $hasOverride = $arguments !== null;
+            $synthesized = self::argumentsFor($tool, $arguments, $hasOverride);
+            if (! $synthesized['ok']) {
+                $unreached[$toolClass] = $synthesized['reason'];
+                $violations[] = 'negative-tool-unreached:'.$toolClass.':'.$synthesized['reason'];
 
-                    return null;
-                }
-                $arguments = $synthesized['value'];
+                return null;
             }
+            $arguments = $synthesized['value'];
 
             $negativeInvocations++;
 
@@ -711,6 +1152,21 @@ final class McpDelegatedEnforcement
         }
 
         return 'passed';
+    }
+
+    /** @param list<string> $violations */
+    private static function negativeSubjectsAreDistinct(
+        ActingPrincipal $primary,
+        ActingPrincipal $secondary,
+        array &$violations,
+    ): bool {
+        if ($primary->identifier() !== $secondary->identifier()) {
+            return true;
+        }
+
+        $violations[] = 'negative-authorization-subjects-not-distinct';
+
+        return false;
     }
 
     /**

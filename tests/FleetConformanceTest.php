@@ -30,6 +30,7 @@ use Laravel\Mcp\Response;
 use Laravel\Mcp\Server;
 use Laravel\Mcp\Server\Tool;
 use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
+use PHPUnit\Framework\AssertionFailedError;
 
 uses(RefreshDatabase::class, ContractAssertions::class);
 
@@ -663,7 +664,49 @@ it('fails an advertised delegated product until assertHonors records the exact t
 
     expect($after->passed)->toBeTrue()
         ->and($after->families['mcp_delegated']->visited)->toBe(1)
-        ->and($after->families['mcp_delegated']->violations)->toBe([]);
+        ->and($after->families['mcp_delegated']->violations)->toBe([])
+        ->and($after->families['mcp_delegated']->limits)->toBe([
+            'tools registered and invoked under the verified delegated assertion fixture',
+            'whether a second-subject authorization case ran, response-body correctness, and evidence from another process are not established',
+        ]);
+
+    expect(fn () => McpDelegatedEnforcement::assertHonors(AggregateEnforcedMcpServer::class, []))
+        ->toThrow(AssertionFailedError::class, 'non-empty expected tool list');
+
+    $afterFailedRetry = (new FleetConformance($this))->inspect($spec);
+    expect($afterFailedRetry->passed)->toBeFalse()
+        ->and($afterFailedRetry->families['mcp_delegated']->violations)
+        ->toContain('mcp-delegated-enforcement-not-run');
+});
+
+it('fails delegated fleet conformance on both missing and unexpected recorded tools', function (): void {
+    config([
+        'built-for-cloud.mcp.path' => '/aggregate-enforced-mcp-mismatch',
+        'built-for-cloud.mcp.delegated' => true,
+    ]);
+    Route::post('/aggregate-enforced-mcp-mismatch', fn (): array => ['ok' => true])->middleware('bfc.mcp');
+
+    McpDelegatedEnforcement::assertHonors(
+        AggregateEnforcedMcpServer::class,
+        [AggregateEnforcedMcpTool::class],
+    );
+
+    $root = aggregateControlRoot('Clean.php', "<?php\nfinal class AggregateMismatchedConsumer {}\n");
+    $expected = packageConformanceExpected();
+    $expected['mcp_delegated'] = ['TestCreatedMissingMcpTool'];
+    $report = (new FleetConformance($this))->inspect(aggregateControlSpec(
+        $root,
+        runtime: ['meta'],
+        capabilities: ['mcp-delegated'],
+        mcpServer: AggregateEnforcedMcpServer::class,
+        expected: $expected,
+    ));
+
+    expect($report->passed)->toBeFalse()
+        ->and($report->families['mcp_delegated']->violations)->toContain(
+            'missing:TestCreatedMissingMcpTool',
+            'unexpected:'.AggregateEnforcedMcpTool::class,
+        );
 });
 
 it('drives conventional thin-host checks from the consumer root instead of split scanner roots', function (): void {
