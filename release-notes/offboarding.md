@@ -34,10 +34,11 @@ point IT authenticates — the `bfc` guard, the operator gate (`bfc.credential.a
 hmac verifier's key selection, and the auth-foundation middleware (`bfc.auth` AND
 `bfc.admin`, which also invalidate a surviving session on first appearance). A consuming
 app's OWN plain `auth`-guarded routes are outside the package's reach: the app must consult
-the documented integration point — `OffboardedSubject::userIsOffboarded($userId)` for a
-session user, `OffboardedSubject::rejects($credential)` for a credential — or stack the
-package middleware on those routes. The package cannot invalidate an arbitrary session store
-it does not own, and does not claim that containment.
+the documented integration point —
+`OffboardedSubject::userOrSubjectIsOffboarded($request, $user)` for a session user,
+`OffboardedSubject::rejects($credential)` for a credential — or stack the appropriate package
+gate (`bfc.auth` or `bfc.admin`) on those routes. The package cannot invalidate an arbitrary
+session store it does not own, and does not claim that containment.
 
 **Idempotent:** a second offboard is a no-op — same response shape, zero counts, no new audit
 rows. **One audit shape (D8):** a single `offboarded` lifecycle event carrying the acting

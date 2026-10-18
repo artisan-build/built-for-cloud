@@ -68,10 +68,10 @@ use Throwable;
  * `bfc.admin`) reject the principal whatever still sits in session
  * storage, invalidating a surviving session on its first appearance.
  * THE HONEST BOUNDARY: a consuming app's OWN plain `auth`-guarded routes
- * are outside the package's reach — the app must consult
- * {@see OffboardedSubject::userIsOffboarded} (or stack the package
- * middleware) on them; the package cannot invalidate an arbitrary
- * session store it does not own.
+ * are outside the package's reach — the app must call
+ * `OffboardedSubject::userOrSubjectIsOffboarded($request, $user)` or stack
+ * the appropriate package gate (`bfc.auth` or `bfc.admin`) on them; the
+ * package cannot invalidate an arbitrary session store it does not own.
  *
  * IDEMPOTENT: a second offboard of a contained subject is a no-op — the
  * same result shape with zero counts, and NO duplicate audit rows (one

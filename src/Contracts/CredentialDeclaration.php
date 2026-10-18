@@ -24,7 +24,9 @@ interface CredentialDeclaration
      *
      * Self-service operations and local-human containment and projection
      * gates call this hook. It may run on every authenticated page view.
-     * Keep it fast and side-effect free. Avoid extra I/O.
+     * Keep it fast and side-effect free. Avoid extra I/O. Exceptions
+     * propagate and fail the authenticated request closed, so implementations
+     * must not throw during normal operation.
      */
     public function resolveSubject(Request $request): ?Subject;
 

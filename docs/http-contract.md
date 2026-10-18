@@ -2503,10 +2503,11 @@ whatever survives in session storage, the principal is rejected at every
 auth-foundation middleware (`bfc.auth` and `bfc.admin` both) — which also invalidate a
 surviving session on its first appearance. **The honest boundary:** a consuming app's OWN
 plain `auth`-guarded routes are outside the package's reach; the app must consult the
-documented integration point — `OffboardedSubject::userIsOffboarded($userId)` /
-`OffboardedSubject::rejects($credential)` — or stack the package middleware on them. The
-package cannot invalidate an arbitrary session store it does not own, and does not claim
-to.
+documented integration point —
+`OffboardedSubject::userOrSubjectIsOffboarded($request, $user)` for a session user and
+`OffboardedSubject::rejects($credential)` for a credential — or stack the appropriate package
+gate (`bfc.auth` or `bfc.admin`) on them. The package cannot invalidate an arbitrary session
+store it does not own, and does not claim to.
 
 **Request:**
 

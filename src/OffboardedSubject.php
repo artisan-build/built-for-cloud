@@ -107,7 +107,9 @@ final class OffboardedSubject extends Model
      * just as it does for the personal-credential surface. Resolve it from
      * an isolated copy of the supplied request authenticated as the local
      * user, so direct credentials cannot substitute their own identity and
-     * the caller never has to reconstruct the app's Subject convention.
+     * the caller never has to reconstruct the app's Subject convention. A
+     * null or non-user-principal result disables only the subject arm; the
+     * exact per-user row remains enforced.
      */
     public static function userOrSubjectIsOffboarded(#[SensitiveParameter] Request $request, Authenticatable $user): bool
     {
