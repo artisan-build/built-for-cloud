@@ -24,6 +24,7 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Testing\TestResponse;
 use Laravel\Mcp\Server;
+use Laravel\Mcp\Server\Tool;
 use PHPUnit\Framework\Assert;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
@@ -43,6 +44,15 @@ trait ContractAssertions
     public function assertBuiltForCloudMcpDelegatedTools(string $serverClass): void
     {
         McpDelegatedTools::assertConforms($serverClass);
+    }
+
+    /**
+     * @param  class-string<Server>  $serverClass
+     * @param  list<class-string<Tool>>  $expected
+     */
+    public function assertBuiltForCloudMcpDelegatedEnforcement(string $serverClass, array $expected): void
+    {
+        McpDelegatedEnforcement::assertHonors($serverClass, $expected);
     }
 
     public function assertBuiltForCloudMcpProductAdmission(): void

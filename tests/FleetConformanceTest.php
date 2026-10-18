@@ -2,13 +2,21 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\Jobs\DeliverOwnershipWebhook;
 use ArtisanBuild\BuiltForCloud\Mcp\AdvertisesToolClassification;
+use ArtisanBuild\BuiltForCloud\Mcp\AdvertisesToolEffect;
+use ArtisanBuild\BuiltForCloud\Mcp\Classification;
+use ArtisanBuild\BuiltForCloud\Mcp\Effect;
+use ArtisanBuild\BuiltForCloud\Mcp\RespectsEffectCeiling;
+use ArtisanBuild\BuiltForCloud\Mcp\ToolClassification;
+use ArtisanBuild\BuiltForCloud\Mcp\ToolEffect;
 use ArtisanBuild\BuiltForCloud\Testing\ConformanceFailed;
 use ArtisanBuild\BuiltForCloud\Testing\ConsumerConformance;
 use ArtisanBuild\BuiltForCloud\Testing\ContractAssertions;
 use ArtisanBuild\BuiltForCloud\Testing\FleetConformance;
+use ArtisanBuild\BuiltForCloud\Testing\McpDelegatedEnforcement;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueHumanQueuedJob;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueScheduleRegistration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\RogueScheduleServiceProvider;
@@ -17,8 +25,12 @@ use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnclassifiedStateChangingCommand;
 use Illuminate\Foundation\Auth\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Route;
+use Laravel\Mcp\Response;
 use Laravel\Mcp\Server;
 use Laravel\Mcp\Server\Tool;
+use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
+use PHPUnit\Framework\AssertionFailedError;
 
 uses(RefreshDatabase::class, ContractAssertions::class);
 
@@ -37,6 +49,26 @@ final class AggregateOffendingMcpTool extends Tool
 final class AggregateOffendingMcpServer extends Server
 {
     protected array $tools = [AggregateOffendingMcpTool::class];
+}
+
+#[IsReadOnly]
+#[ToolClassification(Classification::Metadata)]
+#[ToolEffect(Effect::Read)]
+final class AggregateEnforcedMcpTool extends Tool
+{
+    use AdvertisesToolClassification, AdvertisesToolEffect, RespectsEffectCeiling;
+
+    public function handle(): Response
+    {
+        app(ActingPrincipalResolver::class)->require(request());
+
+        return Response::text('delegated-enforcement-reached');
+    }
+}
+
+final class AggregateEnforcedMcpServer extends Server
+{
+    protected array $tools = [AggregateEnforcedMcpTool::class];
 }
 
 /** @param list<string> $members
@@ -156,6 +188,7 @@ function packageConformanceSpec(
  * @param  list<string>  $runtime
  * @param  list<string>  $capabilities
  * @param  class-string<Server>|null  $mcpServer
+ * @param  array<string, list<string>>|null  $expected
  */
 function aggregateControlSpec(
     string $consumerRoot,
@@ -164,6 +197,7 @@ function aggregateControlSpec(
     array $runtime = [],
     array $capabilities = [],
     ?string $mcpServer = null,
+    ?array $expected = null,
 ): ConsumerConformance {
     $packageRoot = dirname(__DIR__);
     $providerFiles ??= [$packageRoot.'/src/BuiltForCloudServiceProvider.php'];
@@ -181,7 +215,7 @@ function aggregateControlSpec(
         capabilities: $capabilities,
         purposeMappings: [],
         mcpServer: $mcpServer,
-        expected: packageConformanceExpected(),
+        expected: $expected ?? packageConformanceExpected(),
     );
 }
 
@@ -593,12 +627,85 @@ PHP);
         mcpServer: AggregateOffendingMcpServer::class,
     ));
     expect($mcpReport->passed)->toBeFalse()
-        ->and($mcpReport->families['mcp_delegated']->visited)->toBe(1)
+        ->and($mcpReport->families['mcp_delegated']->visited)->toBe(0)
         ->and($mcpReport->families['mcp_delegated']->violations)->toContain(
-            AggregateOffendingMcpTool::class.' is missing IsReadOnly, IsDestructive, or IsIdempotent.',
-            AggregateOffendingMcpTool::class.' is missing ToolClassification.',
-            AggregateOffendingMcpTool::class.' is missing ToolEffect.',
-            'mcp-delegated-conformance',
+            'mcp-delegated-enforcement-not-run',
+        );
+});
+
+it('fails an advertised delegated product until assertHonors records the exact tool list', function (): void {
+    config([
+        'built-for-cloud.mcp.path' => '/aggregate-enforced-mcp',
+        'built-for-cloud.mcp.delegated' => true,
+    ]);
+    Route::post('/aggregate-enforced-mcp', fn (): array => ['ok' => true])->middleware('bfc.mcp');
+
+    $root = aggregateControlRoot('Clean.php', "<?php\nfinal class AggregateEnforcedConsumer {}\n");
+    $expected = packageConformanceExpected();
+    $expected['mcp_delegated'] = [AggregateEnforcedMcpTool::class];
+    $spec = aggregateControlSpec(
+        $root,
+        runtime: ['meta'],
+        capabilities: ['mcp-delegated'],
+        mcpServer: AggregateEnforcedMcpServer::class,
+        expected: $expected,
+    );
+    $before = (new FleetConformance($this))->inspect($spec);
+
+    expect($before->passed)->toBeFalse()
+        ->and($before->families['mcp_delegated']->violations)->toContain('mcp-delegated-enforcement-not-run');
+
+    McpDelegatedEnforcement::assertHonors(
+        AggregateEnforcedMcpServer::class,
+        [AggregateEnforcedMcpTool::class],
+    );
+
+    $after = (new FleetConformance($this))->inspect($spec);
+
+    expect($after->passed)->toBeTrue()
+        ->and($after->families['mcp_delegated']->visited)->toBe(1)
+        ->and($after->families['mcp_delegated']->violations)->toBe([])
+        ->and($after->families['mcp_delegated']->limits)->toBe([
+            'tools registered and invoked under the verified delegated assertion fixture',
+            'whether a second-subject authorization case ran, response-body correctness, and evidence from another process are not established',
+        ]);
+
+    expect(fn () => McpDelegatedEnforcement::assertHonors(AggregateEnforcedMcpServer::class, []))
+        ->toThrow(AssertionFailedError::class, 'non-empty expected tool list');
+
+    $afterFailedRetry = (new FleetConformance($this))->inspect($spec);
+    expect($afterFailedRetry->passed)->toBeFalse()
+        ->and($afterFailedRetry->families['mcp_delegated']->violations)
+        ->toContain('mcp-delegated-enforcement-not-run');
+});
+
+it('fails delegated fleet conformance on both missing and unexpected recorded tools', function (): void {
+    config([
+        'built-for-cloud.mcp.path' => '/aggregate-enforced-mcp-mismatch',
+        'built-for-cloud.mcp.delegated' => true,
+    ]);
+    Route::post('/aggregate-enforced-mcp-mismatch', fn (): array => ['ok' => true])->middleware('bfc.mcp');
+
+    McpDelegatedEnforcement::assertHonors(
+        AggregateEnforcedMcpServer::class,
+        [AggregateEnforcedMcpTool::class],
+    );
+
+    $root = aggregateControlRoot('Clean.php', "<?php\nfinal class AggregateMismatchedConsumer {}\n");
+    $expected = packageConformanceExpected();
+    $expected['mcp_delegated'] = ['TestCreatedMissingMcpTool'];
+    $report = (new FleetConformance($this))->inspect(aggregateControlSpec(
+        $root,
+        runtime: ['meta'],
+        capabilities: ['mcp-delegated'],
+        mcpServer: AggregateEnforcedMcpServer::class,
+        expected: $expected,
+    ));
+
+    expect($report->passed)->toBeFalse()
+        ->and($report->families['mcp_delegated']->violations)->toContain(
+            'missing:TestCreatedMissingMcpTool',
+            'unexpected:'.AggregateEnforcedMcpTool::class,
         );
 });
 

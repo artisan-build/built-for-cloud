@@ -42,8 +42,8 @@ final readonly class FleetConformance
             'arbitrary indirect authentication implementations are not established',
         ],
         'mcp_delegated' => [
-            'currently eligible registered tools and serialized declarations only',
-            'absent tools, response bodies, and semantic honesty are not established',
+            'tools registered and invoked under the verified delegated assertion fixture',
+            'whether a second-subject authorization case ran, response-body correctness, and evidence from another process are not established',
         ],
     ];
 
@@ -320,15 +320,13 @@ final readonly class FleetConformance
     private function mcpDelegated(ConsumerConformance $spec): array
     {
         $server = $spec->mcpServer ?? throw new \RuntimeException('Missing MCP server.');
-        $inventory = McpDelegatedTools::discover($server);
+        $enforced = McpDelegatedEnforcement::recordedTools($server);
 
-        try {
-            McpDelegatedTools::assertConforms($server);
-        } catch (Throwable) {
-            $inventory['violations'][] = 'mcp-delegated-conformance';
+        if ($enforced === null) {
+            return [[], ['mcp-delegated-enforcement-not-run'], 0];
         }
 
-        return [$inventory['tools'], $inventory['violations'], count($inventory['tools'])];
+        return [$enforced, [], count($enforced)];
     }
 
     /**

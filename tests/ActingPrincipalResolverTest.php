@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use ArtisanBuild\BuiltForCloud\Console\ActingPrincipal;
 use ArtisanBuild\BuiltForCloud\Console\ActingPrincipalResolver;
 use ArtisanBuild\BuiltForCloud\Console\DelegatedActor;
 use ArtisanBuild\BuiltForCloud\Console\RequestAssertion;
@@ -280,4 +281,29 @@ it('names nobody and an unverified delegated source with different exceptions', 
     expect($resolver->acting($bareDelegatedRequest)->principal)->toBeNull()
         ->and($resolver->localUser($bareDelegatedRequest))->toBeNull();
     expect(fn () => $resolver->require($bareDelegatedRequest))->toThrow(DelegatedPrincipalUnsupported::class);
+});
+
+it('emits acting and require observations while localUser remains a non-emitting projection', function (): void {
+    $actor = resolverTestActor();
+    $request = Request::create('/mcp', 'POST');
+    $published = RequestAssertion::publish(
+        $request,
+        $actor,
+        consoleAssertionFor(subject: 'resolver-actor-7'),
+    );
+    $observed = [];
+    $request->attributes->set(
+        ActingPrincipalResolver::OBSERVER_ATTRIBUTE,
+        static function (ActingPrincipal $principal) use (&$observed): void {
+            $observed[] = $principal;
+        },
+    );
+    $resolver = app(ActingPrincipalResolver::class);
+
+    expect($resolver->acting($request))->toBe($published)
+        ->and($observed)->toBe([$published])
+        ->and($resolver->require($request))->toBe($published)
+        ->and($observed)->toBe([$published, $published])
+        ->and($resolver->localUser($request))->toBeNull()
+        ->and($observed)->toBe([$published, $published]);
 });

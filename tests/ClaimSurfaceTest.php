@@ -479,6 +479,12 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     // The acting-principal API adds two prose blocks with unpaired
     // absolutes: localUser never aliases a delegated actor, and acting()
     // never throws when a bare delegated actor reaches it.
+    // Delegated MCP enforcement adds one observer docblock in the resolver.
+    // Its HTTP-contract rewrite replaces one paired absolute block with
+    // three blocks: one without absolute vocabulary, one unpaired block
+    // carrying `only`/`cannot`, and one paired declaration-only residue.
+    // Together that is +3 blocks, +1 absolute, paired unchanged, and +1
+    // unpaired.
     $gateSurfaces = [
         'src/Console', 'src/Audit', 'resources/views',
         'docs/http-contract.md',
@@ -488,10 +494,10 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1054,
-        'absolute' => 344,
+        'blocks' => 1057,
+        'absolute' => 345,
         'paired' => 66,
-        'unpaired' => 278,
+        'unpaired' => 279,
     ]);
 
     // The surfaces the restatement map runs over are wider than the
