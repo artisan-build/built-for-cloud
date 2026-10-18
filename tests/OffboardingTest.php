@@ -32,6 +32,7 @@ use ArtisanBuild\BuiltForCloud\StandaloneAccess;
 use ArtisanBuild\BuiltForCloud\Subject;
 use ArtisanBuild\BuiltForCloud\SubjectType;
 use ArtisanBuild\BuiltForCloud\Testing\WithCredentials;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SelfServiceDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\UnifiedStoreDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
 use ArtisanBuild\BuiltForCloud\UserRole;
@@ -342,6 +343,52 @@ it('rejects and invalidates a surviving session — the stated compensation for 
     $response->assertForbidden();
 
     expect(session()->has('residue'))->toBeFalse();
+});
+
+it('rejects and invalidates a surviving session from the canonical subject row alone without over-refusing other rows', function (): void {
+    config(['built-for-cloud.credentials.declaration' => SelfServiceDeclaration::class]);
+
+    $user = User::query()->create([
+        'name' => 'Subject Only Person',
+        'email' => 'subject-only@example.com',
+        'password' => 'irrelevant',
+    ]);
+    $unrelatedUser = User::query()->create([
+        'name' => 'Unrelated Person',
+        'email' => 'unrelated@example.com',
+        'password' => 'irrelevant',
+    ]);
+    $userId = (string) $user->getKey();
+
+    OffboardedSubject::query()->create([
+        'subject_type' => SubjectType::UserPrincipal,
+        'subject_ref' => 'user:somebody-else',
+        'user_id' => OffboardedSubject::SUBJECT_ROW,
+        'offboarded_at' => now(),
+    ]);
+    OffboardedSubject::query()->create([
+        'subject_type' => SubjectType::UserPrincipal,
+        'subject_ref' => 'user:'.$unrelatedUser->getKey(),
+        'user_id' => (string) $unrelatedUser->getKey(),
+        'offboarded_at' => now(),
+    ]);
+
+    $this->actingAsVersioned($user)->withSession(['residue' => 'still-here']);
+    $this->get('/offboard-session-guarded')->assertOk();
+    expect(session()->get('residue'))->toBe('still-here')
+        ->and(OffboardedSubject::userIsOffboarded($userId))->toBeFalse();
+
+    OffboardedSubject::query()->create([
+        'subject_type' => SubjectType::UserPrincipal,
+        'subject_ref' => 'user:'.$userId,
+        'user_id' => OffboardedSubject::SUBJECT_ROW,
+        'offboarded_at' => now(),
+    ]);
+
+    $this->get('/offboard-session-guarded')->assertForbidden();
+
+    expect(OffboardedSubject::userIsOffboarded($userId))->toBeFalse()
+        ->and(session()->has('residue'))->toBeFalse();
 });
 
 it('is idempotent: a second offboard is a no-op with the same response shape and no new audit rows', function (): void {

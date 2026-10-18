@@ -8,6 +8,9 @@ use ArtisanBuild\BuiltForCloud\Console\RequestAssertion;
 use ArtisanBuild\BuiltForCloud\Credential;
 use ArtisanBuild\BuiltForCloud\Exceptions\DelegatedPrincipalUnsupported;
 use ArtisanBuild\BuiltForCloud\Exceptions\NoActingPrincipal;
+use ArtisanBuild\BuiltForCloud\OffboardedSubject;
+use ArtisanBuild\BuiltForCloud\SubjectType;
+use ArtisanBuild\BuiltForCloud\Tests\Fixtures\SelfServiceDeclaration;
 use ArtisanBuild\BuiltForCloud\Tests\Fixtures\User;
 use ArtisanBuild\BuiltForCloud\User as CanonicalUser;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -98,6 +101,35 @@ it('supports an exact local session user and nobody acting', function (): void {
         ->and($nobody->principal)->toBeNull()
         ->and($nobody->check())->toBeFalse();
 });
+
+it('does not project either containment half through session or direct credential arrivals', function (string $arrival, string $containment): void {
+    config(['built-for-cloud.credentials.declaration' => SelfServiceDeclaration::class]);
+
+    $user = resolverTestUser('Contained Local User');
+    $userId = (string) $user->getAuthIdentifier();
+    OffboardedSubject::query()->create([
+        'subject_type' => SubjectType::UserPrincipal,
+        'subject_ref' => 'user:'.$userId,
+        'user_id' => $containment === 'user' ? $userId : OffboardedSubject::SUBJECT_ROW,
+        'offboarded_at' => now(),
+    ]);
+
+    $request = Request::create($arrival === 'credential' ? '/mcp' : '/dashboard', $arrival === 'credential' ? 'POST' : 'GET');
+
+    if ($arrival === 'credential') {
+        $credential = Credential::factory()->create(['user_id' => $userId]);
+        $request->setUserResolver(static fn (): Credential => $credential);
+    } else {
+        $request->setUserResolver(static fn (): User => $user);
+    }
+
+    expect(app(ActingPrincipalResolver::class)->localUser($request))->toBeNull();
+})->with([
+    'session, per-user row' => ['session', 'user'],
+    'session, subject row only' => ['session', 'subject'],
+    'credential, per-user row' => ['credential', 'user'],
+    'credential, subject row only' => ['credential', 'subject'],
+]);
 
 it('requires each supported assertion credential and session arrival shape', function (): void {
     $actor = resolverTestActor();

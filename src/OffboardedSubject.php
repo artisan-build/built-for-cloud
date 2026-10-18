@@ -5,11 +5,15 @@ declare(strict_types=1);
 namespace ArtisanBuild\BuiltForCloud;
 
 use ArtisanBuild\BuiltForCloud\Auth\CredentialGuard;
+use ArtisanBuild\BuiltForCloud\Contracts\CredentialDeclaration;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use Carbon\CarbonInterface;
+use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\Request;
+use SensitiveParameter;
 
 /**
  * The containment registry the offboard verb writes (PRD 1.15,
@@ -94,6 +98,42 @@ final class OffboardedSubject extends Model
         }
 
         return self::query()->where('user_id', $userId)->exists();
+    }
+
+    /**
+     * Whether either containment row for this local human exists.
+     *
+     * The app's declaration owns the canonical user-principal reference,
+     * just as it does for the personal-credential surface. Resolve it from
+     * an isolated copy of the supplied request authenticated as the local
+     * user, so direct credentials cannot substitute their own identity and
+     * the caller never has to reconstruct the app's Subject convention.
+     */
+    public static function userOrSubjectIsOffboarded(#[SensitiveParameter] Request $request, Authenticatable $user): bool
+    {
+        $userId = (string) $user->getAuthIdentifier();
+        $localRequest = clone $request;
+        $localRequest->setUserResolver(static fn (): Authenticatable => $user);
+        $subject = app(CredentialDeclaration::class)->resolveSubject($localRequest);
+        $userSubject = $subject?->type === SubjectType::UserPrincipal ? $subject : null;
+
+        if ($userId === self::SUBJECT_ROW) {
+            return false;
+        }
+
+        return self::query()
+            ->where(function (Builder $query) use ($userId, $userSubject): void {
+                $query->where('user_id', $userId);
+
+                if ($userSubject !== null) {
+                    $query->orWhere(function (Builder $query) use ($userSubject): void {
+                        $query->where('subject_type', $userSubject->type->value)
+                            ->where('subject_ref', $userSubject->ref)
+                            ->where('user_id', self::SUBJECT_ROW);
+                    });
+                }
+            })
+            ->exists();
     }
 
     /**
