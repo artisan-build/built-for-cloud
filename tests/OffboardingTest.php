@@ -490,29 +490,52 @@ it('rides the shared version gate: a replayed or older offboard event is transac
     ])->assertStatus(422);
 });
 
-it('rejects an offboarded user on bfc.admin too, whatever session store kept the session alive (Fix 3)', function (): void {
+it('rejects and invalidates a canonical-subject-contained admin without over-refusing unrelated rows', function (): void {
+    config(['built-for-cloud.credentials.declaration' => SelfServiceDeclaration::class]);
+
     Route::middleware(['web', 'bfc.admin'])->get('/offboard-admin-guarded', fn (): array => ['ok' => true]);
 
-    // The default array session store: the offboard transaction deletes
-    // nothing here — the middleware check IS the containment.
     $user = User::query()->create([
         'name' => 'Admin Person',
-        'email' => 'person@example.com',
+        'email' => 'admin@example.com',
         'password' => 'irrelevant',
     ]);
     $user->forceFill(['role' => UserRole::Admin->value])->save();
+    $unrelatedUser = User::query()->create([
+        'name' => 'Unrelated Admin',
+        'email' => 'unrelated-admin@example.com',
+        'password' => 'irrelevant',
+    ]);
+    $userId = (string) $user->getKey();
 
-    // Positive control: the admin passes the gate before containment.
-    $this->actingAsVersioned($user)->get('/offboard-admin-guarded')->assertOk();
+    OffboardedSubject::query()->create([
+        'subject_type' => SubjectType::UserPrincipal,
+        'subject_ref' => 'user:somebody-else',
+        'user_id' => OffboardedSubject::SUBJECT_ROW,
+        'offboarded_at' => now(),
+    ]);
+    OffboardedSubject::query()->create([
+        'subject_type' => SubjectType::UserPrincipal,
+        'subject_ref' => 'user:'.$unrelatedUser->getKey(),
+        'user_id' => (string) $unrelatedUser->getKey(),
+        'offboarded_at' => now(),
+    ]);
 
-    offboardViaHttp(['subject_type' => 'user_principal', 'subject_ref' => 'person@example.com'])->assertOk();
+    $this->actingAsVersioned($user)->withSession(['residue' => 'still-here']);
+    $this->get('/offboard-admin-guarded')->assertOk();
+    expect(session()->get('residue'))->toBe('still-here');
 
-    // The surviving session presents itself on a bfc.admin-only route
-    // (no bfc.auth stacked): rejected, and invalidated.
-    $this->actingAs($user)->withSession(['residue' => 'still-here']);
+    OffboardedSubject::query()->create([
+        'subject_type' => SubjectType::UserPrincipal,
+        'subject_ref' => 'user:'.$userId,
+        'user_id' => OffboardedSubject::SUBJECT_ROW,
+        'offboarded_at' => now(),
+    ]);
+
     $this->get('/offboard-admin-guarded')->assertForbidden();
 
-    expect(session()->has('residue'))->toBeFalse();
+    expect(OffboardedSubject::userIsOffboarded($userId))->toBeFalse()
+        ->and(session()->has('residue'))->toBeFalse();
 });
 
 it('reports containment INCOMPLETE when the session store is outside the transaction\'s reach (Fix 3)', function (): void {

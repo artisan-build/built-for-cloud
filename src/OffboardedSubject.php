@@ -107,7 +107,9 @@ final class OffboardedSubject extends Model
      * just as it does for the personal-credential surface. Resolve it from
      * an isolated copy of the supplied request authenticated as the local
      * user, so direct credentials cannot substitute their own identity and
-     * the caller never has to reconstruct the app's Subject convention.
+     * the caller never has to reconstruct the app's Subject convention. A
+     * null or non-user-principal result disables only the subject arm; the
+     * exact per-user row remains enforced.
      */
     public static function userOrSubjectIsOffboarded(#[SensitiveParameter] Request $request, Authenticatable $user): bool
     {
@@ -117,20 +119,26 @@ final class OffboardedSubject extends Model
         $subject = app(CredentialDeclaration::class)->resolveSubject($localRequest);
         $userSubject = $subject?->type === SubjectType::UserPrincipal ? $subject : null;
 
-        if ($userId === self::SUBJECT_ROW) {
+        if ($userId === self::SUBJECT_ROW && $userSubject === null) {
             return false;
         }
 
         return self::query()
             ->where(function (Builder $query) use ($userId, $userSubject): void {
-                $query->where('user_id', $userId);
+                if ($userId !== self::SUBJECT_ROW) {
+                    $query->where('user_id', $userId);
+                }
 
                 if ($userSubject !== null) {
-                    $query->orWhere(function (Builder $query) use ($userSubject): void {
+                    $subjectRow = function (Builder $query) use ($userSubject): void {
                         $query->where('subject_type', $userSubject->type->value)
                             ->where('subject_ref', $userSubject->ref)
                             ->where('user_id', self::SUBJECT_ROW);
-                    });
+                    };
+
+                    $userId === self::SUBJECT_ROW
+                        ? $query->where($subjectRow)
+                        : $query->orWhere($subjectRow);
                 }
             })
             ->exists();

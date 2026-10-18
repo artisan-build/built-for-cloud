@@ -14,6 +14,7 @@ use ArtisanBuild\BuiltForCloud\CredentialPurpose;
 use ArtisanBuild\BuiltForCloud\CredentialStatus;
 use ArtisanBuild\BuiltForCloud\CredentialVerb;
 use ArtisanBuild\BuiltForCloud\Exceptions\CredentialVerbRefused;
+use ArtisanBuild\BuiltForCloud\Exceptions\SelfServiceUnavailable;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacEnvelope;
 use ArtisanBuild\BuiltForCloud\Hmac\HmacKeyring;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureCredentialAdmin;
@@ -21,6 +22,7 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\InstallationAuthority;
 use ArtisanBuild\BuiltForCloud\LifecycleEventType;
 use ArtisanBuild\BuiltForCloud\MintOptions;
+use ArtisanBuild\BuiltForCloud\OffboardedSubject;
 use ArtisanBuild\BuiltForCloud\OffboardOptions;
 use ArtisanBuild\BuiltForCloud\OnboardingToken;
 use ArtisanBuild\BuiltForCloud\OperatorAbility;
@@ -279,6 +281,43 @@ it('ignores a crafted subject even when the surface is called directly, not over
 
     expect($credential->subject_ref)->toBe(personalSubjectRef($mine))
         ->and($credential->user_id)->toBe((string) $mine->getAuthIdentifier());
+});
+
+it('refuses a directly called personal surface for either local-human containment row', function (string $containment): void {
+    $mine = personalUser('contained-'.$containment.'@example.test');
+    $userId = (string) $mine->getAuthIdentifier();
+    OffboardedSubject::query()->create([
+        'subject_type' => SubjectType::UserPrincipal,
+        'subject_ref' => personalSubjectRef($mine),
+        'user_id' => $containment === 'user' ? $userId : OffboardedSubject::SUBJECT_ROW,
+        'offboarded_at' => now(),
+    ]);
+
+    $this->actingAsVersioned($mine);
+    $request = Request::create('/consumer-owned/personal-credentials', 'GET');
+    $request->setUserResolver(static fn (): User => $mine);
+
+    if ($containment === 'subject') {
+        expect(OffboardedSubject::userIsOffboarded($userId))->toBeFalse();
+    }
+
+    expect(fn () => app(PersonalCredentialSurface::class)->mine($request))
+        ->toThrow(SelfServiceUnavailable::class, 'authenticated local user is contained');
+})->with([
+    'per-user row' => 'user',
+    'canonical subject row only' => 'subject',
+]);
+
+it('never treats a direct user-bound credential as a browser-session human', function (): void {
+    $mine = personalUser('direct-credential@example.test');
+    $credential = personalCredentialFor($mine);
+
+    $this->actingAsVersioned($mine);
+    $request = Request::create('/consumer-owned/personal-credentials', 'GET');
+    $request->setUserResolver(static fn (): Credential => $credential);
+
+    expect(fn () => app(PersonalCredentialSurface::class)->mine($request))
+        ->toThrow(SelfServiceUnavailable::class, 'no usable local user identifier');
 });
 
 it('cannot mint the reserved signing-root identity through the personal adapter', function (): void {

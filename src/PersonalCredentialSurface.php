@@ -297,6 +297,14 @@ final readonly class PersonalCredentialSurface
             throw SelfServiceUnavailable::delegatedPrincipal();
         }
 
+        $principal = $acting->principal;
+
+        if ($principal instanceof Authenticatable
+            && ! $principal instanceof Credential
+            && OffboardedSubject::userOrSubjectIsOffboarded($request, $principal)) {
+            throw SelfServiceUnavailable::containedLocalPrincipal();
+        }
+
         return $acting;
     }
 
