@@ -650,18 +650,22 @@ MCP tools use the same two-value boundary through
 `#[ToolClassification(Classification::Content)]`. A tool using the
 `AdvertisesToolClassification` trait on its `Laravel\Mcp\Server\Tool` advertises
 the value in `tools/list` as `_meta.classification`; an undeclared tool serializes conservatively
-as `content`, but is still non-conforming because the declaration itself is required. A product
-may advertise `mcp-delegated` only when every registered tool carries one of Laravel MCP's
-`#[IsReadOnly]`, `#[IsDestructive]`, or `#[IsIdempotent]` attributes, an explicit
-`ToolClassification`, an explicit `ToolEffect`, matching `_meta.classification` and `_meta.effect`
-wire values (normally supplied by `AdvertisesToolClassification` and `AdvertisesToolEffect`), and
-the `RespectsEffectCeiling` trait, and its suite runs
-`ContractAssertions::assertBuiltForCloudMcpDelegatedTools()` against the server. The assertion
-checks registered tools eligible under that test's application state, temporarily discovering
-them under a `destructive` ceiling, and verifies classification/effect wire propagation plus the
-ceiling-enforcement trait. It does not inspect unregistered or currently ineligible tools,
-response bodies, implementations, or whether an annotation or effect truthfully describes
-behavior.
+as `content`, but is still non-conforming because the declaration itself is required.
+
+A product may advertise `mcp-delegated` only when its suite runs
+`McpDelegatedEnforcement::assertHonors()` with the exact, non-empty tool class list before fleet
+conformance. The helper publishes a signed assertion that passes the package verifier, registers
+the server under that assertion, runs the declaration checks, synthesizes minimum schema arguments,
+and invokes every expected tool. Each tool must observe the same delegated identifier and role
+through `ActingPrincipalResolver`. Typed package exceptions identify identity refusals without
+message matching. Tools whose schema cannot be synthesized are reported as unreached unless the
+consumer supplies reviewed arguments.
+
+`McpDelegatedTools` remains the declaration-only helper. It verifies Laravel MCP annotations,
+`ToolClassification`, `ToolEffect`, `_meta` propagation, and `RespectsEffectCeiling`; it does not
+establish delegated behavior by itself. See
+[`upgrade-mcp-delegated-enforcement.md`](upgrade-mcp-delegated-enforcement.md) for the consumer test,
+second-subject authorization case, and migration inventory.
 
 This tightened conformance leg is a migration requirement for every consuming server. In
 particular, a trait-bearing server reached through a local/stdio transport publishes no HTTP

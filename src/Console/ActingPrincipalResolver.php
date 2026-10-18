@@ -53,6 +53,9 @@ use SensitiveParameter;
  */
 final class ActingPrincipalResolver
 {
+    /** @internal Used by the delegated MCP conformance harness. */
+    public const string OBSERVER_ATTRIBUTE = 'bfc.testing.acting_principal_observer';
+
     private const string EXPLICIT_REQUEST_PRINCIPAL = 'bfc.explicit_request_principal';
 
     private ?ActingPrincipal $resolved = null;
@@ -91,7 +94,14 @@ final class ActingPrincipalResolver
             ? null
             : $this->requestPrincipal($request, $applicable);
 
-        return $this->actingFromSources($request, $applicable, $requestAssertion, $requestPrincipal);
+        $acting = $this->actingFromSources($request, $applicable, $requestAssertion, $requestPrincipal);
+        $observer = $request->attributes->get(self::OBSERVER_ATTRIBUTE);
+
+        if (is_callable($observer)) {
+            $observer($acting);
+        }
+
+        return $acting;
     }
 
     private function actingFromSources(
@@ -125,7 +135,12 @@ final class ActingPrincipalResolver
      */
     public function localUser(#[SensitiveParameter] Request $request): ?Authenticatable
     {
-        $acting = $this->acting($request);
+        $applicable = $this->applicableGuardName();
+        $requestAssertion = RequestAssertion::principal($request);
+        $requestPrincipal = $requestAssertion instanceof ActingPrincipal
+            ? null
+            : $this->requestPrincipal($request, $applicable);
+        $acting = $this->actingFromSources($request, $applicable, $requestAssertion, $requestPrincipal);
 
         if ($acting->delegated || $acting->principal instanceof DelegatedActor) {
             return null;
@@ -176,6 +191,12 @@ final class ActingPrincipalResolver
         }
 
         $acting = $this->actingFromSources($request, $applicable, $requestAssertion, $requestPrincipal);
+
+        $observer = $request->attributes->get(self::OBSERVER_ATTRIBUTE);
+
+        if (is_callable($observer)) {
+            $observer($acting);
+        }
 
         if (! $acting->check()) {
             throw new NoActingPrincipal('No acting principal is available for this request.');
