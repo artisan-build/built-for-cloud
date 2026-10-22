@@ -193,7 +193,7 @@ it('uses POST logout to end the current session', function (): void {
     loginStandalone($this, $user);
     $this->post('/bfc/logout')->assertRedirect(route('bfc.login'));
     $this->assertGuest();
-    $this->get('/bfc/members')->assertRedirect(route('bfc.login'));
+    $this->get('/bfc/members')->assertRedirect(route('bfc.login', ['intended' => '/bfc/members']));
 });
 
 it('invalidates previously unmarked sessions after password reset on a non-enumerable store', function (): void {
@@ -224,7 +224,7 @@ it('invalidates previously unmarked sessions after password reset on a non-enume
         'password_confirmation' => 'replacement secure password',
     ])->assertRedirect(route('bfc.login'));
 
-    $this->get('/bfc/members')->assertRedirect(route('bfc.login'));
+    $this->get('/bfc/members')->assertRedirect(route('bfc.login', ['intended' => '/bfc/members']));
     $this->assertGuest();
 });
 
@@ -246,7 +246,7 @@ it('invalidates marked stale sessions after password reset on a non-enumerable s
         'password_confirmation' => 'replacement secure password',
     ])->assertRedirect(route('bfc.login'));
 
-    $this->get('/bfc/members')->assertRedirect(route('bfc.login'));
+    $this->get('/bfc/members')->assertRedirect(route('bfc.login', ['intended' => '/bfc/members']));
     $this->assertGuest();
 });
 

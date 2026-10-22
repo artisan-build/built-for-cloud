@@ -212,7 +212,7 @@ it('orders the exact dual-gated class to redirect guests without opening authent
     $this->get('/bfc/members?test-created-authority=invalid')->assertNotFound();
 });
 
-it('keeps standalone redirects unchanged across every guarded package route', function (): void {
+it('redirects every standalone package route guarded by local human authentication with its intended destination', function (): void {
     /** @var Router $router */
     $router = app('router');
     $tested = [];
@@ -228,11 +228,10 @@ it('keeps standalone redirects unchanged across every guarded package route', fu
 
         $method = array_values(array_diff($route->methods(), ['HEAD']))[0];
         $requestUri = p3RequestUri($route, count($tested));
-        $expected = str_starts_with($route->uri(), 'settings') || $route->uri() === 'dashboard'
-            ? route('bfc.login', ['intended' => $requestUri])
-            : route('bfc.login');
 
-        $this->call($method, $requestUri)->assertRedirect($expected);
+        $this->call($method, $requestUri)->assertRedirect(route('bfc.login', [
+            'intended' => $requestUri,
+        ]));
         $tested[] = $method.' '.$route->uri();
     }
 

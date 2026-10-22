@@ -200,7 +200,7 @@ it('protects routes through auth and admin middleware aliases', function (): voi
 
     $admin->forceFill(['role' => UserRole::Admin->value])->save();
 
-    $this->get('/auth-only')->assertRedirect(route('bfc.login'));
+    $this->get('/auth-only')->assertRedirect(route('bfc.login', ['intended' => '/auth-only']));
     $this->get('/admin-only')->assertForbidden();
     $this->actingAsVersioned($regular)->get('/auth-only')->assertOk();
     $this->actingAs($regular)->get('/admin-only')->assertForbidden();

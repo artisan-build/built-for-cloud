@@ -408,6 +408,16 @@ API listing shape.
 
 - **Public routes** are unauthenticated but rate-limited per IP: `bfc-public` (60/min) and
   `bfc-claim` (10/min), returning `429` beyond the limit.
+- **Browser routes behind the local-human gate (`bfc.auth`) redirect an unauthenticated browser
+  into the authority mode's own login route, carrying the requested path as `intended`.** That
+  holds for every guarded route in either mode, not only `/dashboard` and `/settings`, so a
+  signed-out person who opens a deep link lands back on it after signing in. The value is the
+  request's own relative URI and nothing else: it must be a same-origin relative path in every
+  decoded form, and a candidate that is not is dropped for `/dashboard` rather than cleaned up and
+  reused. A request that expects JSON answers `401` and carries no destination. A deployment where
+  the package's login route is absent and the host application registers its own `login` is
+  redirected there with nothing attached, because that route is not the package's and has no
+  `intended` contract.
 - **Operator-route refusals are NOT uniform, deliberately.** Missing, unknown, expired and
   revoked bearers all answer `401` with one body; a bearer that authenticates but lacks the
   route's ability answers `403`. The split is safe because a caller reaching the `403` has
@@ -2222,8 +2232,9 @@ Consequently, and each of these is a named negative test in the package's suite:
 
 **Authentication on these routes is the application's session**, not an operator credential or
 operator ability. The package mounts them behind its `bfc.auth` gate, which the consuming
-application's authenticated human already passes; an unauthenticated request is `401` (or a
-redirect to the app's `login` route when it has one and the request does not expect JSON). That
+application's authenticated human already passes; an unauthenticated request is `401` (or, when
+the request does not expect JSON, the login redirect documented under
+[Authentication](#authentication), carrying the requested path as `intended`). That
 gate is also where an offboarded user's surviving session dies (PRD 1.15), so offboarding a
 subject both revokes its credentials and closes this screen to them. Every request rides the
 `bfc-personal` limiter (30/min per session principal, 60/min per IP).
