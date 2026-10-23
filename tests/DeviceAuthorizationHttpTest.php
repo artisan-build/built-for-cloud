@@ -885,8 +885,9 @@ it('keeps authorization route authority deferral local to authenticated non-dele
         ->not->toContain($deferred);
 
     $this->postJson('/bfc/device-authorizations', ['app_purpose' => 'http.device'])->assertUnauthorized();
-    $this->post('/bfc/device', [])->assertRedirect('/bfc/login');
-    $this->post('/bfc/loopback/authorize', [])->assertRedirect('/bfc/login');
+    $this->post('/bfc/device', [])->assertRedirect(route('bfc.login', ['intended' => '/bfc/device']));
+    $this->post('/bfc/loopback/authorize', [])
+        ->assertRedirect(route('bfc.login', ['intended' => '/bfc/loopback/authorize']));
     expect(DB::table('credential_authorizations')->count())->toBe(0)
         ->and(DB::table('bfc_submission_nonces')->count())->toBe(0)
         ->and(DB::table('credentials')->count())->toBe(0);

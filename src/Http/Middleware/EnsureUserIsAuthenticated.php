@@ -140,6 +140,24 @@ final class EnsureUserIsAuthenticated
 
         $authority = InstallationAuthority::current();
 
+        // The page the browser was actually asking for, carried through
+        // sign-in. It is computed for EVERY browser redirect below, not
+        // only the managed and dashboard/settings ones: a standalone
+        // installation is what the authority table seeds, so the
+        // fall-through below is the default deployment's deep-link path
+        // and {@see StandaloneAuthentication::store()} already honours
+        // `intended`.
+        //
+        // {@see ManagedReturnTo::firstRelative()} is the open-redirect
+        // boundary and the only thing that decides what may be carried:
+        // a request URI that is not a safe same-origin relative path in
+        // every decoded form is dropped for the server-chosen dashboard,
+        // never cleaned up and reused.
+        $intended = ManagedReturnTo::firstRelative([
+            $request->getRequestUri(),
+            route('bfc.dashboard', absolute: false),
+        ]);
+
         if ($request->is('dashboard', 'settings', 'settings/*')
             || ($authority->isValid() && $authority->mode === AuthorityMode::Managed)) {
 
@@ -152,18 +170,17 @@ final class EnsureUserIsAuthenticated
                 AuthorityMode::Managed => 'bfc.managed.login',
                 default => abort(404),
             };
-            $intended = ManagedReturnTo::firstRelative([
-                $request->getRequestUri(),
-                route('bfc.dashboard', absolute: false),
-            ]);
 
             return redirect()->route($login, ['intended' => $intended]);
         }
 
         if (Route::has('bfc.login')) {
-            return redirect()->route('bfc.login');
+            return redirect()->route('bfc.login', ['intended' => $intended]);
         }
 
+        // The host application's own login route, reached only when the
+        // package's is absent. It is not ours and has no `intended`
+        // contract, so nothing is attached to it.
         if (Route::has('login')) {
             return redirect()->route('login');
         }

@@ -157,7 +157,7 @@ it('refuses non-Owner and stale sessions on the abandon route without changing t
     if (in_array($caller, ['admin', 'member'], true)) {
         $response->assertForbidden();
     } else {
-        $response->assertRedirect(route('bfc.login'));
+        $response->assertRedirect(route('bfc.login', ['intended' => $url]));
     }
 
     expect($transition->fresh()->getAttributes())->toBe($before)
@@ -526,12 +526,13 @@ it('refuses Admin, Member, and unauthenticated requests on every transition rout
     }
 
     auth()->logout();
-    $this->get($index)->assertRedirect(route('bfc.login'));
-    $this->post($store)->assertRedirect(route('bfc.login'));
-    $this->get($edit)->assertRedirect(route('bfc.login'));
-    $this->put($update, ['roster' => [], 'locals' => []])->assertRedirect(route('bfc.login'));
-    $this->post($complete)->assertRedirect(route('bfc.login'));
-    $this->post($abandon)->assertRedirect(route('bfc.login'));
+    $this->get($index)->assertRedirect(route('bfc.login', ['intended' => $index]));
+    $this->post($store)->assertRedirect(route('bfc.login', ['intended' => $store]));
+    $this->get($edit)->assertRedirect(route('bfc.login', ['intended' => $edit]));
+    $this->put($update, ['roster' => [], 'locals' => []])
+        ->assertRedirect(route('bfc.login', ['intended' => $update]));
+    $this->post($complete)->assertRedirect(route('bfc.login', ['intended' => $complete]));
+    $this->post($abandon)->assertRedirect(route('bfc.login', ['intended' => $abandon]));
 });
 
 it('executes completion through the Owner route and ends the stale standalone session', function (): void {
@@ -646,7 +647,9 @@ it('keeps Owner, completeness, and unique-email enforcement active with every UI
         'locals' => [],
     ])->assertForbidden();
     auth()->logout();
-    $this->get(route('bfc.transitions.edit', $transition, false))->assertRedirect(route('bfc.login'));
+    $this->get(route('bfc.transitions.edit', $transition, false))->assertRedirect(route('bfc.login', [
+        'intended' => route('bfc.transitions.edit', $transition, false),
+    ]));
 
     $this->actingAsVersioned($owner)->get(route('bfc.transitions.edit', $transition, false))
         ->assertOk()
