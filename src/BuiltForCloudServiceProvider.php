@@ -87,6 +87,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Laravel\Mcp\Server\Methods\CallTool;
+use Livewire\Livewire;
 use ReflectionProperty;
 use RuntimeException;
 use Throwable;
@@ -230,6 +231,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
             $router->aliasMiddleware('bfc.hmac', VerifyHmacSignature::class);
             $router->aliasMiddleware('bfc.mcp', AuthenticateMcp::class);
             $router->aliasMiddleware('bfc.standalone', EnsureStandaloneAuthority::class);
+            $this->registerLivewirePersistentMiddleware();
             $this->prioritizeContractMajorAdmission($router);
             $this->prioritizeProductMcpIdAdmission($router);
 
@@ -260,6 +262,24 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
                 __DIR__.'/../resources/views' => $this->app->resourcePath('views/vendor/bfc'),
             ], 'built-for-cloud-views');
         }
+    }
+
+    private function registerLivewirePersistentMiddleware(): void
+    {
+        if (! class_exists(Livewire::class)) {
+            return;
+        }
+
+        Livewire::addPersistentMiddleware([
+            EnsureUserIsAuthenticated::class,
+            EnsureContractMajor::class,
+            EnsureUserIsAdmin::class,
+            EnsureCredentialAdmin::class,
+            EnsureCredentialAbility::class,
+            VerifyHmacSignature::class,
+            AuthenticateMcp::class,
+            EnsureStandaloneAuthority::class,
+        ]);
     }
 
     /** Keep opt-in contract admission ahead of every package authentication gate. */
