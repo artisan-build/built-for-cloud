@@ -23,6 +23,8 @@ The service provider is auto-discovered. Publish the config if you want to tweak
 php artisan vendor:publish --tag=built-for-cloud-config
 ```
 
+When Livewire is installed, the package's `bfc.*` route middleware also runs on Livewire update requests.
+
 ### Session drivers
 
 Built for Cloud supports Laravel's non-database session drivers, including `cookie`, `redis`, `file`,
