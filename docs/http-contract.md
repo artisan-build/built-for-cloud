@@ -414,7 +414,13 @@ API listing shape.
   signed-out person who opens a deep link lands back on it after signing in. The value is the
   request's own relative URI and nothing else: it must be a same-origin relative path in every
   decoded form, and a candidate that is not is dropped for `/dashboard` rather than cleaned up and
-  reused. A request that expects JSON answers `401` and carries no destination. A deployment where
+  reused. **The sign-in form then checks the value AGAIN, and its check on the query is stricter
+  than the gate's, so the round trip is guaranteed for a path and an ordinary query but NOT for
+  every query the gate will carry.** A query holding a percent-encoded space is the known case: the
+  gate carries `?filter=last%207%20days`, the form refuses it, and sign-in lands on `/dashboard`.
+  That is the safe direction to differ in, since neither validator can emit anything off-origin, but
+  it means the destination a person gets back is whatever the STRICTER of the two accepts. A request
+  that expects JSON answers `401` and carries no destination. A deployment where
   the package's login route is absent and the host application registers its own `login` is
   redirected there with nothing attached, because that route is not the package's and has no
   `intended` contract.
