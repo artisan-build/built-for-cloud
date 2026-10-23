@@ -505,3 +505,102 @@ it('re-registers listeners after the application is refreshed', function (): voi
     expect($failure)->toBeInstanceOf(AssertionFailedError::class)
         ->and($failure->getMessage())->toContain('[log]');
 });
+
+// --------------------- mint helpers: reveal-once + minted containment (pr6-reveal-once-delivery)
+
+it('passes a delivery channel that reveals the secret exactly once', function (): void {
+    $marker = leakMarker();
+
+    $this->assertRevealsSecretExactlyOnce('the one reveal: '.$marker, $marker);
+});
+
+it('fails when the delivery channel reveals the secret twice', function (): void {
+    $marker = leakMarker();
+
+    $failure = null;
+
+    try {
+        $this->assertRevealsSecretExactlyOnce($marker.' and again '.$marker, $marker);
+    } catch (AssertionFailedError $failure) {
+    }
+
+    expect($failure)->toBeInstanceOf(AssertionFailedError::class)
+        ->and($failure->getMessage())->toContain('exactly once');
+});
+
+it('fails when the delivery channel never reveals the secret', function (): void {
+    $marker = leakMarker();
+
+    $failure = null;
+
+    try {
+        $this->assertRevealsSecretExactlyOnce('this channel revealed nothing at all', $marker);
+    } catch (AssertionFailedError $failure) {
+    }
+
+    expect($failure)->toBeInstanceOf(AssertionFailedError::class)
+        ->and($failure->getMessage())->toContain('exactly once');
+});
+
+it('fails when a recoverable encoding of the secret survives beyond the single reveal', function (): void {
+    $marker = leakMarker();
+
+    $failure = null;
+
+    try {
+        $this->assertRevealsSecretExactlyOnce($marker."\n".base64_encode($marker), $marker);
+    } catch (AssertionFailedError $failure) {
+    }
+
+    expect($failure)->toBeInstanceOf(AssertionFailedError::class)
+        ->and($failure->getMessage())->toContain('Beyond the single reveal')
+        ->and($failure->getMessage())->toContain('base64-decoded');
+});
+
+it('fails when a minted secret leaks into a side-effect channel', function (): void {
+    $minted = null;
+
+    $failure = null;
+
+    try {
+        $this->assertNoSecretLeakageOfMinted(function () use (&$minted): string {
+            $minted = leakMarker();
+            Cache::put('minted-shadow', $minted, 60);
+
+            return 'minted';
+        }, function () use (&$minted): string {
+            return (string) $minted;
+        });
+    } catch (AssertionFailedError $failure) {
+    }
+
+    expect($failure)->toBeInstanceOf(AssertionFailedError::class)
+        ->and($failure->getMessage())->toContain('[cache]');
+});
+
+it('passes a mint whose secret escapes into no side-effect channel', function (): void {
+    $minted = null;
+
+    $result = $this->assertNoSecretLeakageOfMinted(function () use (&$minted): string {
+        $minted = leakMarker();
+        Log::info('minted quietly');
+
+        return 'minted';
+    }, function () use (&$minted): string {
+        return (string) $minted;
+    });
+
+    expect($result)->toBe('minted');
+});
+
+it('fails when the minted secret cannot be extracted from the action result', function (): void {
+    $failure = null;
+
+    try {
+        $this->assertNoSecretLeakageOfMinted(fn (): string => 'minted nothing', fn (): string => '');
+    } catch (AssertionFailedError $failure) {
+    }
+
+    expect($failure)->toBeInstanceOf(AssertionFailedError::class)
+        ->and($failure->getMessage())->toContain('could not extract');
+});
