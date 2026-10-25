@@ -555,8 +555,17 @@ final class ManagedMembershipResponses
             'role' => $response->role,
             'managed_membership_role' => $response->role,
         ] : [];
+        $emailVerification = $active
+            && $response instanceof ManagedAuthExchange
+            && $response->contactEmailVerified
+            && $user->email_verified_at === null
+            && StandaloneAccess::normalizeEmail($user->getOriginal('email'))
+                === StandaloneAccess::normalizeEmail($response->contactEmail)
+            ? ['email_verified_at' => $receipt]
+            : [];
         $user->forceFill([
             ...$roleDimension,
+            ...$emailVerification,
             'status' => $active ? 'active' : 'inactive',
             'deactivated_at' => $active ? null : $receipt,
             'managed_membership_status' => $response->membershipStatus,

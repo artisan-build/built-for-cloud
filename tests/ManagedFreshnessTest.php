@@ -693,6 +693,120 @@ it('applies a non-active callback denial without running the active upsert or re
         ->and(DB::table('sessions')->where('id', 'callback-session')->exists())->toBeFalse();
 });
 
+it('records a matching Scalpels-verified email on a successful exchange', function (): void {
+    CarbonImmutable::setTestNow('2026-10-26T12:00:00+00:00');
+    p3cConfigureAuthority();
+    $user = p3cUser('verified-email-subject', sequence: 10);
+    $user->forceFill(['email' => 'Verified.Email@Example.Test', 'email_verified_at' => null])->save();
+
+    $result = app(ManagedMembershipResponses::class)->applyExchange(
+        p3cConnection(),
+        new ManagedAuthExchange(
+            'verified-email-subject',
+            'verified-email-membership',
+            'active',
+            'active',
+            'member',
+            'Verified Email Subject',
+            'verified.email@example.test',
+            true,
+            20,
+            20,
+            new DateTimeImmutable('2026-10-26T11:59:00+00:00'),
+        ),
+    );
+
+    expect($result?->is($user))->toBeTrue()
+        ->and($user->fresh()->email_verified_at?->toAtomString())->toBe(now()->toAtomString());
+});
+
+it('does not let a Scalpels-verified address verify a different local email', function (): void {
+    CarbonImmutable::setTestNow('2026-10-26T12:00:00+00:00');
+    p3cConfigureAuthority();
+    $user = p3cUser('mismatched-email-subject', sequence: 10);
+
+    $result = app(ManagedMembershipResponses::class)->applyExchange(
+        p3cConnection(),
+        new ManagedAuthExchange(
+            'mismatched-email-subject',
+            'mismatched-email-membership',
+            'active',
+            'active',
+            'member',
+            'Mismatched Email Subject',
+            'verified-elsewhere@example.test',
+            true,
+            20,
+            20,
+            new DateTimeImmutable('2026-10-26T11:59:00+00:00'),
+        ),
+    );
+
+    expect($result?->is($user))->toBeTrue()
+        ->and($user->fresh()->email_verified_at)->toBeNull();
+});
+
+it('preserves an existing email verification timestamp on a successful exchange', function (): void {
+    CarbonImmutable::setTestNow('2026-10-26T12:00:00+00:00');
+    p3cConfigureAuthority();
+    $user = p3cUser('already-verified-subject', sequence: 10);
+    $verifiedAt = now()->subDay();
+    $user->forceFill(['email_verified_at' => $verifiedAt])->save();
+
+    app(ManagedMembershipResponses::class)->applyExchange(
+        p3cConnection(),
+        new ManagedAuthExchange(
+            'already-verified-subject',
+            'already-verified-membership',
+            'active',
+            'active',
+            'member',
+            'Already Verified Subject',
+            'already-verified-subject@example.test',
+            true,
+            20,
+            20,
+            new DateTimeImmutable('2026-10-26T11:59:00+00:00'),
+        ),
+    );
+
+    expect($user->fresh()->email_verified_at?->toAtomString())->toBe($verifiedAt->toAtomString());
+});
+
+it('does not write email verification for an unverified or denied exchange', function (bool $verified, string $status): void {
+    CarbonImmutable::setTestNow('2026-10-26T12:00:00+00:00');
+    p3cConfigureAuthority();
+    $user = p3cUser('refused-email-subject', sequence: 10);
+    $before = $user->getAttributes();
+
+    $result = app(ManagedMembershipResponses::class)->applyExchange(
+        p3cConnection(),
+        new ManagedAuthExchange(
+            'refused-email-subject',
+            'refused-email-membership',
+            $status,
+            'active',
+            'member',
+            'Refused Email Subject',
+            'refused-email-subject@example.test',
+            $verified,
+            20,
+            20,
+            new DateTimeImmutable('2026-10-26T11:59:00+00:00'),
+        ),
+    );
+
+    expect($result)->toBeNull()
+        ->and($user->fresh()->email_verified_at)->toBeNull();
+
+    if (! $verified) {
+        expect($user->fresh()->getAttributes())->toBe($before);
+    }
+})->with([
+    'unverified contact' => [false, 'active'],
+    'denied membership' => [true, 'removed'],
+]);
+
 it('links the 299 300 and reset 1799 1800 boundaries on one clock including one managed-valid Admin operation', function (): void {
     CarbonImmutable::setTestNow('2026-09-10T12:00:00+00:00');
     $fixture = p3cConfigureAuthority();
