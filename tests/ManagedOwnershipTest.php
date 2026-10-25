@@ -621,6 +621,19 @@ it('handles valid O1 acquisition, reaffirmation, and an absent incoming row with
         ->and($owner?->status)->toBe('active');
 })->with(['existing acquisition', 'absent acquisition', 'reaffirmation']);
 
+it('records a matching Scalpels-verified email during Owner acquisition', function (): void {
+    CarbonImmutable::setTestNow('2026-10-26T12:00:00+00:00');
+    p4aConfigureAuthority();
+
+    $owner = app(ManagedMembershipResponses::class)->applyExchange(
+        p4aConnection(),
+        p4aExchange('verified-owner-acquisition', 'active', 'owner'),
+    );
+
+    expect($owner?->owner_slot)->toBe('owner')
+        ->and($owner?->email_verified_at?->toAtomString())->toBe(now()->toAtomString());
+});
+
 it('refuses each terminal O1 consistency leaf with zero protected-state writes', function (ManagedOwnershipStatement $statement): void {
     p4aConfigureAuthority();
     $incumbent = p4aUser('o1-a', 'owner');
