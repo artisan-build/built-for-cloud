@@ -336,6 +336,36 @@ defines its own root route, so remove the consumer's starter root page. In the c
 `$this->assertBuiltForCloudManifestMatches($canonicalCatalogEntry)` with the canonical Scalpels entry;
 keep deliberate `bfc::` view overrides under the consumer's own test coverage.
 
+### Shared sidebar layout
+
+`<x-bfc-layout>` supplies a sticky sidebar from `lg` (1024px) and a slim header
+with a navigation drawer on smaller screens. The drawer and signed-in user menu use
+native browser popovers; they do not need Flux scripts or app JavaScript.
+
+Put app navigation in the `sidebar` slot, below the package's app and Documentation links:
+
+```blade
+<x-bfc-layout title="Projects">
+    <x-slot:sidebar>
+        <nav aria-label="Projects">
+            <a href="{{ route('projects.index') }}">All projects</a>
+        </nav>
+    </x-slot:sidebar>
+
+    <h1>Projects</h1>
+</x-bfc-layout>
+```
+
+A full-page Livewire component can put the same `<x-slot:sidebar>` inside its root
+element without wrapping itself in another layout. The slot is rendered once, in the
+sidebar that serves both screen sizes. Omitting it leaves a small navigation placeholder;
+passing an empty slot suppresses that placeholder.
+
+When upgrading, move app-owned navigation out of page content into this slot to avoid
+nested sidebars. The package serves its rebuilt CSS, so consumers do not need to rebuild
+their assets. Existing layout subclasses, configured replacement components, the
+`built-for-cloud.livewire_layout` opt-out, and `head`/`scripts` stacks keep working.
+
 ### System-authority entries
 
 Built for Cloud commands, queued jobs/listeners, package-registered schedule callbacks, and unbound

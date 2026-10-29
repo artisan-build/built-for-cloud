@@ -97,6 +97,17 @@ final class PackageAssetsTest extends Orchestra
         $this->assertSame([], $missing, 'Rebuild the stylesheet with `composer css`; these classes are missing from resources/dist/bfc.css: '.implode(', ', $missing));
     }
 
+    public function test_the_compiled_stylesheet_contains_the_sidebar_shell_rules(): void
+    {
+        $css = (string) file_get_contents(__DIR__.'/../resources/dist/bfc.css');
+
+        foreach (['bfc-sidebar', 'bfc-sidebar-content', 'bfc-sidebar-links', 'bfc-mobile-header', 'bfc-main', 'bfc-desktop-user-button'] as $class) {
+            $this->assertStringContainsString('.'.$class, $css);
+        }
+
+        $this->assertMatchesRegularExpression('/\.bfc-user-menu\{[^}]*bottom:/', $css);
+    }
+
     public function test_the_default_layout_links_the_stylesheet_with_a_content_version(): void
     {
         $version = substr((string) md5_file(__DIR__.'/../resources/dist/bfc.css'), 0, 12);
@@ -104,5 +115,15 @@ final class PackageAssetsTest extends Orchestra
         $html = Blade::render('<x-bfc-layout>Body</x-bfc-layout>');
 
         $this->assertStringContainsString('<link rel="stylesheet" href="'.url('/bfc/assets/bfc.css').'?v='.$version.'">', $html);
+    }
+
+    public function test_the_served_shell_css_positions_the_sidebar_and_upward_user_menu(): void
+    {
+        $css = $this->get('/bfc/assets/bfc.css')->assertOk()->streamedContent();
+
+        $this->assertMatchesRegularExpression('/\.bfc-sidebar\{[^}]*position:sticky/', $css);
+        $this->assertMatchesRegularExpression('/\.bfc-user-menu\{[^}]*position-anchor:--bfc-desktop-user[^}]*bottom:calc\(anchor\(top\)/', $css);
+        $this->assertStringContainsString('.bfc-mobile-header', $css);
+        $this->assertStringContainsString('.bfc-sidebar-slot', $css);
     }
 }

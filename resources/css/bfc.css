@@ -87,6 +87,7 @@
   --color-clay-sand: #eee2cf;
   --color-clay-brown: #70472f;
   --color-clay-dot: #a66c46;
+  --color-clay-hairline: #e2d8c8;
 
   --radius-clay-card: 1.8rem 1.5rem 1.7rem 1.3rem / 1.3rem 1.8rem 1.2rem 1.6rem;
   --radius-clay-marker: 45% 55% 48% 52% / 56% 43% 57% 44%;
@@ -102,10 +103,93 @@
 /* The shared page furniture every package screen is built from. Pages keep
    their `bfc-*` class names; this is the one place those names get a look. */
 @layer components {
-  /* Tests pin a bare <main> as the page's content root, so the shell's
-     content column is styled from here rather than by a class on it. */
   .bfc-body > main {
+    min-width: 0;
+  }
+
+  .bfc-main {
     @apply mx-auto w-full max-w-6xl px-5 py-8 sm:px-8 lg:py-10;
+  }
+
+  .bfc-skip-link {
+    @apply fixed top-2 left-2 z-100 -translate-y-24 rounded-lg bg-clay-surface px-4 py-3 focus:translate-y-0;
+  }
+
+  .bfc-sidebar {
+    @apply fixed m-0 border-0 border-r border-clay-hairline bg-clay-surface text-clay-ink;
+    inset: 0 auto 0 0;
+    width: min(19rem, calc(100vw - 3rem));
+    height: 100dvh;
+    max-height: none;
+    padding: 0;
+  }
+
+  .bfc-sidebar-content {
+    @apply flex h-full min-h-0 flex-col gap-6 overflow-y-auto p-5;
+  }
+
+  .bfc-wordmark {
+    @apply inline-flex min-h-11 w-28 shrink-0 items-center;
+  }
+
+  .bfc-wordmark img {
+    @apply block h-auto w-full;
+  }
+
+  .bfc-sidebar-links {
+    @apply grid gap-1;
+  }
+
+  .bfc-shell-link {
+    @apply flex min-h-11 items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold hover:bg-clay-slip;
+  }
+
+  .bfc-sidebar-slot {
+    @apply border-t border-clay-hairline pt-5;
+  }
+
+  .bfc-sidebar-user {
+    @apply mt-auto hidden border-t border-clay-hairline pt-4 lg:block;
+  }
+
+  .bfc-shell-control {
+    @apply inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold text-clay-brown hover:bg-clay-slip;
+  }
+
+  .bfc-sidebar a:focus-visible,
+  .bfc-shell-control:focus-visible,
+  .bfc-mobile-header a:focus-visible,
+  .bfc-skip-link:focus-visible {
+    @apply outline-3 outline-offset-2 outline-clay-iron;
+  }
+
+  .bfc-desktop-user-button {
+    @apply w-full justify-between;
+    anchor-name: --bfc-desktop-user;
+  }
+
+  .bfc-mobile-user-button {
+    @apply ml-auto min-w-0 max-w-32;
+    anchor-name: --bfc-mobile-user;
+  }
+
+  .bfc-mobile-header {
+    @apply sticky top-0 z-50 flex items-center gap-1 border-b border-clay-hairline bg-clay-surface px-3 py-2 lg:hidden;
+  }
+
+  @media (width >= 64rem) {
+    .bfc-body {
+      display: grid;
+      grid-template-columns: 17rem minmax(0, 1fr);
+      align-items: start;
+    }
+
+    .bfc-sidebar {
+      display: block;
+      position: sticky;
+      top: 0;
+      width: 17rem;
+    }
   }
 
   .bfc-auth {
@@ -181,21 +265,39 @@
     @apply size-2 shrink-0 -rotate-12 rounded-clay-marker bg-radial-[at_30%_25%] from-[#d89f75] to-[#aa6846] shadow-clay-bead;
   }
 
-  /* The user menu: a native popover laid out like Flux's dropdown menu on
-     the clay palette. Anchored under its button where the browser supports
-     anchor positioning, and pinned to the header's right edge where not. */
+  /* One top-layer menu for both triggers, outside the mobile drawer. */
   .bfc-user-menu {
-    @apply fixed m-0 min-w-56 rounded-lg border border-clay-sand bg-clay-surface p-1.5 text-clay-ink shadow-lg;
+    @apply fixed m-0 min-w-56 rounded-lg border border-clay-hairline bg-clay-surface p-1.5 text-clay-ink;
     inset: auto;
     top: 4.25rem;
-    right: max(1.25rem, calc((100vw - 72rem) / 2));
+    right: 0.75rem;
+    max-width: calc(100vw - 1.5rem);
+  }
+
+  @media (width >= 64rem) {
+    .bfc-user-menu {
+      top: auto;
+      right: auto;
+      bottom: 5rem;
+      left: 1.25rem;
+    }
   }
 
   @supports (position-anchor: --bfc-user-menu) {
     .bfc-user-menu {
-      position-anchor: --bfc-user-menu;
+      position-anchor: --bfc-mobile-user;
       top: calc(anchor(bottom) + 0.5rem);
       right: anchor(right);
+    }
+
+    @media (width >= 64rem) {
+      .bfc-user-menu {
+        position-anchor: --bfc-desktop-user;
+        top: auto;
+        right: auto;
+        bottom: calc(anchor(top) + 0.5rem);
+        left: anchor(left);
+      }
     }
   }
 

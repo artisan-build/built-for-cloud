@@ -94,9 +94,19 @@ final class AuthenticatedUiTest extends TestCase
 
         $response->assertSeeHtml('src="https://scalpels.app/img/products/transparent/test-shell-application.png"');
         $response->assertSeeHtml('data-testid="bfc-user-menu"')
+            ->assertSeeHtml('data-testid="bfc-sidebar-user"')
+            ->assertSeeHtml('data-testid="bfc-mobile-user-menu-button"')
             ->assertSeeHtml('data-testid="bfc-user-menu-logout"')
             ->assertSee($user->name)
             ->assertSee($user->email);
+
+        $document = new \DOMDocument;
+        @$document->loadHTML($content);
+        $xpath = new \DOMXPath($document);
+        $this->assertSame(1, $xpath->query('//footer[@data-testid="bfc-sidebar-user"]//button[@popovertarget="bfc-user-menu"]')->length);
+        $this->assertSame(1, $xpath->query('//header[@data-testid="bfc-mobile-header"]//button[@popovertarget="bfc-user-menu"]')->length);
+        $this->assertSame(1, $xpath->query('//div[@id="bfc-user-menu"][@popover]')->length);
+        $this->assertDoesNotMatchRegularExpression('/<[^>]*\bdata-testid\s*=[^>]*\bdata-testid\s*=/s', $content);
 
         $this->assertMarker($content, 'ui-nav-member-management', in_array($role, [UserRole::Owner, UserRole::Admin], true));
         $this->assertMarker($content, 'ui-nav-session-management', $mode === AuthorityMode::Standalone);
