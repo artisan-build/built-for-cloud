@@ -85,6 +85,54 @@ final class LayoutTest extends Orchestra
         $this->assertStringContainsString('<title>Fallback Name</title>', $html);
     }
 
+    public function test_the_shell_has_native_drawer_controls_and_a_sidebar_fallback(): void
+    {
+        $html = Blade::render('<x-bfc-layout><p>Shell body sentinel</p></x-bfc-layout>');
+        $document = new \DOMDocument;
+        @$document->loadHTML($html);
+        $xpath = new \DOMXPath($document);
+
+        foreach (['bfc-sidebar', 'bfc-mobile-header', 'bfc-mobile-drawer', 'bfc-mobile-drawer-open', 'bfc-mobile-drawer-close', 'bfc-sidebar-fallback', 'bfc-main'] as $marker) {
+            $this->assertSame(1, $xpath->query('//*[@data-testid="'.$marker.'"]')->length);
+        }
+
+        $this->assertSame(1, $xpath->query('//aside[@id="bfc-navigation"][@popover="auto"]')->length);
+        foreach (['show', 'hide'] as $action) {
+            $this->assertSame(1, $xpath->query('//button[@popovertarget="bfc-navigation"][@popovertargetaction="'.$action.'"]')->length);
+        }
+        $this->assertStringContainsString('<p>Shell body sentinel</p>', $html);
+        foreach (['@fluxScripts', 'x-data=', 'x-show=', 'onclick='] as $javascriptToggle) {
+            $this->assertStringNotContainsString($javascriptToggle, $html);
+        }
+        $this->assertDoesNotMatchRegularExpression('/<[^>]*\bdata-testid\s*=[^>]*\bdata-testid\s*=/s', $html);
+    }
+
+    public function test_a_caller_sidebar_reaches_the_shell_without_the_fallback(): void
+    {
+        $sentinel = 'Caller navigation '.bin2hex(random_bytes(6));
+        $html = Blade::render(<<<'BLADE'
+            <x-bfc-layout>
+                <x-slot:sidebar><nav>{{ $sentinel }}</nav></x-slot:sidebar>
+                Body
+            </x-bfc-layout>
+            BLADE, compact('sentinel'));
+
+        $this->assertStringContainsString('data-testid="bfc-sidebar-slot"', $html);
+        $this->assertStringContainsString('<nav>'.$sentinel.'</nav>', $html);
+        $this->assertStringNotContainsString('data-testid="bfc-sidebar-fallback"', $html);
+        $this->assertSame(1, substr_count($html, $sentinel));
+    }
+
+    public function test_a_subclass_keeps_the_default_shell_and_constructor_props(): void
+    {
+        config(['built-for-cloud.layout' => InheritedShellLayout::class]);
+
+        $html = Blade::render('<x-bfc-layout title="Inherited sentinel">Body</x-bfc-layout>');
+
+        $this->assertStringContainsString('<title>Inherited sentinel</title>', $html);
+        $this->assertStringContainsString('data-testid="bfc-sidebar"', $html);
+    }
+
     public function test_the_header_is_scalpels_own_navigation_with_the_current_app(): void
     {
         $html = Blade::render('<x-bfc-layout>Body</x-bfc-layout>');
@@ -126,6 +174,8 @@ final class LayoutTest extends Orchestra
 
     public function test_full_page_livewire_components_render_inside_the_default_layout(): void
     {
+        $sidebarSentinel = 'Livewire navigation '.bin2hex(random_bytes(6));
+        config(['layout-test.sidebar-sentinel' => $sidebarSentinel]);
         Route::get('/full-page', FullPageLivewireComponent::class);
 
         $response = $this->get('/full-page');
@@ -133,7 +183,10 @@ final class LayoutTest extends Orchestra
         $response->assertOk()
             ->assertSeeHtml('data-testid="bfc-layout"')
             ->assertSeeHtml('<title>Full page</title>')
-            ->assertSeeHtml('data-testid="full-page-livewire"');
+            ->assertSeeHtml('data-testid="full-page-livewire"')
+            ->assertSeeHtml('data-testid="bfc-sidebar-slot"')
+            ->assertSeeHtml($sidebarSentinel)
+            ->assertDontSeeHtml('data-testid="bfc-sidebar-fallback"');
     }
 
     #[DefineEnvironment('useCustomLayout')]
@@ -190,3 +243,5 @@ final class LayoutTest extends Orchestra
         $this->assertStringContainsString('data-testid="bfc-layout"', Blade::render('<x-bfc-layout>Body</x-bfc-layout>'));
     }
 }
+
+class InheritedShellLayout extends Layout {}

@@ -462,6 +462,10 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     // pinned to PackageAssetsTest, so paired rose by one and unpaired fell.
     // The header then became Scalpels' own app header with a user menu:
     // ten blocks more of layout markup, no claim changed.
+    // The sidebar shell consolidated that layout markup and extracted the
+    // user menu: the layout fell from sixteen blank-line blocks to nine,
+    // while the new partial adds one, so blocks fell by six with no claim
+    // change.
     // Routes then stopped being a selectable surface: the contract's
     // "one mounting switch exists, and only one" paragraph became a
     // statement that there is none, one unpaired absolute fewer.
@@ -494,7 +498,7 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1057,
+        'blocks' => 1051,
         'absolute' => 345,
         'paired' => 66,
         'unpaired' => 279,
