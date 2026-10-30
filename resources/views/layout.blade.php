@@ -50,7 +50,7 @@
                 </a>
             </nav>
 
-            @if (isset($sidebar) && $sidebar->isNotEmpty())
+            @if (filled($sidebar ?? null))
                 <div data-testid="bfc-sidebar-slot" class="bfc-sidebar-slot">{{ $sidebar }}</div>
             @endif
 
