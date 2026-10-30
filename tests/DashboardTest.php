@@ -40,16 +40,33 @@ final class DashboardTest extends TestCase
         $app['config']->set('built-for-cloud.dashboard', AppDashboardComponent::class);
     }
 
-    public function test_the_default_dashboard_offers_the_way_to_settings(): void
+    public function test_the_default_dashboard_offers_general_prompts_for_the_scalpels_mcp(): void
     {
         $response = $this->actingAsVersioned($this->owner())->get('/dashboard');
 
         $response->assertOk()
             ->assertSeeHtml('data-testid="dashboard"')
-            ->assertSeeHtml('data-testid="dashboard-settings"')
-            ->assertSeeHtml('href="'.route('bfc.ui.home').'"')
-            ->assertSee('Go to Settings');
+            ->assertDontSeeHtml('data-testid="dashboard-settings"')
+            ->assertSeeHtml('data-testid="dashboard-prompt-copy"')
+            ->assertSee('Does anything need my attention?')
+            ->assertSee('Call `installed_apps`', escape: false);
         $this->assertSame('/dashboard', route('bfc.dashboard', absolute: false));
+    }
+
+    public function test_the_default_dashboard_shows_the_prompts_an_app_declares_behind_the_same_opening(): void
+    {
+        config(['built-for-cloud.dashboard_prompts' => [
+            ['title' => 'Slowest endpoints', 'ask' => 'List my slowest endpoints this week.'],
+            ['title' => 'Malformed', 'prompt' => 'missing its ask'],
+        ]]);
+
+        $response = $this->actingAsVersioned($this->owner())->get('/dashboard');
+
+        $response->assertOk()
+            ->assertSee('Slowest endpoints')
+            ->assertSee('then call `app_tools` to see what it offers. List my slowest endpoints this week.', escape: false)
+            ->assertDontSee('Malformed')
+            ->assertDontSee('Does anything need my attention?');
     }
 
     public function test_a_signed_out_visitor_is_sent_to_sign_in_and_back_to_the_dashboard(): void

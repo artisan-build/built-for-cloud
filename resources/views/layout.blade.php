@@ -26,7 +26,7 @@
            class="bfc-sidebar">
         <div data-testid="bfc-mobile-drawer" class="bfc-sidebar-content">
             <div class="flex items-center justify-between gap-3">
-                <a href="{{ \ArtisanBuild\BuiltForCloud\View\Layout::SCALPELS_URL }}"
+                <a href="{{ $scalpelsUrl }}"
                    data-testid="bfc-header-scalpels"
                    class="bfc-wordmark">
                     <img src="{{ $wordmarkUrl }}" alt="Scalpels dashboard" width="480" height="138">
@@ -42,38 +42,49 @@
             </div>
 
             <nav aria-label="Scalpels" class="bfc-sidebar-links">
-                <a href="{{ url('/') }}"
+                <a href="{{ \Illuminate\Support\Facades\Route::has('bfc.dashboard') ? route('bfc.dashboard') : url('/') }}"
                    data-testid="bfc-header-app"
-                   class="bfc-shell-link">
-                    <img src="{{ $manifest->imageUrl() }}" alt="" class="size-6 shrink-0 object-contain">
+                   class="bfc-shell-link bfc-app-link">
+                    <img src="{{ $manifest->imageUrl() }}" alt="" class="bfc-app-icon shrink-0 object-contain">
                     <span class="truncate">{{ $manifest->name }}</span>
-                </a>
-                <a href="{{ \ArtisanBuild\BuiltForCloud\View\Layout::SCALPELS_DOCS_URL }}"
-                   data-testid="bfc-header-docs"
-                   class="bfc-shell-link">
-                    Documentation
                 </a>
             </nav>
 
-            @isset($sidebar)
+            @if (isset($sidebar) && $sidebar->isNotEmpty())
                 <div data-testid="bfc-sidebar-slot" class="bfc-sidebar-slot">{{ $sidebar }}</div>
-            @else
-                <div data-testid="bfc-sidebar-fallback" class="bfc-sidebar-slot">
-                    <span class="text-sm text-clay-muted">Application navigation</span>
-                </div>
-            @endisset
-
-            @if ($user)
-                <footer data-testid="bfc-sidebar-user" class="bfc-sidebar-user">
-                    <button type="button"
-                            popovertarget="bfc-user-menu"
-                            data-testid="bfc-user-menu-button"
-                            class="bfc-shell-control bfc-desktop-user-button">
-                        <span class="truncate">{{ $user->name }}</span>
-                        <span aria-hidden="true">&#8963;</span>
-                    </button>
-                </footer>
             @endif
+
+            <div data-testid="bfc-sidebar-bottom" class="bfc-sidebar-bottom">
+                <nav aria-label="Scalpels console" class="bfc-sidebar-links">
+                    @isset($sidebarFooter)
+                        {{ $sidebarFooter }}
+                    @endisset
+                    <a href="{{ $scalpelsDocsUrl }}"
+                       data-testid="bfc-header-docs"
+                       class="bfc-shell-link">
+                        Documentation
+                    </a>
+                    @if ($manageUrl)
+                        <a href="{{ $manageUrl }}"
+                           data-testid="bfc-sidebar-manage"
+                           class="bfc-shell-link">
+                            Manage
+                        </a>
+                    @endif
+                </nav>
+
+                @if ($user)
+                    <footer data-testid="bfc-sidebar-user" class="bfc-sidebar-user">
+                        <button type="button"
+                                popovertarget="bfc-user-menu"
+                                data-testid="bfc-user-menu-button"
+                                class="bfc-shell-control bfc-desktop-user-button">
+                            <span class="truncate">{{ $user->name }}</span>
+                            <span aria-hidden="true">&#8963;</span>
+                        </button>
+                    </footer>
+                @endif
+            </div>
         </div>
     </aside>
 
@@ -88,7 +99,7 @@
                 <path stroke-linecap="round" d="M4 7h16M4 12h16M4 17h16" />
             </svg>
         </button>
-        <a href="{{ url('/') }}" class="bfc-shell-link min-w-0">
+        <a href="{{ \Illuminate\Support\Facades\Route::has('bfc.dashboard') ? route('bfc.dashboard') : url('/') }}" class="bfc-shell-link min-w-0">
             <img src="{{ $manifest->imageUrl() }}" alt="" class="size-6 shrink-0 object-contain">
             <span class="truncate">{{ $manifest->name }}</span>
         </a>

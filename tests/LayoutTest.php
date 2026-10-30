@@ -85,16 +85,22 @@ final class LayoutTest extends Orchestra
         $this->assertStringContainsString('<title>Fallback Name</title>', $html);
     }
 
-    public function test_the_shell_has_native_drawer_controls_and_a_sidebar_fallback(): void
+    public function test_the_shell_has_native_drawer_controls_and_no_placeholder_without_app_navigation(): void
     {
         $html = Blade::render('<x-bfc-layout><p>Shell body sentinel</p></x-bfc-layout>');
         $document = new \DOMDocument;
         @$document->loadHTML($html);
         $xpath = new \DOMXPath($document);
 
-        foreach (['bfc-sidebar', 'bfc-mobile-header', 'bfc-mobile-drawer', 'bfc-mobile-drawer-open', 'bfc-mobile-drawer-close', 'bfc-sidebar-fallback', 'bfc-main'] as $marker) {
+        foreach (['bfc-sidebar', 'bfc-mobile-header', 'bfc-mobile-drawer', 'bfc-mobile-drawer-open', 'bfc-mobile-drawer-close', 'bfc-main'] as $marker) {
             $this->assertSame(1, $xpath->query('//*[@data-testid="'.$marker.'"]')->length);
         }
+
+        $this->assertSame(0, $xpath->query('//*[@data-testid="bfc-sidebar-slot"]')->length);
+        $this->assertStringNotContainsString('Application navigation</span>', $html);
+
+        $blank = Blade::render('<x-bfc-layout><x-slot:sidebar>   </x-slot:sidebar>Body</x-bfc-layout>');
+        $this->assertStringNotContainsString('data-testid="bfc-sidebar-slot"', $blank);
 
         $this->assertSame(1, $xpath->query('//aside[@id="bfc-navigation"][@popover="auto"]')->length);
         foreach (['show', 'hide'] as $action) {
@@ -138,7 +144,7 @@ final class LayoutTest extends Orchestra
         $html = Blade::render('<x-bfc-layout>Body</x-bfc-layout>');
 
         $this->assertMatchesRegularExpression('/<a href="https:\/\/scalpels\.app\/dashboard"\s+data-testid="bfc-header-scalpels"/', $html);
-        $this->assertMatchesRegularExpression('/<a href="https:\/\/scalpels\.app\/docs"\s+data-testid="bfc-header-docs"/', $html);
+        $this->assertMatchesRegularExpression('/<a href="https:\/\/scalpels\.app\/docs\/layout-test-app"\s+data-testid="bfc-header-docs"/', $html);
         $this->assertStringContainsString('data-testid="bfc-header-app"', $html);
         $this->assertStringContainsString('src="https://scalpels.app/img/products/transparent/layout-test-app.png"', $html);
     }
@@ -146,6 +152,43 @@ final class LayoutTest extends Orchestra
     public function test_the_user_menu_appears_only_for_a_signed_in_person(): void
     {
         $this->assertStringNotContainsString('data-testid="bfc-user-menu"', Blade::render('<x-bfc-layout>Body</x-bfc-layout>'));
+    }
+
+    public function test_navigation_follows_the_configured_console_issuer_without_publishing_a_layout(): void
+    {
+        foreach (['https://local-workshop.test/', 'https://scalpels.app'] as $issuer) {
+            config(['built-for-cloud.console.issuer' => $issuer]);
+            $html = Blade::render('<x-bfc-layout>Body</x-bfc-layout>');
+
+            $this->assertStringContainsString('href="'.rtrim($issuer, '/').'/dashboard"', $html);
+            $this->assertStringContainsString('href="'.rtrim($issuer, '/').'/docs/layout-test-app"', $html);
+            if ($issuer !== 'https://scalpels.app') {
+                $this->assertStringNotContainsString('href="https://scalpels.app/dashboard"', $html);
+                $this->assertStringNotContainsString('href="https://scalpels.app/docs/layout-test-app"', $html);
+            }
+        }
+    }
+
+    public function test_the_docs_link_names_this_deployment_so_scalpels_can_offer_a_way_back(): void
+    {
+        config(['built-for-cloud.console.issuer' => 'https://scalpels.app', 'built-for-cloud.vitals.deployment_id' => '01a18c5b-86f5']);
+
+        $this->assertStringContainsString('href="https://scalpels.app/docs/layout-test-app?from=01a18c5b-86f5"', Blade::render('<x-bfc-layout>Body</x-bfc-layout>'));
+    }
+
+    public function test_the_sidebar_links_back_to_the_consoles_manage_page_only_once_the_console_names_this_deployment(): void
+    {
+        config(['built-for-cloud.console.issuer' => 'https://scalpels.app/', 'built-for-cloud.vitals.deployment_id' => null]);
+        $this->assertStringNotContainsString('data-testid="bfc-sidebar-manage"', Blade::render('<x-bfc-layout>Body</x-bfc-layout>'));
+
+        config(['built-for-cloud.console.issuer' => null, 'built-for-cloud.vitals.deployment_id' => '01abc']);
+        $this->assertStringNotContainsString('data-testid="bfc-sidebar-manage"', Blade::render('<x-bfc-layout>Body</x-bfc-layout>'));
+
+        config(['built-for-cloud.console.issuer' => 'https://scalpels.app/', 'built-for-cloud.vitals.deployment_id' => '01abc']);
+        $html = Blade::render('<x-bfc-layout>Body</x-bfc-layout>');
+
+        $this->assertStringContainsString('data-testid="bfc-sidebar-manage"', $html);
+        $this->assertStringContainsString('href="https://scalpels.app/deployments/01abc/manage"', $html);
     }
 
     public function test_pushed_head_and_script_stacks_reach_the_layout(): void

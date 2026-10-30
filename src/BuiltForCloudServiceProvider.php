@@ -66,6 +66,7 @@ use ArtisanBuild\BuiltForCloudContracts\PayloadFilter;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Auth\Events\Authenticated;
 use Illuminate\Auth\Events\Login;
+use Illuminate\Auth\Middleware\RedirectIfAuthenticated;
 use Illuminate\Bus\Dispatcher as BusDispatcher;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
@@ -164,6 +165,7 @@ final class BuiltForCloudServiceProvider extends ServiceProvider
     public function boot(): void
     {
         HumanAuthConfiguration::apply($this->app->make(Repository::class));
+        RedirectIfAuthenticated::redirectUsing(static fn (): string => route('bfc.dashboard'));
 
         Event::listen(Authenticated::class, [RefuseSystemAuthorityAuthentication::class, 'handle']);
         Event::listen(Login::class, [RefuseSystemAuthorityAuthentication::class, 'handle']);

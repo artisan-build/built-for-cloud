@@ -4,10 +4,10 @@
         <span class="truncate text-clay-muted">{{ $user->email }}</span>
     </div>
     <hr class="bfc-user-menu-separator">
-    <a href="{{ \ArtisanBuild\BuiltForCloud\View\Layout::SCALPELS_URL }}" class="bfc-user-menu-item">
+    <a href="{{ $scalpelsUrl }}" class="bfc-user-menu-item">
         Scalpels dashboard
     </a>
-    <a href="{{ \ArtisanBuild\BuiltForCloud\View\Layout::SCALPELS_DOCS_URL }}" class="bfc-user-menu-item lg:hidden">
+    <a href="{{ $scalpelsDocsUrl }}" class="bfc-user-menu-item lg:hidden">
         Documentation
     </a>
     @if ($logoutUrl)

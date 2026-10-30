@@ -27,8 +27,14 @@ class Layout extends Component
     /** Where the Scalpels wordmark in the header takes the user: the dashboard every app is launched from. */
     public const string SCALPELS_URL = 'https://scalpels.app/dashboard';
 
-    /** The Scalpels documentation the header links to, as Scalpels' own header does. */
+    /** The Scalpels documentation index; each app's own documentation sits beneath it at its catalog slug. */
     public const string SCALPELS_DOCS_URL = 'https://scalpels.app/docs';
+
+    /** Navigation follows the same configured console issuer as managed sign-in. */
+    public string $scalpelsUrl;
+
+    /** This app's own documentation on Scalpels, found by its catalog slug and naming this deployment when known. */
+    public string $scalpelsDocsUrl;
 
     /** The app this page belongs to, as its manifest declares it. */
     public LandingManifest $manifest;
@@ -45,11 +51,18 @@ class Layout extends Component
     /** Where the user menu's Log out posts, or null when the package's UI routes are not mounted. */
     public ?string $logoutUrl;
 
+    /** This installation's Manage page in the console, or null when the console has not named this deployment. */
+    public ?string $manageUrl;
+
     /** Default an untitled page to the app's name and gather what the header shows. */
     public function __construct(public ?string $title = null)
     {
+        $issuer = Config::get('built-for-cloud.console.issuer');
+        $origin = is_string($issuer) && $issuer !== '' ? rtrim($issuer, '/') : 'https://scalpels.app';
+        $this->scalpelsUrl = $origin.'/dashboard';
         $this->title ??= Config::string('app.name');
         $this->manifest = App::make(LandingManifest::class);
+        $this->scalpelsDocsUrl = $this->docsUrl($origin);
         $this->stylesheetUrl = Route::has('bfc.assets')
             ? route('bfc.assets', 'bfc.css').'?v='.substr((string) md5_file(dirname(__DIR__, 2).'/resources/dist/bfc.css'), 0, 12)
             : null;
@@ -57,6 +70,37 @@ class Layout extends Component
         $principal = App::make(ActingPrincipalResolver::class)->resolve()->principal;
         $this->user = $principal instanceof User ? $principal : null;
         $this->logoutUrl = Route::has('bfc.ui.logout') ? route('bfc.ui.logout') : null;
+        $this->manageUrl = $this->manageUrl();
+    }
+
+    /**
+     * This app's own docs on Scalpels. When the console has named this deployment, the link says
+     * so, and Scalpels offers a way back to this app on every docs page the person then reads.
+     */
+    protected function docsUrl(string $origin): string
+    {
+        $url = $origin.'/docs/'.rawurlencode($this->manifest->slug);
+        $deployment = Config::get('built-for-cloud.vitals.deployment_id');
+
+        return is_string($deployment) && $deployment !== '' ? $url.'?from='.rawurlencode($deployment) : $url;
+    }
+
+    /**
+     * The console's Manage page for this installation, built from the issuer and
+     * deployment id the console wrote into the environment. The console decides
+     * where that lands, so an app other projects connect to opens on its
+     * connections and every other app on its deployment.
+     */
+    protected function manageUrl(): ?string
+    {
+        $issuer = Config::get('built-for-cloud.console.issuer');
+        $deployment = Config::get('built-for-cloud.vitals.deployment_id');
+
+        if (! is_string($issuer) || $issuer === '' || ! is_string($deployment) || $deployment === '') {
+            return null;
+        }
+
+        return rtrim($issuer, '/').'/deployments/'.rawurlencode($deployment).'/manage';
     }
 
     /**

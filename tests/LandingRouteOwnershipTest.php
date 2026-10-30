@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\LandingPageRegistrar;
+use ArtisanBuild\BuiltForCloud\User;
 use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Route;
 use Symfony\Component\Process\Process;
@@ -38,4 +39,13 @@ it('refuses to mount the landing page without a manifest', function (): void {
 
     expect(fn () => app(LandingPageRegistrar::class)->mount(new Router(app('events'), app())))
         ->toThrow(RuntimeException::class, 'landing manifest');
+});
+
+it('sends a signed-in person from the root straight to their dashboard', function (): void {
+    $user = User::query()->create([
+        'name' => 'Signed In',
+        'email' => 'signed-in@example.test',
+    ]);
+
+    $this->actingAs($user, 'web')->get('/')->assertRedirect(route('bfc.dashboard'));
 });
