@@ -11,6 +11,7 @@ use ArtisanBuild\BuiltForCloud\View\Layout;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Route;
+use Illuminate\View\ComponentSlot;
 use Livewire\LivewireServiceProvider;
 use Orchestra\Testbench\Attributes\DefineEnvironment;
 use Orchestra\Testbench\TestCase as Orchestra;
@@ -137,8 +138,8 @@ final class LayoutTest extends Orchestra
         foreach ([false, true] as $componentSlots) {
             $html = view('bfc::layout', array_merge((new Layout)->data(), [
                 'slot' => 'Body',
-                'sidebar' => $componentSlots ? new \Illuminate\View\ComponentSlot($navigation) : $navigation,
-                'sidebarFooter' => $componentSlots ? new \Illuminate\View\ComponentSlot($footer) : $footer,
+                'sidebar' => $componentSlots ? new ComponentSlot($navigation) : $navigation,
+                'sidebarFooter' => $componentSlots ? new ComponentSlot($footer) : $footer,
             ]))->render();
 
             $document = new \DOMDocument;
