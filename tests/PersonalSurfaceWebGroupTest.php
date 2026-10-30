@@ -110,6 +110,7 @@ final class PersonalSurfaceWebGroupTest extends TestCase
             'DELETE /bfc/members/{user}',
             'DELETE /settings/credentials/installation/{id}',
             'DELETE /settings/credentials/personal/{id}',
+            'GET //',
             'GET /bfc/device',
             'GET /bfc/forgot-password',
             'GET /bfc/installation/credentials',

@@ -498,7 +498,7 @@ it('reproduces the measurement the pairing instrument was set aside on', functio
     expect(AbsolutePairingMeasurement::measure(
         AbsolutePairingMeasurement::filesAcross(dirname(__DIR__), $gateSurfaces),
     ))->toBe([
-        'blocks' => 1051,
+        'blocks' => 1054,
         'absolute' => 345,
         'paired' => 66,
         'unpaired' => 279,

@@ -158,6 +158,7 @@ $exemptFromCitation = [
     'resources/views/home.blade.php' => 'package UI shell template; structural rendering, escaped test-created manifest values, and role navigation are driven by AuthenticatedUiTest',
     'resources/views/layout.blade.php' => 'package layout shell; structural rendering is driven by LayoutTest and through the templates that use it (AuthenticatedUiTest, LandingPageTest)',
     'resources/views/landing.blade.php' => 'package landing template; package-layout use, structural rendering, and escaped test-created manifest values are driven by LandingPageTest',
+    'resources/views/shell/agent-prompts.blade.php' => 'package prompt presentation partial; configured and generic prompt rendering are driven by DashboardTest',
     'resources/views/shell/user-menu.blade.php' => 'package layout presentation partial; signed-in menu structure and test-created user data are driven by AuthenticatedUiTest',
     'src/Audit/AppActionEventBuilder.php' => 'a two-line binding of the shared AppendOnlyBuilder to one model; it adds and overrides nothing, and every claim is on the base',
     'src/Audit/AppActionLedgerBuilder.php' => 'a two-line binding of the shared AppendOnlyBuilder to one model; it adds and overrides nothing, and every claim is on the base',

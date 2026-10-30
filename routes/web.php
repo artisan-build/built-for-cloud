@@ -51,6 +51,7 @@ use ArtisanBuild\BuiltForCloud\Http\Middleware\EnsureUserIsAuthenticated;
 use ArtisanBuild\BuiltForCloud\Http\Middleware\ExpireStandaloneHandoffOnRefusal;
 use ArtisanBuild\BuiltForCloud\LandingPageRegistrar;
 use ArtisanBuild\BuiltForCloud\ManagedTransitionDirection;
+use Illuminate\Auth\Middleware\RedirectIfAuthenticated;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
@@ -70,8 +71,11 @@ $browser = Route::hasMiddlewareGroup('web') ? ['web'] : [
 ];
 $authorizationUser = EnsureUserIsAuthenticated::class.':'.EnsureUserIsAuthenticated::DEFER_MANAGED_AUTHORITY;
 
-Route::group(['bfc_family' => 'landing'], function (): void {
-    App::make(LandingPageRegistrar::class)->mount(App::make(Router::class));
+// A signed-in person who reaches the root goes straight to their dashboard,
+// through Laravel's own guest middleware. Sessions are needed to know them.
+Route::group(['bfc_family' => 'landing'], function () use ($browser): void {
+    App::make(LandingPageRegistrar::class)->mount(App::make(Router::class))
+        ->middleware([...$browser, RedirectIfAuthenticated::class.':web']);
 });
 
 Route::get('/bfc/assets/{path}', PackageAssets::class)

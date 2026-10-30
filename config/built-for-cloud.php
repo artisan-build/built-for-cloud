@@ -81,13 +81,24 @@ return [
     |
     | What `GET /dashboard` (route `bfc.dashboard`), the page every signed-in
     | person lands on, runs: an invokable controller or a full-page Livewire
-    | component. The package default points the way to settings. An app
-    | replaces it by naming its own class in BUILT_FOR_CLOUD_DASHBOARD; the
-    | route keeps the package's sign-in middleware whatever runs behind it.
+    | component. The package default is for an app with no screens of its
+    | own: prompts a person copies into their agent to put questions to the
+    | app through the Scalpels MCP. An app replaces it by naming its own class
+    | in BUILT_FOR_CLOUD_DASHBOARD; the route keeps the package's sign-in
+    | middleware whatever runs behind it.
+    |
+    | `dashboard_prompts` are those prompts, each a `title` and an `ask` — the
+    | question itself, in the app's own terms. The dashboard puts the same
+    | opening in front of every ask, telling the agent how to reach this app,
+    | so an app only writes what is particular to it. Left empty, a few general
+    | prompts stand in. An app with its own dashboard can show the same list by
+    | including `bfc::shell.agent-prompts` with AgentPrompts::all().
     |
     */
 
     'dashboard' => env('BUILT_FOR_CLOUD_DASHBOARD', Dashboard::class),
+
+    'dashboard_prompts' => [],
 
     /*
     |--------------------------------------------------------------------------
