@@ -129,6 +129,27 @@ final class LayoutTest extends Orchestra
         $this->assertSame(1, substr_count($html, $sentinel));
     }
 
+    public function test_sidebar_and_footer_accept_plain_strings_and_component_slots(): void
+    {
+        $navigation = 'Navigation '.bin2hex(random_bytes(6));
+        $footer = 'Footer '.bin2hex(random_bytes(6));
+
+        foreach ([false, true] as $componentSlots) {
+            $html = view('bfc::layout', array_merge((new Layout)->data(), [
+                'slot' => 'Body',
+                'sidebar' => $componentSlots ? new \Illuminate\View\ComponentSlot($navigation) : $navigation,
+                'sidebarFooter' => $componentSlots ? new \Illuminate\View\ComponentSlot($footer) : $footer,
+            ]))->render();
+
+            $document = new \DOMDocument;
+            @$document->loadHTML($html);
+            $xpath = new \DOMXPath($document);
+
+            $this->assertSame($navigation, trim($xpath->query('//*[@data-testid="bfc-sidebar-slot"]')->item(0)->textContent));
+            $this->assertStringContainsString($footer, $xpath->query('//*[@data-testid="bfc-sidebar-bottom"]')->item(0)->textContent);
+        }
+    }
+
     public function test_a_subclass_keeps_the_default_shell_and_constructor_props(): void
     {
         config(['built-for-cloud.layout' => InheritedShellLayout::class]);

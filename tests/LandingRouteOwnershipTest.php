@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 use ArtisanBuild\BuiltForCloud\LandingPageRegistrar;
 use ArtisanBuild\BuiltForCloud\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Route;
 use Symfony\Component\Process\Process;
+
+uses(RefreshDatabase::class);
 
 it('mounts the landing page at the root of every app', function (): void {
     $landing = Route::getRoutes()->getByName('bfc.landing');
